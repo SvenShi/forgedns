@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-hickory-client = "0.25.1"
-hickory-server = "0.25.1"
-tokio = "1.44.2"
-async-trait = "0.1.88"
+hickory-client = "0.25"
+hickory-server = "0.25"
+tokio = "1.44"
+async-trait = "0.1"
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+chrono = "0.4"
