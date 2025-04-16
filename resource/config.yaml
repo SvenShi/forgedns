@@ -1,0 +1,174 @@
+log:
+  level: info
+  file: "/var/log/mosdns.log"
+
+api:
+  http: 172.16.2.53:9199
+
+
+plugins:
+  # 国内域名
+  - tag: geosite_cn
+    type: domain_set
+    args:
+      files:
+        - "/opt/mosdns/rule/whitelist.txt"
+        - "/opt/mosdns/dat/geosite_cn.txt"
+        - "/opt/mosdns/dat/geosite_apple-cn.txt"
+        - "/opt/mosdns/dat/geosite_apple.txt"
+        - "/opt/mosdns/dat/geosite_category-games@cn.txt"
+
+  # 国外域名
+  - tag: geosite_no_cn
+    type: domain_set
+    args:
+      files:
+        - "/opt/mosdns/rule/greylist.txt"
+        - "/opt/mosdns/dat/geosite_geolocation-!cn.txt"
+
+  # hosts
+  - tag: hosts
+    type: hosts
+    args:
+      files:
+        - "/opt/mosdns/rule/hosts.txt"
+
+  # domain_custom_dns
+  - tag: domain_custom_dns
+    type: domain_set
+    args:
+      files:
+        - "/opt/mosdns/rule/domain-countom-dns.txt"
+
+
+  # 国内IP
+  - tag: forward_local
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: "61.139.2.69"
+        - addr: "218.6.200.139"
+        - addr: "223.5.5.5"
+
+  # 转发至国外DNS, 并发查询
+  - tag: forward_remote
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "https://1.1.1.1/dns-query"
+          socks5: "172.16.2.40:7890"
+        - addr: "https://8.8.8.8/dns-query"
+          socks5: "172.16.2.40:7890"
+
+  # fallback服务器, 返回国内ip则accept, 返回非国内ip则drop
+  - tag: local_sequence
+    type: sequence
+    args:
+      - exec: $forward_local
+
+
+ # 动态路由 添加解析后的ip到
+  - tag: ospf
+    type: ospf
+    args:
+      ttl: 21600
+      ip: 172.16.2.53/24
+      iface: eth0
+      routerId: 172.16.2.40
+      persistentRoute:
+        ips:
+          - "140.245.88.245/32"
+          - "141.147.184.18/32"
+        files:
+          - "/opt/mosdns/dat/geoip_telegram.txt"
+      init-calls:
+        - url: http://127.0.0.1/control/cache_clear
+          method: POST
+          heads:
+            "Authorization": Basic YWRtaW46MTk5ODA2MTIuc3M=
+
+        - url: http://172.16.2.40:8796/restart
+          method: GET
+
+  # fallback的secondary服务器, 返回非国内ip则添加至ipset, 返回国内ip只接受不会添加ipset 解析后将ip添加到路由中
+  - tag: remote_sequence
+    type: sequence
+    args:
+      - exec: $forward_remote
+      - exec: $ospf
+
+
+  # fallback sequence
+  - tag: fallback
+    type: fallback
+    args:
+      primary: remote_sequence
+      secondary: local_sequence
+      threshold: 500
+      always_standby: true
+
+  # 有响应终止返回
+  - tag: has_resp_sequence
+    type: sequence
+    args:
+      - exec: prefer_ipv4
+      - matches: has_resp
+        exec: accept
+
+  # 当匹配到domain-countom-dns.txt域名时使用以下dns解析
+  - tag: forward_custom
+    type: forward
+    args:
+      concurrent: 1
+      upstreams:
+        - addr: "192.168.0.1"
+
+
+
+  - tag: query
+    type: sequence
+    args:
+        # drop https query type
+      - matches:
+        - qtype 12 65
+        exec: reject 3
+
+      - matches: 
+        - "qname $domain_custom_dns"
+        exec: "$forward_custom"
+      - exec: jump has_resp_sequence
+
+      - matches:
+        - qname $geosite_cn
+        exec: $forward_local
+      - exec: jump has_resp_sequence
+
+      - exec: $remote_sequence
+      - exec: jump has_resp_sequence
+
+      - exec: $fallback
+      - exec: jump has_resp_sequence
+      - exec: reject 3
+
+      
+
+  - tag: main_sequence
+    type: sequence
+    args:
+      #hosts
+      - exec: $hosts
+      # - matches: 
+      #   - "resp_ip 0.0.0.0/0"
+      #   exec: goto query
+      - exec: jump has_resp_sequence
+
+      - exec: "$query"
+    
+  
+  - tag: "udp_server"
+    type: "udp_server"
+    args: 
+      entry:  "main_sequence"
+      listen:  ":5335"
