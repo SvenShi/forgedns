@@ -17,7 +17,6 @@ use hickory_client::client::Client;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::udp::UdpClientStream;
 
-use crate::config::config::LogConfig;
 use crate::core::handler::DnsRequestHandler;
 use crate::plugin::executable::forward::SequentialDnsForwarder;
 use hickory_server::ServerFuture;
@@ -27,9 +26,9 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UdpSocket;
 use tokio::runtime;
 
-mod plugin;
-mod core;
 mod config;
+mod core;
+mod plugin;
 
 fn main() -> Result<(), String> {
     app_init();
@@ -40,14 +39,13 @@ fn app_init() {
     let runtime = core::init();
     let options = runtime.options;
     let config = config::init(&options.config);
-    let mut log_config = config.log;
+    let mut log_config = config.log.clone();
     match options.log_level {
         None => {}
-        Some(level) => {
-            log_config.level = level
-        }
+        Some(level) => log_config.level = level,
     }
     let _ = core::log_init(log_config);
+    plugin::init(config);
 }
 
 fn tokio_run() -> Result<(), String> {

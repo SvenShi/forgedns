@@ -21,7 +21,10 @@ mod server;
 // todo 插件注册逻辑需要实现
 
 
-pub fn plugin_init(config: Config) -> HashMap<String, PluginInfo> {
+
+
+
+pub fn init(config: Config) -> HashMap<String, PluginInfo> {
     // todo 插件初始化 需要提前将所有的插件注册到应用中
     todo!()
 }
