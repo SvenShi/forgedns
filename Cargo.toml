@@ -16,3 +16,4 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yml = "0.0.12"
 clap = { version = "4.5", features = ["derive"] }
 tracing-appender = "0.2.3"
+lazy_static = "1.5"

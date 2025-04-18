@@ -10,12 +10,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use crate::core::context::DnsContext;
+use crate::plugin::executable::forward::SequentialDnsForwarder;
+use crate::plugin::executable::Executable;
 use hickory_server::authority::MessageResponseBuilder;
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
-use crate::core::context::DnsContext;
-use crate::plugin::executable::Executable;
-use crate::plugin::executable::forward::SequentialDnsForwarder;
+use std::collections::HashMap;
 
 // dns请求处理
 pub struct DnsRequestHandler {
@@ -34,6 +34,8 @@ impl RequestHandler for DnsRequestHandler {
         let mut context = DnsContext {
             request_info: request.request_info().unwrap(),
             response: None,
+            mark: Vec::new(),
+            attributes: HashMap::new(),
         };
 
         for x in &self.executors {

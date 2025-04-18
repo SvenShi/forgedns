@@ -11,13 +11,13 @@
  * limitations under the License.
  */
 
+use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::executable::Executable;
+use crate::plugin::{Plugin, PluginFactory, PluginType};
 use hickory_client::client::{Client, ClientHandle};
 use log::debug;
 use std::sync::{Arc, Mutex};
-use crate::config::config::PluginConfig;
-use crate::plugin::{Plugin, PluginFactory};
 
 /// dns请求转发器
 pub trait RequestForwarder: Executable {
@@ -41,9 +41,15 @@ impl Plugin for SequentialDnsForwarder {
     }
 }
 
-impl PluginFactory for SequentialDnsForwarder {
-    fn create(plugin_info: PluginConfig) -> Box<dyn Plugin> {
+pub struct ForwardFactory;
+
+impl PluginFactory for ForwardFactory {
+    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
         todo!()
+    }
+
+    fn plugin_type(&self, tag: &str) -> PluginType {
+        PluginType::Executor { tag: tag.to_string() }
     }
 }
 

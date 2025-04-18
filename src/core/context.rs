@@ -10,9 +10,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use hickory_client::proto::xfer::DnsResponse;
 use hickory_server::server::RequestInfo;
+use std::any::Any;
+use std::collections::HashMap;
 
 pub struct DnsContext<'a> {
     /// dns 请求信息
@@ -20,4 +21,28 @@ pub struct DnsContext<'a> {
 
     /// dns 响应信息
     pub response: Option<DnsResponse>,
+
+    pub mark: Vec<String>,
+
+    pub attributes: HashMap<String, Box<dyn Any + Send + Sync>>,
+}
+
+impl DnsContext<'_> {
+    fn set_attr<T>(&mut self, name: String, value: Box<T>)
+    where
+        T: Send + Sync + 'static,
+    {
+        self.attributes.insert(name, value);
+    }
+
+    fn get_attr<T>(&mut self, name: String) -> Option<&T>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.attributes.get(&name).and_then(|a| a.downcast_ref())
+    }
+
+    fn remove_attr(&mut self, name: &str) {
+        self.attributes.remove(name);
+    }
 }

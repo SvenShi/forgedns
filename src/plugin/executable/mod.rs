@@ -11,12 +11,12 @@
  * limitations under the License.
  */
 use crate::core::context::DnsContext;
-use crate::plugin::{Plugin, PluginFactory};
+use crate::plugin::Plugin;
 
 pub mod forward;
 
 
 ///
-pub trait Executable: Plugin + PluginFactory {
+pub trait Executable: Plugin {
     fn execute(&self, context: &mut DnsContext<'_>) -> impl Future<Output=()> + Send;
 }

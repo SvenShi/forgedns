@@ -10,7 +10,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::plugin::PluginType;
 use serde::Deserialize;
 use serde_yml::Value;
 
@@ -52,7 +51,7 @@ pub struct PluginConfig {
     pub tag: String,
     /// 插件类型
     #[serde(rename = "type")]
-    pub plugin_type: PluginType,
+    pub plugin_type: String,
     /// 插件参数
     pub args: Option<Value>,
 }

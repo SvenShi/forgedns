@@ -10,45 +10,72 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 use crate::config::config::{Config, PluginConfig};
+use crate::plugin::executable::forward::ForwardFactory;
+use lazy_static::lazy_static;
 use serde::Deserialize;
+use serde_yml::Value;
+use std::collections::HashMap;
 
 pub mod executable;
 mod server;
 
+lazy_static! {
+    static ref FACTORIES: HashMap<String, Box<dyn PluginFactory>> = {
+        let mut m : HashMap<String, Box<dyn PluginFactory>> = HashMap::new();
+        m.insert("forward".to_owned(), Box::new(ForwardFactory));
+        m
+    };
+}
 
-// todo 插件注册逻辑需要实现
 
-
-
-
-
+/// 初始化插件
 pub fn init(config: Config) -> HashMap<String, PluginInfo> {
-    // todo 插件初始化 需要提前将所有的插件注册到应用中
-    todo!()
+    let mut plugin_map = HashMap::new();
+
+    for plugin_config in config.plugins {
+        let key = plugin_config.plugin_type.as_str();
+        let factory = FACTORIES.get(key).unwrap_or_else(|| panic!("plugin {key} not found"));
+        plugin_map.insert(plugin_config.tag.clone(), PluginInfo::from(&plugin_config, &factory));
+    }
+
+    plugin_map
 }
 
 
 #[derive(Clone, Debug, Deserialize)]
 pub enum PluginType {
-
-
+    /// 持续运行的服务插件
+    Server {
+        tag: String,
+    },
+    /// 可执行的执行插件
+    Executor {
+        tag: String,
+    },
+    /// 用于匹配某种规则的匹配器
+    Matcher {
+        tag: String,
+    },
+    /// 用于提供数据的数据提供器
+    DataProvider {
+        tag: String,
+    },
 }
 
 
 /// 插件
 pub trait Plugin: Send + Sync + 'static {
-
     fn init(&self);
 
     fn destroy(&self);
-
 }
 
 /// 插件构造工厂
-pub trait PluginFactory {
-    fn create(plugin_info: PluginConfig) -> Box<dyn Plugin>;
+pub trait PluginFactory: Send + Sync + 'static {
+    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin>;
+
+    fn plugin_type(&self, tag: &str) -> PluginType;
 }
 
 
@@ -58,8 +85,22 @@ pub struct PluginInfo {
     pub tag: String,
     /// 插件类型
     pub plugin_type: PluginType,
+    /// 插件分类
     /// 插件参数
-    pub args: Vec<String>,
+    pub args: Option<Value>,
     ///插件
     pub plugin: Box<dyn Plugin>,
+}
+
+impl PluginInfo {
+    pub fn from(config: &PluginConfig, factory: &Box<dyn PluginFactory>) -> PluginInfo {
+        let plugin = factory.create(config);
+
+        PluginInfo {
+            tag: config.tag.clone(),
+            plugin_type: factory.plugin_type(&config.tag),
+            args: config.args.clone(),
+            plugin,
+        }
+    }
 }

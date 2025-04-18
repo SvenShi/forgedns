@@ -10,4 +10,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::plugin::Plugin;
+
 mod udp;
+
+pub trait Server: Plugin {
+    fn run();
+}
+
+// todo 开发udp服务实现类
