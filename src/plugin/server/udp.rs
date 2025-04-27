@@ -10,5 +10,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::config::config::PluginConfig;
+use crate::plugin::{Plugin, PluginFactory, PluginMainType};
+use crate::plugin::server::Server;
 
-// todo udp dns服务器需要迁移到这里
+pub struct UdpServer {}
+
+impl Plugin for UdpServer {
+    fn init(&self) {
+        todo!()
+    }
+
+    fn destroy(&self) {
+        todo!()
+    }
+}
+
+impl Server for UdpServer {
+    fn run() {
+        todo!()
+    }
+}
+
+pub struct UdpServerFactory {}
+
+impl PluginFactory for UdpServerFactory {
+    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
+        todo!()
+    }
+
+    fn plugin_type(&self, tag: &str) -> PluginMainType {
+        PluginMainType::Server {
+            tag: tag.to_string(),
+            type_name: "udp".to_string(),
+        }
+    }
+}

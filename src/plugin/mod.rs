@@ -13,56 +13,88 @@
 use crate::config::config::{Config, PluginConfig};
 use crate::plugin::executable::forward::ForwardFactory;
 use lazy_static::lazy_static;
+use log::info;
 use serde::Deserialize;
 use serde_yml::Value;
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter, Write};
 
 pub mod executable;
 mod server;
 
 lazy_static! {
     static ref FACTORIES: HashMap<String, Box<dyn PluginFactory>> = {
-        let mut m : HashMap<String, Box<dyn PluginFactory>> = HashMap::new();
+        let mut m: HashMap<String, Box<dyn PluginFactory>> = HashMap::new();
         m.insert("forward".to_owned(), Box::new(ForwardFactory));
         m
     };
 }
 
-
 /// 初始化插件
 pub fn init(config: Config) -> HashMap<String, PluginInfo> {
     let mut plugin_map = HashMap::new();
 
+    // 每种插件都要实现一个插件构造工厂，通过构造工厂来创造插件
     for plugin_config in config.plugins {
         let key = plugin_config.plugin_type.as_str();
-        let factory = FACTORIES.get(key).unwrap_or_else(|| panic!("plugin {key} not found"));
-        plugin_map.insert(plugin_config.tag.clone(), PluginInfo::from(&plugin_config, &factory));
+        let factory = FACTORIES
+            .get(key)
+            .unwrap_or_else(|| panic!("plugin {key} not found"));
+        let plugin_info = PluginInfo::from(&plugin_config, &factory);
+
+        info!("{} 插件构造成功", plugin_info.plugin_type);
+        plugin_map.insert(plugin_config.tag.clone(), plugin_info);
     }
 
     plugin_map
 }
 
-
 #[derive(Clone, Debug, Deserialize)]
-pub enum PluginType {
+pub enum PluginMainType {
     /// 持续运行的服务插件
-    Server {
-        tag: String,
-    },
+    Server { tag: String, type_name: String },
     /// 可执行的执行插件
-    Executor {
-        tag: String,
-    },
+    Executor { tag: String, type_name: String },
     /// 用于匹配某种规则的匹配器
-    Matcher {
-        tag: String,
-    },
+    Matcher { tag: String, type_name: String },
     /// 用于提供数据的数据提供器
-    DataProvider {
-        tag: String,
-    },
+    DataProvider { tag: String, type_name: String },
 }
 
+impl PluginMainType {
+    pub fn tag(&self) -> &str {
+        match self {
+            PluginMainType::Server { tag, .. }
+            | PluginMainType::Executor { tag, .. }
+            | PluginMainType::Matcher { tag, .. }
+            | PluginMainType::DataProvider { tag, .. } => tag,
+        }
+    }
+
+    pub fn type_name(&self) -> &str {
+        match self {
+            PluginMainType::Server { type_name, .. }
+            | PluginMainType::Executor { type_name, .. }
+            | PluginMainType::Matcher { type_name, .. }
+            | PluginMainType::DataProvider { type_name, .. } => type_name,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            PluginMainType::Server { .. } => "Server",
+            PluginMainType::Executor { .. } => "Executor",
+            PluginMainType::Matcher { .. } => "Matcher",
+            PluginMainType::DataProvider { .. } => "DataProvider",
+        }
+    }
+}
+
+impl Display for PluginMainType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}:{}", self.kind(), self.type_name(), self.tag())
+    }
+}
 
 /// 插件
 pub trait Plugin: Send + Sync + 'static {
@@ -75,16 +107,15 @@ pub trait Plugin: Send + Sync + 'static {
 pub trait PluginFactory: Send + Sync + 'static {
     fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin>;
 
-    fn plugin_type(&self, tag: &str) -> PluginType;
+    fn plugin_type(&self, tag: &str) -> PluginMainType;
 }
-
 
 /// 插件信息
 pub struct PluginInfo {
     /// 插件tag
     pub tag: String,
     /// 插件类型
-    pub plugin_type: PluginType,
+    pub plugin_type: PluginMainType,
     /// 插件分类
     /// 插件参数
     pub args: Option<Value>,

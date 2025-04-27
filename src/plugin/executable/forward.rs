@@ -14,16 +14,15 @@
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::executable::Executable;
-use crate::plugin::{Plugin, PluginFactory, PluginType};
+use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use hickory_client::client::{Client, ClientHandle};
 use log::debug;
 use std::sync::{Arc, Mutex};
 
 /// dns请求转发器
 pub trait RequestForwarder: Executable {
-    fn forward(&self, context: &mut DnsContext<'_>) -> impl Future<Output=()> + Send;
+    fn forward(&self, context: &mut DnsContext<'_>) -> impl Future<Output = ()> + Send;
 }
-
 
 /// 单线程的dns转发器
 pub struct SequentialDnsForwarder {
@@ -48,8 +47,11 @@ impl PluginFactory for ForwardFactory {
         todo!()
     }
 
-    fn plugin_type(&self, tag: &str) -> PluginType {
-        PluginType::Executor { tag: tag.to_string() }
+    fn plugin_type(&self, tag: &str) -> PluginMainType {
+        PluginMainType::Executor {
+            tag: tag.to_string(),
+            type_name: "forward".to_string(),
+        }
     }
 }
 
