@@ -15,7 +15,6 @@ use crate::core::handler::DnsRequestHandler;
 use crate::plugin::executable::Executable;
 use crate::plugin::server::Server;
 use crate::plugin::{Plugin, PluginFactory, PluginMainType, get_plugin};
-use async_trait::async_trait;
 use hickory_server::ServerFuture;
 use serde::Deserialize;
 use std::sync::Arc;

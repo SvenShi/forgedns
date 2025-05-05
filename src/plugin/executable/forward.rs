@@ -13,11 +13,17 @@
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::executable::Executable;
+use crate::plugin::server::udp::UdpServerConfig;
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
+use hickory_client::proto::runtime::TokioRuntimeProvider;
+use hickory_client::proto::udp::UdpClientStream;
 use log::debug;
+use serde::Deserialize;
 use std::any::Any;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -28,20 +34,45 @@ pub struct SequentialDnsForwarder {
 }
 
 impl Plugin for SequentialDnsForwarder {
-    fn init(&self) {
-        todo!()
-    }
+    fn init(&self) {}
 
-    fn destroy(&self) {
-        todo!()
-    }
+    fn destroy(&self) {}
+}
+
+#[derive(Deserialize)]
+pub struct ForwardConfig {
+    /// 转发线程数
+    pub concurrent: u32,
+    /// server监听地址
+    pub upstreams: Vec<UpStreamConfig>,
+}
+
+#[derive(Deserialize)]
+pub struct UpStreamConfig {
+    /// 请求服务器地址
+    pub addr: String,
 }
 
 pub struct ForwardFactory;
 
 impl PluginFactory for ForwardFactory {
     fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
-        todo!()
+        let forward_config = match plugin_info.args.clone() {
+            Some(args) => serde_yml::from_value::<ForwardConfig>(args)
+                .unwrap_or_else(|e| panic!("初始化Forward时，读取配置异常。Error:{}", e)),
+            None => {
+                panic!("初始化Forward需要配置线程数(concurrent)以及上游地址(upstreams)")
+            }
+        };
+        let addr = IpAddr::from_str(forward_config.upstreams[0].addr.as_str()).unwrap();
+        let socket_addr = SocketAddr::new(addr, 53);
+        let conn = UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
+        let (client, bg) = Client::connect(conn).await.unwrap();
+        tokio::spawn(bg);
+
+        Box::new(SequentialDnsForwarder {
+            client: Arc::new(Mutex::new(client)),
+        })
     }
 
     fn plugin_type(&self, tag: &str) -> PluginMainType {
