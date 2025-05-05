@@ -11,19 +11,20 @@
  * limitations under the License.
  */
 use crate::core::context::DnsContext;
-use crate::plugin::executable::forward::SequentialDnsForwarder;
 use crate::plugin::executable::Executable;
 use hickory_server::authority::MessageResponseBuilder;
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use std::collections::HashMap;
+use std::sync::Arc;
+use async_trait::async_trait;
 
 // dns请求处理
 pub struct DnsRequestHandler {
-    pub executors: Vec<SequentialDnsForwarder>,
+    pub executor: Arc<Box<dyn Executable>>,
 }
 
 // 修改后的handle_request方法
-#[async_trait::async_trait]
+#[async_trait]
 impl RequestHandler for DnsRequestHandler {
     async fn handle_request<R: ResponseHandler>(
         &self,
@@ -38,9 +39,8 @@ impl RequestHandler for DnsRequestHandler {
             attributes: HashMap::new(),
         };
 
-        for x in &self.executors {
-            x.execute(&mut context).await;
-        }
+        // 执行程序入口执行
+        self.executor.execute(&mut context).await;
 
         match context.response {
             None => {

@@ -12,10 +12,8 @@
  */
 use crate::plugin::Plugin;
 
-mod udp;
+pub mod udp;
 
 pub trait Server: Plugin {
-    fn run();
+    fn run(&self);
 }
-
-// todo 开发udp服务实现类

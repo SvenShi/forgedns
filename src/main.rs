@@ -13,16 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use hickory_client::client::Client;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::udp::UdpClientStream;
+use tokio::sync::Mutex;
 
 use crate::core::handler::DnsRequestHandler;
 use crate::plugin::executable::forward::SequentialDnsForwarder;
 use hickory_server::ServerFuture;
 use log::info;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::runtime;
 
@@ -50,7 +52,7 @@ fn app_init() {
 
 fn tokio_run() -> Result<(), String> {
     info!("RustDNS {} starting...", hickory_client::version());
-    let mut tokio_runtime = runtime::Builder::new_multi_thread();
+    let mut tokio_runtime = tokio::runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
         .thread_name("rustdns-worker")
@@ -59,6 +61,7 @@ fn tokio_run() -> Result<(), String> {
         .build()
         .map_err(|err| format!("failed to initialize Tokio runtime: {err}"))?;
     tokio_runtime.block_on(async_run())
+
 }
 
 async fn async_run() -> Result<(), String> {
@@ -67,16 +70,8 @@ async fn async_run() -> Result<(), String> {
     let (client, bg) = Client::connect(conn).await.unwrap();
     tokio::spawn(bg);
 
-    let forwarder = SequentialDnsForwarder {
+    let _forwarder = SequentialDnsForwarder {
         client: Arc::new(Mutex::new(client)),
     };
-    let handler = DnsRequestHandler {
-        executors: vec![forwarder],
-    };
-    let mut future = ServerFuture::new(handler);
-    let bind1 = UdpSocket::bind("0.0.0.0:253");
-    future.register_socket(bind1.await.unwrap());
-    tracing::info!("server starting up, awaiting connections...");
-    future.block_until_done().await?;
     Ok(())
 }

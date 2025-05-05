@@ -10,30 +10,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use crate::config::config::{Config, PluginConfig};
 use crate::plugin::executable::forward::ForwardFactory;
+use crate::plugin::server::udp::UdpServerFactory;
+use executable::Executable;
 use lazy_static::lazy_static;
 use log::info;
 use serde::Deserialize;
 use serde_yml::Value;
+use std::any::Any;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub mod executable;
 mod server;
 
 lazy_static! {
-    static ref FACTORIES: HashMap<String, Box<dyn PluginFactory>> = {
-        let mut m: HashMap<String, Box<dyn PluginFactory>> = HashMap::new();
-        m.insert("forward".to_owned(), Box::new(ForwardFactory));
+    static ref FACTORIES: HashMap<&'static str, Box<dyn PluginFactory>> = {
+        let mut m: HashMap<&str, Box<dyn PluginFactory>> = HashMap::new();
+        m.insert("forward", Box::new(ForwardFactory {}));
+        m.insert("udp_server", Box::new(UdpServerFactory {}));
         m
     };
+    static ref PLUGINS: RwLock<HashMap<String, Arc<Box<PluginInfo>>>> = RwLock::new(HashMap::new());
 }
 
 /// 初始化插件
-pub fn init(config: Config) -> HashMap<String, PluginInfo> {
-    let mut plugin_map = HashMap::new();
-
+pub fn init(config: Config) {
+    let mut plugins = PLUGINS.blocking_write();
     // 每种插件都要实现一个插件构造工厂，通过构造工厂来创造插件
     for plugin_config in config.plugins {
         let key = plugin_config.plugin_type.as_str();
@@ -42,11 +49,21 @@ pub fn init(config: Config) -> HashMap<String, PluginInfo> {
             .unwrap_or_else(|| panic!("plugin {key} not found"));
         let plugin_info = PluginInfo::from(&plugin_config, &factory);
 
-        info!("{} 插件构造成功", plugin_info.plugin_type);
-        plugin_map.insert(plugin_config.tag.clone(), plugin_info);
-    }
+        let plugin = &plugin_info.plugin;
+        
+        plugin.init();
 
-    plugin_map
+        info!("{} 插件构造成功", plugin_info.plugin_type);
+        plugins.insert(
+            plugin_config.tag.to_owned(),
+            Arc::new(Box::new(plugin_info)),
+        );
+    }
+}
+
+pub fn get_plugin(tag: &str) -> Option<Arc<Box<PluginInfo>>> {
+    let read_guard = PLUGINS.blocking_read();
+    read_guard.get(tag).cloned()
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -116,11 +133,10 @@ pub struct PluginInfo {
     pub tag: String,
     /// 插件类型
     pub plugin_type: PluginMainType,
-    /// 插件分类
     /// 插件参数
     pub args: Option<Value>,
     ///插件
-    pub plugin: Box<dyn Plugin>,
+    pub plugin: Arc<Box<dyn Plugin>>,
 }
 
 impl PluginInfo {
@@ -131,7 +147,7 @@ impl PluginInfo {
             tag: config.tag.clone(),
             plugin_type: factory.plugin_type(&config.tag),
             args: config.args.clone(),
-            plugin,
+            plugin: Arc::new(plugin),
         }
     }
 }

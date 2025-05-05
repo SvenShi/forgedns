@@ -10,13 +10,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+use async_trait::async_trait;
 use crate::core::context::DnsContext;
 use crate::plugin::Plugin;
 
 pub mod forward;
 
-
 ///
-pub trait Executable: Plugin {
-    fn execute(&self, context: &mut DnsContext<'_>) -> impl Future<Output=()> + Send;
+#[async_trait]
+pub trait Executable: Plugin{
+    async fn execute(&self, context: &mut DnsContext<'_>);
 }

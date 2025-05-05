@@ -10,19 +10,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::executable::Executable;
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
+use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
 use log::debug;
-use std::sync::{Arc, Mutex};
-
-/// dns请求转发器
-pub trait RequestForwarder: Executable {
-    fn forward(&self, context: &mut DnsContext<'_>) -> impl Future<Output = ()> + Send;
-}
+use std::any::Any;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// 单线程的dns转发器
 pub struct SequentialDnsForwarder {
@@ -55,17 +52,12 @@ impl PluginFactory for ForwardFactory {
     }
 }
 
+#[async_trait]
 impl Executable for SequentialDnsForwarder {
     async fn execute(&self, context: &mut DnsContext<'_>) {
-        self.forward(context).await;
-    }
-}
-
-impl RequestForwarder for SequentialDnsForwarder {
-    async fn forward(&self, context: &mut DnsContext<'_>) {
         let query = context.request_info.query;
 
-        let response = self.client.lock().unwrap().query(
+        let response = self.client.lock().await.query(
             query.name().into(),
             query.query_class(),
             query.query_type(),

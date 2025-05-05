@@ -11,24 +11,52 @@
  * limitations under the License.
  */
 use crate::config::config::PluginConfig;
-use crate::plugin::{Plugin, PluginFactory, PluginMainType};
+use crate::core::handler::DnsRequestHandler;
+use crate::plugin::executable::Executable;
 use crate::plugin::server::Server;
+use crate::plugin::{Plugin, PluginFactory, PluginMainType, get_plugin};
+use async_trait::async_trait;
+use hickory_server::ServerFuture;
+use serde::Deserialize;
+use std::sync::Arc;
+use tokio::net::UdpSocket;
 
-pub struct UdpServer {}
+#[derive(Deserialize)]
+pub struct UdpServerConfig {
+    /// server执行入口
+    pub entry: String,
+    /// server监听地址
+    pub listen: String,
+}
+
+pub struct UdpServer {
+    entry: Arc<Box<dyn Executable>>,
+    listen: String,
+}
 
 impl Plugin for UdpServer {
     fn init(&self) {
-        todo!()
+        self.run();
     }
 
-    fn destroy(&self) {
-        todo!()
-    }
+    fn destroy(&self) {}
 }
 
 impl Server for UdpServer {
-    fn run() {
-        todo!()
+    fn run(&self) {
+        let listen = self.listen.clone();
+        let entry = self.entry.clone();
+
+        tokio::spawn(async move {
+            let bind = UdpSocket::bind(listen);
+            let udp_socket = bind.await.unwrap();
+            let mut server_future = ServerFuture::new(DnsRequestHandler { executor: entry });
+            server_future.register_socket(udp_socket);
+            server_future
+                .block_until_done()
+                .await
+                .unwrap_or_else(|e| panic!("UDP Server 启动失败。{}", e));
+        });
     }
 }
 
@@ -36,7 +64,34 @@ pub struct UdpServerFactory {}
 
 impl PluginFactory for UdpServerFactory {
     fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
-        todo!()
+        let udp_config = match plugin_info.args.clone() {
+            Some(args) => serde_yml::from_value::<UdpServerConfig>(args)
+                .unwrap_or_else(|e| panic!("初始化UDP Server时，读取配置异常。Error:{}", e)),
+            None => {
+                panic!("初始化UDP Server需要配置监听地址(listen)以及服务入口(entry)")
+            }
+        };
+
+        let entry = get_plugin(&udp_config.entry).expect(
+            format!(
+                "请检查{} UDP Server的入口插件{}是否存在",
+                plugin_info.tag, udp_config.entry
+            )
+            .as_str(),
+        );
+        let plugin = entry.plugin.clone();
+
+        let executable = Arc::downcast::<Box<dyn Executable>>(plugin).unwrap_or_else(|_| {
+            panic!(
+                "插件{}不是可执行插件(Executable)，无法作为UDP Server的入口",
+                udp_config.entry
+            )
+        });
+
+        Box::new(UdpServer {
+            entry: executable,
+            listen: udp_config.listen,
+        })
     }
 
     fn plugin_type(&self, tag: &str) -> PluginMainType {
