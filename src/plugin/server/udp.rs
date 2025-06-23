@@ -14,10 +14,12 @@ use crate::config::config::PluginConfig;
 use crate::core::handler::DnsRequestHandler;
 use crate::plugin::executable::Executable;
 use crate::plugin::server::Server;
-use crate::plugin::{Plugin, PluginFactory, PluginMainType, get_plugin};
+use crate::plugin::{get_plugin, Plugin, PluginFactory, PluginMainType};
 use hickory_server::ServerFuture;
 use serde::Deserialize;
 use std::sync::Arc;
+use async_trait::async_trait;
+use log::info;
 use tokio::net::UdpSocket;
 
 #[derive(Deserialize)]
@@ -45,9 +47,9 @@ impl Server for UdpServer {
     fn run(&self) {
         let listen = self.listen.clone();
         let entry = self.entry.clone();
-
+        let addr = listen.clone();
         tokio::spawn(async move {
-            let bind = UdpSocket::bind(listen);
+            let bind = UdpSocket::bind(addr);
             let udp_socket = bind.await.unwrap();
             let mut server_future = ServerFuture::new(DnsRequestHandler { executor: entry });
             server_future.register_socket(udp_socket);
@@ -56,13 +58,15 @@ impl Server for UdpServer {
                 .await
                 .unwrap_or_else(|e| panic!("UDP Server 启动失败。{}", e));
         });
+        info!("UDP Server启动成功，监听地址：{listen}");
     }
 }
 
 pub struct UdpServerFactory {}
 
+#[async_trait]
 impl PluginFactory for UdpServerFactory {
-    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
+    async fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
         let udp_config = match plugin_info.args.clone() {
             Some(args) => serde_yml::from_value::<UdpServerConfig>(args)
                 .unwrap_or_else(|e| panic!("初始化UDP Server时，读取配置异常。Error:{}", e)),
@@ -79,6 +83,8 @@ impl PluginFactory for UdpServerFactory {
             .as_str(),
         );
         let plugin = entry.plugin.clone();
+        
+        //todo downcast error
 
         let executable = Arc::downcast::<Box<dyn Executable>>(plugin).unwrap_or_else(|_| {
             panic!(

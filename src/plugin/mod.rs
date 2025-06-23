@@ -14,16 +14,15 @@
 use crate::config::config::{Config, PluginConfig};
 use crate::plugin::executable::forward::ForwardFactory;
 use crate::plugin::server::udp::UdpServerFactory;
-use executable::Executable;
+use async_trait::async_trait;
+use dashmap::DashMap;
 use lazy_static::lazy_static;
-use log::info;
+use log::{info, log};
 use serde::Deserialize;
 use serde_yml::Value;
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 pub mod executable;
 mod server;
@@ -35,26 +34,25 @@ lazy_static! {
         m.insert("udp_server", Box::new(UdpServerFactory {}));
         m
     };
-    static ref PLUGINS: RwLock<HashMap<String, Arc<Box<PluginInfo>>>> = RwLock::new(HashMap::new());
+    static ref PLUGINS: DashMap<String, Arc<Box<PluginInfo>>> = DashMap::new();
 }
 
 /// 初始化插件
-pub fn init(config: Config) {
-    let mut plugins = PLUGINS.blocking_write();
+pub async fn init(config: Config) {
     // 每种插件都要实现一个插件构造工厂，通过构造工厂来创造插件
     for plugin_config in config.plugins {
         let key = plugin_config.plugin_type.as_str();
         let factory = FACTORIES
             .get(key)
             .unwrap_or_else(|| panic!("plugin {key} not found"));
-        let plugin_info = PluginInfo::from(&plugin_config, &factory);
+        let plugin_info = PluginInfo::from(&plugin_config, &factory).await;
 
         let plugin = &plugin_info.plugin;
-        
+
         plugin.init();
 
         info!("{} 插件构造成功", plugin_info.plugin_type);
-        plugins.insert(
+        PLUGINS.insert(
             plugin_config.tag.to_owned(),
             Arc::new(Box::new(plugin_info)),
         );
@@ -62,8 +60,7 @@ pub fn init(config: Config) {
 }
 
 pub fn get_plugin(tag: &str) -> Option<Arc<Box<PluginInfo>>> {
-    let read_guard = PLUGINS.blocking_read();
-    read_guard.get(tag).cloned()
+    PLUGINS.get(tag).map(|v| v.clone())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -121,8 +118,9 @@ pub trait Plugin: Send + Sync + 'static {
 }
 
 /// 插件构造工厂
+#[async_trait]
 pub trait PluginFactory: Send + Sync + 'static {
-    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin>;
+    async fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin>;
 
     fn plugin_type(&self, tag: &str) -> PluginMainType;
 }
@@ -140,8 +138,8 @@ pub struct PluginInfo {
 }
 
 impl PluginInfo {
-    pub fn from(config: &PluginConfig, factory: &Box<dyn PluginFactory>) -> PluginInfo {
-        let plugin = factory.create(config);
+    pub async fn from(config: &PluginConfig, factory: &Box<dyn PluginFactory>) -> PluginInfo {
+        let plugin = factory.create(config).await;
 
         PluginInfo {
             tag: config.tag.clone(),

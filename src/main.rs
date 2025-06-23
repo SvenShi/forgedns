@@ -33,11 +33,10 @@ mod core;
 mod plugin;
 
 fn main() -> Result<(), String> {
-    app_init();
     tokio_run()
 }
 
-fn app_init() {
+async fn app_init() {
     let runtime = core::init();
     let options = runtime.options;
     let config = config::init(&options.config);
@@ -47,12 +46,12 @@ fn app_init() {
         Some(level) => log_config.level = level,
     }
     let _ = core::log_init(log_config);
-    plugin::init(config);
+    plugin::init(config).await;
 }
 
 fn tokio_run() -> Result<(), String> {
     info!("RustDNS {} starting...", hickory_client::version());
-    let mut tokio_runtime = tokio::runtime::Builder::new_multi_thread();
+    let mut tokio_runtime = runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
         .thread_name("rustdns-worker")
@@ -61,17 +60,9 @@ fn tokio_run() -> Result<(), String> {
         .build()
         .map_err(|err| format!("failed to initialize Tokio runtime: {err}"))?;
     tokio_runtime.block_on(async_run())
-
 }
 
 async fn async_run() -> Result<(), String> {
-    let address = SocketAddr::from(([223, 5, 5, 5], 53));
-    let conn = UdpClientStream::builder(address, TokioRuntimeProvider::default()).build();
-    let (client, bg) = Client::connect(conn).await.unwrap();
-    tokio::spawn(bg);
-
-    let _forwarder = SequentialDnsForwarder {
-        client: Arc::new(Mutex::new(client)),
-    };
+    app_init().await;
     Ok(())
 }

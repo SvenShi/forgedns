@@ -2,6 +2,7 @@
 name = "rustdns"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [dependencies]
 hickory-client = "0.25.0-alpha"
@@ -17,3 +18,4 @@ serde_yml = "0.0.12"
 clap = { version = "4.5", features = ["derive"] }
 tracing-appender = "0.2.3"
 lazy_static = "1.5"
+dashmap = "5"

@@ -21,7 +21,7 @@ pub struct Runtime {
 #[derive(Parser)]
 #[clap(version = "1.0", author = "Sven <shiwei@vankeytech.com>")]
 pub struct Options {
-    #[clap(short, long, default_value = "config.json")]
+    #[clap(short, long, default_value = "config.yaml")]
     pub config: PathBuf,
     #[clap(short, long)]
     pub log_level: Option<String>,
