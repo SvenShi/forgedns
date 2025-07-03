@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
 use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::udp::UdpClientStream;
-use log::debug;
+use log::{debug, info};
 use serde::Deserialize;
 use std::any::Any;
 use std::net::{IpAddr, SocketAddr};
@@ -29,11 +29,43 @@ use tokio::sync::Mutex;
 
 /// 单线程的dns转发器
 pub struct SequentialDnsForwarder {
+    pub tag: String,
     /// 发送dns请求的客户端
     pub client: Arc<Mutex<Client>>,
 }
 
+#[async_trait]
 impl Plugin for SequentialDnsForwarder {
+    fn tag(&self) -> &str {
+        self.tag.as_str()
+    }
+
+    async fn execute(&self, context: &mut DnsContext<'_>) {
+        let query = context.request_info.query;
+
+        let response = self.client.lock().await.query(
+            query.name().into(),
+            query.query_class(),
+            query.query_type(),
+        );
+
+        info!(
+            "收到dns请求 source:{} , query:{}",
+            context.request_info.src,
+            query.name().to_string()
+        );
+
+        match response.await {
+            Ok(res) => {
+                context.response = Some(res);
+            }
+            Err(e) => {
+                debug!("dns request has err: {e}");
+                context.response = None;
+            }
+        }
+    }
+
     fn init(&self) {}
 
     fn destroy(&self) {}
@@ -73,6 +105,7 @@ impl PluginFactory for ForwardFactory {
         tokio::spawn(bg);
 
         Box::new(SequentialDnsForwarder {
+            tag: plugin_info.tag.clone(),
             client: Arc::new(Mutex::new(client)),
         })
     }
@@ -87,23 +120,5 @@ impl PluginFactory for ForwardFactory {
 
 #[async_trait]
 impl Executable for SequentialDnsForwarder {
-    async fn execute(&self, context: &mut DnsContext<'_>) {
-        let query = context.request_info.query;
 
-        let response = self.client.lock().await.query(
-            query.name().into(),
-            query.query_class(),
-            query.query_type(),
-        );
-
-        match response.await {
-            Ok(res) => {
-                context.response = Some(res);
-            }
-            Err(e) => {
-                debug!("dns request has err: {e}");
-                context.response = None;
-            }
-        }
-    }
 }

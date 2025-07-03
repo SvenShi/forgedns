@@ -12,11 +12,12 @@
  */
 use crate::core::context::DnsContext;
 use crate::plugin::executable::Executable;
+use async_trait::async_trait;
 use hickory_server::authority::MessageResponseBuilder;
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
+use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
 
 // dns请求处理
 pub struct DnsRequestHandler {
@@ -31,7 +32,7 @@ impl RequestHandler for DnsRequestHandler {
         request: &Request,
         mut response_handle: R,
     ) -> ResponseInfo {
-        println!("Handling request: {:?}", request);
+        info!("Handling request: {:?}", request);
         let mut context = DnsContext {
             request_info: request.request_info().unwrap(),
             response: None,
@@ -39,16 +40,20 @@ impl RequestHandler for DnsRequestHandler {
             attributes: HashMap::new(),
         };
 
+        info!("................{}", self.executor.tag());
+
         // 执行程序入口执行
         self.executor.execute(&mut context).await;
 
         match context.response {
             None => {
+                info!("No response received");
                 let response = MessageResponseBuilder::from_message_request(request)
                     .build_no_records(request.header().to_owned());
                 response_handle.send_response(response).await.unwrap()
             }
             Some(res) => {
+                info!("Response received: {:?}", res);
                 let response = MessageResponseBuilder::from_message_request(request).build(
                     request.header().to_owned(),
                     res.answers().iter(),

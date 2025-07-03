@@ -7,7 +7,7 @@ build = "build.rs"
 [dependencies]
 hickory-client = "0.25.0-alpha"
 hickory-server = "0.25.0-alpha"
-tokio = "1.43"
+tokio = {version = "1" ,features = ["full"]}
 async-trait = "0.1"
 log = "0.4"
 tracing = "0.1"

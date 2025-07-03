@@ -15,12 +15,13 @@ use crate::core::handler::DnsRequestHandler;
 use crate::plugin::executable::Executable;
 use crate::plugin::server::Server;
 use crate::plugin::{get_plugin, Plugin, PluginFactory, PluginMainType};
+use async_trait::async_trait;
 use hickory_server::ServerFuture;
+use log::info;
 use serde::Deserialize;
 use std::sync::Arc;
-use async_trait::async_trait;
-use log::info;
 use tokio::net::UdpSocket;
+use crate::core::context::DnsContext;
 
 #[derive(Deserialize)]
 pub struct UdpServerConfig {
@@ -31,11 +32,20 @@ pub struct UdpServerConfig {
 }
 
 pub struct UdpServer {
+    tag: String,
     entry: Arc<Box<dyn Executable>>,
     listen: String,
 }
 
+#[async_trait]
 impl Plugin for UdpServer {
+    fn tag(&self) -> &str {
+        self.tag.as_str()
+    }
+
+    async fn execute(&self, context: &mut DnsContext<'_>) {
+    }
+
     fn init(&self) {
         self.run();
     }
@@ -83,17 +93,11 @@ impl PluginFactory for UdpServerFactory {
             .as_str(),
         );
         let plugin = entry.plugin.clone();
-        
-        //todo downcast error
 
-        let executable = Arc::downcast::<Box<dyn Executable>>(plugin).unwrap_or_else(|_| {
-            panic!(
-                "插件{}不是可执行插件(Executable)，无法作为UDP Server的入口",
-                udp_config.entry
-            )
-        });
+        let executable = unsafe_cast_to_executable(plugin);
 
         Box::new(UdpServer {
+            tag: plugin_info.tag.clone(),
             entry: executable,
             listen: udp_config.listen,
         })
@@ -104,5 +108,15 @@ impl PluginFactory for UdpServerFactory {
             tag: tag.to_string(),
             type_name: "udp".to_string(),
         }
+    }
+}
+
+
+fn unsafe_cast_to_executable(plugin: Arc<Box<dyn Plugin>>) -> Arc<Box<dyn Executable>> {
+    unsafe {
+        let raw: *const Box<dyn Plugin> = Arc::into_raw(plugin);
+        // 转为 *const Box<dyn Executable>
+        let raw_exec = raw as *const Box<dyn Executable>;
+        Arc::from_raw(raw_exec)
     }
 }

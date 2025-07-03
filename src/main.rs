@@ -27,6 +27,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::runtime;
+use tokio::runtime::Runtime;
 
 mod config;
 mod core;
@@ -64,5 +65,12 @@ fn tokio_run() -> Result<(), String> {
 
 async fn async_run() -> Result<(), String> {
     app_init().await;
+
+    // ✅ 等待 Ctrl+C 或其它停止事件
+    tokio::signal::ctrl_c()
+        .await
+        .map_err(|e| format!("接收关闭信号失败: {}", e))?;
+
+    info!("接收到关闭信号，正在退出...");
     Ok(())
 }

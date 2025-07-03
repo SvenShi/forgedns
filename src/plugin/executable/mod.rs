@@ -20,5 +20,4 @@ pub mod forward;
 ///
 #[async_trait]
 pub trait Executable: Plugin{
-    async fn execute(&self, context: &mut DnsContext<'_>);
 }
