@@ -11,9 +11,8 @@
  * limitations under the License.
  */
 use crate::config::config::PluginConfig;
+use crate::core::context::DnsContext;
 use crate::core::handler::DnsRequestHandler;
-use crate::plugin::executable::Executable;
-use crate::plugin::server::Server;
 use crate::plugin::{get_plugin, Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
 use hickory_server::ServerFuture;
@@ -21,7 +20,6 @@ use log::info;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use crate::core::context::DnsContext;
 
 #[derive(Deserialize)]
 pub struct UdpServerConfig {
@@ -33,7 +31,7 @@ pub struct UdpServerConfig {
 
 pub struct UdpServer {
     tag: String,
-    entry: Arc<Box<dyn Executable>>,
+    entry: Arc<Box<dyn Plugin>>,
     listen: String,
 }
 
@@ -43,18 +41,7 @@ impl Plugin for UdpServer {
         self.tag.as_str()
     }
 
-    async fn execute(&self, context: &mut DnsContext<'_>) {
-    }
-
     fn init(&self) {
-        self.run();
-    }
-
-    fn destroy(&self) {}
-}
-
-impl Server for UdpServer {
-    fn run(&self) {
         let listen = self.listen.clone();
         let entry = self.entry.clone();
         let addr = listen.clone();
@@ -70,7 +57,22 @@ impl Server for UdpServer {
         });
         info!("UDP Server启动成功，监听地址：{listen}");
     }
+
+    async fn execute(&self, context: &mut DnsContext<'_>) {
+    }
+
+    fn main_type(&self) -> PluginMainType {
+        PluginMainType::Executor {
+            tag: self.tag.to_string(),
+            type_name: "UdpServer".to_string(),
+        }
+    }
+
+    fn destroy(&self) {
+
+    }
 }
+
 
 pub struct UdpServerFactory {}
 
@@ -94,11 +96,9 @@ impl PluginFactory for UdpServerFactory {
         );
         let plugin = entry.plugin.clone();
 
-        let executable = unsafe_cast_to_executable(plugin);
-
         Box::new(UdpServer {
             tag: plugin_info.tag.clone(),
-            entry: executable,
+            entry: plugin,
             listen: udp_config.listen,
         })
     }
@@ -108,15 +108,5 @@ impl PluginFactory for UdpServerFactory {
             tag: tag.to_string(),
             type_name: "udp".to_string(),
         }
-    }
-}
-
-
-fn unsafe_cast_to_executable(plugin: Arc<Box<dyn Plugin>>) -> Arc<Box<dyn Executable>> {
-    unsafe {
-        let raw: *const Box<dyn Plugin> = Arc::into_raw(plugin);
-        // 转为 *const Box<dyn Executable>
-        let raw_exec = raw as *const Box<dyn Executable>;
-        Arc::from_raw(raw_exec)
     }
 }

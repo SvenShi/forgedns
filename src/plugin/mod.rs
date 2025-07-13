@@ -11,20 +11,18 @@
  * limitations under the License.
  */
 use crate::config::config::{Config, PluginConfig};
+use crate::core::context::DnsContext;
 use crate::plugin::executable::forward::ForwardFactory;
-use crate::plugin::executable::Executable;
 use crate::plugin::server::udp::UdpServerFactory;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
-use log::{info, log};
+use log::info;
 use serde::Deserialize;
 use serde_yml::Value;
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::sync::{Arc, RwLock};
-use crate::core::context::DnsContext;
+use std::sync::Arc;
 
 pub mod executable;
 mod server;
@@ -116,9 +114,12 @@ impl Display for PluginMainType {
 #[async_trait]
 pub trait Plugin: Send + Sync + 'static {
     fn tag(&self) -> &str;
-    async fn execute(&self, context: &mut DnsContext<'_>);
 
     fn init(&self);
+
+    async fn execute(&self, context: &mut DnsContext<'_>);
+
+    fn main_type(&self) -> PluginMainType;
 
     fn destroy(&self);
 }

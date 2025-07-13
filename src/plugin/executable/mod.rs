@@ -11,13 +11,6 @@
  * limitations under the License.
  */
 
-use async_trait::async_trait;
-use crate::core::context::DnsContext;
-use crate::plugin::Plugin;
 
 pub mod forward;
 
-///
-#[async_trait]
-pub trait Executable: Plugin{
-}

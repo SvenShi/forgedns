@@ -10,10 +10,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::plugin::Plugin;
-
 pub mod udp;
 
-pub trait Server: Plugin {
-    fn run(&self);
-}

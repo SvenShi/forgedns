@@ -12,8 +12,6 @@
  */
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::plugin::executable::Executable;
-use crate::plugin::server::udp::UdpServerConfig;
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
@@ -21,7 +19,6 @@ use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::udp::UdpClientStream;
 use log::{debug, info};
 use serde::Deserialize;
-use std::any::Any;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -39,6 +36,8 @@ impl Plugin for SequentialDnsForwarder {
     fn tag(&self) -> &str {
         self.tag.as_str()
     }
+
+    fn init(&self) {}
 
     async fn execute(&self, context: &mut DnsContext<'_>) {
         let query = context.request_info.query;
@@ -66,7 +65,12 @@ impl Plugin for SequentialDnsForwarder {
         }
     }
 
-    fn init(&self) {}
+    fn main_type(&self) -> PluginMainType {
+        PluginMainType::Executor {
+            tag: self.tag.to_string(),
+            type_name: "SequentialDnsForwarder".to_string(),
+        }
+    }
 
     fn destroy(&self) {}
 }
@@ -116,9 +120,4 @@ impl PluginFactory for ForwardFactory {
             type_name: "forward".to_string(),
         }
     }
-}
-
-#[async_trait]
-impl Executable for SequentialDnsForwarder {
-
 }

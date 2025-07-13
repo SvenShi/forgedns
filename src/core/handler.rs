@@ -11,7 +11,7 @@
  * limitations under the License.
  */
 use crate::core::context::DnsContext;
-use crate::plugin::executable::Executable;
+use crate::plugin::Plugin;
 use async_trait::async_trait;
 use hickory_server::authority::MessageResponseBuilder;
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 // dns请求处理
 pub struct DnsRequestHandler {
-    pub executor: Arc<Box<dyn Executable>>,
+    pub executor: Arc<Box<dyn Plugin>>,
 }
 
 // 修改后的handle_request方法
