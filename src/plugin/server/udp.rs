@@ -10,6 +10,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::future;
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::handler::DnsRequestHandler;
