@@ -18,7 +18,6 @@ Cargo.lock
 ### JetBrains template
 # Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio, WebStorm and Rider
 # Reference: https://intellij-support.jetbrains.com/hc/en-us/articles/206544839
-.idea/
 # User-specific stuff
 .idea/**/workspace.xml
 .idea/**/tasks.xml
@@ -93,4 +92,3 @@ fabric.properties
 
 # Android studio 3.1+ serialized cache file
 .idea/caches/build_file_checksums.ser
-
