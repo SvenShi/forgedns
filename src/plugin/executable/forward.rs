@@ -12,28 +12,17 @@
  */
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
+use crate::pkg::upstream::{UpStream, UpStreamBuilder};
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
-use crate::pkg::upstream::UpStream;
 use async_trait::async_trait;
-use hickory_client::client::{Client, ClientHandle};
-use hickory_client::proto::runtime::TokioRuntimeProvider;
-use hickory_client::proto::udp::UdpClientStream;
 use log::{debug, info};
 use serde::Deserialize;
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
-use std::sync::Arc;
-use hickory_client::proto::h2::{HttpsClientStream, HttpsClientStreamBuilder};
-use hickory_client::proto::tcp::TcpClientStream;
-use tokio::sync::Mutex;
 
 /// 单线程的dns转发器
 pub struct SequentialDnsForwarder {
     pub tag: String,
-    /// 发送dns请求的客户端
-    pub client: Arc<Mutex<Client>>,
 
-    pub upstream: UpStream,
+    pub upstream: Box<dyn UpStream>,
 }
 
 #[async_trait]
@@ -42,24 +31,16 @@ impl Plugin for SequentialDnsForwarder {
         self.tag.as_str()
     }
 
-    fn init(&self) {}
+    fn init(&mut self) {}
 
-    async fn execute(&self, context: &mut DnsContext<'_>) {
-        let query = context.request_info.query;
-
-        let response = self.client.lock().await.query(
-            query.name().into(),
-            query.query_class(),
-            query.query_type(),
-        );
-
+    async fn execute(&mut self, context: &mut DnsContext<'_>) {
         info!(
             "收到dns请求 source:{} , query:{}",
             context.request_info.src,
-            query.name().to_string()
+            context.request_info.query.name().to_string()
         );
 
-        match response.await {
+        match self.upstream.query(context).await {
             Ok(res) => {
                 context.response = Some(res);
             }
@@ -77,7 +58,7 @@ impl Plugin for SequentialDnsForwarder {
         }
     }
 
-    fn destroy(&self) {}
+    fn destroy(&mut self) {}
 }
 
 #[derive(Deserialize)]
@@ -87,7 +68,6 @@ pub struct ForwardConfig {
     /// server监听地址
     pub upstreams: Vec<UpStreamConfig>,
 }
-
 
 #[derive(Deserialize)]
 pub struct UpStreamConfig {
@@ -110,15 +90,14 @@ impl PluginFactory for ForwardFactory {
             }
         };
         // 注意以后要根据上游地址的数量 拆分不同的实现类
-        let addr = IpAddr::from_str(forward_config.upstreams[0].addr.as_str()).unwrap();
-        let socket_addr = SocketAddr::new(addr, 53);
-        let conn = UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
-        let (client, bg) = Client::connect(conn).await.unwrap();
-        tokio::spawn(bg);
+        // let addr = IpAddr::from_str(.addr.as_str()).unwrap();
+        // let socket_addr = SocketAddr::new(addr, 53);
+        // let conn = UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
+        // tokio::spawn(bg);
 
         Box::new(SequentialDnsForwarder {
             tag: plugin_info.tag.clone(),
-            client: Arc::new(Mutex::new(client)),
+            upstream: UpStreamBuilder::build(&forward_config.upstreams[0]),
         })
     }
 

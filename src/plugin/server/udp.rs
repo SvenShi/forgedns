@@ -10,7 +10,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::future;
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::handler::DnsRequestHandler;
@@ -19,8 +18,10 @@ use async_trait::async_trait;
 use hickory_server::ServerFuture;
 use log::info;
 use serde::Deserialize;
+use std::future;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
+use tokio::sync::RwLock;
 
 #[derive(Deserialize)]
 pub struct UdpServerConfig {
@@ -32,7 +33,7 @@ pub struct UdpServerConfig {
 
 pub struct UdpServer {
     tag: String,
-    entry: Arc<Box<dyn Plugin>>,
+    entry: Arc<RwLock<Box<dyn Plugin>>>,
     listen: String,
 }
 
@@ -42,14 +43,16 @@ impl Plugin for UdpServer {
         self.tag.as_str()
     }
 
-    fn init(&self) {
+    fn init(&mut self) {
         let listen = self.listen.clone();
-        let entry = self.entry.clone();
         let addr = listen.clone();
+        let entry_executor = self.entry.clone();
         tokio::spawn(async move {
             let bind = UdpSocket::bind(addr);
             let udp_socket = bind.await.unwrap();
-            let mut server_future = ServerFuture::new(DnsRequestHandler { executor: entry });
+            let mut server_future = ServerFuture::new(DnsRequestHandler {
+                executor: entry_executor,
+            });
             server_future.register_socket(udp_socket);
             server_future
                 .block_until_done()
@@ -59,8 +62,7 @@ impl Plugin for UdpServer {
         info!("UDP Server启动成功，监听地址：{listen}");
     }
 
-    async fn execute(&self, context: &mut DnsContext<'_>) {
-    }
+    async fn execute(&mut self, context: &mut DnsContext<'_>) {}
 
     fn main_type(&self) -> PluginMainType {
         PluginMainType::Executor {
@@ -69,11 +71,8 @@ impl Plugin for UdpServer {
         }
     }
 
-    fn destroy(&self) {
-
-    }
+    fn destroy(&mut self) {}
 }
-
 
 pub struct UdpServerFactory {}
 
@@ -95,11 +94,10 @@ impl PluginFactory for UdpServerFactory {
             )
             .as_str(),
         );
-        let plugin = entry.plugin.clone();
 
         Box::new(UdpServer {
             tag: plugin_info.tag.clone(),
-            entry: plugin,
+            entry: entry.plugin.clone(),
             listen: udp_config.listen,
         })
     }

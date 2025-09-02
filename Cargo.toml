@@ -19,3 +19,4 @@ clap = { version = "4.5", features = ["derive"] }
 tracing-appender = "0.2.3"
 lazy_static = "1.5"
 dashmap = "6"
+url = "2.5.7"

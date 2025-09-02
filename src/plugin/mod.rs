@@ -23,6 +23,7 @@ use serde_yml::Value;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub mod executable;
 mod server;
@@ -47,9 +48,7 @@ pub async fn init(config: Config) {
             .unwrap_or_else(|| panic!("plugin {key} not found"));
         let plugin_info = PluginInfo::from(&plugin_config, &factory).await;
 
-        let plugin = &plugin_info.plugin;
-
-        plugin.init();
+        plugin_info.plugin.write().await.init();
 
         info!("{} 插件构造成功", plugin_info.plugin_type);
         PLUGINS.insert(
@@ -115,13 +114,13 @@ impl Display for PluginMainType {
 pub trait Plugin: Send + Sync + 'static {
     fn tag(&self) -> &str;
 
-    fn init(&self);
+    fn init(&mut self);
 
-    async fn execute(&self, context: &mut DnsContext<'_>);
+    async fn execute(&mut self, context: &mut DnsContext<'_>);
 
     fn main_type(&self) -> PluginMainType;
 
-    fn destroy(&self);
+    fn destroy(&mut self);
 }
 
 /// 插件构造工厂
@@ -141,7 +140,7 @@ pub struct PluginInfo {
     /// 插件参数
     pub args: Option<Value>,
     ///插件
-    pub plugin: Arc<Box<dyn Plugin>>,
+    pub plugin: Arc<RwLock<Box<dyn Plugin>>>,
 }
 
 impl PluginInfo {
@@ -152,7 +151,7 @@ impl PluginInfo {
             tag: config.tag.clone(),
             plugin_type: factory.plugin_type(&config.tag),
             args: config.args.clone(),
-            plugin: Arc::new(plugin),
+            plugin: Arc::new(RwLock::new(plugin)),
         }
     }
 }

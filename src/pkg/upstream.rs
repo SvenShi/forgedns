@@ -10,7 +10,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::core::context::DnsContext;
+use crate::plugin::executable::forward::UpStreamConfig;
+use async_trait::async_trait;
+use hickory_client::client::{Client, ClientHandle};
+use hickory_client::proto::ProtoError;
+use hickory_server::proto::xfer::DnsResponse;
+use url::Url;
+
 /// 上游服务器连接类型
+#[derive(Clone)]
 enum ConnectType {
     UDP,
     TCP,
@@ -43,10 +52,57 @@ impl ConnectType {
     }
 }
 
-///上游服务器
-pub struct UpStream {
+#[async_trait]
+pub trait UpStream: Send + Sync {
+    async fn query(&mut self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError>;
+
+    fn connect_type(&self) -> ConnectType;
+}
+
+pub struct DefaultUpStream {
     pub addr: String,
     pub port: u16,
     pub socks5: Option<String>,
     pub connect_type: ConnectType,
+    client: Client,
+}
+
+#[async_trait]
+impl UpStream for DefaultUpStream {
+    async fn query(&mut self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError> {
+        let query = context.request_info.query;
+        self.client
+            .query(query.name().into(), query.query_class(), query.query_type())
+            .await
+    }
+
+    fn connect_type(&self) -> ConnectType {
+        self.connect_type.clone()
+    }
+}
+
+pub struct UpStreamBuilder {}
+
+impl UpStreamBuilder {
+    pub fn build(up_stream_config: &UpStreamConfig) -> Box<dyn UpStream> {
+        let url = Url::parse(&up_stream_config.addr).expect("invalid upstream url");
+        let connect_type = match url.scheme() {
+            "udp" => ConnectType::UDP,
+            "tcp" => ConnectType::TCP,
+            "https" => ConnectType::HTTPS,
+            "tls" => ConnectType::TLS,
+            "quic" => ConnectType::QUIC,
+            "doq" => ConnectType::DOQ,
+            _ => ConnectType::UDP,
+        };
+
+        Box::new(DefaultUpStream {
+            addr: "".to_string(),
+            port: 0,
+            socks5: up_stream_config.socks5,
+            connect_type,
+            client: (),
+        })
+    }
+
 }

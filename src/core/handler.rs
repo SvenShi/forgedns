@@ -18,10 +18,11 @@ use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseI
 use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 // dns请求处理
 pub struct DnsRequestHandler {
-    pub executor: Arc<Box<dyn Plugin>>,
+    pub executor: Arc<RwLock<Box<dyn Plugin>>>,
 }
 
 // 修改后的handle_request方法
@@ -40,10 +41,10 @@ impl RequestHandler for DnsRequestHandler {
             attributes: HashMap::new(),
         };
 
-        info!("................{}", self.executor.tag());
+        info!("................{}", self.executor.read().await.tag());
 
         // 执行程序入口执行
-        self.executor.execute(&mut context).await;
+        self.executor.write().await.execute(&mut context).await;
 
         match context.response {
             None => {
