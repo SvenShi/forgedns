@@ -5,8 +5,8 @@ edition = "2024"
 build = "build.rs"
 
 [dependencies]
-hickory-client = "0.25.0-alpha"
-hickory-server = "0.25.0-alpha"
+hickory-client = {version = "0.26.0-alpha.1",features = ["https-ring"]}
+hickory-server = "0.26.0-alpha.1"
 tokio = {version = "1" ,features = ["full"]}
 async-trait = "0.1"
 log = "0.4"
@@ -18,4 +18,4 @@ serde_yml = "0.0.12"
 clap = { version = "4.5", features = ["derive"] }
 tracing-appender = "0.2.3"
 lazy_static = "1.5"
-dashmap = "5"
+dashmap = "6"

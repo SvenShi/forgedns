@@ -20,6 +20,7 @@ use tokio::runtime;
 
 mod config;
 mod core;
+mod pkg;
 mod plugin;
 
 fn main() -> Result<(), String> {

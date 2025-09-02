@@ -13,6 +13,7 @@
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
+use crate::pkg::upstream::UpStream;
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
 use hickory_client::proto::runtime::TokioRuntimeProvider;
@@ -22,6 +23,8 @@ use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
+use hickory_client::proto::h2::{HttpsClientStream, HttpsClientStreamBuilder};
+use hickory_client::proto::tcp::TcpClientStream;
 use tokio::sync::Mutex;
 
 /// 单线程的dns转发器
@@ -29,6 +32,8 @@ pub struct SequentialDnsForwarder {
     pub tag: String,
     /// 发送dns请求的客户端
     pub client: Arc<Mutex<Client>>,
+
+    pub upstream: UpStream,
 }
 
 #[async_trait]
@@ -83,10 +88,13 @@ pub struct ForwardConfig {
     pub upstreams: Vec<UpStreamConfig>,
 }
 
+
 #[derive(Deserialize)]
 pub struct UpStreamConfig {
     /// 请求服务器地址
     pub addr: String,
+    pub port: Option<u16>,
+    pub socks5: Option<String>,
 }
 
 pub struct ForwardFactory;

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GitCommitMessageStorage">
+    <option name="messageStorage">
+      <MessageStorage>
+        <option name="commitTemplate">
+          <CommitTemplate>
+            <option name="body" value="" />
+            <option name="changes" value="" />
+            <option name="closes" value="" />
+            <option name="scope" value="" />
+            <option name="skipCi" value="" />
+            <option name="subject" value="" />
+            <option name="type" value="feat" />
+          </CommitTemplate>
+        </option>
+      </MessageStorage>
+    </option>
+  </component>
+</project>
