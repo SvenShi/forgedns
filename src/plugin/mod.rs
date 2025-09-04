@@ -45,14 +45,14 @@ pub async fn init(config: Config) {
         let key = plugin_config.plugin_type.as_str();
         let factory = FACTORIES
             .get(key)
-            .unwrap_or_else(|| panic!("plugin {key} not found"));
+            .unwrap_or_else(|| panic!("Plugin {key} not found"));
         let plugin_info = PluginInfo::from(&plugin_config, &factory);
 
         {
+            info!("Plugin init {} start", plugin_info.plugin_type);
             plugin_info.plugin.write().await.init().await;
         }
 
-        info!("{} 插件构造成功", plugin_info.plugin_type);
         PLUGINS.insert(
             plugin_config.tag.to_owned(),
             Arc::new(Box::new(plugin_info)),

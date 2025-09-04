@@ -57,9 +57,9 @@ impl Plugin for UdpServer {
             server_future
                 .block_until_done()
                 .await
-                .unwrap_or_else(|e| panic!("UDP Server 启动失败。{}", e));
+                .unwrap_or_else(|e| panic!("UDP Server start failed.{}", e));
         });
-        info!("UDP Server启动成功，监听地址：{listen}");
+        info!("UDP Server started，listen:{listen}");
     }
 
     async fn execute(&self, _: &mut DnsContext<'_>) {}
@@ -81,15 +81,15 @@ impl PluginFactory for UdpServerFactory {
     fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
         let udp_config = match plugin_info.args.clone() {
             Some(args) => serde_yml::from_value::<UdpServerConfig>(args)
-                .unwrap_or_else(|e| panic!("初始化UDP Server时，读取配置异常。Error:{}", e)),
+                .unwrap_or_else(|e| panic!("UDP Server init failed, config error. Error:{}", e)),
             None => {
-                panic!("初始化UDP Server需要配置监听地址(listen)以及服务入口(entry)")
+                panic!("UDP Server must set 'listen' and 'entry' in config file.)")
             }
         };
 
         let entry = get_plugin(&udp_config.entry).expect(
             format!(
-                "请检查{} UDP Server的入口插件{}是否存在",
+                "UDP Server [{}] entry plugin [{}] not found",
                 plugin_info.tag, udp_config.entry
             )
             .as_str(),

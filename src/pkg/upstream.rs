@@ -156,6 +156,7 @@ impl DefaultUpStream {
         let conn = UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
         let (client, bg) = Client::connect(conn).await?;
         tokio::spawn(bg);
+        info!("Upstream connected to: {}", info.addr);
         Ok(client)
     }
 }
@@ -192,7 +193,7 @@ impl UpStreamBuilder {
         if !addr.contains("//") {
             return Self::detect_connect_type(&("udp://".to_owned() + addr));
         }
-        let url = Url::parse(addr).expect("invalid upstream url");
+        let url = Url::parse(addr).expect("Invalid upstream url");
         let connect_type;
         let new_addr;
         match url.scheme() {
