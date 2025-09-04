@@ -15,8 +15,8 @@
  */
 use std::future;
 
-use log::info;
 use tokio::runtime;
+use tracing::info;
 
 mod config;
 mod core;
@@ -27,7 +27,7 @@ fn main() -> Result<(), String> {
     tokio_run()
 }
 
-async fn app_init() {
+async fn app_run() {
     let runtime = core::init();
     let options = runtime.options;
     let config = config::init(&options.config);
@@ -54,7 +54,7 @@ fn tokio_run() -> Result<(), String> {
 }
 
 async fn async_run() -> Result<(), String> {
-    app_init().await;
+    app_run().await;
     future::pending::<()>().await;
     Ok(())
 }

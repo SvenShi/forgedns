@@ -9,7 +9,6 @@ hickory-client = {version = "0.26.0-alpha.1",features = ["https-ring"]}
 hickory-server = "0.26.0-alpha.1"
 tokio = {version = "1" ,features = ["full"]}
 async-trait = "0.1"
-log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 chrono = "0.4"

@@ -15,10 +15,10 @@ use crate::plugin::Plugin;
 use async_trait::async_trait;
 use hickory_server::authority::MessageResponseBuilder;
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
-use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
 
 // dns请求处理
 pub struct DnsRequestHandler {
@@ -33,13 +33,20 @@ impl RequestHandler for DnsRequestHandler {
         request: &Request,
         mut response_handle: R,
     ) -> ResponseInfo {
-        info!("Handling request: {:?}", request);
+        debug!("Handling request: {:?}", request);
         let mut context = DnsContext {
             request_info: request.request_info().unwrap(),
             response: None,
             mark: Vec::new(),
             attributes: HashMap::new(),
         };
+
+        info!(
+            "dns:request source:{} , query:{}, queryType:{}",
+            context.request_info.src,
+            context.request_info.query.name().to_string(),
+            context.request_info.query.query_type().to_string()
+        );
 
         {
             // 执行程序入口执行
@@ -48,13 +55,13 @@ impl RequestHandler for DnsRequestHandler {
 
         match context.response {
             None => {
-                info!("No response received");
+                warn!("No response received");
                 let response = MessageResponseBuilder::from_message_request(request)
                     .build_no_records(request.header().to_owned());
                 response_handle.send_response(response).await.unwrap()
             }
             Some(res) => {
-                info!("Response received: {:?}", res);
+                debug!("Response received: {:?}", res);
                 let response = MessageResponseBuilder::from_message_request(request).build(
                     request.header().to_owned(),
                     res.answers().iter(),

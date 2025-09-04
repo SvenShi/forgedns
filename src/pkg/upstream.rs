@@ -18,11 +18,11 @@ use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::udp::UdpClientStream;
 use hickory_client::proto::ProtoError;
 use hickory_server::proto::xfer::DnsResponse;
-use log::info;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use tokio::sync::RwLock;
 use tokio::task::yield_now;
+use tracing::info;
 use url::Url;
 
 /// 上游服务器连接类型

@@ -14,9 +14,7 @@ use crate::config::config::LogConfig;
 use crate::core::log::RustDnsLogFormatter;
 use crate::core::runtime::{Options, Runtime};
 use clap::Parser;
-use std::str::FromStr;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::filter::Directive;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter, Registry};
@@ -50,8 +48,6 @@ pub fn log_init(log: LogConfig) -> WorkerGuard {
         (None, None)
     };
 
-    // 解析日志级别
-    let directive = Directive::from_str(&log.level).unwrap_or_default();
 
     // 构建控制台layer
     let console_layer = fmt::layer()
@@ -65,15 +61,14 @@ pub fn log_init(log: LogConfig) -> WorkerGuard {
             .with_writer(writer)
     });
 
-    // 创建subscriber
+    let mut filter = EnvFilter::try_new(&log.level)
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // 屏蔽 hickory_server::server
+    filter = filter.add_directive("hickory_server::server=off".parse().unwrap());
+
     let subscriber = Registry::default()
-        .with(EnvFilter::builder()
-            .with_default_directive(directive)
-            .from_env()
-            .map_err(|err| {
-                format!("failed to parse environment variable for tracing: {err}")
-            })
-            .expect("tracing subscriber error"))
+        .with(filter)
         .with(console_layer);
 
     // 添加文件layer（如果存在）

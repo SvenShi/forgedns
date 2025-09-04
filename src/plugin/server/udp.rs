@@ -16,11 +16,11 @@ use crate::core::handler::DnsRequestHandler;
 use crate::plugin::{Plugin, PluginFactory, PluginMainType, get_plugin};
 use async_trait::async_trait;
 use hickory_server::ServerFuture;
-use log::info;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
+use tracing::info;
 
 #[derive(Deserialize)]
 pub struct UdpServerConfig {

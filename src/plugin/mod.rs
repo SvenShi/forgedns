@@ -17,13 +17,13 @@ use crate::plugin::server::udp::UdpServerFactory;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
-use log::info;
 use serde::Deserialize;
 use serde_yml::Value;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::info;
 
 pub mod executable;
 mod server;

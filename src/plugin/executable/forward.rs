@@ -15,8 +15,8 @@ use crate::core::context::DnsContext;
 use crate::pkg::upstream::{UpStream, UpStreamBuilder};
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
-use log::{debug, info};
 use serde::Deserialize;
+use tracing::debug;
 
 /// 单线程的dns转发器
 #[allow(unused)]
@@ -37,12 +37,6 @@ impl Plugin for SequentialDnsForwarder {
     }
 
     async fn execute(&self, context: &mut DnsContext<'_>) {
-        info!(
-            "收到dns请求 source:{} , query:{}",
-            context.request_info.src,
-            context.request_info.query.name().to_string()
-        );
-
         match self.upstream.query(context).await {
             Ok(res) => {
                 context.response = Some(res);
