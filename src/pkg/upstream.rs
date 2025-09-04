@@ -31,10 +31,9 @@ use url::Url;
 pub enum ConnectType {
     UDP,
     TCP,
-    HTTPS,
-    TLS,
-    QUIC,
-    DOH,
+    DoT,
+    DoQ,
+    DoH,
 }
 
 #[allow(unused)]
@@ -43,21 +42,19 @@ impl ConnectType {
         match self {
             ConnectType::UDP => 53,
             ConnectType::TCP => 53,
-            ConnectType::HTTPS => 443,
-            ConnectType::TLS => 853,
-            ConnectType::QUIC => 853,
-            ConnectType::DOH => 853,
+            ConnectType::DoT => 853,
+            ConnectType::DoQ => 853,
+            ConnectType::DoH => 853,
         }
     }
 
-    pub fn schema(&self) -> &str {
+    pub fn schema(&self) -> Vec<&str> {
         match self {
-            ConnectType::UDP => "udp",
-            ConnectType::TCP => "tcp",
-            ConnectType::HTTPS => "https",
-            ConnectType::TLS => "tls",
-            ConnectType::QUIC => "quic",
-            ConnectType::DOH => "doq",
+            ConnectType::UDP => vec!["udp", ""],
+            ConnectType::TCP => vec!["tcp"],
+            ConnectType::DoT => vec!["tls"],
+            ConnectType::DoQ => vec!["doq", "quic"],
+            ConnectType::DoH => vec!["doh", "https"],
         }
     }
 }
@@ -172,17 +169,15 @@ impl DefaultUpStream {
                 info!("TCP Upstream connected to: {}:{}", info.addr, info.port);
                 Ok(client)
             }
-            ConnectType::HTTPS => {
+            ConnectType::DoH => {
+                // HttpsClientStreamBuilder::build()
                 todo!("https is not yet implemented")
             }
-            ConnectType::TLS => {
+            ConnectType::DoT => {
                 todo!("tls is not yet implemented")
             }
-            ConnectType::QUIC => {
+            ConnectType::DoQ => {
                 todo!("quic is not yet implemented")
-            }
-            ConnectType::DOH => {
-                todo!("doq is not yet implemented")
             }
         }
     }
@@ -244,25 +239,20 @@ impl UpStreamBuilder {
                 connect_type = ConnectType::TCP;
                 new_addr = url.host_str().unwrap().to_string();
             }
-            "https" => {
-                connect_type = ConnectType::HTTPS;
-                new_addr = addr.to_string();
-            }
             "tls" => {
-                connect_type = ConnectType::TLS;
+                connect_type = ConnectType::DoT;
                 new_addr = url.host_str().unwrap().to_string();
             }
-            "quic" => {
-                connect_type = ConnectType::QUIC;
+            "quic" | "doq" => {
+                connect_type = ConnectType::DoQ;
                 new_addr = addr.to_string();
             }
-            "doq" => {
-                connect_type = ConnectType::DOH;
+            "https" | "doh" => {
+                connect_type = ConnectType::DoH;
                 new_addr = addr.to_string();
             }
             _ => {
-                connect_type = ConnectType::UDP;
-                new_addr = url.host_str().unwrap().to_string();
+                panic!("Invalid upstream url scheme");
             }
         };
         (connect_type, new_addr, url.port())
