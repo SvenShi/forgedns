@@ -15,6 +15,7 @@ use crate::plugin::executable::forward::UpStreamConfig;
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
 use hickory_client::proto::runtime::TokioRuntimeProvider;
+use hickory_client::proto::tcp::TcpClientStream;
 use hickory_client::proto::udp::UdpClientStream;
 use hickory_client::proto::ProtoError;
 use hickory_server::proto::xfer::DnsResponse;
@@ -33,7 +34,7 @@ pub enum ConnectType {
     HTTPS,
     TLS,
     QUIC,
-    DOQ,
+    DOH,
 }
 
 #[allow(unused)]
@@ -45,7 +46,7 @@ impl ConnectType {
             ConnectType::HTTPS => 443,
             ConnectType::TLS => 853,
             ConnectType::QUIC => 853,
-            ConnectType::DOQ => 853,
+            ConnectType::DOH => 853,
         }
     }
 
@@ -56,7 +57,7 @@ impl ConnectType {
             ConnectType::HTTPS => "https",
             ConnectType::TLS => "tls",
             ConnectType::QUIC => "quic",
-            ConnectType::DOQ => "doq",
+            ConnectType::DOH => "doq",
         }
     }
 }
@@ -117,7 +118,7 @@ impl UpStream for DefaultUpStream {
                 ConnectState::Connecting => {
                     info!("state: Connecting");
                     yield_now().await;
-                },
+                }
                 ConnectState::Connected { .. } | ConnectState::Failed(_) => {
                     info!("state: Connected");
                     break;
@@ -151,14 +152,52 @@ impl UpStream for DefaultUpStream {
 
 impl DefaultUpStream {
     async fn do_connect(info: &ConnectInfo) -> Result<Client, ProtoError> {
-        let addr = IpAddr::from_str(&info.addr).unwrap();
-        let socket_addr = SocketAddr::new(addr, 53);
-        let conn = UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
-        let (client, bg) = Client::connect(conn).await?;
-        tokio::spawn(bg);
-        info!("Upstream connected to: {}", info.addr);
-        Ok(client)
+        match info.connect_type {
+            ConnectType::UDP => {
+                let addr = IpAddr::from_str(&info.addr).unwrap();
+                let socket_addr = SocketAddr::new(addr, info.port);
+                let conn =
+                    UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
+                let (client, bg) = Client::connect(conn).await?;
+                tokio::spawn(bg);
+                info!("UDP Upstream connected to: {}:{}", info.addr, info.port);
+                Ok(client)
+            }
+            ConnectType::TCP => {
+                let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
+                let stream =
+                    TcpClientStream::new(addr, None, None, TokioRuntimeProvider::default());
+                let (client, bg) = Client::new(stream.0, stream.1, None).await?;
+                tokio::spawn(bg);
+                info!("TCP Upstream connected to: {}:{}", info.addr, info.port);
+                Ok(client)
+            }
+            ConnectType::HTTPS => {
+                todo!("https is not yet implemented")
+            }
+            ConnectType::TLS => {
+                todo!("tls is not yet implemented")
+            }
+            ConnectType::QUIC => {
+                todo!("quic is not yet implemented")
+            }
+            ConnectType::DOH => {
+                todo!("doq is not yet implemented")
+            }
+        }
     }
+}
+
+#[tokio::test]
+async fn tcp_connect_test() {
+    let stream_config = UpStreamConfig {
+        addr: "tcp://223.5.5.5".to_string(),
+        port: Some(53),
+        socks5: None,
+    };
+    let upstream = UpStreamBuilder::build(&stream_config);
+    upstream.connect().await;
+    println!("connect success");
 }
 
 pub struct DefaultUpStream {
@@ -218,7 +257,7 @@ impl UpStreamBuilder {
                 new_addr = addr.to_string();
             }
             "doq" => {
-                connect_type = ConnectType::DOQ;
+                connect_type = ConnectType::DOH;
                 new_addr = addr.to_string();
             }
             _ => {
