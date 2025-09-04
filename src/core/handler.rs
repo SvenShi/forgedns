@@ -18,7 +18,7 @@ use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseI
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, event_enabled, info, warn, Level};
 
 // dns请求处理
 pub struct DnsRequestHandler {
@@ -33,7 +33,6 @@ impl RequestHandler for DnsRequestHandler {
         request: &Request,
         mut response_handle: R,
     ) -> ResponseInfo {
-        debug!("Handling request: {:?}", request);
         let mut context = DnsContext {
             request_info: request.request_info().unwrap(),
             response: None,
@@ -41,12 +40,16 @@ impl RequestHandler for DnsRequestHandler {
             attributes: HashMap::new(),
         };
 
-        info!(
-            "dns:request source:{} , query:{}, queryType:{}",
-            context.request_info.src,
-            context.request_info.query.name().to_string(),
-            context.request_info.query.query_type().to_string()
-        );
+        if event_enabled!(Level::DEBUG) {
+            debug!("Handling request: {:?}", request);
+        } else {
+            info!(
+                "dns:request source:{}, query:{}, queryType:{}",
+                context.request_info.src,
+                context.request_info.query.name().to_string(),
+                context.request_info.query.query_type().to_string()
+            );
+        }
 
         {
             // 执行程序入口执行
@@ -61,7 +64,16 @@ impl RequestHandler for DnsRequestHandler {
                 response_handle.send_response(response).await.unwrap()
             }
             Some(res) => {
-                debug!("Response received: {:?}", res);
+                if event_enabled!(Level::DEBUG) {
+                    debug!("Response received: {:?}", res);
+                } else {
+                    info!(
+                        "Response received: source:{}, query:{},answer:{:?}",
+                        context.request_info.src,
+                        context.request_info.query.name().to_string(),
+                        res.answers()
+                    );
+                }
                 let response = MessageResponseBuilder::from_message_request(request).build(
                     request.header().to_owned(),
                     res.answers().iter(),
