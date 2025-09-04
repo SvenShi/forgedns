@@ -78,7 +78,7 @@ pub struct UdpServerFactory {}
 
 #[async_trait]
 impl PluginFactory for UdpServerFactory {
-    async fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
+    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
         let udp_config = match plugin_info.args.clone() {
             Some(args) => serde_yml::from_value::<UdpServerConfig>(args)
                 .unwrap_or_else(|e| panic!("初始化UDP Server时，读取配置异常。Error:{}", e)),

@@ -32,7 +32,9 @@ impl Plugin for SequentialDnsForwarder {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) {
+        self.upstream.connect().await;
+    }
 
     async fn execute(&self, context: &mut DnsContext<'_>) {
         info!(
@@ -82,9 +84,8 @@ pub struct UpStreamConfig {
 
 pub struct ForwardFactory;
 
-#[async_trait]
 impl PluginFactory for ForwardFactory {
-    async fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
+    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
         let forward_config = match plugin_info.args.clone() {
             Some(args) => serde_yml::from_value::<ForwardConfig>(args)
                 .unwrap_or_else(|e| panic!("初始化Forward时，读取配置异常。Error:{}", e)),
@@ -92,11 +93,6 @@ impl PluginFactory for ForwardFactory {
                 panic!("初始化Forward需要配置线程数(concurrent)以及上游地址(upstreams)")
             }
         };
-        // 注意以后要根据上游地址的数量 拆分不同的实现类
-        // let addr = IpAddr::from_str(.addr.as_str()).unwrap();
-        // let socket_addr = SocketAddr::new(addr, 53);
-        // let conn = UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
-        // tokio::spawn(bg);
 
         Box::new(SequentialDnsForwarder {
             tag: plugin_info.tag.clone(),

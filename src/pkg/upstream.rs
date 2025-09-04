@@ -14,8 +14,13 @@ use crate::core::context::DnsContext;
 use crate::plugin::executable::forward::UpStreamConfig;
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
+use hickory_client::proto::runtime::TokioRuntimeProvider;
+use hickory_client::proto::udp::UdpClientStream;
 use hickory_client::proto::ProtoError;
 use hickory_server::proto::xfer::DnsResponse;
+use log::info;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use tokio::sync::RwLock;
 use tokio::task::yield_now;
 use url::Url;
@@ -63,7 +68,6 @@ pub trait UpStream: Send + Sync {
 
     async fn query(&self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError>;
 
-
     fn connect_type(&self) -> ConnectType;
 }
 
@@ -92,6 +96,7 @@ impl UpStream for DefaultUpStream {
             let state = { self.connect_state.read().await };
             match &*state {
                 ConnectState::New => {
+                    drop(state);
                     {
                         let mut state = self.connect_state.write().await;
                         *state = ConnectState::Connecting;
@@ -99,18 +104,22 @@ impl UpStream for DefaultUpStream {
                     // 真正执行连接逻辑
                     match Self::do_connect(&self.connect_info).await {
                         Ok(client) => {
-                            let mut w = self.connect_state.write().await;
-                            *w = ConnectState::Connected { client };
+                            let mut state = self.connect_state.write().await;
+                            *state = ConnectState::Connected { client };
                         }
                         Err(e) => {
-                            let mut w = self.connect_state.write().await;
-                            *w = ConnectState::Failed(ProtoError::from(e));
+                            let mut state = self.connect_state.write().await;
+                            *state = ConnectState::Failed(e);
                         }
                     }
                     break;
                 }
-                ConnectState::Connecting => yield_now().await,
+                ConnectState::Connecting => {
+                    info!("state: Connecting");
+                    yield_now().await;
+                },
                 ConnectState::Connected { .. } | ConnectState::Failed(_) => {
+                    info!("state: Connected");
                     break;
                 }
             }
@@ -141,8 +150,13 @@ impl UpStream for DefaultUpStream {
 }
 
 impl DefaultUpStream {
-    async fn do_connect(_: &ConnectInfo) -> Result<Client, String> {
-        todo!("connect to client")
+    async fn do_connect(info: &ConnectInfo) -> Result<Client, ProtoError> {
+        let addr = IpAddr::from_str(&info.addr).unwrap();
+        let socket_addr = SocketAddr::new(addr, 53);
+        let conn = UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
+        let (client, bg) = Client::connect(conn).await?;
+        tokio::spawn(bg);
+        Ok(client)
     }
 }
 
@@ -175,6 +189,9 @@ impl UpStreamBuilder {
     }
 
     fn detect_connect_type(addr: &str) -> (ConnectType, String, Option<u16>) {
+        if !addr.contains("//") {
+            return Self::detect_connect_type(&("udp://".to_owned() + addr));
+        }
         let url = Url::parse(addr).expect("invalid upstream url");
         let connect_type;
         let new_addr;

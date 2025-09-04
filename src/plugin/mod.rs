@@ -46,9 +46,11 @@ pub async fn init(config: Config) {
         let factory = FACTORIES
             .get(key)
             .unwrap_or_else(|| panic!("plugin {key} not found"));
-        let plugin_info = PluginInfo::from(&plugin_config, &factory).await;
+        let plugin_info = PluginInfo::from(&plugin_config, &factory);
 
-        let _ = plugin_info.plugin.write().await.init();
+        {
+            plugin_info.plugin.write().await.init().await;
+        }
 
         info!("{} 插件构造成功", plugin_info.plugin_type);
         PLUGINS.insert(
@@ -127,7 +129,7 @@ pub trait Plugin: Send + Sync + 'static {
 /// 插件构造工厂
 #[async_trait]
 pub trait PluginFactory: Send + Sync + 'static {
-    async fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin>;
+    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin>;
 
     fn plugin_type(&self, tag: &str) -> PluginMainType;
 }
@@ -146,8 +148,8 @@ pub struct PluginInfo {
 }
 
 impl PluginInfo {
-    pub async fn from(config: &PluginConfig, factory: &Box<dyn PluginFactory>) -> PluginInfo {
-        let plugin = factory.create(config).await;
+    pub fn from(config: &PluginConfig, factory: &Box<dyn PluginFactory>) -> PluginInfo {
+        let plugin = factory.create(config);
 
         PluginInfo {
             tag: config.tag.clone(),
