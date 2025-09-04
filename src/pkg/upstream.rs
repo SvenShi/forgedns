@@ -16,14 +16,13 @@ use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
 use hickory_client::proto::ProtoError;
 use hickory_server::proto::xfer::DnsResponse;
-use std::default;
 use tokio::sync::RwLock;
 use tokio::task::yield_now;
 use url::Url;
 
 /// 上游服务器连接类型
 #[derive(Clone, Copy)]
-enum ConnectType {
+pub enum ConnectType {
     UDP,
     TCP,
     HTTPS,
@@ -32,6 +31,7 @@ enum ConnectType {
     DOQ,
 }
 
+#[allow(unused)]
 impl ConnectType {
     pub fn default_port(&self) -> u16 {
         match self {
@@ -57,17 +57,20 @@ impl ConnectType {
 }
 
 #[async_trait]
+#[allow(unused)]
 pub trait UpStream: Send + Sync {
     async fn connect(&self);
 
     async fn query(&self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError>;
+
 
     fn connect_type(&self) -> ConnectType;
 }
 
 /// 公共的连接信息
 #[derive(Clone)]
-struct ConnectInfo {
+#[allow(unused)]
+pub struct ConnectInfo {
     connect_type: ConnectType,
     addr: String,
     port: u16,
@@ -75,7 +78,7 @@ struct ConnectInfo {
 }
 
 /// 连接状态
-enum ConnectState {
+pub enum ConnectState {
     New,
     Connecting,
     Connected { client: Client },
@@ -138,7 +141,7 @@ impl UpStream for DefaultUpStream {
 }
 
 impl DefaultUpStream {
-    async fn do_connect(info: &ConnectInfo) -> Result<Client, String> {
+    async fn do_connect(_: &ConnectInfo) -> Result<Client, String> {
         todo!("connect to client")
     }
 }

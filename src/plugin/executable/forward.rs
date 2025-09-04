@@ -19,6 +19,7 @@ use log::{debug, info};
 use serde::Deserialize;
 
 /// 单线程的dns转发器
+#[allow(unused)]
 pub struct SequentialDnsForwarder {
     pub tag: String,
 
@@ -62,8 +63,10 @@ impl Plugin for SequentialDnsForwarder {
 }
 
 #[derive(Deserialize)]
+#[allow(unused)]
 pub struct ForwardConfig {
     /// 转发线程数
+    #[allow(unused_variables)]
     pub concurrent: Option<u32>,
     /// server监听地址
     pub upstreams: Vec<UpStreamConfig>,

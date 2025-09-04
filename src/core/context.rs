@@ -15,6 +15,7 @@ use hickory_server::server::RequestInfo;
 use std::any::Any;
 use std::collections::HashMap;
 
+#[allow(unused)]
 pub struct DnsContext<'a> {
     /// dns 请求信息
     pub request_info: RequestInfo<'a>,
@@ -27,6 +28,7 @@ pub struct DnsContext<'a> {
     pub attributes: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
 
+#[allow(unused)]
 impl DnsContext<'_> {
     fn set_attr<T>(&mut self, name: String, value: Box<T>)
     where

@@ -18,7 +18,6 @@ use async_trait::async_trait;
 use hickory_server::ServerFuture;
 use log::info;
 use serde::Deserialize;
-use std::future;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
@@ -31,6 +30,7 @@ pub struct UdpServerConfig {
     pub listen: String,
 }
 
+#[allow(unused)]
 pub struct UdpServer {
     tag: String,
     entry: Arc<RwLock<Box<dyn Plugin>>>,
@@ -62,7 +62,7 @@ impl Plugin for UdpServer {
         info!("UDP Server启动成功，监听地址：{listen}");
     }
 
-    async fn execute(&self, context: &mut DnsContext<'_>) {}
+    async fn execute(&self, _: &mut DnsContext<'_>) {}
 
     fn main_type(&self) -> PluginMainType {
         PluginMainType::Executor {

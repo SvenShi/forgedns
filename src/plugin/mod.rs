@@ -48,7 +48,7 @@ pub async fn init(config: Config) {
             .unwrap_or_else(|| panic!("plugin {key} not found"));
         let plugin_info = PluginInfo::from(&plugin_config, &factory).await;
 
-        plugin_info.plugin.write().await.init();
+        let _ = plugin_info.plugin.write().await.init();
 
         info!("{} 插件构造成功", plugin_info.plugin_type);
         PLUGINS.insert(
@@ -111,6 +111,7 @@ impl Display for PluginMainType {
 
 /// 插件
 #[async_trait]
+#[allow(unused)]
 pub trait Plugin: Send + Sync + 'static {
     fn tag(&self) -> &str;
 
@@ -132,6 +133,7 @@ pub trait PluginFactory: Send + Sync + 'static {
 }
 
 /// 插件信息
+#[allow(unused)]
 pub struct PluginInfo {
     /// 插件tag
     pub tag: String,
