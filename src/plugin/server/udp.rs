@@ -13,7 +13,7 @@
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::handler::DnsRequestHandler;
-use crate::plugin::{get_plugin, Plugin, PluginFactory, PluginMainType};
+use crate::plugin::{Plugin, PluginFactory, PluginMainType, get_plugin};
 use async_trait::async_trait;
 use hickory_server::ServerFuture;
 use log::info;
@@ -43,7 +43,7 @@ impl Plugin for UdpServer {
         self.tag.as_str()
     }
 
-    fn init(&mut self) {
+    async fn init(&mut self) {
         let listen = self.listen.clone();
         let addr = listen.clone();
         let entry_executor = self.entry.clone();
@@ -62,7 +62,7 @@ impl Plugin for UdpServer {
         info!("UDP Server启动成功，监听地址：{listen}");
     }
 
-    async fn execute(&mut self, context: &mut DnsContext<'_>) {}
+    async fn execute(&self, context: &mut DnsContext<'_>) {}
 
     fn main_type(&self) -> PluginMainType {
         PluginMainType::Executor {
@@ -71,7 +71,7 @@ impl Plugin for UdpServer {
         }
     }
 
-    fn destroy(&mut self) {}
+    async fn destroy(&mut self) {}
 }
 
 pub struct UdpServerFactory {}

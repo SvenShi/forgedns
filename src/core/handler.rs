@@ -41,10 +41,10 @@ impl RequestHandler for DnsRequestHandler {
             attributes: HashMap::new(),
         };
 
-        info!("................{}", self.executor.read().await.tag());
+        let executor = { self.executor.read().await };
 
         // 执行程序入口执行
-        self.executor.write().await.execute(&mut context).await;
+        executor.execute(&mut context).await;
 
         match context.response {
             None => {

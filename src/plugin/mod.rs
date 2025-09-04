@@ -114,13 +114,13 @@ impl Display for PluginMainType {
 pub trait Plugin: Send + Sync + 'static {
     fn tag(&self) -> &str;
 
-    fn init(&mut self);
+    async fn init(&mut self);
 
-    async fn execute(&mut self, context: &mut DnsContext<'_>);
+    async fn execute(&self, context: &mut DnsContext<'_>);
 
     fn main_type(&self) -> PluginMainType;
 
-    fn destroy(&mut self);
+    async fn destroy(&mut self);
 }
 
 /// 插件构造工厂

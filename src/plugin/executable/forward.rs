@@ -31,9 +31,9 @@ impl Plugin for SequentialDnsForwarder {
         self.tag.as_str()
     }
 
-    fn init(&mut self) {}
+    async fn init(&mut self) {}
 
-    async fn execute(&mut self, context: &mut DnsContext<'_>) {
+    async fn execute(&self, context: &mut DnsContext<'_>) {
         info!(
             "收到dns请求 source:{} , query:{}",
             context.request_info.src,
@@ -58,7 +58,7 @@ impl Plugin for SequentialDnsForwarder {
         }
     }
 
-    fn destroy(&mut self) {}
+    async fn destroy(&mut self) {}
 }
 
 #[derive(Deserialize)]
