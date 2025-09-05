@@ -10,17 +10,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::config::config::Config;
 use crate::core::context::DnsContext;
-use crate::plugin::executable::forward::UpStreamConfig;
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
+use hickory_client::proto::ProtoError;
+use hickory_client::proto::h2::HttpsClientStreamBuilder;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
+use hickory_client::proto::rustls::client_config;
 use hickory_client::proto::tcp::TcpClientStream;
 use hickory_client::proto::udp::UdpClientStream;
-use hickory_client::proto::ProtoError;
 use hickory_server::proto::xfer::DnsResponse;
+use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::yield_now;
 use tracing::info;
@@ -59,6 +63,16 @@ impl ConnectType {
     }
 }
 
+#[derive(Deserialize)]
+pub struct UpStreamConfig {
+    /// 请求服务器地址
+    pub addr: String,
+    pub port: Option<u16>,
+    pub socks5: Option<String>,
+    pub bootstrap: Option<String>,
+    pub dial_addr: Option<IpAddr>,
+}
+
 #[async_trait]
 #[allow(unused)]
 pub trait UpStream: Send + Sync {
@@ -77,6 +91,9 @@ pub struct ConnectInfo {
     addr: String,
     port: u16,
     socks5: Option<String>,
+    bootstrap: Option<String>,
+    path: String,
+    host: String,
 }
 
 /// 连接状态
@@ -87,8 +104,13 @@ pub enum ConnectState {
     Failed(ProtoError),
 }
 
+pub struct IpAddrUpStream {
+    pub connect_info: ConnectInfo,
+    pub connect_state: RwLock<ConnectState>,
+}
+
 #[async_trait]
-impl UpStream for DefaultUpStream {
+impl UpStream for IpAddrUpStream {
     async fn connect(&self) {
         loop {
             let state = { self.connect_state.read().await };
@@ -147,7 +169,7 @@ impl UpStream for DefaultUpStream {
     }
 }
 
-impl DefaultUpStream {
+impl IpAddrUpStream {
     async fn do_connect(info: &ConnectInfo) -> Result<Client, ProtoError> {
         match info.connect_type {
             ConnectType::UDP => {
@@ -170,8 +192,20 @@ impl DefaultUpStream {
                 Ok(client)
             }
             ConnectType::DoH => {
-                // HttpsClientStreamBuilder::build()
-                todo!("https is not yet implemented")
+                let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
+                let conn = HttpsClientStreamBuilder::with_client_config(
+                    Arc::from(client_config()),
+                    TokioRuntimeProvider::default(),
+                )
+                .build(
+                    addr,
+                    Arc::from(info.host.clone()),
+                    Arc::from(info.path.clone()),
+                );
+                let (client, bg) = Client::connect(conn).await?;
+                tokio::spawn(bg);
+                info!("DoH Upstream connected to: {}:{}", info.addr, info.port);
+                Ok(client)
             }
             ConnectType::DoT => {
                 todo!("tls is not yet implemented")
@@ -183,78 +217,107 @@ impl DefaultUpStream {
     }
 }
 
-#[tokio::test]
-async fn tcp_connect_test() {
-    let stream_config = UpStreamConfig {
-        addr: "tcp://223.5.5.5".to_string(),
-        port: Some(53),
-        socks5: None,
-    };
-    let upstream = UpStreamBuilder::build(&stream_config);
-    upstream.connect().await;
-    println!("connect success");
-}
-
-pub struct DefaultUpStream {
+pub struct DomainUpStream {
+    pub bootstrap: Option<Box<dyn UpStream>>,
     pub connect_info: ConnectInfo,
     pub connect_state: RwLock<ConnectState>,
+}
+
+#[async_trait]
+impl UpStream for DomainUpStream {
+    async fn connect(&self) {
+        todo!()
+    }
+
+    async fn query(&self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError> {
+        todo!()
+    }
+
+    fn connect_type(&self) -> ConnectType {
+        todo!()
+    }
 }
 
 pub struct UpStreamBuilder;
 
 impl UpStreamBuilder {
     pub fn build(up_stream_config: &UpStreamConfig) -> Box<dyn UpStream> {
-        let (connect_type, addr, port) = Self::detect_connect_type(&up_stream_config.addr);
+        let (connect_type, host, port, path) = Self::detect_connect_type(&up_stream_config.addr);
         let port = up_stream_config
             .port
             .or(port)
             .unwrap_or(connect_type.default_port());
 
         let connect_info = ConnectInfo {
-            addr,
+            addr: if up_stream_config.dial_addr.is_some() {
+                up_stream_config.dial_addr.unwrap().to_string()
+            } else {
+                host.clone()
+            },
             port,
             socks5: up_stream_config.socks5.clone(),
             connect_type,
+            bootstrap: up_stream_config.bootstrap.clone(),
+            path: path.clone(),
+            host: host.clone(),
         };
 
-        Box::new(DefaultUpStream {
-            connect_info,
-            connect_state: RwLock::new(ConnectState::New),
-        })
+        if up_stream_config.dial_addr.is_some() || IpAddr::from_str(host.as_str()).is_ok() {
+            Box::new(IpAddrUpStream {
+                connect_info,
+                connect_state: RwLock::new(ConnectState::New),
+            })
+        } else {
+            todo!("new domain upstream")
+        }
     }
 
-    fn detect_connect_type(addr: &str) -> (ConnectType, String, Option<u16>) {
+    fn detect_connect_type(addr: &str) -> (ConnectType, String, Option<u16>, String) {
         if !addr.contains("//") {
             return Self::detect_connect_type(&("udp://".to_owned() + addr));
         }
         let url = Url::parse(addr).expect("Invalid upstream url");
         let connect_type;
-        let new_addr;
+        let host;
         match url.scheme() {
             "udp" => {
                 connect_type = ConnectType::UDP;
-                new_addr = url.host_str().unwrap().to_string();
+                host = url.host_str().unwrap().to_string();
             }
             "tcp" => {
                 connect_type = ConnectType::TCP;
-                new_addr = url.host_str().unwrap().to_string();
+                host = url.host_str().unwrap().to_string();
             }
             "tls" => {
                 connect_type = ConnectType::DoT;
-                new_addr = url.host_str().unwrap().to_string();
+                host = url.host_str().unwrap().to_string();
             }
             "quic" | "doq" => {
                 connect_type = ConnectType::DoQ;
-                new_addr = addr.to_string();
+                host = url.host_str().unwrap().to_string();
             }
             "https" | "doh" => {
                 connect_type = ConnectType::DoH;
-                new_addr = addr.to_string();
+                host = url.host_str().unwrap().to_string();
             }
             _ => {
                 panic!("Invalid upstream url scheme");
             }
         };
-        (connect_type, new_addr, url.port())
+        (connect_type, host, url.port(), url.path().to_string())
     }
+}
+
+#[tokio::test]
+async fn tcp_connect_test() {
+    let stream_config = UpStreamConfig {
+        addr: "tcp://223.5.5.5".to_string(),
+        port: Some(53),
+        socks5: None,
+        bootstrap: None,
+        dial_addr: None,
+    };
+    let upstream = UpStreamBuilder::build(&stream_config);
+    upstream.connect().await;
+    println!("connect success");
 }

@@ -12,11 +12,11 @@
  */
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::pkg::upstream::{UpStream, UpStreamBuilder};
+use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpStreamConfig};
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
 use serde::Deserialize;
-use tracing::debug;
+use tracing::{debug, error};
 
 /// 单线程的dns转发器
 #[allow(unused)]
@@ -42,7 +42,7 @@ impl Plugin for SequentialDnsForwarder {
                 context.response = Some(res);
             }
             Err(e) => {
-                debug!("dns request has err: {e}");
+                error!("dns request has err: {e}");
                 context.response = None;
             }
         }
@@ -68,13 +68,6 @@ pub struct ForwardConfig {
     pub upstreams: Vec<UpStreamConfig>,
 }
 
-#[derive(Deserialize)]
-pub struct UpStreamConfig {
-    /// 请求服务器地址
-    pub addr: String,
-    pub port: Option<u16>,
-    pub socks5: Option<String>,
-}
 
 pub struct ForwardFactory;
 
