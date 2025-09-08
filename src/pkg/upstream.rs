@@ -10,16 +10,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::config::config::Config;
 use crate::core::context::DnsContext;
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
-use hickory_client::proto::ProtoError;
 use hickory_client::proto::h2::HttpsClientStreamBuilder;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::rustls::client_config;
 use hickory_client::proto::tcp::TcpClientStream;
 use hickory_client::proto::udp::UdpClientStream;
+use hickory_client::proto::ProtoError;
 use hickory_server::proto::xfer::DnsResponse;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
@@ -48,7 +47,7 @@ impl ConnectType {
             ConnectType::TCP => 53,
             ConnectType::DoT => 853,
             ConnectType::DoQ => 853,
-            ConnectType::DoH => 853,
+            ConnectType::DoH => 443,
         }
     }
 
@@ -194,7 +193,7 @@ impl IpAddrUpStream {
             ConnectType::DoH => {
                 let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
                 let conn = HttpsClientStreamBuilder::with_client_config(
-                    Arc::from(client_config()),
+                    Arc::new(client_config()),
                     TokioRuntimeProvider::default(),
                 )
                 .build(
@@ -216,7 +215,7 @@ impl IpAddrUpStream {
         }
     }
 }
-
+#[allow(unused)]
 pub struct DomainUpStream {
     pub bootstrap: Option<Box<dyn UpStream>>,
     pub connect_info: ConnectInfo,
@@ -224,6 +223,7 @@ pub struct DomainUpStream {
 }
 
 #[async_trait]
+#[allow(unused)]
 impl UpStream for DomainUpStream {
     async fn connect(&self) {
         todo!()
@@ -308,16 +308,21 @@ impl UpStreamBuilder {
     }
 }
 
-#[tokio::test]
-async fn tcp_connect_test() {
-    let stream_config = UpStreamConfig {
-        addr: "tcp://223.5.5.5".to_string(),
-        port: Some(53),
-        socks5: None,
-        bootstrap: None,
-        dial_addr: None,
-    };
-    let upstream = UpStreamBuilder::build(&stream_config);
-    upstream.connect().await;
-    println!("connect success");
+#[cfg(test)]
+mod test {
+    use crate::pkg::upstream::{UpStreamBuilder, UpStreamConfig};
+
+    #[tokio::test]
+    async fn tcp_connect_test() {
+        let stream_config = UpStreamConfig {
+            addr: "tcp://223.5.5.5".to_string(),
+            port: Some(53),
+            socks5: None,
+            bootstrap: None,
+            dial_addr: None,
+        };
+        let upstream = UpStreamBuilder::build(&stream_config);
+        upstream.connect().await;
+        println!("connect success");
+    }
 }

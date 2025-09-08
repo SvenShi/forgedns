@@ -4,8 +4,8 @@ plugins:
     args:
       timeout_ms: 3000  # 3 秒超时
       upstreams:
-        - addr: "https://dns.google.com/dns-query"  # 阿里 DNS
-          dial_addr: "8.8.8.8"
+        - addr: "https://cloudflare-dns.com/dns-query"  # 阿里 DNS
+          dial_addr: "1.1.1.1"
         # 当配置多个上游服务器时，会自动启用并发模式
         # - addr: "119.29.29.29"  # 腾讯 DNS
         # - addr: "114.114.114.114"  # 114 DNS

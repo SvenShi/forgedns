@@ -16,7 +16,7 @@ use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpStreamConfig};
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
 use serde::Deserialize;
-use tracing::{debug, error};
+use tracing::error;
 
 /// 单线程的dns转发器
 #[allow(unused)]
@@ -67,7 +67,6 @@ pub struct ForwardConfig {
     /// server监听地址
     pub upstreams: Vec<UpStreamConfig>,
 }
-
 
 pub struct ForwardFactory;
 
