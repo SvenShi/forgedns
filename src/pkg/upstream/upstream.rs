@@ -11,7 +11,7 @@
  * limitations under the License.
  */
 use crate::core::context::DnsContext;
-use crate::pkg::tls_client_config::{insecure_client_config, secure_client_config};
+use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
 use hickory_client::proto::ProtoError;
@@ -341,7 +341,7 @@ impl UpStreamBuilder {
 
 #[cfg(test)]
 mod test {
-    use crate::pkg::upstream::{UpStreamBuilder, UpStreamConfig};
+    use crate::pkg::upstream::upstream::{UpStreamBuilder, UpStreamConfig};
 
     #[tokio::test]
     async fn tcp_connect_test() {
