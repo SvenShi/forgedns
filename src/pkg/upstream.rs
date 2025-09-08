@@ -14,11 +14,12 @@ use crate::core::context::DnsContext;
 use crate::pkg::tls_client_config::{insecure_client_config, secure_client_config};
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
+use hickory_client::proto::ProtoError;
 use hickory_client::proto::h2::HttpsClientStreamBuilder;
+use hickory_client::proto::quic::QuicClientStream;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::tcp::TcpClientStream;
 use hickory_client::proto::udp::UdpClientStream;
-use hickory_client::proto::ProtoError;
 use hickory_server::proto::rustls::tls_client_connect;
 use hickory_server::proto::xfer::DnsResponse;
 use rustls::pki_types::ServerName;
@@ -48,7 +49,7 @@ impl ConnectType {
             ConnectType::UDP => 53,
             ConnectType::TCP => 53,
             ConnectType::DoT => 853,
-            ConnectType::DoQ => 853,
+            ConnectType::DoQ => 784,
             ConnectType::DoH => 443,
         }
     }
@@ -233,7 +234,13 @@ impl IpAddrUpStream {
                 Ok(client)
             }
             ConnectType::DoQ => {
-                todo!("quic is not yet implemented")
+                let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
+                let conn = QuicClientStream::builder().build(addr, Arc::from(info.host.clone()));
+                let (client, bg) = Client::connect(conn).await?;
+                // fixme: 没有合适的quic 服务器 待测试
+                tokio::spawn(bg);
+                info!("DoQ Upstream connected to: {}:{}", info.addr, info.port);
+                Ok(client)
             }
         }
     }
