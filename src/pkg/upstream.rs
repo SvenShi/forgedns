@@ -14,12 +14,14 @@ use crate::core::context::DnsContext;
 use crate::pkg::tls_client_config::{insecure_client_config, secure_client_config};
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
-use hickory_client::proto::ProtoError;
 use hickory_client::proto::h2::HttpsClientStreamBuilder;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::tcp::TcpClientStream;
 use hickory_client::proto::udp::UdpClientStream;
+use hickory_client::proto::ProtoError;
+use hickory_server::proto::rustls::tls_client_connect;
 use hickory_server::proto::xfer::DnsResponse;
+use rustls::pki_types::ServerName;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -94,6 +96,7 @@ pub struct ConnectInfo {
     bootstrap: Option<String>,
     path: String,
     host: String,
+    is_ip_host: bool,
     insecure_skip_verify: bool,
 }
 
@@ -213,7 +216,21 @@ impl IpAddrUpStream {
                 Ok(client)
             }
             ConnectType::DoT => {
-                todo!("tls is not yet implemented")
+                let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
+                let stream = tls_client_connect(
+                    addr,
+                    ServerName::try_from(info.host.clone()).unwrap(),
+                    Arc::new(if info.insecure_skip_verify {
+                        insecure_client_config()
+                    } else {
+                        secure_client_config()
+                    }),
+                    TokioRuntimeProvider::default(),
+                );
+                let (client, bg) = Client::new(stream.0, stream.1, None).await?;
+                tokio::spawn(bg);
+                info!("TLS Upstream connected to: {}:{}", info.addr, info.port);
+                Ok(client)
             }
             ConnectType::DoQ => {
                 todo!("quic is not yet implemented")
@@ -253,7 +270,6 @@ impl UpStreamBuilder {
             .port
             .or(port)
             .unwrap_or(connect_type.default_port());
-
         let connect_info = ConnectInfo {
             addr: if up_stream_config.dial_addr.is_some() {
                 up_stream_config.dial_addr.unwrap().to_string()
@@ -266,10 +282,11 @@ impl UpStreamBuilder {
             bootstrap: up_stream_config.bootstrap.clone(),
             path: path.clone(),
             host: host.clone(),
+            is_ip_host: IpAddr::from_str(host.as_str()).is_ok(),
             insecure_skip_verify: up_stream_config.insecure_skip_verify.unwrap_or(false),
         };
 
-        if up_stream_config.dial_addr.is_some() || IpAddr::from_str(host.as_str()).is_ok() {
+        if up_stream_config.dial_addr.is_some() || connect_info.is_ip_host {
             Box::new(IpAddrUpStream {
                 connect_info,
                 connect_state: RwLock::new(ConnectState::New),
