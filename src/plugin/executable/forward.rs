@@ -82,7 +82,7 @@ impl PluginFactory for ForwardFactory {
 
         Box::new(SequentialDnsForwarder {
             tag: plugin_info.tag.clone(),
-            upstream: UpStreamBuilder::build(&forward_config.upstreams[0]),
+            upstream: UpStreamBuilder::with_upstream_config(&forward_config.upstreams[0]),
         })
     }
 

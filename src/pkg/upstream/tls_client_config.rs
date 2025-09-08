@@ -18,7 +18,7 @@ use rustls::{ClientConfig, DigitallySignedStruct, Error, RootCertStore, Signatur
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-pub fn secure_client_config() -> ClientConfig {
+pub(crate) fn secure_client_config() -> ClientConfig {
     let builder = ClientConfig::builder_with_provider(Arc::new(default_provider()))
         .with_safe_default_protocol_versions()
         .unwrap();
@@ -32,7 +32,7 @@ pub fn secure_client_config() -> ClientConfig {
     builder.with_no_client_auth()
 }
 
-pub fn insecure_client_config() -> ClientConfig {
+pub(crate) fn insecure_client_config() -> ClientConfig {
     ring::default_provider()
         .install_default()
         .expect("failed to install default CryptoProvider");

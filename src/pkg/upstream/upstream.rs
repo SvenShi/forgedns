@@ -14,12 +14,12 @@ use crate::core::context::DnsContext;
 use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
-use hickory_client::proto::ProtoError;
 use hickory_client::proto::h2::HttpsClientStreamBuilder;
 use hickory_client::proto::quic::QuicClientStream;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::tcp::TcpClientStream;
 use hickory_client::proto::udp::UdpClientStream;
+use hickory_client::proto::ProtoError;
 use hickory_server::proto::rustls::tls_client_connect;
 use hickory_server::proto::xfer::DnsResponse;
 use rustls::pki_types::ServerName;
@@ -271,7 +271,7 @@ impl UpStream for DomainUpStream {
 pub struct UpStreamBuilder;
 
 impl UpStreamBuilder {
-    pub fn build(up_stream_config: &UpStreamConfig) -> Box<dyn UpStream> {
+    pub fn with_upstream_config(up_stream_config: &UpStreamConfig) -> Box<dyn UpStream> {
         let (connect_type, host, port, path) = Self::detect_connect_type(&up_stream_config.addr);
         let port = up_stream_config
             .port
@@ -300,6 +300,31 @@ impl UpStreamBuilder {
             })
         } else {
             todo!("new domain upstream")
+        }
+    }
+
+    pub fn build_ip_upstream(ip_addr: &str) -> IpAddrUpStream {
+        let (connect_type, host, port, path) = Self::detect_connect_type(ip_addr);
+        let port = port.unwrap_or(connect_type.default_port());
+        let result = IpAddr::from_str(host.as_str());
+        let is_ip_host = result.is_ok();
+        if !is_ip_host {
+            panic!("bootstrap 仅支持ip服务器")
+        }
+        let info = ConnectInfo {
+            connect_type,
+            addr: host.clone(),
+            port,
+            socks5: None,
+            bootstrap: None,
+            path,
+            host,
+            is_ip_host,
+            insecure_skip_verify: true,
+        };
+        IpAddrUpStream {
+            connect_info: info,
+            connect_state: RwLock::new(ConnectState::New),
         }
     }
 
@@ -353,7 +378,7 @@ mod test {
             dial_addr: None,
             insecure_skip_verify: None,
         };
-        let upstream = UpStreamBuilder::build(&stream_config);
+        let upstream = UpStreamBuilder::with_upstream_config(&stream_config);
         upstream.connect().await;
         println!("connect success");
     }
