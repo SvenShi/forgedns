@@ -11,14 +11,14 @@
  * limitations under the License.
  */
 use crate::core::context::DnsContext;
+use crate::pkg::tls_client_config::{insecure_client_config, secure_client_config};
 use async_trait::async_trait;
 use hickory_client::client::{Client, ClientHandle};
+use hickory_client::proto::ProtoError;
 use hickory_client::proto::h2::HttpsClientStreamBuilder;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
-use hickory_client::proto::rustls::client_config;
 use hickory_client::proto::tcp::TcpClientStream;
 use hickory_client::proto::udp::UdpClientStream;
-use hickory_client::proto::ProtoError;
 use hickory_server::proto::xfer::DnsResponse;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
@@ -70,6 +70,7 @@ pub struct UpStreamConfig {
     pub socks5: Option<String>,
     pub bootstrap: Option<String>,
     pub dial_addr: Option<IpAddr>,
+    pub insecure_skip_verify: Option<bool>,
 }
 
 #[async_trait]
@@ -93,6 +94,7 @@ pub struct ConnectInfo {
     bootstrap: Option<String>,
     path: String,
     host: String,
+    insecure_skip_verify: bool,
 }
 
 /// 连接状态
@@ -193,7 +195,11 @@ impl IpAddrUpStream {
             ConnectType::DoH => {
                 let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
                 let conn = HttpsClientStreamBuilder::with_client_config(
-                    Arc::new(client_config()),
+                    Arc::new(if info.insecure_skip_verify {
+                        insecure_client_config()
+                    } else {
+                        secure_client_config()
+                    }),
                     TokioRuntimeProvider::default(),
                 )
                 .build(
@@ -260,6 +266,7 @@ impl UpStreamBuilder {
             bootstrap: up_stream_config.bootstrap.clone(),
             path: path.clone(),
             host: host.clone(),
+            insecure_skip_verify: up_stream_config.insecure_skip_verify.unwrap_or(false),
         };
 
         if up_stream_config.dial_addr.is_some() || IpAddr::from_str(host.as_str()).is_ok() {
@@ -320,6 +327,7 @@ mod test {
             socks5: None,
             bootstrap: None,
             dial_addr: None,
+            insecure_skip_verify: None,
         };
         let upstream = UpStreamBuilder::build(&stream_config);
         upstream.connect().await;

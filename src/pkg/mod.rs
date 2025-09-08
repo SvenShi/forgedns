@@ -11,4 +11,5 @@
  * limitations under the License.
  */
 pub mod upstream;
+mod tls_client_config;
 

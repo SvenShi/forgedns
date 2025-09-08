@@ -6,6 +6,7 @@ plugins:
       upstreams:
         - addr: "https://cloudflare-dns.com/dns-query"  # 阿里 DNS
           dial_addr: "1.1.1.1"
+          insecure_skip_verify: true
         # 当配置多个上游服务器时，会自动启用并发模式
         # - addr: "119.29.29.29"  # 腾讯 DNS
         # - addr: "114.114.114.114"  # 114 DNS
@@ -13,5 +14,5 @@ plugins:
   - tag: "udp_server"
     type: "udp_server"
     args:
-      entry:  "forward"
-      listen:  "0.0.0.0:5335"
+      entry: "forward"
+      listen: "0.0.0.0:5335"
