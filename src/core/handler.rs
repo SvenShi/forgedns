@@ -41,9 +41,7 @@ impl RequestHandler for DnsRequestHandler {
         };
 
         if event_enabled!(Level::DEBUG) {
-            debug!("Handling request: {:?}", request);
-        } else {
-            info!(
+            debug!(
                 "dns:request source:{}, query:{}, queryType:{}",
                 context.request_info.src,
                 context.request_info.query.name().to_string(),
@@ -65,9 +63,7 @@ impl RequestHandler for DnsRequestHandler {
             }
             Some(res) => {
                 if event_enabled!(Level::DEBUG) {
-                    debug!("Response received: {:?}", res);
-                } else {
-                    info!(
+                    debug!(
                         "Response received: source:{}, query:{},answer:{:?}",
                         context.request_info.src,
                         context.request_info.query.name().to_string(),
