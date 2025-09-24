@@ -6,6 +6,7 @@ build = "build.rs"
 
 [dependencies]
 hickory-client = { version = "0.26.0-alpha.1", features = ["https-ring", "tls-ring", "quic-ring", "webpki-roots"] }
+hickory-proto = { version = "0.26.0-alpha.1", features = ["https-ring", "tls-ring", "quic-ring", "webpki-roots"] }
 hickory-server = "0.26.0-alpha.1"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"

@@ -39,7 +39,7 @@ impl RequestHandler for DnsRequestHandler {
             mark: Vec::new(),
             attributes: HashMap::new(),
         };
-
+        info!("Handling request");
         if event_enabled!(Level::DEBUG) {
             debug!(
                 "dns:request source:{}, query:{}, queryType:{}",
