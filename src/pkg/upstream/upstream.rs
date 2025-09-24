@@ -11,15 +11,17 @@
  * limitations under the License.
  */
 use crate::core::context::DnsContext;
+use crate::pkg::upstream::self_impl_upstream::SelfImplUpstream;
 use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use async_trait::async_trait;
+use dashmap::DashMap;
 use hickory_client::client::{Client, ClientHandle};
+use hickory_client::proto::ProtoError;
 use hickory_client::proto::h2::HttpsClientStreamBuilder;
 use hickory_client::proto::quic::QuicClientStream;
 use hickory_client::proto::runtime::TokioRuntimeProvider;
 use hickory_client::proto::tcp::TcpClientStream;
 use hickory_client::proto::udp::UdpClientStream;
-use hickory_client::proto::ProtoError;
 use hickory_server::proto::rustls::tls_client_connect;
 use hickory_server::proto::xfer::DnsResponse;
 use rustls::pki_types::ServerName;
@@ -27,7 +29,9 @@ use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::atomic::AtomicU16;
+use tokio::net::UdpSocket;
+use tokio::sync::{OnceCell, RwLock};
 use tokio::task::yield_now;
 use tracing::info;
 use url::Url;
@@ -91,8 +95,8 @@ pub trait UpStream: Send + Sync {
 #[allow(unused)]
 pub struct ConnectInfo {
     connect_type: ConnectType,
-    addr: String,
-    port: u16,
+    pub(crate) addr: String,
+    pub(crate) port: u16,
     socks5: Option<String>,
     bootstrap: Option<String>,
     path: String,
@@ -294,9 +298,16 @@ impl UpStreamBuilder {
         };
 
         if up_stream_config.dial_addr.is_some() || connect_info.is_ip_host {
-            Box::new(IpAddrUpStream {
+            // Box::new(IpAddrUpStream {
+            //     connect_info,
+            //     connect_state: RwLock::new(ConnectState::New),
+            // })
+
+            Box::new(SelfImplUpstream {
+                current_id: AtomicU16::new(0),
+                request_map: Arc::new(DashMap::new()),
                 connect_info,
-                connect_state: RwLock::new(ConnectState::New),
+                connect: OnceCell::new(),
             })
         } else {
             todo!("new domain upstream")

@@ -10,6 +10,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod upstream;
-mod tls_client_config;
 mod bootstrap;
+mod self_impl_upstream;
+mod tls_client_config;
+pub mod upstream;
