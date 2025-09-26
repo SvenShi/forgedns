@@ -20,12 +20,15 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use futures::future::err;
 use hickory_proto::ProtoError;
 use hickory_proto::xfer::DnsResponse;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{oneshot, OnceCell};
+use tokio::time::timeout;
+use tracing::error;
 use tracing::log::info;
 
 pub(crate) struct SelfImplUpstream {
@@ -43,7 +46,7 @@ impl UpStream for SelfImplUpstream {
             self.connect_info.port,
         );
         let mut sockets = Vec::new();
-        for _ in 0..200 {
+        for _ in 0..20 {
             let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
             udp_socket.connect(addr).await.unwrap();
             let arc = Arc::new(udp_socket);
@@ -83,20 +86,24 @@ impl UpStream for SelfImplUpstream {
         header.set_id(query_id);
         query_msg.set_header(header);
         let vec = query_msg.to_bytes().unwrap();
-        let instant = Instant::now();
-        let index = (query_id % 200) as usize;
+        // let instant = Instant::now();
+        let index = (query_id % 20) as usize;
         let connect = self.connect.get().unwrap().get(index).unwrap();
         connect.send(vec.as_slice()).await?;
         let (tx, rx) = oneshot::channel();
         self.request_map.insert(query_msg.header().id(), tx);
-        let message = rx.await.unwrap();
-        info!(
-            "query id {} , index {} , using time {:?}",
-            query_id,
-            index,
-            instant.elapsed()
-        );
-        DnsResponse::from_message(message)
+
+        match timeout(Duration::from_secs(2), rx).await {
+            Ok(Ok(message)) => DnsResponse::from_message(message),
+            Ok(Err(_canceled)) => {
+                Err(ProtoError::from("request canceled"))
+            },
+            Err(_elapsed) => {
+                // 超时，清理 request_map 里的 key
+                self.request_map.remove(&query_id);
+                Err(ProtoError::from("dns query timeout"))
+            }
+        }
     }
 
     fn connect_type(&self) -> ConnectType {
