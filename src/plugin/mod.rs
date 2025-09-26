@@ -119,7 +119,7 @@ pub trait Plugin: Send + Sync + 'static {
 
     async fn init(&mut self);
 
-    async fn execute(&self, context: &mut DnsContext<'_>);
+    async fn execute(&self, context: &mut DnsContext);
 
     fn main_type(&self) -> PluginMainType;
 

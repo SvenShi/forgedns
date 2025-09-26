@@ -5,9 +5,9 @@ edition = "2024"
 build = "build.rs"
 
 [dependencies]
-hickory-client = { version = "0.26.0-alpha.1", features = ["https-ring", "tls-ring", "quic-ring", "webpki-roots"] }
+futures = "0.3.31"
+socket2 = "0.6.0"
 hickory-proto = { version = "0.26.0-alpha.1", features = ["https-ring", "tls-ring", "quic-ring", "webpki-roots"] }
-hickory-server = "0.26.0-alpha.1"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 tracing = "0.1"

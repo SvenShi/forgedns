@@ -15,21 +15,20 @@ use crate::pkg::upstream::self_impl_upstream::SelfImplUpstream;
 use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use async_trait::async_trait;
 use dashmap::DashMap;
-use hickory_client::client::{Client, ClientHandle};
-use hickory_client::proto::ProtoError;
-use hickory_client::proto::h2::HttpsClientStreamBuilder;
-use hickory_client::proto::quic::QuicClientStream;
-use hickory_client::proto::runtime::TokioRuntimeProvider;
-use hickory_client::proto::tcp::TcpClientStream;
-use hickory_client::proto::udp::UdpClientStream;
-use hickory_server::proto::rustls::tls_client_connect;
-use hickory_server::proto::xfer::DnsResponse;
 use rustls::pki_types::ServerName;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU16;
+use hickory_proto::h2::HttpsClientStreamBuilder;
+use hickory_proto::ProtoError;
+use hickory_proto::quic::QuicClientStream;
+use hickory_proto::runtime::TokioRuntimeProvider;
+use hickory_proto::rustls::tls_client_connect;
+use hickory_proto::tcp::TcpClientStream;
+use hickory_proto::udp::UdpClientStream;
+use hickory_proto::xfer::DnsResponse;
 use tokio::net::UdpSocket;
 use tokio::sync::{OnceCell, RwLock};
 use tokio::task::yield_now;
@@ -84,8 +83,9 @@ pub struct UpStreamConfig {
 #[allow(unused)]
 pub trait UpStream: Send + Sync {
     async fn connect(&self);
+    async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError>;
 
-    async fn query(&self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError>;
+    // async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError>;
 
     fn connect_type(&self) -> ConnectType;
 }
@@ -106,171 +106,172 @@ pub struct ConnectInfo {
 }
 
 /// 连接状态
-pub enum ConnectState {
-    New,
-    Connecting,
-    Connected { client: Client },
-    Failed(ProtoError),
-}
+// pub enum ConnectState {
+//     New,
+//     Connecting,
+//     Connected { client: () },
+//     Failed(ProtoError),
+// }
 
-pub struct IpAddrUpStream {
-    pub connect_info: ConnectInfo,
-    pub connect_state: RwLock<ConnectState>,
-}
+// pub struct IpAddrUpStream {
+//     pub connect_info: ConnectInfo,
+//     pub connect_state: RwLock<ConnectState>,
+// }
 
-#[async_trait]
-impl UpStream for IpAddrUpStream {
-    async fn connect(&self) {
-        loop {
-            let state = { self.connect_state.read().await };
-            match &*state {
-                ConnectState::New => {
-                    drop(state);
-                    {
-                        let mut state = self.connect_state.write().await;
-                        *state = ConnectState::Connecting;
-                    }
-                    // 真正执行连接逻辑
-                    match Self::do_connect(&self.connect_info).await {
-                        Ok(client) => {
-                            let mut state = self.connect_state.write().await;
-                            *state = ConnectState::Connected { client };
-                        }
-                        Err(e) => {
-                            let mut state = self.connect_state.write().await;
-                            *state = ConnectState::Failed(e);
-                        }
-                    }
-                    break;
-                }
-                ConnectState::Connecting => {
-                    info!("state: Connecting");
-                    yield_now().await;
-                }
-                ConnectState::Connected { .. } | ConnectState::Failed(_) => {
-                    info!("state: Connected");
-                    break;
-                }
-            }
-        }
-    }
+// #[async_trait]
+// impl UpStream for IpAddrUpStream {
+//     async fn connect(&self) {
+//         loop {
+//             let state = { self.connect_state.read().await };
+//             match &*state {
+//                 ConnectState::New => {
+//                     drop(state);
+//                     {
+//                         let mut state = self.connect_state.write().await;
+//                         *state = ConnectState::Connecting;
+//                     }
+//                     // 真正执行连接逻辑
+//                     match Self::do_connect(&self.connect_info).await {
+//                         Ok(client) => {
+//                             let mut state = self.connect_state.write().await;
+//                             *state = ConnectState::Connected { client };
+//                         }
+//                         Err(e) => {
+//                             let mut state = self.connect_state.write().await;
+//                             *state = ConnectState::Failed(e);
+//                         }
+//                     }
+//                     break;
+//                 }
+//                 ConnectState::Connecting => {
+//                     info!("state: Connecting");
+//                     yield_now().await;
+//                 }
+//                 ConnectState::Connected { .. } | ConnectState::Failed(_) => {
+//                     info!("state: Connected");
+//                     break;
+//                 }
+//             }
+//         }
+//     }
+//
+//     async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
+//         let query = &context.request_info.query;
+//         let state = { self.connect_state.read().await };
+//         match &*state {
+//             ConnectState::New | ConnectState::Connecting => {
+//                 self.connect().await;
+//                 self.query(context).await
+//             }
+//             ConnectState::Connected { client, .. } => {
+//                 todo!()
+//                 // let mut client = client.clone();
+//                 // client
+//                 //     .query(query.name().into(), query.query_class(), query.query_type())
+//                 //     .await
+//             }
+//             ConnectState::Failed(e) => Err(e.clone()),
+//         }
+//     }
+//
+//     fn connect_type(&self) -> ConnectType {
+//         self.connect_info.connect_type
+//     }
+// }
 
-    async fn query(&self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError> {
-        let query = context.request_info.query;
-        let state = { self.connect_state.read().await };
-        match &*state {
-            ConnectState::New | ConnectState::Connecting => {
-                self.connect().await;
-                self.query(context).await
-            }
-            ConnectState::Connected { client, .. } => {
-                let mut client = client.clone();
-                client
-                    .query(query.name().into(), query.query_class(), query.query_type())
-                    .await
-            }
-            ConnectState::Failed(e) => Err(e.clone()),
-        }
-    }
+// impl IpAddrUpStream {
+//     async fn do_connect(info: &ConnectInfo) -> Result<Client, ProtoError> {
+//         match info.connect_type {
+//             ConnectType::UDP => {
+//                 let addr = IpAddr::from_str(&info.addr).unwrap();
+//                 let socket_addr = SocketAddr::new(addr, info.port);
+//                 let conn =
+//                     UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
+//                 let (client, bg) = Client::connect(conn).await?;
+//                 tokio::spawn(bg);
+//                 info!("UDP Upstream connected to: {}:{}", info.addr, info.port);
+//                 Ok(client)
+//             }
+//             ConnectType::TCP => {
+//                 let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
+//                 let stream =
+//                     TcpClientStream::new(addr, None, None, TokioRuntimeProvider::default());
+//                 let (client, bg) = Client::new(stream.0, stream.1, None).await?;
+//                 tokio::spawn(bg);
+//                 info!("TCP Upstream connected to: {}:{}", info.addr, info.port);
+//                 Ok(client)
+//             }
+//             ConnectType::DoH => {
+//                 let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
+//                 let conn = HttpsClientStreamBuilder::with_client_config(
+//                     Arc::new(if info.insecure_skip_verify {
+//                         insecure_client_config()
+//                     } else {
+//                         secure_client_config()
+//                     }),
+//                     TokioRuntimeProvider::default(),
+//                 )
+//                 .build(
+//                     addr,
+//                     Arc::from(info.host.clone()),
+//                     Arc::from(info.path.clone()),
+//                 );
+//                 let (client, bg) = Client::connect(conn).await?;
+//                 tokio::spawn(bg);
+//                 info!("DoH Upstream connected to: {}:{}", info.addr, info.port);
+//                 Ok(client)
+//             }
+//             ConnectType::DoT => {
+//                 let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
+//                 let stream = tls_client_connect(
+//                     addr,
+//                     ServerName::try_from(info.host.clone()).unwrap(),
+//                     Arc::new(if info.insecure_skip_verify {
+//                         insecure_client_config()
+//                     } else {
+//                         secure_client_config()
+//                     }),
+//                     TokioRuntimeProvider::default(),
+//                 );
+//                 let (client, bg) = Client::new(stream.0, stream.1, None).await?;
+//                 tokio::spawn(bg);
+//                 info!("TLS Upstream connected to: {}:{}", info.addr, info.port);
+//                 Ok(client)
+//             }
+//             ConnectType::DoQ => {
+//                 let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
+//                 let conn = QuicClientStream::builder().build(addr, Arc::from(info.host.clone()));
+//                 let (client, bg) = Client::connect(conn).await?;
+//                 // fixme: 没有合适的quic 服务器 待测试
+//                 tokio::spawn(bg);
+//                 info!("DoQ Upstream connected to: {}:{}", info.addr, info.port);
+//                 Ok(client)
+//             }
+//         }
+//     }
+// }
+// #[allow(unused)]
+// pub struct DomainUpStream {
+//     pub bootstrap: Option<Box<dyn UpStream>>,
+//     pub connect_info: ConnectInfo,
+//     pub connect_state: RwLock<ConnectState>,
+// }
 
-    fn connect_type(&self) -> ConnectType {
-        self.connect_info.connect_type
-    }
-}
-
-impl IpAddrUpStream {
-    async fn do_connect(info: &ConnectInfo) -> Result<Client, ProtoError> {
-        match info.connect_type {
-            ConnectType::UDP => {
-                let addr = IpAddr::from_str(&info.addr).unwrap();
-                let socket_addr = SocketAddr::new(addr, info.port);
-                let conn =
-                    UdpClientStream::builder(socket_addr, TokioRuntimeProvider::default()).build();
-                let (client, bg) = Client::connect(conn).await?;
-                tokio::spawn(bg);
-                info!("UDP Upstream connected to: {}:{}", info.addr, info.port);
-                Ok(client)
-            }
-            ConnectType::TCP => {
-                let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
-                let stream =
-                    TcpClientStream::new(addr, None, None, TokioRuntimeProvider::default());
-                let (client, bg) = Client::new(stream.0, stream.1, None).await?;
-                tokio::spawn(bg);
-                info!("TCP Upstream connected to: {}:{}", info.addr, info.port);
-                Ok(client)
-            }
-            ConnectType::DoH => {
-                let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
-                let conn = HttpsClientStreamBuilder::with_client_config(
-                    Arc::new(if info.insecure_skip_verify {
-                        insecure_client_config()
-                    } else {
-                        secure_client_config()
-                    }),
-                    TokioRuntimeProvider::default(),
-                )
-                .build(
-                    addr,
-                    Arc::from(info.host.clone()),
-                    Arc::from(info.path.clone()),
-                );
-                let (client, bg) = Client::connect(conn).await?;
-                tokio::spawn(bg);
-                info!("DoH Upstream connected to: {}:{}", info.addr, info.port);
-                Ok(client)
-            }
-            ConnectType::DoT => {
-                let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
-                let stream = tls_client_connect(
-                    addr,
-                    ServerName::try_from(info.host.clone()).unwrap(),
-                    Arc::new(if info.insecure_skip_verify {
-                        insecure_client_config()
-                    } else {
-                        secure_client_config()
-                    }),
-                    TokioRuntimeProvider::default(),
-                );
-                let (client, bg) = Client::new(stream.0, stream.1, None).await?;
-                tokio::spawn(bg);
-                info!("TLS Upstream connected to: {}:{}", info.addr, info.port);
-                Ok(client)
-            }
-            ConnectType::DoQ => {
-                let addr = SocketAddr::new(IpAddr::from_str(&info.addr).unwrap(), info.port);
-                let conn = QuicClientStream::builder().build(addr, Arc::from(info.host.clone()));
-                let (client, bg) = Client::connect(conn).await?;
-                // fixme: 没有合适的quic 服务器 待测试
-                tokio::spawn(bg);
-                info!("DoQ Upstream connected to: {}:{}", info.addr, info.port);
-                Ok(client)
-            }
-        }
-    }
-}
-#[allow(unused)]
-pub struct DomainUpStream {
-    pub bootstrap: Option<Box<dyn UpStream>>,
-    pub connect_info: ConnectInfo,
-    pub connect_state: RwLock<ConnectState>,
-}
-
-#[async_trait]
-#[allow(unused)]
-impl UpStream for DomainUpStream {
-    async fn connect(&self) {
-        todo!()
-    }
-
-    async fn query(&self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError> {
-        todo!()
-    }
-
-    fn connect_type(&self) -> ConnectType {
-        todo!()
-    }
-}
+// #[async_trait]
+// #[allow(unused)]
+// impl UpStream for DomainUpStream {
+//     async fn connect(&self) {
+//         todo!()
+//     }
+//
+//     async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
+//         todo!()
+//     }
+//
+//     fn connect_type(&self) -> ConnectType {
+//         todo!()
+//     }
+// }
 
 pub struct UpStreamBuilder;
 
@@ -314,30 +315,30 @@ impl UpStreamBuilder {
         }
     }
 
-    pub fn build_ip_upstream(ip_addr: &str) -> IpAddrUpStream {
-        let (connect_type, host, port, path) = Self::detect_connect_type(ip_addr);
-        let port = port.unwrap_or(connect_type.default_port());
-        let result = IpAddr::from_str(host.as_str());
-        let is_ip_host = result.is_ok();
-        if !is_ip_host {
-            panic!("bootstrap 仅支持ip服务器")
-        }
-        let info = ConnectInfo {
-            connect_type,
-            addr: host.clone(),
-            port,
-            socks5: None,
-            bootstrap: None,
-            path,
-            host,
-            is_ip_host,
-            insecure_skip_verify: true,
-        };
-        IpAddrUpStream {
-            connect_info: info,
-            connect_state: RwLock::new(ConnectState::New),
-        }
-    }
+    // pub fn build_ip_upstream(ip_addr: &str) -> IpAddrUpStream {
+    //     let (connect_type, host, port, path) = Self::detect_connect_type(ip_addr);
+    //     let port = port.unwrap_or(connect_type.default_port());
+    //     let result = IpAddr::from_str(host.as_str());
+    //     let is_ip_host = result.is_ok();
+    //     if !is_ip_host {
+    //         panic!("bootstrap 仅支持ip服务器")
+    //     }
+    //     let info = ConnectInfo {
+    //         connect_type,
+    //         addr: host.clone(),
+    //         port,
+    //         socks5: None,
+    //         bootstrap: None,
+    //         path,
+    //         host,
+    //         is_ip_host,
+    //         insecure_skip_verify: true,
+    //     };
+    //     IpAddrUpStream {
+    //         connect_info: info,
+    //         connect_state: RwLock::new(ConnectState::New),
+    //     }
+    // }
 
     fn detect_connect_type(addr: &str) -> (ConnectType, String, Option<u16>, String) {
         if !addr.contains("//") {

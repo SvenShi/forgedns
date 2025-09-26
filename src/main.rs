@@ -41,12 +41,12 @@ async fn app_run() {
 }
 
 fn tokio_run() -> Result<(), String> {
-    info!("RustDNS {} starting...", hickory_client::version());
+    // info!("RustDNS {} starting...", hickory_client::version());
     let mut tokio_runtime = runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
         .thread_name("rustdns-worker")
-        .worker_threads(4);
+        .worker_threads(8);
     let tokio_runtime = tokio_runtime
         .build()
         .map_err(|err| format!("failed to initialize Tokio runtime: {err}"))?;

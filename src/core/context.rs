@@ -10,15 +10,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use hickory_client::proto::xfer::DnsResponse;
-use hickory_server::server::RequestInfo;
 use std::any::Any;
 use std::collections::HashMap;
+use std::net::SocketAddr;
+use hickory_proto::op::{Header, LowerQuery};
+use hickory_proto::xfer::{DnsResponse, Protocol};
 
 #[allow(unused)]
-pub struct DnsContext<'a> {
+pub struct DnsContext {
     /// dns 请求信息
-    pub request_info: RequestInfo<'a>,
+    pub request_info: RequestInfo,
 
     /// dns 响应信息
     pub response: Option<DnsResponse>,
@@ -29,7 +30,7 @@ pub struct DnsContext<'a> {
 }
 
 #[allow(unused)]
-impl DnsContext<'_> {
+impl DnsContext {
     fn set_attr<T>(&mut self, name: String, value: Box<T>)
     where
         T: Send + Sync + 'static,
@@ -47,4 +48,16 @@ impl DnsContext<'_> {
     fn remove_attr(&mut self, name: &str) {
         self.attributes.remove(name);
     }
+}
+
+
+pub struct RequestInfo {
+    /// The source address from which the request came
+    pub src: SocketAddr,
+    /// The protocol used for the request
+    pub protocol: Protocol,
+    /// The header from the original request
+    pub header: Header,
+    /// The query from the request
+    pub query: LowerQuery,
 }
