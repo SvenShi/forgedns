@@ -12,11 +12,10 @@
  */
 use crate::config::config::PluginConfig;
 use crate::core::context::{DnsContext, RequestInfo};
-use crate::core::handler::DnsRequestHandler;
-use crate::plugin::{Plugin, PluginFactory, PluginMainType, get_plugin};
+use crate::plugin::{get_plugin, Plugin, PluginFactory, PluginInfo, PluginMainType};
 use async_trait::async_trait;
-use futures::{SinkExt, StreamExt};
-use hickory_proto::op::{LowerQuery, Message, Query, UpdateMessage};
+use futures::StreamExt;
+use hickory_proto::op::{LowerQuery, Message, Query};
 use hickory_proto::runtime::TokioRuntimeProvider;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::udp::UdpStream;
@@ -26,15 +25,12 @@ use serde::Deserialize;
 use socket2::{Domain, Socket, Type};
 use std::collections::HashMap;
 use std::io::Error;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::count;
 use tokio::net::UdpSocket;
-use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use tracing::{Level, debug, event_enabled, info, warn};
-use url::quirks::{port, protocol};
+use tracing::{debug, event_enabled, info, warn, Level};
 
 #[derive(Deserialize)]
 pub struct UdpServerConfig {
@@ -45,9 +41,10 @@ pub struct UdpServerConfig {
 }
 
 #[allow(unused)]
+#[derive(Clone)]
 pub struct UdpServer {
     tag: String,
-    entry: Arc<RwLock<Box<dyn Plugin>>>,
+    entry: Arc<PluginInfo>,
     listen: String,
 }
 
@@ -77,7 +74,7 @@ impl Plugin for UdpServer {
     async fn destroy(&mut self) {}
 }
 
-async fn run_server(addr: String, entry_executor: Arc<RwLock<Box<dyn Plugin>>>) {
+async fn run_server(addr: String, entry_executor: Arc<PluginInfo>) {
     let (mut stream, stream_handle) = UdpStream::<TokioRuntimeProvider>::with_bound(
         build_udp_socket(&addr).unwrap(),
         ([127, 255, 255, 254], 0).into(),
@@ -92,7 +89,6 @@ async fn run_server(addr: String, entry_executor: Arc<RwLock<Box<dyn Plugin>>>) 
                 Some(message) => message,
             },
         };
-
         let message = match message {
             Err(error) => {
                 warn!(%error, "error receiving message on udp_socket");
@@ -112,7 +108,7 @@ async fn run_server(addr: String, entry_executor: Arc<RwLock<Box<dyn Plugin>>>) 
 }
 
 async fn handler_message(
-    entry_executor: Arc<RwLock<Box<dyn Plugin>>>,
+    entry_executor: Arc<PluginInfo>,
     stream_handle: Arc<BufDnsStreamHandle>,
     message: SerialMessage,
 ) {
@@ -141,7 +137,7 @@ async fn handler_message(
         }
         {
             // 执行程序入口执行
-            entry_executor.read().await.execute(&mut context).await;
+            entry_executor.plugin.execute(&mut context).await;
         }
 
         match context.response {
@@ -226,7 +222,7 @@ impl PluginFactory for UdpServerFactory {
 
         Box::new(UdpServer {
             tag: plugin_info.tag.clone(),
-            entry: entry.plugin.clone(),
+            entry: entry.clone(),
             listen: udp_config.listen,
         })
     }

@@ -22,7 +22,6 @@ use serde_yml::Value;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::info;
 
 pub mod executable;
@@ -35,7 +34,7 @@ lazy_static! {
         m.insert("udp_server", Box::new(UdpServerFactory {}));
         m
     };
-    static ref PLUGINS: DashMap<String, Arc<Box<PluginInfo>>> = DashMap::new();
+    static ref PLUGINS: DashMap<String, Arc<PluginInfo>> = DashMap::new();
 }
 
 /// 初始化插件
@@ -46,22 +45,22 @@ pub async fn init(config: Config) {
         let factory = FACTORIES
             .get(key)
             .unwrap_or_else(|| panic!("Plugin {key} not found"));
-        let plugin_info = PluginInfo::from(&plugin_config, &factory);
+        let mut plugin_info = PluginInfo::from(&plugin_config, &factory);
 
-        {
-            info!("Plugin init {} start", plugin_info.plugin_type);
-            plugin_info.plugin.write().await.init().await;
-        }
+        info!("Plugin init {} start", plugin_info.plugin_type);
+        plugin_info.plugin.as_mut().init().await;
 
-        PLUGINS.insert(
-            plugin_config.tag.to_owned(),
-            Arc::new(Box::new(plugin_info)),
-        );
+        PLUGINS.insert(plugin_config.tag.to_owned(), Arc::new(plugin_info));
     }
 }
 
-pub fn get_plugin(tag: &str) -> Option<Arc<Box<PluginInfo>>> {
-    PLUGINS.get(tag).map(|v| v.clone())
+pub fn get_plugin(tag: &str) -> Option<Arc<PluginInfo>> {
+    Some(PLUGINS.get(tag)?.clone())
+}
+
+#[allow(unused)]
+pub fn set_plugin(plugin_info: Arc<PluginInfo>) {
+    PLUGINS.insert(plugin_info.tag.to_owned(), plugin_info);
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -144,7 +143,7 @@ pub struct PluginInfo {
     /// 插件参数
     pub args: Option<Value>,
     ///插件
-    pub plugin: Arc<RwLock<Box<dyn Plugin>>>,
+    pub plugin: Box<dyn Plugin>,
 }
 
 impl PluginInfo {
@@ -155,7 +154,7 @@ impl PluginInfo {
             tag: config.tag.clone(),
             plugin_type: factory.plugin_type(&config.tag),
             args: config.args.clone(),
-            plugin: Arc::new(RwLock::new(plugin)),
+            plugin,
         }
     }
 }
