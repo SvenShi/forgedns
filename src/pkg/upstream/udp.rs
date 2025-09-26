@@ -11,35 +11,32 @@
  * limitations under the License.
  */
 use crate::core::context::DnsContext;
-use crate::pkg::upstream::upstream::{ConnectInfo, ConnectType, UpStream};
+use crate::pkg::upstream::{ConnectInfo, ConnectType, UpStream};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hickory_proto::op::{Message, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use futures::future::err;
-use hickory_proto::ProtoError;
-use hickory_proto::xfer::DnsResponse;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{oneshot, OnceCell};
 use tokio::time::timeout;
-use tracing::error;
-use tracing::log::info;
 
-pub(crate) struct SelfImplUpstream {
-    pub(crate) current_id: AtomicU16,
-    pub(crate) request_map: Arc<DashMap<u16, Sender<Message>>>,
-    pub(crate) connect_info: ConnectInfo,
-    pub(crate) connect: OnceCell<Vec<Arc<UdpSocket>>>,
+pub struct UdpUpstream {
+    pub current_id: AtomicU16,
+    pub request_map: Arc<DashMap<u16, Sender<Message>>>,
+    pub connect_info: ConnectInfo,
+    pub connect: OnceCell<Vec<Arc<UdpSocket>>>,
 }
 
 #[async_trait]
-impl UpStream for SelfImplUpstream {
+impl UpStream for UdpUpstream {
     async fn connect(&self) {
         let addr = SocketAddr::new(
             IpAddr::from_str(&self.connect_info.addr).unwrap(),
@@ -95,9 +92,7 @@ impl UpStream for SelfImplUpstream {
 
         match timeout(Duration::from_secs(2), rx).await {
             Ok(Ok(message)) => DnsResponse::from_message(message),
-            Ok(Err(_canceled)) => {
-                Err(ProtoError::from("request canceled"))
-            },
+            Ok(Err(_canceled)) => Err(ProtoError::from("request canceled")),
             Err(_elapsed) => {
                 // 超时，清理 request_map 里的 key
                 self.request_map.remove(&query_id);
@@ -111,8 +106,22 @@ impl UpStream for SelfImplUpstream {
     }
 }
 
-pub(crate) struct DnsConnect {
-    udp_socket: UdpSocket,
-}
+#[cfg(test)]
+mod test {
+    use crate::pkg::upstream::{UpStreamBuilder, UpStreamConfig};
 
-impl DnsConnect {}
+    #[tokio::test]
+    async fn tcp_connect_test() {
+        let stream_config = UpStreamConfig {
+            addr: "tcp://223.5.5.5".to_string(),
+            port: Some(53),
+            socks5: None,
+            bootstrap: None,
+            dial_addr: None,
+            insecure_skip_verify: None,
+        };
+        let upstream = UpStreamBuilder::with_upstream_config(&stream_config);
+        upstream.connect().await;
+        println!("connect success");
+    }
+}
