@@ -36,7 +36,7 @@ impl Plugin for SequentialDnsForwarder {
         self.upstream.connect().await;
     }
 
-    async fn execute(&self, context: &mut DnsContext<'_>) {
+    async fn execute(&self, context: &mut DnsContext) {
         match self.upstream.query(context).await {
             Ok(res) => {
                 context.response = Some(res);

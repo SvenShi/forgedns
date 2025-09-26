@@ -13,22 +13,19 @@
 use crate::core::context::DnsContext;
 use crate::pkg::upstream::upstream::{ConnectInfo, ConnectType, UpStream};
 use async_trait::async_trait;
-use dashmap::{DashMap, Map};
-use hickory_client::proto::ProtoError;
-use hickory_client::proto::xfer::DnsResponse;
+use dashmap::DashMap;
 use hickory_proto::op::{Message, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
-use hickory_proto::xfer::Protocol::Udp;
 use std::net::{IpAddr, SocketAddr};
-use std::ops::Index;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
+use hickory_proto::ProtoError;
+use hickory_proto::xfer::DnsResponse;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot::Sender;
-use tokio::sync::{OnceCell, RwLock, oneshot};
-use tokio::task::yield_now;
+use tokio::sync::{oneshot, OnceCell};
 use tracing::log::info;
 
 pub(crate) struct SelfImplUpstream {
@@ -46,7 +43,7 @@ impl UpStream for SelfImplUpstream {
             self.connect_info.port,
         );
         let mut sockets = Vec::new();
-        for i in 0..20 {
+        for _ in 0..200 {
             let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
             udp_socket.connect(addr).await.unwrap();
             let arc = Arc::new(udp_socket);
@@ -54,7 +51,7 @@ impl UpStream for SelfImplUpstream {
             let request_map = self.request_map.clone();
             sockets.push(arc);
             tokio::spawn(async move {
-                let mut buf = [0u8; 512];
+                let mut buf = [0u8; 4096];
                 loop {
                     let (len, _) = match connect.recv_from(&mut buf).await {
                         Ok(res) => res,
@@ -63,8 +60,6 @@ impl UpStream for SelfImplUpstream {
                             continue;
                         }
                     };
-
-                    // 解析 DNS 消息
                     if let Ok(msg) = Message::from_bytes(&buf[..len]) {
                         let id = msg.header().id();
                         let sender = request_map.remove(&id).unwrap().1;
@@ -77,7 +72,7 @@ impl UpStream for SelfImplUpstream {
         self.connect.set(sockets).expect("set error");
     }
 
-    async fn query(&self, context: &mut DnsContext<'_>) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
         let mut query_msg = Message::query();
         let info = &context.request_info;
         let mut query = Query::query(info.query.name().into(), info.query.query_type().clone());
@@ -89,7 +84,7 @@ impl UpStream for SelfImplUpstream {
         query_msg.set_header(header);
         let vec = query_msg.to_bytes().unwrap();
         let instant = Instant::now();
-        let index = (query_id % 20) as usize;
+        let index = (query_id % 200) as usize;
         let connect = self.connect.get().unwrap().get(index).unwrap();
         connect.send(vec.as_slice()).await?;
         let (tx, rx) = oneshot::channel();
