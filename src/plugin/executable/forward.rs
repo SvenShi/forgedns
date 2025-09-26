@@ -12,11 +12,11 @@
  */
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::pkg::upstream::upstream::{UpStream, UpStreamBuilder, UpStreamConfig};
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::error;
+use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpStreamConfig};
 
 /// 单线程的dns转发器
 #[allow(unused)]

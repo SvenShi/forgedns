@@ -41,7 +41,6 @@ pub struct UdpServerConfig {
 }
 
 #[allow(unused)]
-#[derive(Clone)]
 pub struct UdpServer {
     tag: String,
     entry: Arc<PluginInfo>,
