@@ -54,7 +54,7 @@ impl UpStream for SelfImplUpstream {
             let request_map = self.request_map.clone();
             sockets.push(arc);
             tokio::spawn(async move {
-                let mut buf = [0u8; 4096];
+                let mut buf = [0u8; 2048];
                 loop {
                     let (len, _) = match connect.recv_from(&mut buf).await {
                         Ok(res) => res,

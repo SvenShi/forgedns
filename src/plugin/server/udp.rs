@@ -78,11 +78,10 @@ impl Plugin for UdpServer {
 }
 
 async fn run_server(addr: String, entry_executor: Arc<RwLock<Box<dyn Plugin>>>) {
-    let bind = UdpSocket::bind(addr);
-    let udp_socket = Arc::new(bind.await.unwrap());
-
+    let udp_socket = Arc::new(build_udp_socket(&addr).unwrap());
     let udp_socket_c = udp_socket.clone();
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; 2048];
+    let mut inner_join_set = JoinSet::new();
     loop {
         let (len, source) = match udp_socket_c.recv_from(&mut buf).await {
             Ok(res) => res,
@@ -95,7 +94,8 @@ async fn run_server(addr: String, entry_executor: Arc<RwLock<Box<dyn Plugin>>>) 
         if let Ok(mut msg) = Message::from_bytes(&buf[..len]) {
             let entry_executor = entry_executor.clone();
             let udp_socket_c = udp_socket_c.clone();
-            let _ = tokio::spawn(async move {
+
+           inner_join_set.spawn(async move {
                 let mut context = DnsContext {
                     request_info: RequestInfo {
                         src: source,
@@ -108,7 +108,7 @@ async fn run_server(addr: String, entry_executor: Arc<RwLock<Box<dyn Plugin>>>) 
                     attributes: HashMap::new(),
                 };
 
-                info!("Handling request");
+                // info!("Handling request");
                 if event_enabled!(Level::DEBUG) {
                     debug!(
                         "dns:request source:{}, query:{}, queryType:{}",
@@ -141,19 +141,20 @@ async fn run_server(addr: String, entry_executor: Arc<RwLock<Box<dyn Plugin>>>) 
                 }
 
                 let message = msg.to_response();
-                info!(
-                    "Response received: source:{}, query:{}, sourceId: {}, responseId: {}, dst: {}",
-                    context.request_info.src,
-                    context.request_info.query.name().to_string(),
-                    msg.header().id(),
-                    message.header().id(),
-                    source.to_string()
-                );
+                // info!(
+                //     "Response received: source:{}, query:{}, sourceId: {}, responseId: {}, dst: {}",
+                //     context.request_info.src,
+                //     context.request_info.query.name().to_string(),
+                //     msg.header().id(),
+                //     message.header().id(),
+                //     source.to_string()
+                // );
                 udp_socket_c
                     .send_to(message.to_bytes().unwrap().as_slice(), source)
                     .await
                     .unwrap();
             });
+            reap_tasks(&mut inner_join_set);
         }
     }
 }
