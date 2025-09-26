@@ -217,7 +217,7 @@ async fn handle_raw_request(
                 attributes: HashMap::new(),
             };
 
-            info!("Handling request");
+            // info!("Handling request");
             if event_enabled!(Level::DEBUG) {
                 debug!(
                     "dns:request source:{}, query:{}, queryType:{}",
@@ -242,14 +242,14 @@ async fn handle_raw_request(
             }
 
             let message = msg.to_response();
-            info!(
-                "Response received: source:{}, query:{}, sourceId: {}, responseId: {}, dst: {}",
-                context.request_info.src,
-                context.request_info.query.name().to_string(),
-                msg.header().id(),
-                message.header().id(),
-                src_addr.to_string()
-            );
+            // info!(
+            //     "Response received: source:{}, query:{}, sourceId: {}, responseId: {}, dst: {}",
+            //     context.request_info.src,
+            //     context.request_info.query.name().to_string(),
+            //     msg.header().id(),
+            //     message.header().id(),
+            //     src_addr.to_string()
+            // );
             response_handler
                 .send(SerialMessage::new(message.to_bytes().unwrap(), src_addr))
                 .unwrap();
