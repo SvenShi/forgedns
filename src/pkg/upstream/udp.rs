@@ -14,18 +14,21 @@ use crate::core::context::DnsContext;
 use crate::pkg::upstream::{ConnectInfo, ConnectType, UpStream};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use hickory_proto::ProtoError;
 use hickory_proto::op::{Message, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
+use socket2::{Domain, Socket, Type};
+use std::io::Error;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot::Sender;
-use tokio::sync::{oneshot, OnceCell};
+use tokio::sync::{Mutex, OnceCell, oneshot, RwLock};
+use tokio::time::Instant;
 use tokio::time::timeout;
 
 pub struct UdpUpstream {
@@ -104,6 +107,89 @@ impl UpStream for UdpUpstream {
     fn connect_type(&self) -> ConnectType {
         todo!()
     }
+}
+
+pub struct LazyUpdConnectPool {
+    remote_addr: SocketAddr,
+    bind_addr: SocketAddr,
+    index: u16,
+    size: u16,
+    max_size: u16,
+    connections: Vec<UdpConnection>,
+}
+
+pub struct UdpConnection {
+    use_count: Arc<AtomicU16>,
+    socket: UdpSocket,
+    last_use: Instant,
+}
+
+impl LazyUpdConnectPool {
+    pub fn new(
+        max_pool_size: u16,
+        bind_addr: SocketAddr,
+        remote_addr: SocketAddr,
+    ) -> Arc<RwLock<Self>> {
+        let pool = Self {
+            index: 0,
+            size: 0,
+            bind_addr,
+            remote_addr,
+            max_size: max_pool_size,
+            connections: Vec::new(),
+        };
+
+        let pool = Arc::new(RwLock::new(pool));
+        let arc_pool = pool.clone();
+        tokio::spawn(async move {
+            let read_guard = arc_pool.read().await;
+
+        });
+
+        pool.clone()
+    }
+
+    pub fn get(&mut self) -> &UdpConnection {
+        if self.size == 0 {
+            self.try_expand();
+        }
+        todo!()
+    }
+    fn try_expand(&mut self) {
+        if self.size >= self.max_size {
+            return;
+        }
+        let socket = connect_udp_socket(self.bind_addr, self.remote_addr).unwrap();
+        let connection = UdpConnection::from(socket);
+        self.size += 1;
+        self.connections.push(connection);
+    }
+}
+
+impl UdpConnection {
+    pub fn from(socket: UdpSocket) -> Self {
+        Self {
+            use_count: Arc::new(AtomicU16::new(0)),
+            socket,
+            last_use: Instant::now(),
+        }
+    }
+}
+
+fn connect_udp_socket(bind_addr: SocketAddr, remote_addr: SocketAddr) -> Result<UdpSocket, Error> {
+    let sock = if bind_addr.is_ipv4() {
+        Socket::new(Domain::IPV4, Type::DGRAM, None)?
+    } else {
+        let s = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
+        s.set_only_v6(true)?;
+        s
+    };
+
+    sock.set_nonblocking(true)?;
+    sock.bind(&bind_addr.into())?;
+    sock.connect(&remote_addr.into())?;
+
+    UdpSocket::from_std(sock.into())
 }
 
 #[cfg(test)]
