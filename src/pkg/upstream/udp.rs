@@ -12,24 +12,24 @@
  */
 use crate::core::context::DnsContext;
 use crate::pkg::upstream::{ConnectInfo, ConnectType, UpStream};
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use hickory_proto::ProtoError;
 use hickory_proto::op::{Message, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use socket2::{Domain, Socket, Type};
 use std::io::Error;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot::Sender;
-use tokio::sync::{Mutex, OnceCell, oneshot, RwLock};
-use tokio::time::Instant;
-use tokio::time::timeout;
+use tokio::sync::{oneshot, OnceCell};
+use tokio::time::{timeout, Instant};
 
 pub struct UdpUpstream {
     pub current_id: AtomicU16,
@@ -95,7 +95,10 @@ impl UpStream for UdpUpstream {
 
         match timeout(Duration::from_secs(2), rx).await {
             Ok(Ok(message)) => DnsResponse::from_message(message),
-            Ok(Err(_canceled)) => Err(ProtoError::from("request canceled")),
+            Ok(Err(_canceled)) => {
+                self.request_map.remove(&query_id);
+                Err(ProtoError::from("request canceled"))
+            }
             Err(_elapsed) => {
                 // 超时，清理 request_map 里的 key
                 self.request_map.remove(&query_id);
@@ -109,72 +112,138 @@ impl UpStream for UdpUpstream {
     }
 }
 
-pub struct LazyUpdConnectPool {
-    remote_addr: SocketAddr,
-    bind_addr: SocketAddr,
-    index: u16,
-    size: u16,
-    max_size: u16,
-    connections: Vec<UdpConnection>,
-}
-
+/// 单个 UDP 连接
 pub struct UdpConnection {
-    use_count: Arc<AtomicU16>,
-    socket: UdpSocket,
-    last_use: Instant,
-}
-
-impl LazyUpdConnectPool {
-    pub fn new(
-        max_pool_size: u16,
-        bind_addr: SocketAddr,
-        remote_addr: SocketAddr,
-    ) -> Arc<RwLock<Self>> {
-        let pool = Self {
-            index: 0,
-            size: 0,
-            bind_addr,
-            remote_addr,
-            max_size: max_pool_size,
-            connections: Vec::new(),
-        };
-
-        let pool = Arc::new(RwLock::new(pool));
-        let arc_pool = pool.clone();
-        tokio::spawn(async move {
-            let read_guard = arc_pool.read().await;
-
-        });
-
-        pool.clone()
-    }
-
-    pub fn get(&mut self) -> &UdpConnection {
-        if self.size == 0 {
-            self.try_expand();
-        }
-        todo!()
-    }
-    fn try_expand(&mut self) {
-        if self.size >= self.max_size {
-            return;
-        }
-        let socket = connect_udp_socket(self.bind_addr, self.remote_addr).unwrap();
-        let connection = UdpConnection::from(socket);
-        self.size += 1;
-        self.connections.push(connection);
-    }
+    pub use_count: AtomicU16,
+    pub socket: Arc<UdpSocket>,
+    pub last_use: parking_lot::Mutex<Instant>, // 更新 last_use
 }
 
 impl UdpConnection {
-    pub fn from(socket: UdpSocket) -> Self {
+    fn new(socket: UdpSocket) -> Self {
         Self {
-            use_count: Arc::new(AtomicU16::new(0)),
-            socket,
-            last_use: Instant::now(),
+            use_count: AtomicU16::new(0),
+            socket: Arc::new(socket),
+            last_use: parking_lot::Mutex::new(Instant::now()),
         }
     }
+
+    fn touch(&self) {
+        *self.last_use.lock() = Instant::now();
+    }
 }
+
+
+pub struct UdpPool {
+    remote_addr: SocketAddr,
+    bind_addr: SocketAddr,
+    index: AtomicUsize,                     // round-robin 指针
+    connections: ArcSwap<Vec<Arc<UdpConnection>>>, // 热切换连接集合
+    max_size: usize,
+    min_size: usize,
+    max_load: u16, // 单连接最大负载
+    max_idle: Duration,
+}
+
+impl UdpPool {
+    pub fn new(bind: SocketAddr, remote: SocketAddr, min_size: usize, max_size: usize) -> Arc<Self> {
+        let pool = Arc::new(Self {
+                  remote_addr: remote,
+                  bind_addr: bind,
+                  index: AtomicUsize::new(0),
+                  connections: ArcSwap::from_pointee(Vec::new()),
+                  max_size,
+                  min_size,
+                  max_load: 4096,
+                  max_idle: Duration::from_secs(60),
+              });
+
+              // 启动维护任务
+              pool.clone().start_maintenance();
+              pool
+    }
+
+
+    /// 获取一个连接（必要时扩容）
+      pub async fn get(&self) -> Arc<UdpConnection> {
+          let conns = self.connections.load();
+          if conns.is_empty() {
+              self.expand().await;
+          }
+
+          let conns = self.connections.load();
+          let len = conns.len();
+          let mut idx = self.index.fetch_add(1, Ordering::Relaxed) % len;
+
+          // 如果负载过高，尝试找下一个
+          for _ in 0..len {
+              let conn = &conns[idx];
+              if conn.use_count.load(Ordering::Relaxed) < self.max_load {
+                  conn.use_count.fetch_add(1, Ordering::Relaxed);
+                  conn.touch();
+                  return conn.clone();
+              }
+              idx = (idx + 1) % len;
+          }
+
+          // 如果所有连接都超量，尝试扩容
+          self.expand().await;
+          self.get().await
+      }
+
+    /// 扩容一个连接
+     pub async fn expand(&self) {
+         let conns = self.connections.load().clone();
+         if conns.len() >= self.max_size {
+             return;
+         }
+
+         let socket = UdpSocket::bind(self.bind_addr).await.unwrap();
+         socket.connect(self.remote_addr).await.unwrap();
+         let conn = Arc::new(UdpConnection::new(socket));
+
+         let mut new_vec = (*conns).clone();
+         new_vec.push(conn);
+         self.connections.store(Arc::new(new_vec));
+     }
+
+     /// 定时清理长时间空闲的连接
+     fn start_maintenance(self: Arc<Self>) {
+         tokio::spawn(async move {
+             loop {
+                 tokio::time::sleep(Duration::from_secs(30)).await;
+
+                 let now = Instant::now();
+                 let conns = self.connections.load();
+                 let mut new_vec = Vec::new();
+
+                 for conn in conns.iter() {
+                     let idle = now.duration_since(*conn.last_use.lock());
+                     if idle < self.max_idle {
+                         new_vec.push(conn.clone());
+                     }
+                 }
+
+                 // 保留至少 min_size 个
+                 while new_vec.len() < self.min_size {
+                     if let Ok(socket) = UdpSocket::bind(self.bind_addr).await {
+                         if socket.connect(self.remote_addr).await.is_ok() {
+                             new_vec.push(Arc::new(UdpConnection::new(socket)));
+                         }
+                     }
+                 }
+
+                 self.connections.store(Arc::new(new_vec));
+             }
+         });
+     }
+}
+
+pub struct ConnectionGuard<'a> {
+    connection: &'a UdpConnection,
+}
+
+const LOAD_FACTOR: u16 = (4096f64 / 0.75) as u16;
 
 fn connect_udp_socket(bind_addr: SocketAddr, remote_addr: SocketAddr) -> Result<UdpSocket, Error> {
     let sock = if bind_addr.is_ipv4() {
