@@ -133,9 +133,8 @@ impl UpStreamBuilder {
 
             Box::new(UdpUpstream {
                 current_id: AtomicU16::new(0),
-                request_map: Arc::new(DashMap::new()),
                 connect_info,
-                connect: OnceCell::new(),
+                pool: OnceCell::new(),
             })
         } else {
             todo!("new domain upstream")
