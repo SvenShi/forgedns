@@ -20,22 +20,24 @@ use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
 use socket2::{Domain, Socket, Type};
+use std::io;
 use std::io::Error;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, SocketAddrV4};
+use std::ops::Deref;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{oneshot, OnceCell};
+use tokio::task::JoinHandle;
 use tokio::time::{timeout, Instant};
 
 pub struct UdpUpstream {
     pub current_id: AtomicU16,
-    pub request_map: Arc<DashMap<u16, Sender<Message>>>,
     pub connect_info: ConnectInfo,
-    pub connect: OnceCell<Vec<Arc<UdpSocket>>>,
+    pub pool: OnceCell<Arc<UdpPool>>,
 }
 
 #[async_trait]
@@ -45,87 +47,78 @@ impl UpStream for UdpUpstream {
             IpAddr::from_str(&self.connect_info.addr).unwrap(),
             self.connect_info.port,
         );
-        let mut sockets = Vec::new();
-        for _ in 0..20 {
-            let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-            udp_socket.connect(addr).await.unwrap();
-            let arc = Arc::new(udp_socket);
-            let connect = arc.clone();
-            let request_map = self.request_map.clone();
-            sockets.push(arc);
-            tokio::spawn(async move {
-                let mut buf = [0u8; 2048];
-                loop {
-                    let (len, _) = match connect.recv_from(&mut buf).await {
-                        Ok(res) => res,
-                        Err(e) => {
-                            eprintln!("recv_from error: {:?}", e);
-                            continue;
-                        }
-                    };
-                    if let Ok(msg) = Message::from_bytes(&buf[..len]) {
-                        let id = msg.header().id();
-                        let sender = request_map.remove(&id).unwrap().1;
-                        sender.send(msg).unwrap();
-                    }
-                }
-            });
-        }
-
-        self.connect.set(sockets).expect("set error");
+        self.pool
+            .set(UdpPool::new(
+                SocketAddrV4::from_str("0.0.0.0:0").unwrap().into(),
+                addr,
+                64,
+            ))
+            .unwrap();
     }
 
     async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
+        let (query_msg, query_id) = self.build_query_message(&context);
+        let vec = query_msg.to_bytes().unwrap();
+        self.pool
+            .get()
+            .unwrap()
+            .send(vec.as_slice(), query_id)
+            .await
+    }
+
+    fn connect_type(&self) -> ConnectType {
+        ConnectType::UDP
+    }
+}
+
+impl UdpUpstream {
+    fn build_query_message(&self, context: &&mut DnsContext) -> (Message, u16) {
         let mut query_msg = Message::query();
         let info = &context.request_info;
         let mut query = Query::query(info.query.name().into(), info.query.query_type().clone());
         query.set_query_class(info.query.query_class().clone());
         query_msg.add_query(query);
         let mut header = info.header.clone();
-        let query_id = self.current_id.fetch_add(1, Ordering::Relaxed);
+        let query_id = loop {
+            let id = self
+                .current_id
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+                    Some(id.wrapping_add(1))
+                })
+                .unwrap();
+
+            if !self.pool.get().unwrap().requests.contains_key(&id) {
+                break id;
+            }
+        };
         header.set_id(query_id);
         query_msg.set_header(header);
-        let vec = query_msg.to_bytes().unwrap();
-        // let instant = Instant::now();
-        let index = (query_id % 20) as usize;
-        let connect = self.connect.get().unwrap().get(index).unwrap();
-        connect.send(vec.as_slice()).await?;
-        let (tx, rx) = oneshot::channel();
-        self.request_map.insert(query_msg.header().id(), tx);
-
-        match timeout(Duration::from_secs(2), rx).await {
-            Ok(Ok(message)) => DnsResponse::from_message(message),
-            Ok(Err(_canceled)) => {
-                self.request_map.remove(&query_id);
-                Err(ProtoError::from("request canceled"))
-            }
-            Err(_elapsed) => {
-                // 超时，清理 request_map 里的 key
-                self.request_map.remove(&query_id);
-                Err(ProtoError::from("dns query timeout"))
-            }
-        }
-    }
-
-    fn connect_type(&self) -> ConnectType {
-        todo!()
+        (query_msg, query_id)
     }
 }
 
 /// 单个 UDP 连接
+#[derive(Debug)]
 pub struct UdpConnection {
-    pub use_count: AtomicU16,
-    pub socket: Arc<UdpSocket>,
-    pub last_use: parking_lot::Mutex<Instant>, // 更新 last_use
+    use_count: AtomicU16,
+    socket: Arc<UdpSocket>,
+    last_use: parking_lot::Mutex<Instant>, // 更新 last_use
+    listen_handler: OnceCell<JoinHandle<()>>,
+    dropped: AtomicBool,
 }
 
 impl UdpConnection {
-    fn new(socket: UdpSocket) -> Self {
+    fn new(socket: Arc<UdpSocket>) -> Self {
         Self {
             use_count: AtomicU16::new(0),
-            socket: Arc::new(socket),
+            socket,
             last_use: parking_lot::Mutex::new(Instant::now()),
+            listen_handler: OnceCell::new(),
+            dropped: AtomicBool::new(false),
         }
+    }
+    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
+        self.socket.send(buf).await
     }
 
     fn touch(&self) {
@@ -133,117 +126,200 @@ impl UdpConnection {
     }
 }
 
-
+#[derive(Debug)]
 pub struct UdpPool {
     remote_addr: SocketAddr,
     bind_addr: SocketAddr,
-    index: AtomicUsize,                     // round-robin 指针
+    index: AtomicUsize,                            // round-robin 指针
     connections: ArcSwap<Vec<Arc<UdpConnection>>>, // 热切换连接集合
     max_size: usize,
-    min_size: usize,
     max_load: u16, // 单连接最大负载
     max_idle: Duration,
+    requests: Arc<DashMap<u16, Sender<Message>>>,
 }
 
 impl UdpPool {
-    pub fn new(bind: SocketAddr, remote: SocketAddr, min_size: usize, max_size: usize) -> Arc<Self> {
+    pub fn new(bind: SocketAddr, remote: SocketAddr, max_size: usize) -> Arc<Self> {
         let pool = Arc::new(Self {
-                  remote_addr: remote,
-                  bind_addr: bind,
-                  index: AtomicUsize::new(0),
-                  connections: ArcSwap::from_pointee(Vec::new()),
-                  max_size,
-                  min_size,
-                  max_load: 4096,
-                  max_idle: Duration::from_secs(60),
-              });
+            remote_addr: remote,
+            bind_addr: bind,
+            index: AtomicUsize::new(0),
+            connections: ArcSwap::from_pointee(Vec::new()),
+            max_size,
+            max_load: 4096,
+            max_idle: Duration::from_secs(60),
+            requests: Arc::new(DashMap::with_capacity(65535)),
+        });
 
-              // 启动维护任务
-              pool.clone().start_maintenance();
-              pool
+        // 启动维护任务
+        pool.clone().start_maintenance();
+        pool
     }
 
+    pub async fn send(&self, buf: &[u8], query_id: u16) -> Result<DnsResponse, ProtoError> {
+        let (tx, rx) = oneshot::channel();
+        self.requests.insert(query_id, tx);
+        {
+            let conn = self.get().await;
+            conn.send(buf).await?;
+        }
+        match timeout(Duration::from_secs(3), rx).await {
+            Ok(Ok(message)) => DnsResponse::from_message(message),
+            Ok(Err(_canceled)) => {
+                self.requests.remove(&query_id);
+                Err(ProtoError::from("request canceled"))
+            }
+            Err(_elapsed) => {
+                // 超时，清理 request_map 里的 key
+                self.requests.remove(&query_id);
+                Err(ProtoError::from("dns query timeout"))
+            }
+        }
+    }
 
     /// 获取一个连接（必要时扩容）
-      pub async fn get(&self) -> Arc<UdpConnection> {
-          let conns = self.connections.load();
-          if conns.is_empty() {
-              self.expand().await;
-          }
+    async fn get(&'_ self) -> ConnectionGuard<'_> {
+        loop {
+            let conns = self.connections.load();
+            if conns.is_empty() {
+                self.expand().await;
+                continue; // 扩容后重新尝试
+            }
 
-          let conns = self.connections.load();
-          let len = conns.len();
-          let mut idx = self.index.fetch_add(1, Ordering::Relaxed) % len;
+            let conns = self.connections.load();
+            let len = conns.len();
+            let mut idx = self.index.fetch_add(1, Ordering::Relaxed) % len;
 
-          // 如果负载过高，尝试找下一个
-          for _ in 0..len {
-              let conn = &conns[idx];
-              if conn.use_count.load(Ordering::Relaxed) < self.max_load {
-                  conn.use_count.fetch_add(1, Ordering::Relaxed);
-                  conn.touch();
-                  return conn.clone();
-              }
-              idx = (idx + 1) % len;
-          }
+            // 如果负载过高，尝试找下一个
+            for _ in 0..len {
+                let conn = &conns[idx];
+                if conn.use_count.load(Ordering::Relaxed) < self.max_load {
+                    conn.use_count.fetch_add(1, Ordering::Relaxed);
+                    conn.touch();
+                    return ConnectionGuard {
+                        connection: conn.clone(),
+                        pool: self,
+                    };
+                }
+                idx = (idx + 1) % len;
+            }
 
-          // 如果所有连接都超量，尝试扩容
-          self.expand().await;
-          self.get().await
-      }
+            // 如果所有连接都超量，尝试扩容后再来一轮
+            self.expand().await;
+        }
+    }
+
+    pub(crate) fn release(&self, connection: Arc<UdpConnection>) {
+        // 释放一个连接的占用，减少计数
+        let prev = connection.use_count.fetch_sub(1, Ordering::Relaxed);
+
+        if prev == 0 {
+            if connection.dropped.load(Ordering::Relaxed) {
+                //  the dropped connection
+                match connection.listen_handler.get() {
+                    None => {}
+                    Some(handler) => handler.abort(),
+                }
+                drop(connection);
+            } else {
+                connection.use_count.store(0, Ordering::Relaxed);
+                // update last_use time
+                connection.touch();
+            }
+        } else {
+            // update last_use time
+            connection.touch();
+        }
+    }
 
     /// 扩容一个连接
-     pub async fn expand(&self) {
-         let conns = self.connections.load().clone();
-         if conns.len() >= self.max_size {
-             return;
-         }
+    pub async fn expand(&self) {
+        let conns = self.connections.load().clone();
+        if conns.len() >= self.max_size {
+            return;
+        }
 
-         let socket = UdpSocket::bind(self.bind_addr).await.unwrap();
-         socket.connect(self.remote_addr).await.unwrap();
-         let conn = Arc::new(UdpConnection::new(socket));
+        let socket = connect_udp_socket(self.bind_addr, self.remote_addr).unwrap();
+        let arc = Arc::new(socket);
+        let inner_socket = arc.clone();
+        let connection = UdpConnection::new(arc);
+        let conn = Arc::new(connection);
+        let requests = self.requests.clone();
 
-         let mut new_vec = (*conns).clone();
-         new_vec.push(conn);
-         self.connections.store(Arc::new(new_vec));
-     }
+        let handle = tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            loop {
+                let (len, _) = match inner_socket.recv_from(&mut buf).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("recv_from error: {:?}", e);
+                        continue;
+                    }
+                };
 
-     /// 定时清理长时间空闲的连接
-     fn start_maintenance(self: Arc<Self>) {
-         tokio::spawn(async move {
-             loop {
-                 tokio::time::sleep(Duration::from_secs(30)).await;
+                if let Ok(msg) = Message::from_bytes(&buf[..len]) {
+                    let id = msg.header().id();
+                    let sender = requests.remove(&id).unwrap().1;
+                    sender.send(msg).unwrap();
+                }
+            }
+        });
 
-                 let now = Instant::now();
-                 let conns = self.connections.load();
-                 let mut new_vec = Vec::new();
+        conn.listen_handler.set(handle).unwrap();
 
-                 for conn in conns.iter() {
-                     let idle = now.duration_since(*conn.last_use.lock());
-                     if idle < self.max_idle {
-                         new_vec.push(conn.clone());
-                     }
-                 }
+        let mut new_vec = (*conns).clone();
+        new_vec.push(conn);
+        self.connections.store(Arc::new(new_vec));
+    }
 
-                 // 保留至少 min_size 个
-                 while new_vec.len() < self.min_size {
-                     if let Ok(socket) = UdpSocket::bind(self.bind_addr).await {
-                         if socket.connect(self.remote_addr).await.is_ok() {
-                             new_vec.push(Arc::new(UdpConnection::new(socket)));
-                         }
-                     }
-                 }
+    /// 定时清理长时间空闲的连接
+    fn start_maintenance(self: Arc<Self>) {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
 
-                 self.connections.store(Arc::new(new_vec));
-             }
-         });
-     }
+                let now = Instant::now();
+                let conns = self.connections.load();
+                let mut new_vec = Vec::new();
+                let mut drop_vec = Vec::new();
+
+                for conn in conns.iter() {
+                    let idle = now.duration_since(*conn.last_use.lock());
+                    if idle < self.max_idle {
+                        new_vec.push(conn.clone());
+                    } else {
+                        drop_vec.push(conn.clone());
+                    }
+                }
+                // switch and stop
+                self.connections.store(Arc::new(new_vec));
+
+                for conn in drop_vec {
+                    conn.dropped.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+    }
 }
 
 pub struct ConnectionGuard<'a> {
-    connection: &'a UdpConnection,
+    connection: Arc<UdpConnection>,
+    pool: &'a UdpPool,
 }
 
-const LOAD_FACTOR: u16 = (4096f64 / 0.75) as u16;
+impl Drop for ConnectionGuard<'_> {
+    fn drop(&mut self) {
+        self.pool.release(self.connection.clone());
+    }
+}
+
+impl<'a> Deref for ConnectionGuard<'a> {
+    type Target = UdpConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
 
 fn connect_udp_socket(bind_addr: SocketAddr, remote_addr: SocketAddr) -> Result<UdpSocket, Error> {
     let sock = if bind_addr.is_ipv4() {
@@ -257,7 +333,6 @@ fn connect_udp_socket(bind_addr: SocketAddr, remote_addr: SocketAddr) -> Result<
     sock.set_nonblocking(true)?;
     sock.bind(&bind_addr.into())?;
     sock.connect(&remote_addr.into())?;
-
     UdpSocket::from_std(sock.into())
 }
 
