@@ -18,15 +18,20 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter, Registry};
+use crate::core::app_clock::AppClock;
 
 pub mod context;
 pub mod handler;
+pub mod app_clock;
+
 mod log;
 mod runtime;
 
 /// 初始化核心包
 pub fn init() -> Runtime {
     let options = Options::parse();
+
+    AppClock::run();
 
     Runtime {
         options,
