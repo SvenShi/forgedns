@@ -29,10 +29,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{OnceCell, oneshot};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, yield_now};
 use tokio::time::timeout;
 use tracing::info;
 
@@ -102,10 +103,10 @@ impl UdpUpstream {
 /// 单个 UDP 连接
 #[derive(Debug)]
 pub struct UdpConnection {
-    use_count: AtomicU16,
+    use_count: Arc<AtomicU16>,
     socket: Arc<UdpSocket>,
     last_use: AtomicU64,
-    listen_handler: OnceCell<JoinHandle<()>>,
+    listen_handler: Arc<OnceCell<JoinHandle<()>>>,
     dropped: AtomicBool,
 }
 
@@ -117,12 +118,33 @@ fn now_mono_ms() -> u64 {
 impl UdpConnection {
     fn new(socket: Arc<UdpSocket>) -> Self {
         Self {
-            use_count: AtomicU16::new(0),
+            use_count: Arc::new(AtomicU16::new(0)),
             socket,
             last_use: AtomicU64::new(now_mono_ms()),
-            listen_handler: OnceCell::new(),
+            listen_handler: Arc::new(OnceCell::new()),
             dropped: AtomicBool::new(false),
         }
+    }
+
+    pub fn close(&self) {
+        if self.dropped.load(Ordering::Relaxed) {
+            return;
+        }
+        self.dropped.store(true, Ordering::SeqCst);
+        let use_count = self.use_count.clone();
+        let listen_handler = self.listen_handler.clone();
+        tokio::spawn(async move {
+            loop {
+                let i = use_count.load(Ordering::Relaxed);
+                info!("closing connection using count {i}");
+                if i == 0 {
+                    listen_handler.get().unwrap().abort();
+                    break;
+                } else {
+                    yield_now().await;
+                }
+            }
+        });
     }
 
     #[inline]
@@ -225,11 +247,7 @@ impl UdpPool {
 
         if prev == 0 {
             if connection.dropped.load(Ordering::Relaxed) {
-                //  the dropped connection
-                match connection.listen_handler.get() {
-                    None => {}
-                    Some(handler) => handler.abort(),
-                }
+                connection.close();
                 drop(connection);
             } else {
                 connection.use_count.store(0, Ordering::Relaxed);
@@ -308,7 +326,7 @@ impl UdpPool {
                 self.connections.store(Arc::new(new_vec));
 
                 for conn in &drop_vec {
-                    conn.dropped.store(true, Ordering::SeqCst);
+                    conn.close();
                 }
                 info!(
                     "连接池过期连接扫描 本次丢弃连接数：{}, 现有连接数：{}",
