@@ -10,29 +10,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::pkg::upstream::{ConnectInfo, ConnectType, UpStream};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use hickory_proto::ProtoError;
 use hickory_proto::op::{Message, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use socket2::{Domain, Socket, Type};
 use std::io;
 use std::io::Error;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::ops::Deref;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot::Sender;
-use tokio::sync::{oneshot, OnceCell};
+use tokio::sync::{OnceCell, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Instant};
+use tokio::time::timeout;
+use tracing::info;
 
 pub struct UdpUpstream {
     pub current_id: AtomicU16,
@@ -102,9 +104,14 @@ impl UdpUpstream {
 pub struct UdpConnection {
     use_count: AtomicU16,
     socket: Arc<UdpSocket>,
-    last_use: parking_lot::Mutex<Instant>, // 更新 last_use
+    last_use: AtomicU64,
     listen_handler: OnceCell<JoinHandle<()>>,
     dropped: AtomicBool,
+}
+
+#[inline]
+fn now_mono_ms() -> u64 {
+    AppClock::run_millis()
 }
 
 impl UdpConnection {
@@ -112,17 +119,20 @@ impl UdpConnection {
         Self {
             use_count: AtomicU16::new(0),
             socket,
-            last_use: parking_lot::Mutex::new(Instant::now()),
+            last_use: AtomicU64::new(now_mono_ms()),
             listen_handler: OnceCell::new(),
             dropped: AtomicBool::new(false),
         }
     }
+
+    #[inline]
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         self.socket.send(buf).await
     }
 
+    #[inline]
     fn touch(&self) {
-        *self.last_use.lock() = Instant::now();
+        self.last_use.store(now_mono_ms(), Ordering::Relaxed);
     }
 }
 
@@ -146,7 +156,7 @@ impl UdpPool {
             index: AtomicUsize::new(0),
             connections: ArcSwap::from_pointee(Vec::new()),
             max_size,
-            max_load: 4096,
+            max_load: 128,
             max_idle: Duration::from_secs(60),
             requests: Arc::new(DashMap::with_capacity(65535)),
         });
@@ -267,9 +277,11 @@ impl UdpPool {
 
         conn.listen_handler.set(handle).unwrap();
 
+        let conns = self.connections.load().clone();
         let mut new_vec = (*conns).clone();
         new_vec.push(conn);
         self.connections.store(Arc::new(new_vec));
+        info!("连接池扩容 现有连接数：{}", self.connections.load().len());
     }
 
     /// 定时清理长时间空闲的连接
@@ -278,14 +290,15 @@ impl UdpPool {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
 
-                let now = Instant::now();
+                let now = now_mono_ms();
                 let conns = self.connections.load();
                 let mut new_vec = Vec::new();
                 let mut drop_vec = Vec::new();
 
                 for conn in conns.iter() {
-                    let idle = now.duration_since(*conn.last_use.lock());
-                    if idle < self.max_idle {
+                    let last_use = conn.last_use.load(Ordering::Relaxed);
+                    let idle = now - last_use;
+                    if idle < self.max_idle.as_millis() as u64 {
                         new_vec.push(conn.clone());
                     } else {
                         drop_vec.push(conn.clone());
@@ -294,9 +307,14 @@ impl UdpPool {
                 // switch and stop
                 self.connections.store(Arc::new(new_vec));
 
-                for conn in drop_vec {
+                for conn in &drop_vec {
                     conn.dropped.store(true, Ordering::SeqCst);
                 }
+                info!(
+                    "连接池过期连接扫描 本次丢弃连接数：{}, 现有连接数：{}",
+                    drop_vec.len(),
+                    self.connections.load().len()
+                );
             }
         });
     }
