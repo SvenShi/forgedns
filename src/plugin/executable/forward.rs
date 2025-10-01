@@ -87,16 +87,19 @@ impl PluginFactory for ForwardFactory {
                 panic!("Forward plugin requires 'concurrent' and 'upstreams' configuration")
             }
         };
+        if forward_config.upstreams.len() == 1 {
+            info!(
+                "Creating SingleDnsForwarder with upstream {:?}",
+                forward_config.upstreams[0]
+            );
 
-        info!(
-            "Creating SingleDnsForwarder with upstream {:?}",
-            forward_config.upstreams[0]
-        );
-
-        Box::new(SingleDnsForwarder {
-            tag: plugin_info.tag.clone(),
-            upstream: UpStreamBuilder::with_upstream_config(&forward_config.upstreams[0]),
-        })
+            Box::new(SingleDnsForwarder {
+                tag: plugin_info.tag.clone(),
+                upstream: UpStreamBuilder::with_upstream_config(&forward_config.upstreams[0]),
+            })
+        } else {
+            todo!("concurrent dns forward not implemented yet")
+        }
     }
 
     fn plugin_type(&self, tag: &str) -> PluginMainType {

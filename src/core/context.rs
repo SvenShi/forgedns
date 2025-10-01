@@ -52,6 +52,7 @@ impl DnsContext {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct RequestInfo {
     /// The source address from which the request came
     pub src: SocketAddr,
