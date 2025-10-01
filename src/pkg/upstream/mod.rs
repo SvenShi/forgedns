@@ -10,28 +10,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::net::IpAddr;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::atomic::AtomicU16;
+
+use crate::core::context::DnsContext;
+use crate::pkg::upstream::udp::UdpUpstream;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use hickory_proto::ProtoError;
 use hickory_proto::xfer::DnsResponse;
 use serde::Deserialize;
+use std::net::IpAddr;
+use std::str::FromStr;
 use tokio::sync::OnceCell;
+use tracing::{debug, info, warn};
 use url::Url;
-use crate::core::context::DnsContext;
-use crate::pkg::upstream::udp::UdpUpstream;
 
 mod bootstrap;
 mod tls_client_config;
 pub mod udp;
 
-
-
-/// 上游服务器连接类型
-#[derive(Clone, Copy)]
+/// Supported upstream connection types
+#[derive(Clone, Copy, Debug)]
 pub enum ConnectType {
     UDP,
     TCP,
@@ -42,6 +39,7 @@ pub enum ConnectType {
 
 #[allow(unused)]
 impl ConnectType {
+    /// Returns the default port for each connection type
     pub fn default_port(&self) -> u16 {
         match self {
             ConnectType::UDP => 53,
@@ -52,6 +50,7 @@ impl ConnectType {
         }
     }
 
+    /// Returns all supported URL schemes for this connection type
     pub fn schema(&self) -> Vec<&str> {
         match self {
             ConnectType::UDP => vec!["udp", ""],
@@ -63,92 +62,106 @@ impl ConnectType {
     }
 }
 
+/// Configuration for building an upstream
 #[derive(Deserialize)]
-pub struct UpStreamConfig {
-    /// 请求服务器地址
+#[derive(Debug)]
+pub struct UpstreamConfig {
+    /// DNS server address (hostname or IP)
     pub addr: String,
+    /// Optional server port (falls back to type default if not specified)
     pub port: Option<u16>,
+    /// Optional SOCKS5 proxy to connect through
     pub socks5: Option<String>,
+    /// Optional bootstrap server for resolving hostname during runtime
     pub bootstrap: Option<String>,
+    /// Direct dial IP address, if provided
     pub dial_addr: Option<IpAddr>,
+    /// Skip TLS certificate verification (not recommended)
     pub insecure_skip_verify: Option<bool>,
 }
 
 #[async_trait]
 #[allow(unused)]
 pub trait UpStream: Send + Sync {
+    /// Initialize or establish connection to the upstream
     async fn connect(&self);
+
+    /// Send a DNS query and wait for the response
     async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError>;
 
+    /// Return the connection type of this upstream
     fn connect_type(&self) -> ConnectType;
 }
 
-/// 公共的连接信息
+/// Connection metadata used by all upstreams
 #[derive(Clone)]
 #[allow(unused)]
 pub struct ConnectInfo {
+    /// Connection type (UDP, TCP, DoT, DoQ, DoH)
     connect_type: ConnectType,
-    addr: String,
+    /// Local bind address, defaults to 0.0.0.0:0
+    bind_addr: String,
+    /// Upstream DNS server address (hostname or IP)
+    remote_addr: String,
+    /// Upstream server port
     port: u16,
+    /// Optional SOCKS5 proxy
     socks5: Option<String>,
+    /// Bootstrap server for hostname resolution
     bootstrap: Option<String>,
+    /// For DoH: request path on the server
     path: String,
+    /// Raw hostname from configuration
     host: String,
+    /// Whether the host is a valid IP address
     is_ip_host: bool,
+    /// Whether to skip TLS certificate verification
     insecure_skip_verify: bool,
 }
 
+impl ConnectInfo {
+    /// Build `ConnectInfo` from `UpstreamConfig`
+    pub fn with_upstream_config(upstream_config: &UpstreamConfig) -> Self {
+        let (connect_type, host, port, path) = Self::detect_connect_type(&upstream_config.addr);
 
-
-pub struct UpStreamBuilder;
-
-impl UpStreamBuilder {
-    pub fn with_upstream_config(up_stream_config: &UpStreamConfig) -> Box<dyn UpStream> {
-        let (connect_type, host, port, path) = Self::detect_connect_type(&up_stream_config.addr);
-        let port = up_stream_config
+        let port = upstream_config
             .port
             .or(port)
             .unwrap_or(connect_type.default_port());
-        let connect_info = ConnectInfo {
-            addr: if up_stream_config.dial_addr.is_some() {
-                up_stream_config.dial_addr.unwrap().to_string()
+
+        info!(
+            "Building ConnectInfo: type={:?}, host={}, port={}, path={}",
+            connect_type, host, port, path
+        );
+
+        ConnectInfo {
+            bind_addr: "0.0.0.0:0".to_string(),
+            remote_addr: if let Some(ip) = upstream_config.dial_addr {
+                ip.to_string()
             } else {
                 host.clone()
             },
             port,
-            socks5: up_stream_config.socks5.clone(),
+            socks5: upstream_config.socks5.clone(),
             connect_type,
-            bootstrap: up_stream_config.bootstrap.clone(),
-            path: path.clone(),
+            bootstrap: upstream_config.bootstrap.clone(),
+            path,
             host: host.clone(),
-            is_ip_host: IpAddr::from_str(host.as_str()).is_ok(),
-            insecure_skip_verify: up_stream_config.insecure_skip_verify.unwrap_or(false),
-        };
-
-        if up_stream_config.dial_addr.is_some() || connect_info.is_ip_host {
-            // Box::new(IpAddrUpStream {
-            //     connect_info,
-            //     connect_state: RwLock::new(ConnectState::New),
-            // })
-
-            Box::new(UdpUpstream {
-                current_id: AtomicU16::new(0),
-                connect_info,
-                pool: OnceCell::new(),
-            })
-        } else {
-            todo!("new domain upstream")
+            is_ip_host: IpAddr::from_str(&host).is_ok(),
+            insecure_skip_verify: upstream_config.insecure_skip_verify.unwrap_or(false),
         }
     }
 
-
+    /// Detect the connection type from the config address
     fn detect_connect_type(addr: &str) -> (ConnectType, String, Option<u16>, String) {
         if !addr.contains("//") {
             return Self::detect_connect_type(&("udp://".to_owned() + addr));
         }
-        let url = Url::parse(addr).expect("Invalid upstream url");
+
+        let url = Url::parse(addr).expect("Invalid upstream URL");
         let connect_type;
         let host;
+
         match url.scheme() {
             "udp" => {
                 connect_type = ConnectType::UDP;
@@ -170,10 +183,66 @@ impl UpStreamBuilder {
                 connect_type = ConnectType::DoH;
                 host = url.host_str().unwrap().to_string();
             }
-            _ => {
-                panic!("Invalid upstream url scheme");
+            other => {
+                panic!("Invalid upstream URL scheme: {}", other);
             }
         };
+
+        debug!(
+            "Detected upstream: scheme={}, type={:?}, host={}, port={:?}, path={}",
+            url.scheme(),
+            connect_type,
+            host,
+            url.port(),
+            url.path()
+        );
+
         (connect_type, host, url.port(), url.path().to_string())
+    }
+}
+
+/// Builder for creating upstream instances
+pub struct UpStreamBuilder;
+
+impl UpStreamBuilder {
+    /// Build an upstream instance from configuration
+    pub fn with_upstream_config(up_stream_config: &UpstreamConfig) -> Box<dyn UpStream> {
+        let connect_info = ConnectInfo::with_upstream_config(up_stream_config);
+
+        info!(
+            "Creating upstream: type={:?}, remote={}, port={}",
+            connect_info.connect_type, connect_info.remote_addr, connect_info.port
+        );
+
+        if up_stream_config.dial_addr.is_some() || connect_info.is_ip_host {
+            match connect_info.connect_type {
+                ConnectType::UDP => {
+                    info!("Using UDP upstream");
+                    Box::new(UdpUpstream {
+                        connect_info,
+                        pool: OnceCell::new(),
+                    })
+                }
+                ConnectType::TCP => {
+                    warn!("TCP upstream not yet implemented");
+                    todo!()
+                }
+                ConnectType::DoT => {
+                    warn!("DoT upstream not yet implemented");
+                    todo!()
+                }
+                ConnectType::DoQ => {
+                    warn!("DoQ upstream not yet implemented");
+                    todo!()
+                }
+                ConnectType::DoH => {
+                    warn!("DoH upstream not yet implemented");
+                    todo!()
+                }
+            }
+        } else {
+            warn!("Upstream requires domain resolution: {}", connect_info.host);
+            todo!("new domain upstream")
+        }
     }
 }
