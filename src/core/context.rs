@@ -17,6 +17,7 @@ use hickory_proto::op::{Header, LowerQuery};
 use hickory_proto::xfer::{DnsResponse, Protocol};
 
 #[allow(unused)]
+#[derive(Debug)]
 pub struct DnsContext {
     /// dns 请求信息
     pub request_info: RequestInfo,
@@ -50,7 +51,7 @@ impl DnsContext {
     }
 }
 
-
+#[derive(Debug)]
 pub struct RequestInfo {
     /// The source address from which the request came
     pub src: SocketAddr,

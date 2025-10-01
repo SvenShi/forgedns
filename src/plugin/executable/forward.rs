@@ -12,28 +12,33 @@
  */
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
+use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpstreamConfig};
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
 use serde::Deserialize;
-use tracing::error;
-use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpStreamConfig};
+use tracing::{debug, error, info};
 
-/// 单线程的dns转发器
+/// A single-upstream DNS forwarder
+/// - Forwards DNS queries to the configured upstream
 #[allow(unused)]
-pub struct SequentialDnsForwarder {
+pub struct SingleDnsForwarder {
+    /// Plugin identifier
     pub tag: String,
 
+    /// Upstream DNS resolver
     pub upstream: Box<dyn UpStream>,
 }
 
 #[async_trait]
-impl Plugin for SequentialDnsForwarder {
+impl Plugin for SingleDnsForwarder {
     fn tag(&self) -> &str {
         self.tag.as_str()
     }
 
     async fn init(&mut self) {
+        info!("Initializing SingleDnsForwarder...");
         self.upstream.connect().await;
+        info!("SingleDnsForwarder initialized successfully");
     }
 
     async fn execute(&self, context: &mut DnsContext) {
@@ -42,7 +47,7 @@ impl Plugin for SequentialDnsForwarder {
                 context.response = Some(res);
             }
             Err(e) => {
-                error!("dns request has err: {e}");
+                error!("DNS request failed: {e}, {:?}", context);
                 context.response = None;
             }
         }
@@ -51,36 +56,44 @@ impl Plugin for SequentialDnsForwarder {
     fn main_type(&self) -> PluginMainType {
         PluginMainType::Executor {
             tag: self.tag.to_string(),
-            type_name: "SequentialDnsForwarder".to_string(),
+            type_name: "SingleDnsForwarder".to_string(),
         }
     }
 
     async fn destroy(&mut self) {}
 }
 
+/// Forwarder configuration
 #[derive(Deserialize)]
 #[allow(unused)]
 pub struct ForwardConfig {
-    /// 转发线程数
+    /// Number of forwarding threads (not used by SingleDnsForwarder)
     #[allow(unused_variables)]
     pub concurrent: Option<u32>,
-    /// server监听地址
-    pub upstreams: Vec<UpStreamConfig>,
+
+    /// Upstream DNS server list
+    pub upstreams: Vec<UpstreamConfig>,
 }
 
+/// Factory for creating forwarder plugins
 pub struct ForwardFactory;
 
 impl PluginFactory for ForwardFactory {
     fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
         let forward_config = match plugin_info.args.clone() {
             Some(args) => serde_yml::from_value::<ForwardConfig>(args)
-                .unwrap_or_else(|e| panic!("初始化Forward时，读取配置异常。Error:{}", e)),
+                .unwrap_or_else(|e| panic!("Failed to parse Forward config. Error: {}", e)),
             None => {
-                panic!("初始化Forward需要配置线程数(concurrent)以及上游地址(upstreams)")
+                panic!("Forward plugin requires 'concurrent' and 'upstreams' configuration")
             }
         };
 
-        Box::new(SequentialDnsForwarder {
+        info!(
+            "Creating SingleDnsForwarder with upstream {:?}",
+            forward_config.upstreams[0]
+        );
+
+        Box::new(SingleDnsForwarder {
             tag: plugin_info.tag.clone(),
             upstream: UpStreamBuilder::with_upstream_config(&forward_config.upstreams[0]),
         })

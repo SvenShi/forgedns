@@ -141,7 +141,7 @@ async fn handler_message(
 
         match context.response {
             None => {
-                warn!("No response received");
+                debug!("No response received");
             }
             Some(mut res) => {
                 msg.add_answers(res.take_answers());

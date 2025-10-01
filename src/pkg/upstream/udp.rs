@@ -17,30 +17,31 @@ use crate::pkg::upstream::{ConnectInfo, ConnectType, UpStream};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use hickory_proto::ProtoError;
 use hickory_proto::op::{Message, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use socket2::{Domain, Socket, Type};
 use std::io;
 use std::io::Error;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::ops::Deref;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::oneshot::Sender;
-use tokio::sync::{oneshot, Notify, OnceCell};
+use tokio::sync::{Notify, OnceCell, oneshot};
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// UDP-based upstream resolver implementation
 pub struct UdpUpstream {
-    pub current_id: AtomicU16,
+    /// Connection metadata (remote address, port, etc.)
     pub connect_info: ConnectInfo,
+    /// Lazy-initialized UDP connection pool
     pub pool: OnceCell<Arc<UdpPool>>,
 }
 
@@ -48,12 +49,14 @@ pub struct UdpUpstream {
 impl UpStream for UdpUpstream {
     async fn connect(&self) {
         let addr = SocketAddr::new(
-            IpAddr::from_str(&self.connect_info.addr).unwrap(),
+            IpAddr::from_str(&self.connect_info.remote_addr).unwrap(),
             self.connect_info.port,
         );
         self.pool
             .set(UdpPool::new(
-                SocketAddrV4::from_str("0.0.0.0:0").unwrap().into(),
+                SocketAddr::from_str(&self.connect_info.bind_addr)
+                    .unwrap()
+                    .into(),
                 addr,
                 1,
                 64,
@@ -89,18 +92,7 @@ impl UdpUpstream {
         query_msg.add_query(query);
 
         let mut header = info.header.clone();
-        let query_id = loop {
-            let id = self
-                .current_id
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
-                    Some(id.wrapping_add(1))
-                })
-                .unwrap();
-
-            if !self.pool.get().unwrap().requests.contains_key(&id) {
-                break id;
-            }
-        };
+        let query_id = self.pool.get().unwrap().next_query_id();
         header.set_id(query_id);
         query_msg.set_header(header);
 
@@ -112,10 +104,15 @@ impl UdpUpstream {
 /// A single UDP connection in the pool
 #[derive(Debug)]
 pub struct UdpConnection {
+    /// Number of active queries using this connection
     use_count: Arc<AtomicU16>,
+    /// Underlying UDP socket
     socket: Arc<UdpSocket>,
+    /// Timestamp (ms, monotonic) of the last usage
     last_use: AtomicU64,
+    /// Whether this connection has been marked as dropped
     dropped: AtomicBool,
+    /// Notify waiters when the connection is closed
     close_notify: Notify,
 }
 
@@ -155,18 +152,52 @@ impl UdpConnection {
     }
 }
 
+/// Guard object for a borrowed UDP connection
+pub struct ConnectionGuard<'a> {
+    /// The borrowed connection
+    connection: Arc<UdpConnection>,
+    /// Reference to the pool for releasing the connection
+    pool: &'a UdpPool,
+}
+
+impl Drop for ConnectionGuard<'_> {
+    fn drop(&mut self) {
+        self.pool.release(self.connection.clone());
+    }
+}
+
+impl<'a> Deref for ConnectionGuard<'a> {
+    type Target = UdpConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
+
 /// A pool of UDP connections used for DNS queries
 #[derive(Debug)]
 pub struct UdpPool {
+    /// Upstream DNS server address
     remote_addr: SocketAddr,
+    /// Local bind address for UDP sockets
     bind_addr: SocketAddr,
+    /// Round-robin index for load balancing across connections
     index: AtomicUsize,
+    /// List of active UDP connections
     connections: ArcSwap<Vec<Arc<UdpConnection>>>,
+    /// Maximum number of UDP connections allowed
     max_size: usize,
+    /// Minimum number of UDP connections to maintain
     min_size: usize,
+    /// Maximum number of concurrent queries per connection
     max_load: u16,
+    /// Maximum allowed idle time before a connection is dropped
     max_idle: Duration,
+    /// Counter for generating unique DNS query IDs
+    current_query_id: AtomicU16,
+    /// Mapping of query ID -> response channel sender
     requests: Arc<DashMap<u16, Sender<Message>>>,
+    /// Query timeout in seconds
     time_out_secs: u64,
 }
 
@@ -192,6 +223,7 @@ impl UdpPool {
             time_out_secs,
             max_load: 64,
             max_idle: Duration::from_secs(60),
+            current_query_id: AtomicU16::new(0),
             requests: Arc::new(DashMap::with_capacity(65535)),
         });
 
@@ -204,6 +236,21 @@ impl UdpPool {
             });
         }
         pool
+    }
+
+    pub fn next_query_id(&self) -> u16 {
+        loop {
+            let id = self
+                .current_query_id
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+                    Some(id.wrapping_add(1))
+                })
+                .unwrap();
+
+            if !self.requests.contains_key(&id) {
+                break id;
+            }
+        }
     }
 
     /// Send DNS request and wait for the response or timeout
@@ -223,12 +270,10 @@ impl UdpPool {
             }
             Ok(Err(_canceled)) => {
                 self.requests.remove(&query_id);
-                warn!("DNS request canceled, id={}", query_id);
                 Err(ProtoError::from("request canceled"))
             }
             Err(_elapsed) => {
                 self.requests.remove(&query_id);
-                warn!("DNS query timeout, id={}", query_id);
                 Err(ProtoError::from("dns query timeout"))
             }
         }
@@ -261,7 +306,7 @@ impl UdpPool {
                 idx = (idx + 1) % len;
             }
 
-            warn!("All UDP connections overloaded, attempting to expand pool...");
+            trace!("All UDP connections overloaded, attempting to expand pool...");
             self.expand().await;
         }
     }
@@ -320,7 +365,7 @@ impl UdpPool {
                 &conns,
                 &self.connections.compare_and_swap(&conns, Arc::new(new_vec)),
             ) {
-                info!("UDP connections pool expanded, new total: {}", new_len);
+                debug!("UDP connections pool expanded, new total: {}", new_len);
                 break;
             }
         }
@@ -411,7 +456,7 @@ impl UdpPool {
 
                 drop_vec.iter().for_each(|conn| conn.close());
 
-                info!(
+                debug!(
                     "UDP connection pool maintenance: dropped {} idle connections, active={}",
                     drop_vec.len(),
                     new_len
@@ -421,27 +466,8 @@ impl UdpPool {
     }
 }
 
-/// Guard object for a borrowed UDP connection
-pub struct ConnectionGuard<'a> {
-    connection: Arc<UdpConnection>,
-    pool: &'a UdpPool,
-}
-
-impl Drop for ConnectionGuard<'_> {
-    fn drop(&mut self) {
-        self.pool.release(self.connection.clone());
-    }
-}
-
-impl<'a> Deref for ConnectionGuard<'a> {
-    type Target = UdpConnection;
-
-    fn deref(&self) -> &Self::Target {
-        &self.connection
-    }
-}
-
 /// Create and bind a new UDP socket
+#[inline]
 fn connect_udp_socket(bind_addr: SocketAddr, remote_addr: SocketAddr) -> Result<UdpSocket, Error> {
     let sock = if bind_addr.is_ipv4() {
         Socket::new(Domain::IPV4, Type::DGRAM, None)?
