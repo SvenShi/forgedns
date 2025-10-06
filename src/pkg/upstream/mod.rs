@@ -12,18 +12,21 @@
  */
 
 use crate::core::context::DnsContext;
-use crate::pkg::upstream::udp::UdpUpstream;
+use crate::pkg::upstream::pool::{Connection, ConnectionPool};
+use crate::pkg::upstream::udp::{UdpConnection, UdpConnectionBuilder};
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
+use hickory_proto::op::Query;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use serde::Deserialize;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use tokio::sync::OnceCell;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 use url::Url;
 
 mod bootstrap;
+mod pool;
 mod tls_client_config;
 pub mod udp;
 
@@ -63,8 +66,7 @@ impl ConnectType {
 }
 
 /// Configuration for building an upstream
-#[derive(Deserialize)]
-#[derive(Debug)]
+#[derive(Deserialize, Debug)]
 pub struct UpstreamConfig {
     /// DNS server address (hostname or IP)
     pub addr: String,
@@ -83,9 +85,6 @@ pub struct UpstreamConfig {
 #[async_trait]
 #[allow(unused)]
 pub trait UpStream: Send + Sync {
-    /// Initialize or establish connection to the upstream
-    async fn connect(&self);
-
     /// Send a DNS query and wait for the response
     async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError>;
 
@@ -218,9 +217,23 @@ impl UpStreamBuilder {
             match connect_info.connect_type {
                 ConnectType::UDP => {
                     info!("Using UDP upstream");
-                    Box::new(UdpUpstream {
+                    let builder = UdpConnectionBuilder::new(
+                        connect_info
+                            .bind_addr
+                            .parse()
+                            .expect("Invalid bind address"),
+                        SocketAddr::new(
+                            connect_info
+                                .remote_addr
+                                .parse()
+                                .expect("Invalid remote address"),
+                            connect_info.port,
+                        ),
+                        300,
+                    );
+                    Box::new(PooledUpstream::<UdpConnection> {
                         connect_info,
-                        pool: OnceCell::new(),
+                        pool: ConnectionPool::new(1, 64, Box::new(builder)),
                     })
                 }
                 ConnectType::TCP => {
@@ -244,5 +257,35 @@ impl UpStreamBuilder {
             warn!("Upstream requires domain resolution: {}", connect_info.host);
             todo!("new domain upstream")
         }
+    }
+}
+
+/// UDP-based upstream resolver implementation
+pub struct PooledUpstream<C: Connection> {
+    /// Connection metadata (remote address, port, etc.)
+    pub connect_info: ConnectInfo,
+    /// Lazy-initialized UDP connection pool
+    pub pool: Arc<ConnectionPool<C>>,
+}
+
+#[async_trait]
+impl<C: Connection> UpStream for PooledUpstream<C> {
+    async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
+        let query_msg = self.build_query_message(&context);
+        self.pool.query(query_msg).await
+    }
+
+    fn connect_type(&self) -> ConnectType {
+        self.connect_info.connect_type
+    }
+}
+
+impl<C: Connection> PooledUpstream<C> {
+    /// Build a DNS query message and assign a unique ID that is not in use
+    fn build_query_message(&self, context: &&mut DnsContext) -> Query {
+        let info = &context.request_info;
+        let mut query = Query::query(info.query.name().into(), info.query.query_type().clone());
+        query.set_query_class(info.query.query_class().clone());
+        query
     }
 }
