@@ -13,12 +13,12 @@
 use crate::core::app_clock::AppClock;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Query;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tracing::{debug, info, trace, warn};
 
@@ -136,7 +136,7 @@ impl<C: Connection> ConnectionPool<C> {
         let mut new_conns = Vec::with_capacity(new_conns_count);
 
         for _ in 0..new_conns_count {
-            let conn = self.connection_builder.new_conn();
+            let conn = self.connection_builder.new_conn().await.unwrap();
             let connection: ConnectionWrapper<C> = ConnectionWrapper::new(conn);
             let conn = Arc::new(connection);
             new_conns.push(conn);
@@ -169,6 +169,7 @@ impl<C: Connection> ConnectionPool<C> {
                 let conns = self.connections.load();
 
                 for conn in conns.iter() {
+                    // todo: need connection active detect
                     let last_use = conn.last_use.load(Ordering::Relaxed);
                     let idle = now - last_use;
                     if idle < self.max_idle.as_millis() as u64 {
@@ -260,6 +261,7 @@ pub trait Connection: Send + Sized + Sync + 'static {
     fn using_count(&self) -> u16;
 }
 
+#[async_trait]
 pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
-    fn new_conn(&self) -> Arc<C>;
+    async fn new_conn(&self) -> Result<Arc<C>, ProtoError>;
 }

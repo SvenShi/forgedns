@@ -11,8 +11,8 @@
  * limitations under the License.
  */
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
+use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
@@ -21,12 +21,10 @@ use socket2::{Domain, Socket, Type};
 use std::fmt::Debug;
 use std::io::Error;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::sync::oneshot::Sender;
 use tokio::sync::{oneshot, Notify};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
@@ -39,9 +37,7 @@ pub struct UdpConnection {
     /// Notify waiters when the connection is closed
     close_notify: Notify,
     /// Mapping of query ID -> response channel sender
-    requests: DashMap<u16, Sender<Message>>,
-    /// Counter for generating unique DNS query IDs
-    current_id: AtomicU16,
+    request_map: RequestMap,
     /// Query timeout in seconds
     timeout_secs: u64,
 }
@@ -55,19 +51,7 @@ impl Connection for UdpConnection {
 
     async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError> {
         let (tx, rx) = oneshot::channel();
-        let query_id = loop {
-            let id = self
-                .current_id
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
-                    Some(id.wrapping_add(1))
-                })
-                .unwrap();
-
-            if !self.requests.contains_key(&id) {
-                break id;
-            }
-        };
-        self.requests.insert(query_id, tx);
+        let query_id = self.request_map.store(tx);
         let mut query_msg = Message::new(query_id, MessageType::Query, OpCode::Query);
         query_msg.add_query(query);
 
@@ -78,7 +62,7 @@ impl Connection for UdpConnection {
         {
             Ok(_sent) => {}
             Err(e) => {
-                self.requests.remove(&query_id);
+                self.request_map.remove(&query_id);
                 return Err(ProtoError::from(e));
             }
         };
@@ -86,22 +70,23 @@ impl Connection for UdpConnection {
         match timeout(Duration::from_secs(self.timeout_secs), rx).await {
             Ok(Ok(message)) => {
                 debug!("Received DNS response for id={}", query_id);
-                let response = DnsResponse::from_message(message).unwrap();
+                let response = DnsResponse::from_message(message)?;
+                self.request_map.remove(&query_id);
                 Ok(response)
             }
             Ok(Err(_canceled)) => {
-                self.requests.remove(&query_id);
+                self.request_map.remove(&query_id);
                 Err(ProtoError::from("request canceled"))
             }
             Err(_elapsed) => {
-                self.requests.remove(&query_id);
+                self.request_map.remove(&query_id);
                 Err(ProtoError::from("dns query timeout"))
             }
         }
     }
 
     fn using_count(&self) -> u16 {
-        self.requests.len() as u16
+        self.request_map.len() as u16
     }
 }
 
@@ -110,8 +95,7 @@ impl UdpConnection {
         Self {
             socket,
             close_notify: Notify::new(),
-            requests: DashMap::with_capacity(65535),
-            current_id: AtomicU16::new(0),
+            request_map: RequestMap::new(),
             timeout_secs,
         }
     }
@@ -120,7 +104,7 @@ impl UdpConnection {
         let mut buf = [0u8; 4096];
         let mut closing = false;
         loop {
-            if closing && self.requests.is_empty() {
+            if closing && self.request_map.is_empty() {
                 debug!("UDP connection listener exiting due to drop");
                 break;
             }
@@ -131,7 +115,7 @@ impl UdpConnection {
                         Ok((len, _)) => {
                             if let Ok(msg) = Message::from_bytes(&buf[..len]) {
                                 let id = msg.header().id();
-                                if let Some((_, sender)) = self.requests.remove(&id) {
+                                if let Some((_, sender)) = self.request_map.remove(&id) {
                                     let _ = sender.send(msg);
                                     debug!("Received valid DNS response id={}", id);
                                 } else {
@@ -175,13 +159,14 @@ impl UdpConnectionBuilder {
     }
 }
 
+#[async_trait]
 impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
-    fn new_conn(&self) -> Arc<UdpConnection> {
+   async fn new_conn(&self) -> Result<Arc<UdpConnection>, ProtoError> {
         let socket = connect_udp_socket(self.bind_addr, self.remote_addr).unwrap();
         let connection = UdpConnection::new(socket, self.timeout_secs);
         let arc = Arc::new(connection);
         tokio::spawn(UdpConnection::listen_dns_response(arc.clone()));
-        arc
+        Ok(arc)
     }
 }
 
