@@ -13,6 +13,7 @@
 
 use crate::core::context::DnsContext;
 use crate::pkg::upstream::pool::{Connection, ConnectionPool};
+use crate::pkg::upstream::tcp::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::udp::{UdpConnection, UdpConnectionBuilder};
 use async_trait::async_trait;
 use hickory_proto::op::Query;
@@ -27,6 +28,8 @@ use url::Url;
 
 mod bootstrap;
 mod pool;
+mod request_map;
+mod tcp;
 mod tls_client_config;
 pub mod udp;
 
@@ -237,8 +240,21 @@ impl UpStreamBuilder {
                     })
                 }
                 ConnectType::TCP => {
-                    warn!("TCP upstream not yet implemented");
-                    todo!()
+                    info!("Using TCP upstream");
+                    let builder = TcpConnectionBuilder::new(
+                        SocketAddr::new(
+                            connect_info
+                                .remote_addr
+                                .parse()
+                                .expect("Invalid remote address"),
+                            connect_info.port,
+                        ),
+                        300,
+                    );
+                    Box::new(PooledUpstream::<TcpConnection> {
+                        connect_info,
+                        pool: ConnectionPool::new(1, 64, Box::new(builder)),
+                    })
                 }
                 ConnectType::DoT => {
                     warn!("DoT upstream not yet implemented");
