@@ -36,9 +36,6 @@ impl Plugin for SingleDnsForwarder {
     }
 
     async fn init(&mut self) {
-        info!("Initializing SingleDnsForwarder...");
-        self.upstream.connect().await;
-        info!("SingleDnsForwarder initialized successfully");
     }
 
     async fn execute(&self, context: &mut DnsContext) {
