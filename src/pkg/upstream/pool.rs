@@ -167,16 +167,20 @@ impl<C: Connection> ConnectionPool<C> {
                 let now = AppClock::run_millis();
                 let mut new_vec = Vec::new();
                 let mut drop_vec = Vec::new();
+                let mut invalid_vec = Vec::new();
                 let conns = self.connections.load();
 
                 for conn in conns.iter() {
-                    // todo: need connection active detect
-                    let last_use = conn.last_use.load(Ordering::Relaxed);
-                    let idle = now - last_use;
-                    if idle < self.max_idle.as_millis() as u64 {
-                        new_vec.push(conn.clone());
+                    if conn.available().await {
+                        let last_use = conn.last_use.load(Ordering::Relaxed);
+                        let idle = now - last_use;
+                        if idle < self.max_idle.as_millis() as u64 {
+                            new_vec.push(conn.clone());
+                        } else {
+                            drop_vec.push(conn.clone());
+                        }
                     } else {
-                        drop_vec.push(conn.clone());
+                        invalid_vec.push(conn.clone());
                     }
                 }
 
@@ -198,10 +202,12 @@ impl<C: Connection> ConnectionPool<C> {
                 }
 
                 drop_vec.iter().for_each(|conn| conn.close());
+                invalid_vec.iter().for_each(|conn| conn.close());
 
                 debug!(
-                    "UDP connection pool maintenance: dropped {} idle connections, active={}",
+                    "UDP connection pool maintenance: dropped {} idle connections, dropped {} invalid connections, active={}",
                     drop_vec.len(),
+                    invalid_vec.len(),
                     new_len
                 );
             }
@@ -237,6 +243,10 @@ impl<C: Connection> ConnectionWrapper<C> {
         self.connection.query(query).await
     }
 
+    pub async fn available(&self) -> bool {
+        self.connection.available().await
+    }
+
     /// Mark this connection as closed and notify listeners
     pub fn close(&self) {
         if self.dropped.swap(true, Ordering::SeqCst) {
@@ -260,6 +270,7 @@ pub trait Connection: Send + Sized + Sync + 'static {
     async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError>;
 
     fn using_count(&self) -> u16;
+    async fn available(&self) -> bool;
 }
 
 #[async_trait]
