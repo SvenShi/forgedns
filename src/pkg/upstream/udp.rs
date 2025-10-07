@@ -88,6 +88,10 @@ impl Connection for UdpConnection {
     fn using_count(&self) -> u16 {
         self.request_map.len() as u16
     }
+
+    async fn available(&self) -> bool {
+        true
+    }
 }
 
 impl UdpConnection {
@@ -161,7 +165,7 @@ impl UdpConnectionBuilder {
 
 #[async_trait]
 impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
-   async fn new_conn(&self) -> Result<Arc<UdpConnection>, ProtoError> {
+    async fn new_conn(&self) -> Result<Arc<UdpConnection>, ProtoError> {
         let socket = connect_udp_socket(self.bind_addr, self.remote_addr).unwrap();
         let connection = UdpConnection::new(socket, self.timeout_secs);
         let arc = Arc::new(connection);

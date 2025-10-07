@@ -26,7 +26,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::select;
-use tokio::sync::{oneshot, Mutex, Notify};
+use tokio::sync::{oneshot, Mutex, Notify, RwLock};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
@@ -34,8 +34,8 @@ use tracing::{debug, error, warn};
 #[derive(Debug)]
 pub struct TcpConnection {
     /// The underlying TCP stream
-    reader: Mutex<OwnedReadHalf>,
-    writer: Mutex<OwnedWriteHalf>,
+    reader: RwLock<OwnedReadHalf>,
+    writer: RwLock<OwnedWriteHalf>,
     /// Notify listeners when closed
     close_notify: Notify,
     /// Mapping query_id -> response sender
@@ -68,7 +68,7 @@ impl Connection for TcpConnection {
         msg.extend_from_slice(&buf);
 
         {
-            let mut writer = self.writer.lock().await;
+            let mut writer = self.writer.write().await;
             if let Err(e) = writer.write_all(msg.as_slice()).await {
                 self.request_map.remove(&query_id);
                 return Err(ProtoError::from(e));
@@ -79,7 +79,7 @@ impl Connection for TcpConnection {
         match timeout(Duration::from_secs(self.timeout_secs), rx).await {
             Ok(Ok(message)) => {
                 debug!("Received TCP DNS response id={}", query_id);
-                Ok(DnsResponse::from_message(message).unwrap())
+                Ok(DnsResponse::from_message(message)?)
             }
             Ok(Err(_)) => {
                 self.request_map.remove(&query_id);
@@ -95,14 +95,18 @@ impl Connection for TcpConnection {
     fn using_count(&self) -> u16 {
         self.request_map.len() as u16
     }
+
+    async fn available(&self) -> bool {
+        self.writer.read().await.writable().await.is_ok()
+    }
 }
 
 impl TcpConnection {
     fn new(stream: TcpStream, timeout_secs: u64) -> Self {
         let (reader, writer) = stream.into_split();
         Self {
-            reader: Mutex::new(reader),
-            writer: Mutex::new(writer),
+            reader: RwLock::new(reader),
+            writer: RwLock::new(writer),
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
             timeout_secs,
@@ -112,7 +116,7 @@ impl TcpConnection {
     /// Start listening for incoming TCP DNS responses
     async fn listen_dns_response(self: Arc<Self>) {
         let mut closing = false;
-        let mut reader = self.reader.lock().await;
+        let mut reader = self.reader.write().await;
 
         loop {
             if closing && self.request_map.is_empty() {
