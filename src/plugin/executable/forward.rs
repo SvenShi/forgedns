@@ -45,7 +45,6 @@ impl Plugin for SingleDnsForwarder {
             }
             Err(e) => {
                 error!("DNS request failed: {e}, {:?}", context);
-                context.response = None;
             }
         }
     }
