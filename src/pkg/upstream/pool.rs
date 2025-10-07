@@ -45,6 +45,7 @@ impl<C: Connection> ConnectionPool<C> {
     pub fn new(
         min_size: usize,
         max_size: usize,
+        max_load: u16,
         connection_builder: Box<dyn ConnectionBuilder<C>>,
     ) -> Arc<Self> {
         info!(
@@ -56,7 +57,7 @@ impl<C: Connection> ConnectionPool<C> {
             connections: ArcSwap::from_pointee(Vec::new()),
             max_size,
             min_size,
-            max_load: 64,
+            max_load,
             max_idle: Duration::from_secs(60),
             connection_builder,
         });

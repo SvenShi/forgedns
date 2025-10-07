@@ -206,6 +206,8 @@ impl ConnectInfo {
 /// Builder for creating upstream instances
 pub struct UpStreamBuilder;
 
+const TIMEOUT_SECS: u64 = 4 * 60;
+
 impl UpStreamBuilder {
     /// Build an upstream instance from configuration
     pub fn with_upstream_config(up_stream_config: &UpstreamConfig) -> Box<dyn UpStream> {
@@ -232,11 +234,11 @@ impl UpStreamBuilder {
                                 .expect("Invalid remote address"),
                             connect_info.port,
                         ),
-                        300,
+                        TIMEOUT_SECS,
                     );
                     Box::new(PooledUpstream::<UdpConnection> {
                         connect_info,
-                        pool: ConnectionPool::new(1, 64, Box::new(builder)),
+                        pool: ConnectionPool::new(1, 64, 64, Box::new(builder)),
                     })
                 }
                 ConnectType::TCP => {
@@ -249,11 +251,11 @@ impl UpStreamBuilder {
                                 .expect("Invalid remote address"),
                             connect_info.port,
                         ),
-                        300,
+                        TIMEOUT_SECS,
                     );
                     Box::new(PooledUpstream::<TcpConnection> {
                         connect_info,
-                        pool: ConnectionPool::new(1, 64, Box::new(builder)),
+                        pool: ConnectionPool::new(1, 64, 16, Box::new(builder)),
                     })
                 }
                 ConnectType::DoT => {
