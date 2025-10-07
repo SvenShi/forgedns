@@ -38,18 +38,16 @@ impl RequestMap {
     }
 
     pub fn next_id(&self) -> u16 {
-        loop {
+        for _ in 0..65535 {
             let id = self
                 .current_id
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
-                    Some(id.wrapping_add(1))
-                })
-                .unwrap();
-
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(1);
             if !self.requests.contains_key(&id) {
-                break id;
+                return id;
             }
         }
+        panic!("RequestMap exhausted all IDs");
     }
 
     pub fn current_id(&self) -> u16 {

@@ -206,7 +206,7 @@ impl ConnectInfo {
 /// Builder for creating upstream instances
 pub struct UpStreamBuilder;
 
-const TIMEOUT_SECS: u64 = 4 * 60;
+const TIMEOUT_SECS: u64 = 4;
 
 impl UpStreamBuilder {
     /// Build an upstream instance from configuration
