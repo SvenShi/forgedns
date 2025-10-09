@@ -22,7 +22,7 @@ static CLOCK_INIT: Once = Once::new();
 
 pub struct AppClock {}
 impl AppClock {
-    pub fn run() {
+    pub(crate) fn run() {
         CLOCK_INIT.call_once(|| {
             START_INSTANT.set(Instant::now()).expect("never throw");
 
