@@ -17,10 +17,10 @@ use hickory_proto::ProtoError;
 use hickory_proto::op::Query;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 /// A pool of UDP connections used for DNS queries
 #[derive(Debug)]
@@ -28,7 +28,7 @@ pub struct ConnectionPool<C: Connection> {
     /// Round-robin index for load balancing across connections
     index: AtomicUsize,
     /// List of active UDP connections
-    connections: ArcSwap<Vec<Arc<ConnectionWrapper<C>>>>,
+    connections: ArcSwap<Vec<Arc<C>>>,
     /// Maximum number of UDP connections allowed
     max_size: usize,
     /// Minimum number of UDP connections to maintain
@@ -39,6 +39,8 @@ pub struct ConnectionPool<C: Connection> {
     max_idle: Duration,
     /// Connection builder, build new connections
     connection_builder: Box<dyn ConnectionBuilder<C>>,
+    // Self Pointer
+    self_arc: OnceLock<Arc<ConnectionPool<C>>>,
 }
 
 impl<C: Connection> ConnectionPool<C> {
@@ -60,14 +62,17 @@ impl<C: Connection> ConnectionPool<C> {
             max_load,
             max_idle: Duration::from_secs(60),
             connection_builder,
+            self_arc: OnceLock::new(),
         });
+
+        let _ = pool.self_arc.set(pool.clone());
 
         pool.clone().start_maintenance();
 
         if min_size > 0 {
             let arc = pool.clone();
             tokio::spawn(async move {
-                arc.expand().await;
+                let _ = arc.expand().await;
             });
         }
         pool
@@ -75,21 +80,19 @@ impl<C: Connection> ConnectionPool<C> {
 
     /// Send DNS request and wait for the response or timeout
     pub async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError> {
-        let conn = self.get().await;
-        let result = conn.query(query).await;
-        self.release(conn);
-        result
+        let conn = self.get().await?;
+        conn.query(query).await
     }
 
     /// Get a connection from the pool with load balancing
-    async fn get(&'_ self) -> Arc<ConnectionWrapper<C>> {
+    async fn get(&'_ self) -> Result<Arc<C>, ProtoError> {
         loop {
             let conns = self.connections.load();
             let len = conns.len();
 
             if len == 0 {
                 warn!("No available connections, expanding pool...");
-                self.expand().await;
+                self.expand().await?;
                 continue;
             }
 
@@ -97,31 +100,22 @@ impl<C: Connection> ConnectionPool<C> {
 
             for _ in 0..len {
                 let conn = &conns[idx];
-                if conn.using_count() < self.max_load {
-                    return conn.clone();
+                if conn.available() && conn.using_count() < self.max_load {
+                    return Ok(conn.clone());
                 }
                 idx = (idx + 1) % len;
             }
 
-            trace!("All connections overloaded, attempting to expand pool...");
-            self.expand().await;
-        }
-    }
-
-    /// Release a connection back to the pool
-    fn release(&self, connection: Arc<ConnectionWrapper<C>>) {
-        if connection.using_count() == 0 && connection.dropped.load(Ordering::Acquire) {
-            connection.close();
-            return;
+            self.expand().await?;
         }
     }
 
     /// Expand the pool by creating new UDP connections
-    async fn expand(&self) {
+    async fn expand(&self) -> Result<(), ProtoError> {
         let conns_len = self.connections.load().len();
         if conns_len >= self.max_size {
             debug!("Connection pool already at max size");
-            return;
+            return Ok(());
         }
 
         let new_conns_count = if conns_len >= self.min_size {
@@ -137,9 +131,12 @@ impl<C: Connection> ConnectionPool<C> {
         let mut new_conns = Vec::with_capacity(new_conns_count);
 
         for _ in 0..new_conns_count {
-            let conn = self.connection_builder.new_conn().await.unwrap();
-            let connection: ConnectionWrapper<C> = ConnectionWrapper::new(conn);
-            let conn = Arc::new(connection);
+            let conn = match self.connection_builder.new_conn().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    return Err(e);
+                }
+            };
             new_conns.push(conn);
         }
 
@@ -153,124 +150,90 @@ impl<C: Connection> ConnectionPool<C> {
                 &self.connections.compare_and_swap(&conns, Arc::new(new_vec)),
             ) {
                 debug!("UDP connections pool expanded, new total: {}", new_len);
-                break;
+                break Ok(());
             }
         }
     }
+    const MAINTENANCE_DURATION: Duration = Duration::from_secs(30);
 
     /// Periodically remove idle connections
     fn start_maintenance(self: Arc<Self>) {
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(30)).await;
-
-                let now = AppClock::run_millis();
-                let mut new_vec = Vec::new();
-                let mut drop_vec = Vec::new();
-                let mut invalid_vec = Vec::new();
-                let conns = self.connections.load();
-
-                for conn in conns.iter() {
-                    if conn.available().await {
-                        let last_use = conn.last_use.load(Ordering::Relaxed);
-                        let idle = now - last_use;
-                        if idle < self.max_idle.as_millis() as u64 {
-                            new_vec.push(conn.clone());
-                        } else {
-                            drop_vec.push(conn.clone());
-                        }
-                    } else {
-                        invalid_vec.push(conn.clone());
-                    }
-                }
-
-                while new_vec.len() < self.min_size {
-                    if !drop_vec.is_empty() {
-                        new_vec.push(drop_vec.pop().unwrap());
-                    } else {
-                        break;
-                    }
-                }
-
-                let new_len = new_vec.len();
-
-                if !Arc::ptr_eq(
-                    &conns,
-                    &self.connections.compare_and_swap(&conns, Arc::new(new_vec)),
-                ) {
-                    break;
-                }
-
-                drop_vec.iter().for_each(|conn| conn.close());
-                invalid_vec.iter().for_each(|conn| conn.close());
-
-                debug!(
-                    "UDP connection pool maintenance: dropped {} idle connections, dropped {} invalid connections, active={}",
-                    drop_vec.len(),
-                    invalid_vec.len(),
-                    new_len
-                );
+                tokio::time::sleep(Self::MAINTENANCE_DURATION).await;
+                self.clone().scan_pool().await;
             }
         });
     }
-}
 
-#[derive(Debug)]
-pub struct ConnectionWrapper<C: Connection> {
-    /// Underlying connection
-    pub connection: Arc<C>,
-    /// Timestamp (ms, monotonic) of the last usage
-    pub last_use: AtomicU64,
-    /// Whether this connection has been marked as dropped
-    pub dropped: AtomicBool,
-}
+    async fn scan_pool(self: Arc<Self>) {
+        let now = AppClock::run_millis();
+        let mut new_vec = Vec::new();
+        let mut drop_vec = Vec::new();
+        let mut invalid_vec = Vec::new();
+        let conns = self.connections.load();
 
-impl<C: Connection> ConnectionWrapper<C> {
-    pub fn new(connection: Arc<C>) -> Self {
-        Self {
-            connection,
-            last_use: AtomicU64::new(AppClock::run_millis()),
-            dropped: AtomicBool::new(false),
+        for conn in conns.iter() {
+            if conn.available() {
+                let idle = now - conn.last_used();
+                if idle < self.max_idle.as_millis() as u64 {
+                    new_vec.push(conn.clone());
+                } else {
+                    drop_vec.push(conn.clone());
+                }
+            } else {
+                invalid_vec.push(conn.clone());
+            }
         }
-    }
 
-    pub fn using_count(&self) -> u16 {
-        self.connection.using_count()
-    }
+        while new_vec.len() < self.min_size {
+            if !drop_vec.is_empty() {
+                new_vec.push(drop_vec.pop().unwrap());
+            } else {
+                break;
+            }
+        }
 
-    pub async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError> {
-        self.touch();
-        self.connection.query(query).await
-    }
+        let new_len = new_vec.len();
 
-    pub async fn available(&self) -> bool {
-        self.connection.available().await
-    }
-
-    /// Mark this connection as closed and notify listeners
-    pub fn close(&self) {
-        if self.dropped.swap(true, Ordering::SeqCst) {
+        if !Arc::ptr_eq(
+            &conns,
+            &self.connections.compare_and_swap(&conns, Arc::new(new_vec)),
+        ) {
             return;
         }
-        self.connection.close();
-    }
 
-    #[inline]
-    pub fn touch(&self) {
-        self.last_use
-            .store(AppClock::run_millis(), Ordering::Relaxed);
+        close_conns(&drop_vec).await;
+        close_conns(&invalid_vec).await;
+
+        debug!(
+            "UDP connection pool maintenance: dropped {} idle connections, dropped {} invalid connections, active={}",
+            drop_vec.len(),
+            invalid_vec.len(),
+            new_len
+        );
+    }
+}
+
+#[inline]
+async fn close_conns<C: Connection>(conns: &Vec<Arc<C>>) {
+    for conn in conns {
+        conn.close().await;
     }
 }
 
 #[async_trait]
 pub trait Connection: Send + Sized + Sync + 'static {
     /// Mark this connection as closed and notify listeners
-    fn close(&self);
+    async fn close(&self);
 
     async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError>;
 
     fn using_count(&self) -> u16;
-    async fn available(&self) -> bool;
+
+    fn available(&self) -> bool;
+
+    fn last_used(&self) -> u64;
 }
 
 #[async_trait]

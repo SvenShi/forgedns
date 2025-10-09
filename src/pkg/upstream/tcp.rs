@@ -11,7 +11,8 @@
  * limitations under the License.
  */
 
-use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
+use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
 use hickory_proto::ProtoError;
@@ -19,14 +20,17 @@ use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::ops::ControlFlow::Break;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::select;
 use tokio::sync::{Notify, RwLock, oneshot};
-use tokio::time::timeout;
-use tracing::{debug, info, warn, error};
+use tokio::time::{sleep, timeout};
+use tracing::{Level, debug, error, event_enabled, info, warn};
 
 /// Represents a single persistent TCP DNS connection
 #[derive(Debug)]
@@ -39,18 +43,36 @@ pub struct TcpConnection {
     request_map: RequestMap,
     /// Timeout duration for a single DNS query
     timeout: Duration,
+    /// connection close mark
+    closed: AtomicBool,
+
+    writeable: AtomicBool,
+
+    last_used: AtomicU64,
 }
 
 #[async_trait]
 impl Connection for TcpConnection {
     /// Close the TCP connection and notify all waiters
-    fn close(&self) {
+    async fn close(&self) {
+        if self.closed.swap(true, Ordering::Relaxed) {
+            return; // already closed
+        }
+
         debug!("Closing TCP connection");
         self.close_notify.notify_waiters();
+
+        let _ = self.writer.write().await.shutdown().await;
     }
 
     /// Sends a DNS query over TCP and waits for the response
     async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError> {
+        if self.closed.load(Ordering::Relaxed) {
+            return Err(ProtoError::from("TCP connection closed"));
+        }
+
+        self.last_used
+            .store(AppClock::run_millis(), Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
 
         // Generate and register a unique query ID
@@ -73,6 +95,7 @@ impl Connection for TcpConnection {
             let mut writer = self.writer.write().await;
             if let Err(e) = writer.write_all(msg.as_slice()).await {
                 self.request_map.remove(&query_id);
+                self.writeable.store(false, Ordering::Relaxed);
                 error!("Failed to send TCP DNS query: {:?}", e);
                 return Err(ProtoError::from(e));
             }
@@ -103,8 +126,16 @@ impl Connection for TcpConnection {
     }
 
     /// Check if the connection is writable (usable)
-    async fn available(&self) -> bool {
-        self.writer.read().await.writable().await.is_ok()
+    fn available(&self) -> bool {
+        if self.closed.load(Ordering::Relaxed) {
+            false
+        } else {
+            self.writeable.load(Ordering::Relaxed)
+        }
+    }
+
+    fn last_used(&self) -> u64 {
+        self.last_used.load(Ordering::Relaxed)
     }
 }
 
@@ -116,6 +147,9 @@ impl TcpConnection {
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
             timeout: Duration::from_secs(timeout_secs),
+            closed: AtomicBool::new(false),
+            writeable: AtomicBool::new(true),
+            last_used: AtomicU64::new(AppClock::run_millis()),
         }
     }
 
@@ -126,48 +160,69 @@ impl TcpConnection {
         let mut data = Vec::new();
 
         info!("Start listening for TCP DNS responses");
-
+        let mut closing = false;
         loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => {
-                    // EOF (connection closed)
-                    warn!("TCP DNS connection closed by remote, canceling all pending requests");
-                    break;
-                }
-                Ok(n) => {
-                    data.extend_from_slice(&buf[..n]);
+            if closing && self.request_map.is_empty() {
+                debug!("TCP connection listener exiting due to drop");
+                break;
+            }
+            if self.closed.load(Ordering::Relaxed) {
+                debug!("TCP connection closed");
+                break;
+            }
 
-                    // Try to parse full DNS messages from the accumulated data
-                    while data.len() >= 2 {
-                        let msg_len = u16::from_be_bytes([data[0], data[1]]) as usize;
-                        if data.len() < 2 + msg_len {
-                            // Not enough bytes for a full message yet
+            select! {
+                res = reader.read(&mut buf) => {
+                    match res {
+                        Ok(0) => {
+                            // EOF (connection closed)
+                            warn!("TCP DNS connection closed by remote");
+                            self.closed.store(true, Ordering::Relaxed);
                             break;
                         }
+                        Ok(n) => {
+                            data.extend_from_slice(&buf[..n]);
 
-                        // Extract one full message
-                        let msg_bytes = data.drain(0..2 + msg_len).collect::<Vec<_>>();
-                        let msg_body = &msg_bytes[2..];
+                            // Try to parse full DNS messages from the accumulated data
+                            while data.len() >= 2 {
+                                let msg_len = u16::from_be_bytes([data[0], data[1]]) as usize;
+                                if data.len() < 2 + msg_len {
+                                    // Not enough bytes for a full message yet
+                                    break;
+                                }
 
-                        match Message::from_bytes(msg_body) {
-                            Ok(msg) => {
-                                let id = msg.header().id();
-                                if let Some((_, sender)) = self.request_map.remove(&id) {
-                                    let _ = sender.send(msg);
-                                    debug!("Delivered TCP DNS response id={}", id);
-                                } else {
-                                    debug!("Discarded unmatched TCP response id={}", id);
+                                // Extract one full message
+                                let msg_bytes = data.drain(0..2 + msg_len).collect::<Vec<_>>();
+                                let msg_body = &msg_bytes[2..];
+
+                                match Message::from_bytes(msg_body) {
+                                    Ok(msg) => {
+                                        let id = msg.header().id();
+                                        if let Some((_, sender)) = self.request_map.remove(&id) {
+                                            let _ = sender.send(msg);
+                                            debug!("Delivered TCP DNS response id={}", id);
+                                        } else {
+                                            debug!("Discarded unmatched TCP response id={}", id);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to decode TCP DNS response: {:?}", e);
+                                    }
                                 }
                             }
-                            Err(e) => {
-                                warn!("Failed to decode TCP DNS response: {:?}", e);
-                            }
+                        }
+                        Err(e) => {
+                            error!("TCP DNS read error: {:?}", e);
+                            self.closed.store(true, Ordering::Relaxed);
+                            break;
                         }
                     }
                 }
-                Err(e) => {
-                    error!("TCP DNS read error: {:?}", e);
-                    break;
+                _ = self.close_notify.notified() => {
+                    // back to the loop, recheck dropped flag
+                    closing = true;
+                    self.closed.store(true, Ordering::Relaxed);
+                    continue;
                 }
             }
         }

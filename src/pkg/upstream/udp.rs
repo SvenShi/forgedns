@@ -10,22 +10,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
+use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
+use hickory_proto::ProtoError;
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use socket2::{Domain, Socket, Type};
 use std::fmt::Debug;
 use std::io::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
@@ -40,11 +42,13 @@ pub struct UdpConnection {
     request_map: RequestMap,
     /// Query timeout in seconds
     timeout_secs: u64,
+    /// Last using time
+    last_used: AtomicU64,
 }
 
 #[async_trait]
 impl Connection for UdpConnection {
-    fn close(&self) {
+    async fn close(&self) {
         debug!("Closing UDP connection");
         self.close_notify.notify_waiters();
     }
@@ -54,6 +58,9 @@ impl Connection for UdpConnection {
         let query_id = self.request_map.store(tx);
         let mut query_msg = Message::new(query_id, MessageType::Query, OpCode::Query);
         query_msg.add_query(query);
+
+        self.last_used
+            .store(AppClock::run_millis(), Ordering::Relaxed);
 
         match self
             .socket
@@ -89,8 +96,12 @@ impl Connection for UdpConnection {
         self.request_map.len() as u16
     }
 
-    async fn available(&self) -> bool {
+    fn available(&self) -> bool {
         true
+    }
+
+    fn last_used(&self) -> u64 {
+        self.last_used.load(Ordering::Relaxed)
     }
 }
 
@@ -101,6 +112,7 @@ impl UdpConnection {
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
             timeout_secs,
+            last_used: AtomicU64::new(AppClock::run_millis()),
         }
     }
     /// Listen for DNS responses from the remote server
@@ -135,9 +147,9 @@ impl UdpConnection {
                     }
                 }
                 _ = self.close_notify.notified() => {
-                  // back to the loop, recheck dropped flag
+                    // back to the loop, recheck dropped flag
                     closing = true;
-                  continue;
+                    continue;
                 }
             }
         }

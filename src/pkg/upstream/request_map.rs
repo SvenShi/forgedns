@@ -11,6 +11,7 @@
  * limitations under the License.
  */
 use dashmap::DashMap;
+use dashmap::mapref::one::Ref;
 use hickory_proto::op::Message;
 use std::sync::atomic::{AtomicU16, Ordering};
 use tokio::sync::oneshot::Sender;
@@ -56,6 +57,10 @@ impl RequestMap {
 
     pub fn insert(&self, id: u16, tx: Sender<Message>) {
         self.requests.insert(id, tx);
+    }
+
+    pub fn get(&'_ self, id: &u16) -> Option<Ref<'_, u16, Sender<Message>>> {
+        self.requests.get(id)
     }
 
     pub fn remove(&self, id: &u16) -> Option<(u16, Sender<Message>)> {
