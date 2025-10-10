@@ -35,6 +35,7 @@ use tracing::{Level, debug, error, event_enabled, info, warn};
 /// Represents a single persistent TCP DNS connection
 #[derive(Debug)]
 pub struct TcpConnection {
+    id: u16,
     /// TCP writer half, protected by RwLock to allow concurrent reads
     writer: RwLock<OwnedWriteHalf>,
     /// Notifies listeners when the connection is closed
@@ -141,8 +142,9 @@ impl Connection for TcpConnection {
 
 impl TcpConnection {
     /// Create a new TCP connection wrapper
-    fn new(writer: OwnedWriteHalf, timeout_secs: u64) -> Self {
+    fn new(conn_id: u16, writer: OwnedWriteHalf, timeout_secs: u64) -> Self {
         Self {
+            id: conn_id,
             writer: RwLock::new(writer),
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
@@ -252,7 +254,7 @@ impl TcpConnectionBuilder {
 #[async_trait]
 impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
     /// Establish a new TCP connection to the DNS server
-    async fn new_conn(&self) -> Result<Arc<TcpConnection>, ProtoError> {
+    async fn new_conn(&self, conn_id: u16) -> Result<Arc<TcpConnection>, ProtoError> {
         let remote = self.remote_addr;
         let timeout = self.timeout_secs;
 
@@ -263,7 +265,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                 info!("Connected to TCP DNS server: {:?}", remote);
                 let (reader, writer) = stream.into_split();
 
-                let connection = TcpConnection::new(writer, timeout);
+                let connection = TcpConnection::new(conn_id, writer, timeout);
                 let arc = Arc::new(connection);
 
                 // Spawn a background task to read responses

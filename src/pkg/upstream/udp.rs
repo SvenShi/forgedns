@@ -34,6 +34,7 @@ use tracing::{debug, error, warn};
 /// A single UDP connection in the pool
 #[derive(Debug)]
 pub struct UdpConnection {
+    id: u16,
     /// Underlying UDP socket
     socket: UdpSocket,
     /// Notify waiters when the connection is closed
@@ -106,8 +107,9 @@ impl Connection for UdpConnection {
 }
 
 impl UdpConnection {
-    fn new(socket: UdpSocket, timeout_secs: u64) -> UdpConnection {
+    fn new(conn_id: u16, socket: UdpSocket, timeout_secs: u64) -> UdpConnection {
         Self {
+            id: conn_id,
             socket,
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
@@ -177,9 +179,9 @@ impl UdpConnectionBuilder {
 
 #[async_trait]
 impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
-    async fn new_conn(&self) -> Result<Arc<UdpConnection>, ProtoError> {
+    async fn new_conn(&self, conn_id: u16) -> Result<Arc<UdpConnection>, ProtoError> {
         let socket = connect_udp_socket(self.bind_addr, self.remote_addr).unwrap();
-        let connection = UdpConnection::new(socket, self.timeout_secs);
+        let connection = UdpConnection::new(conn_id, socket, self.timeout_secs);
         let arc = Arc::new(connection);
         tokio::spawn(UdpConnection::listen_dns_response(arc.clone()));
         Ok(arc)

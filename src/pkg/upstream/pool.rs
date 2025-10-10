@@ -17,8 +17,8 @@ use hickory_proto::ProtoError;
 use hickory_proto::op::Query;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::{Arc};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -39,8 +39,8 @@ pub struct ConnectionPool<C: Connection> {
     max_idle: Duration,
     /// Connection builder, build new connections
     connection_builder: Box<dyn ConnectionBuilder<C>>,
-    // Self Pointer
-    self_arc: OnceLock<Arc<ConnectionPool<C>>>,
+    /// The Next connection id
+    next_id: AtomicU16,
 }
 
 impl<C: Connection> ConnectionPool<C> {
@@ -62,10 +62,8 @@ impl<C: Connection> ConnectionPool<C> {
             max_load,
             max_idle: Duration::from_secs(60),
             connection_builder,
-            self_arc: OnceLock::new(),
+            next_id: AtomicU16::new(0),
         });
-
-        let _ = pool.self_arc.set(pool.clone());
 
         pool.clone().start_maintenance();
 
@@ -131,7 +129,8 @@ impl<C: Connection> ConnectionPool<C> {
         let mut new_conns = Vec::with_capacity(new_conns_count);
 
         for _ in 0..new_conns_count {
-            let conn = match self.connection_builder.new_conn().await {
+            let conn_id = self.next_id.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+            let conn = match self.connection_builder.new_conn(conn_id).await {
                 Ok(conn) => conn,
                 Err(e) => {
                     return Err(e);
@@ -238,5 +237,5 @@ pub trait Connection: Send + Sized + Sync + 'static {
 
 #[async_trait]
 pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
-    async fn new_conn(&self) -> Result<Arc<C>, ProtoError>;
+    async fn new_conn(&self, conn_id: u16) -> Result<Arc<C>, ProtoError>;
 }
