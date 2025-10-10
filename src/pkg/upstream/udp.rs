@@ -11,23 +11,23 @@
  * limitations under the License.
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
+use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use socket2::{Domain, Socket, Type};
 use std::fmt::Debug;
 use std::io::Error;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{oneshot, Notify};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
@@ -49,7 +49,7 @@ pub struct UdpConnection {
 
 #[async_trait]
 impl Connection for UdpConnection {
-    async fn close(&self) {
+    fn close(&self) {
         debug!("Closing UDP connection");
         self.close_notify.notify_waiters();
     }
@@ -63,11 +63,7 @@ impl Connection for UdpConnection {
         self.last_used
             .store(AppClock::run_millis(), Ordering::Relaxed);
 
-        match self
-            .socket
-            .send(query_msg.to_bytes().unwrap().as_slice())
-            .await
-        {
+        match self.socket.send(query_msg.to_bytes()?.as_slice()).await {
             Ok(_sent) => {}
             Err(e) => {
                 self.request_map.remove(&query_id);
@@ -77,7 +73,6 @@ impl Connection for UdpConnection {
 
         match timeout(Duration::from_secs(self.timeout_secs), rx).await {
             Ok(Ok(message)) => {
-                debug!("Received DNS response for id={}", query_id);
                 let response = DnsResponse::from_message(message)?;
                 self.request_map.remove(&query_id);
                 Ok(response)
@@ -135,7 +130,6 @@ impl UdpConnection {
                                 let id = msg.header().id();
                                 if let Some((_, sender)) = self.request_map.remove(&id) {
                                     let _ = sender.send(msg);
-                                    debug!("Received valid DNS response id={}", id);
                                 } else {
                                     debug!("Discarded unmatched DNS response id={}", id);
                                 }

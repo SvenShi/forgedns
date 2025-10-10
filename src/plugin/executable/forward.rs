@@ -35,8 +35,7 @@ impl Plugin for SingleDnsForwarder {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) {
-    }
+    async fn init(&mut self) {}
 
     async fn execute(&self, context: &mut DnsContext) {
         match self.upstream.query(context).await {
@@ -44,7 +43,13 @@ impl Plugin for SingleDnsForwarder {
                 context.response = Some(res);
             }
             Err(e) => {
-                error!("DNS request failed: {e}, {:?}", context);
+                error!(
+                    "DNS request failed source:{}, query:{}, sourceId: {}, responseId: {}, reason: {e}",
+                    context.request_info.src,
+                    context.request_info.query.name().to_string(),
+                    context.request_info.header.id(),
+                    context.request_info.header.id()
+                );
             }
         }
     }

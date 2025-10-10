@@ -17,10 +17,30 @@ use hickory_proto::ProtoError;
 use hickory_proto::op::Query;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
-use std::sync::{Arc};
+use std::thread::yield_now;
 use std::time::Duration;
 use tracing::{debug, info, warn};
+
+#[async_trait]
+pub trait Connection: Send + Sized + Sync + 'static {
+    /// Mark this connection as closed and notify listeners
+    fn close(&self);
+
+    async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError>;
+
+    fn using_count(&self) -> u16;
+
+    fn available(&self) -> bool;
+
+    fn last_used(&self) -> u64;
+}
+
+#[async_trait]
+pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
+    async fn new_conn(&self, conn_id: u16) -> Result<Arc<C>, ProtoError>;
+}
 
 /// A pool of UDP connections used for DNS queries
 #[derive(Debug)]
@@ -86,25 +106,29 @@ impl<C: Connection> ConnectionPool<C> {
     async fn get(&'_ self) -> Result<Arc<C>, ProtoError> {
         loop {
             let conns = self.connections.load();
-            let len = conns.len();
-
-            if len == 0 {
+            if conns.len() == 0 {
                 warn!("No available connections, expanding pool...");
                 self.expand().await?;
                 continue;
             }
-
-            let mut idx = self.index.fetch_add(1, Ordering::Relaxed) % len;
-
-            for _ in 0..len {
+            let mut idx = self.index.load(Ordering::Relaxed) % conns.len();
+            let raw_idx = idx.clone();
+            for _ in 0..conns.len() {
                 let conn = &conns[idx];
                 if conn.available() && conn.using_count() < self.max_load {
+                    if raw_idx != idx {
+                        self.index.store(raw_idx, Ordering::Relaxed);
+                    }
                     return Ok(conn.clone());
                 }
-                idx = (idx + 1) % len;
+                idx = (idx + 1) % conns.len();
             }
 
-            self.expand().await?;
+            if conns.len() < self.max_size {
+                if let Err(_) = self.expand().await {
+                    yield_now();
+                }
+            }
         }
     }
 
@@ -113,7 +137,7 @@ impl<C: Connection> ConnectionPool<C> {
         let conns_len = self.connections.load().len();
         if conns_len >= self.max_size {
             debug!("Connection pool already at max size");
-            return Ok(());
+            return Err(ProtoError::from("Connection pool already at maximum size"));
         }
 
         let new_conns_count = if conns_len >= self.min_size {
@@ -141,6 +165,10 @@ impl<C: Connection> ConnectionPool<C> {
 
         loop {
             let conns = self.connections.load().clone();
+            if conns.len() >= self.max_size {
+                close_conns(&new_conns).await;
+                return Ok(());
+            }
             let mut new_vec = (*conns).clone();
             new_vec.append(&mut new_conns);
             let new_len = new_vec.len();
@@ -148,6 +176,7 @@ impl<C: Connection> ConnectionPool<C> {
                 &conns,
                 &self.connections.compare_and_swap(&conns, Arc::new(new_vec)),
             ) {
+                self.index.store(new_len - 1, Ordering::Relaxed);
                 debug!("UDP connections pool expanded, new total: {}", new_len);
                 break Ok(());
             }
@@ -211,31 +240,17 @@ impl<C: Connection> ConnectionPool<C> {
             invalid_vec.len(),
             new_len
         );
+
+        // try to keep min_size connections
+        if new_len < self.min_size {
+            let _ = self.expand().await;
+        }
     }
 }
 
 #[inline]
 async fn close_conns<C: Connection>(conns: &Vec<Arc<C>>) {
     for conn in conns {
-        conn.close().await;
+        conn.close();
     }
-}
-
-#[async_trait]
-pub trait Connection: Send + Sized + Sync + 'static {
-    /// Mark this connection as closed and notify listeners
-    async fn close(&self);
-
-    async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError>;
-
-    fn using_count(&self) -> u16;
-
-    fn available(&self) -> bool;
-
-    fn last_used(&self) -> u64;
-}
-
-#[async_trait]
-pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
-    async fn new_conn(&self, conn_id: u16) -> Result<Arc<C>, ProtoError>;
 }

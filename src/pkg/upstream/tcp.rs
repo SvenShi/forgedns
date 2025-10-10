@@ -10,34 +10,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
+use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
+use bytes::{BufMut, Bytes, BytesMut};
 use hickory_proto::ProtoError;
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::xfer::DnsResponse;
 use std::net::SocketAddr;
-use std::ops::ControlFlow::Break;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::select;
-use tokio::sync::{Notify, RwLock, oneshot};
-use tokio::time::{sleep, timeout};
-use tracing::{Level, debug, error, event_enabled, info, warn};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::{Mutex, Notify, oneshot};
+use tokio::time::timeout;
+use tracing::{debug, error, info, warn};
 
 /// Represents a single persistent TCP DNS connection
 #[derive(Debug)]
 pub struct TcpConnection {
     id: u16,
     /// TCP writer half, protected by RwLock to allow concurrent reads
-    writer: RwLock<OwnedWriteHalf>,
+    sender: UnboundedSender<Bytes>,
     /// Notifies listeners when the connection is closed
     close_notify: Notify,
     /// Map of query_id -> response sender
@@ -50,26 +50,29 @@ pub struct TcpConnection {
     writeable: AtomicBool,
 
     last_used: AtomicU64,
+
+    serial_lock: Mutex<()>,
 }
 
 #[async_trait]
 impl Connection for TcpConnection {
     /// Close the TCP connection and notify all waiters
-    async fn close(&self) {
+    fn close(&self) {
         if self.closed.swap(true, Ordering::Relaxed) {
             return; // already closed
         }
 
-        debug!("Closing TCP connection");
+        debug!("Connection id {} Closing TCP connection", self.id);
         self.close_notify.notify_waiters();
-
-        let _ = self.writer.write().await.shutdown().await;
     }
 
     /// Sends a DNS query over TCP and waits for the response
     async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError> {
         if self.closed.load(Ordering::Relaxed) {
-            return Err(ProtoError::from("TCP connection closed"));
+            return Err(ProtoError::from(format!(
+                "Connection id {} TCP connection closed",
+                self.id
+            )));
         }
 
         self.last_used
@@ -78,45 +81,49 @@ impl Connection for TcpConnection {
 
         // Generate and register a unique query ID
         let query_id = self.request_map.store(tx);
-        debug!("Sending TCP DNS query id={}", query_id);
+        debug!(
+            "Connection id {} Sending TCP DNS query id={}, current requests count {}",
+            self.id,
+            query_id,
+            self.using_count()
+        );
 
         // Build DNS message
         let mut msg = Message::new(query_id, MessageType::Query, OpCode::Query);
         msg.add_query(query);
-
         // Encode message with TCP 2-byte length prefix
         let buf = msg.to_bytes()?;
-        let buf_length = (buf.len() as u16).to_be_bytes();
-        let mut msg = Vec::with_capacity(2 + buf.len());
-        msg.extend_from_slice(&buf_length);
-        msg.extend_from_slice(&buf);
-
-        // Send message to upstream DNS server
-        {
-            let mut writer = self.writer.write().await;
-            if let Err(e) = writer.write_all(msg.as_slice()).await {
-                self.request_map.remove(&query_id);
-                self.writeable.store(false, Ordering::Relaxed);
-                error!("Failed to send TCP DNS query: {:?}", e);
-                return Err(ProtoError::from(e));
-            }
+        let mut bytes_mut = BytesMut::with_capacity(2 + buf.len());
+        bytes_mut.put_u16(buf.len() as u16);
+        bytes_mut.put_slice(&buf);
+        if let Err(e) = self.sender.send(bytes_mut.freeze()) {
+            self.request_map.remove(&query_id);
+            error!(
+                "Connection id {} Failed to send TCP DNS query: {:?}",
+                self.id, e
+            );
+            return Err(ProtoError::from(e.to_string()));
         }
 
         // Wait for response or timeout
         match timeout(self.timeout, rx).await {
             Ok(Ok(message)) => {
-                debug!("Received TCP DNS response id={}", query_id);
+                debug!("Connection id {} Response received", self.id);
                 Ok(DnsResponse::from_message(message)?)
             }
             Ok(Err(_)) => {
-                warn!("TCP DNS query id={} canceled", query_id);
                 self.request_map.remove(&query_id);
-                Err(ProtoError::from("request canceled"))
+                Err(ProtoError::from(format!(
+                    "Connection id {} request canceled",
+                    self.id
+                )))
             }
             Err(_) => {
-                warn!("TCP DNS query id={} timed out", query_id);
                 self.request_map.remove(&query_id);
-                Err(ProtoError::from("dns query timeout"))
+                Err(ProtoError::from(format!(
+                    "Connection id {} DNS query timeout",
+                    self.id
+                )))
             }
         }
     }
@@ -142,80 +149,111 @@ impl Connection for TcpConnection {
 
 impl TcpConnection {
     /// Create a new TCP connection wrapper
-    fn new(conn_id: u16, writer: OwnedWriteHalf, timeout_secs: u64) -> Self {
+    fn new(conn_id: u16, sender: UnboundedSender<Bytes>, timeout_secs: u64) -> Self {
         Self {
             id: conn_id,
-            writer: RwLock::new(writer),
+            sender,
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
             timeout: Duration::from_secs(timeout_secs),
             closed: AtomicBool::new(false),
             writeable: AtomicBool::new(true),
             last_used: AtomicU64::new(AppClock::run_millis()),
+            serial_lock: Mutex::new(()),
+        }
+    }
+
+    async fn send_dns_request(
+        self: Arc<Self>,
+        mut writer: OwnedWriteHalf,
+        mut receiver: UnboundedReceiver<Bytes>,
+    ) {
+        let mut closing = false;
+
+        while !closing {
+            select! {
+                res = receiver.recv() => {
+                    if let Some(res) = res {
+                        let  instant = Instant::now();
+                        if let Err(e) = writer.write_all(res.as_ref()).await {
+                            error!("Write error: {:?}", e);
+                            self.writeable.store(false, Ordering::Relaxed);
+                            self.close();
+                            break;
+                        }
+                        info!("Connection id {} send DNS request, using time {:?}", self.id,instant.elapsed());
+                    }
+                }
+                _ = self.close_notify.notified() => {
+                    closing = true;
+                }
+            }
         }
     }
 
     /// Background task: continuously reads responses from the upstream DNS server
     async fn listen_dns_response(self: Arc<Self>, reader: OwnedReadHalf) {
         let mut reader = BufReader::new(reader);
-        let mut buf = vec![0u8; 4096];
-        let mut data = Vec::new();
+        let mut buf = vec![0u8; 16384];
+        let mut start = 0;
 
-        info!("Start listening for TCP DNS responses");
+        info!(
+            "Connection id {} Start listening for TCP DNS responses",
+            self.id
+        );
         let mut closing = false;
         loop {
             if closing && self.request_map.is_empty() {
-                debug!("TCP connection listener exiting due to drop");
+                debug!(
+                    "Connection id {} TCP connection listener exiting due to drop",
+                    self.id
+                );
                 break;
             }
             if self.closed.load(Ordering::Relaxed) {
-                debug!("TCP connection closed");
+                debug!("Connection id {} TCP connection closed", self.id);
                 break;
             }
 
             select! {
-                res = reader.read(&mut buf) => {
+                res = reader.read(&mut buf[start..]) => {
                     match res {
                         Ok(0) => {
                             // EOF (connection closed)
-                            warn!("TCP DNS connection closed by remote");
-                            self.closed.store(true, Ordering::Relaxed);
+                            warn!("Connection id {} TCP DNS connection closed by remote", self.id);
+                            self.close();
                             break;
                         }
                         Ok(n) => {
-                            data.extend_from_slice(&buf[..n]);
+                            let total = start + n;
+                            let mut offset = 0;
 
-                            // Try to parse full DNS messages from the accumulated data
-                            while data.len() >= 2 {
-                                let msg_len = u16::from_be_bytes([data[0], data[1]]) as usize;
-                                if data.len() < 2 + msg_len {
-                                    // Not enough bytes for a full message yet
-                                    break;
-                                }
+                            while total - offset >= 2 {
+                                   let msg_len = u16::from_be_bytes([buf[offset], buf[offset+1]]) as usize;
+                                   if total - offset < 2 + msg_len { break; }
 
-                                // Extract one full message
-                                let msg_bytes = data.drain(0..2 + msg_len).collect::<Vec<_>>();
-                                let msg_body = &msg_bytes[2..];
-
+                                   let msg_body = &buf[offset+2..offset+2+msg_len];
                                 match Message::from_bytes(msg_body) {
                                     Ok(msg) => {
                                         let id = msg.header().id();
                                         if let Some((_, sender)) = self.request_map.remove(&id) {
                                             let _ = sender.send(msg);
-                                            debug!("Delivered TCP DNS response id={}", id);
                                         } else {
-                                            debug!("Discarded unmatched TCP response id={}", id);
+                                            debug!("Connection id {} Discarded unmatched TCP response id={}",self.id, id);
                                         }
                                     }
                                     Err(e) => {
-                                        warn!("Failed to decode TCP DNS response: {:?}", e);
+                                        warn!("Connection id {} Failed to decode TCP DNS response: {:?}", self.id,e);
                                     }
                                 }
-                            }
+                                   offset += 2 + msg_len;
+                               }
+                            start = total - offset;
+                            buf.copy_within(offset..total, 0);
                         }
                         Err(e) => {
-                            error!("TCP DNS read error: {:?}", e);
-                            self.closed.store(true, Ordering::Relaxed);
+                            error!("Connection id {} TCP DNS read error: {:?}", self.id,e);
+                            self.close();
                             break;
                         }
                     }
@@ -223,13 +261,12 @@ impl TcpConnection {
                 _ = self.close_notify.notified() => {
                     // back to the loop, recheck dropped flag
                     closing = true;
-                    self.closed.store(true, Ordering::Relaxed);
                     continue;
                 }
             }
         }
 
-        warn!("TCP DNS listener terminated");
+        warn!("Connection id {} TCP DNS listener terminated", self.id);
     }
 }
 
@@ -258,23 +295,43 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
         let remote = self.remote_addr;
         let timeout = self.timeout_secs;
 
-        info!("Connecting to TCP DNS server: {:?}", remote);
+        info!(
+            "Connection id {} Connecting to TCP DNS server: {:?}",
+            conn_id, remote
+        );
 
         match TcpStream::connect(remote).await {
             Ok(stream) => {
-                info!("Connected to TCP DNS server: {:?}", remote);
+                if let Err(e) = stream.set_nodelay(true) {
+                    warn!("Connection id {} Failed to set TCP nodelay", conn_id);
+                }
+                info!(
+                    "Connection id {} Connected to TCP DNS server: {:?}, Local addr: {:?}",
+                    conn_id,
+                    stream.peer_addr()?,
+                    stream.local_addr()?
+                );
                 let (reader, writer) = stream.into_split();
+                let (sender, receiver) = unbounded_channel();
 
-                let connection = TcpConnection::new(conn_id, writer, timeout);
+                let connection = TcpConnection::new(conn_id, sender, timeout);
                 let arc = Arc::new(connection);
 
                 // Spawn a background task to read responses
                 tokio::spawn(TcpConnection::listen_dns_response(arc.clone(), reader));
+                tokio::spawn(TcpConnection::send_dns_request(
+                    arc.clone(),
+                    writer,
+                    receiver,
+                ));
 
                 Ok(arc)
             }
             Err(e) => {
-                error!("Failed to connect to TCP DNS server {:?}: {:?}", remote, e);
+                error!(
+                    "Connection id {} Failed to connect to TCP DNS server {:?}: {:?}",
+                    conn_id, remote, e
+                );
                 Err(ProtoError::from(e))
             }
         }
