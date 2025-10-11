@@ -44,11 +44,10 @@ impl Plugin for SingleDnsForwarder {
             }
             Err(e) => {
                 error!(
-                    "DNS request failed source:{}, query:{}, sourceId: {}, responseId: {}, reason: {e}",
-                    context.request_info.src,
-                    context.request_info.query.name().to_string(),
-                    context.request_info.header.id(),
-                    context.request_info.header.id()
+                    "DNS request failed source:{}, queries:{:?}, query_id: {} reason: {e}",
+                    context.src_addr,
+                    context.request.queries(),
+                    context.request.id()
                 );
             }
         }

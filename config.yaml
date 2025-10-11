@@ -1,12 +1,12 @@
-log:
-  level: debug
+#log:
+#  level: debug
 
 plugins:
   - tag: forward
     type: forward
     args:
       upstreams:
-        - addr: "tcp://223.5.5.5"  # 阿里 DNS
+        - addr: "223.5.5.5"  # 阿里 DNS
 #          dial_addr: "94.140.14.141"
 #          insecure_skip_verify: true
         # 当配置多个上游服务器时，会自动启用并发模式

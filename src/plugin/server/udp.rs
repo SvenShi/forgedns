@@ -11,16 +11,16 @@
  * limitations under the License.
  */
 use crate::config::config::PluginConfig;
-use crate::core::context::{DnsContext, RequestInfo};
+use crate::core::context::DnsContext;
 use crate::plugin::{get_plugin, Plugin, PluginFactory, PluginInfo, PluginMainType};
 use async_trait::async_trait;
 use futures::StreamExt;
-use hickory_proto::op::{LowerQuery, Message, Query};
+use hickory_proto::op::{Message, OpCode};
 use hickory_proto::runtime::TokioRuntimeProvider;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::udp::UdpStream;
-use hickory_proto::xfer::{Protocol, SerialMessage};
-use hickory_proto::{BufDnsStreamHandle, DnsStreamHandle, ProtoError, ProtoErrorKind};
+use hickory_proto::xfer::SerialMessage;
+use hickory_proto::{BufDnsStreamHandle, DnsStreamHandle};
 use serde::Deserialize;
 use socket2::{Domain, Socket, Type};
 use std::collections::HashMap;
@@ -113,14 +113,10 @@ async fn handler_message(
 ) {
     let (message, src_addr) = message.into_parts();
     // 解析 DNS 消息
-    if let Ok(mut msg) = Message::from_bytes(message.as_slice()) {
+    if let Ok(msg) = Message::from_bytes(message.as_slice()) {
         let mut context = DnsContext {
-            request_info: RequestInfo {
-                src: src_addr,
-                protocol: Protocol::Udp,
-                header: msg.header().clone(),
-                query: to_query(msg.queries()).unwrap(),
-            },
+            src_addr,
+            request: msg,
             response: None,
             mark: Vec::new(),
             attributes: HashMap::new(),
@@ -128,42 +124,41 @@ async fn handler_message(
 
         if event_enabled!(Level::DEBUG) {
             debug!(
-                "dns:request source:{}, query:{}, queryType:{}",
-                context.request_info.src,
-                context.request_info.query.name().to_string(),
-                context.request_info.query.query_type().to_string()
+                "dns:request source:{}, queries:{:?},  edns:{:?}, nameservers:{:?}",
+                &src_addr,
+                context.request.queries(),
+                context.request.extensions(),
+                context.request.name_servers()
             );
         }
-        {
-            // 执行程序入口执行
-            entry_executor.plugin.execute(&mut context).await;
-        }
 
+        // 执行程序入口执行
+        entry_executor.plugin.execute(&mut context).await;
+
+        let response;
         match context.response {
             None => {
                 debug!("No response received");
+                response = Message::response(context.request.id(), OpCode::Query)
             }
-            Some(mut res) => {
-                msg.add_answers(res.take_answers());
-                msg.add_additionals(res.take_additionals());
+            Some(res) => {
+                response = Message::from(res);
             }
         }
-
-        let message = msg.to_response();
         if event_enabled!(Level::DEBUG) {
             debug!(
-                "Response received: source:{}, query:{}, sourceId: {}, responseId: {}, dst: {}",
-                context.request_info.src,
-                context.request_info.query.name().to_string(),
-                msg.header().id(),
-                message.header().id(),
-                src_addr.to_string()
+                "Response received: source:{}, queries:{:?}, sourceId: {}, edns:{:?}, nameservers:{:?}",
+                &src_addr,
+                context.request.queries(),
+                context.request.id(),
+                response.extensions(),
+                response.name_servers()
             );
         }
 
         stream_handle
             .with_remote_addr(src_addr)
-            .send(SerialMessage::new(message.to_bytes().unwrap(), src_addr))
+            .send(SerialMessage::new(response.to_bytes().unwrap(), src_addr))
             .unwrap();
     }
 }
@@ -187,15 +182,6 @@ fn build_udp_socket(addr: &str) -> Result<UdpSocket, Error> {
     sock.bind(&addr.into())?;
 
     UdpSocket::from_std(sock.into())
-}
-
-fn to_query(queries: &[Query]) -> Result<LowerQuery, ProtoError> {
-    let i = queries.len();
-    if i == 1 {
-        Ok(queries[0].clone().into())
-    } else {
-        Err(ProtoErrorKind::BadQueryCount(i).into())
-    }
 }
 
 pub struct UdpServerFactory {}

@@ -16,7 +16,6 @@ use crate::pkg::upstream::pool::{Connection, ConnectionPool};
 use crate::pkg::upstream::tcp::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::udp::{UdpConnection, UdpConnectionBuilder};
 use async_trait::async_trait;
-use hickory_proto::op::Query;
 use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
 use serde::Deserialize;
@@ -206,7 +205,7 @@ impl ConnectInfo {
 /// Builder for creating upstream instances
 pub struct UpStreamBuilder;
 
-const TIMEOUT_SECS: u64 = 4;
+const TIMEOUT_SECS: u64 = 1;
 
 impl UpStreamBuilder {
     /// Build an upstream instance from configuration
@@ -289,21 +288,18 @@ pub struct PooledUpstream<C: Connection> {
 #[async_trait]
 impl<C: Connection> UpStream for PooledUpstream<C> {
     async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
-        let query_msg = self.build_query_message(&context);
-        self.pool.query(query_msg).await
+        match self.pool.query(context.request.clone()).await {
+            Ok(mut res) => {
+                let mut header = res.header().clone();
+                header.set_id(context.request.id());
+                res.set_header(header);
+                Ok(res)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn connect_type(&self) -> ConnectType {
         self.connect_info.connect_type
-    }
-}
-
-impl<C: Connection> PooledUpstream<C> {
-    /// Build a DNS query message and assign a unique ID that is not in use
-    fn build_query_message(&self, context: &&mut DnsContext) -> Query {
-        let info = &context.request_info;
-        let mut query = Query::query(info.query.name().into(), info.query.query_type().clone());
-        query.set_query_class(info.query.query_class().clone());
-        query
     }
 }

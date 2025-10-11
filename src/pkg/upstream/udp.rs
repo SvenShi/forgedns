@@ -14,8 +14,8 @@ use crate::core::app_clock::AppClock;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
-use hickory_proto::op::{Message, MessageType, OpCode, Query};
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use hickory_proto::op::Message;
+use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
 use socket2::{Domain, Socket, Type};
@@ -42,7 +42,7 @@ pub struct UdpConnection {
     /// Mapping of query ID -> response channel sender
     request_map: RequestMap,
     /// Query timeout in seconds
-    timeout_secs: u64,
+    timeout: Duration,
     /// Last using time
     last_used: AtomicU64,
 }
@@ -54,42 +54,39 @@ impl Connection for UdpConnection {
         self.close_notify.notify_waiters();
     }
 
-    async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
         let (tx, rx) = oneshot::channel();
         let query_id = self.request_map.store(tx);
-        let mut query_msg = Message::new(query_id, MessageType::Query, OpCode::Query);
-        query_msg.add_query(query);
+        let mut header = request.header().clone();
+        header.set_id(query_id);
+        request.set_header(header);
 
-        self.last_used
-            .store(AppClock::run_millis(), Ordering::Relaxed);
-
-        match self.socket.send(query_msg.to_bytes()?.as_slice()).await {
+        match self.socket.send(request.to_bytes()?.as_slice()).await {
             Ok(_sent) => {}
             Err(e) => {
-                self.request_map.remove(&query_id);
+                self.request_map.take(query_id);
                 return Err(ProtoError::from(e));
             }
         };
 
-        match timeout(Duration::from_secs(self.timeout_secs), rx).await {
-            Ok(Ok(message)) => {
-                let response = DnsResponse::from_message(message)?;
-                self.request_map.remove(&query_id);
+        match timeout(self.timeout, rx).await {
+            Ok(Ok(response)) => {
+                self.request_map.take(query_id);
                 Ok(response)
             }
             Ok(Err(_canceled)) => {
-                self.request_map.remove(&query_id);
+                self.request_map.take(query_id);
                 Err(ProtoError::from("request canceled"))
             }
             Err(_elapsed) => {
-                self.request_map.remove(&query_id);
+                self.request_map.take(query_id);
                 Err(ProtoError::from("dns query timeout"))
             }
         }
     }
 
     fn using_count(&self) -> u16 {
-        self.request_map.len() as u16
+        self.request_map.size()
     }
 
     fn available(&self) -> bool {
@@ -108,7 +105,7 @@ impl UdpConnection {
             socket,
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
-            timeout_secs,
+            timeout: Duration::from_secs(timeout_secs),
             last_used: AtomicU64::new(AppClock::run_millis()),
         }
     }
@@ -126,10 +123,12 @@ impl UdpConnection {
                 res = self.socket.recv_from(&mut buf) => {
                     match res {
                         Ok((len, _)) => {
-                            if let Ok(msg) = Message::from_bytes(&buf[..len]) {
+                            if let Ok(msg) = DnsResponse::from_buffer(Vec::from(&buf[..len])) {
                                 let id = msg.header().id();
-                                if let Some((_, sender)) = self.request_map.remove(&id) {
+                                if let Some(sender) = self.request_map.take(id) {
                                     let _ = sender.send(msg);
+                                    self.last_used
+                                        .store(AppClock::run_millis(), Ordering::Relaxed);
                                 } else {
                                     debug!("Discarded unmatched DNS response id={}", id);
                                 }
