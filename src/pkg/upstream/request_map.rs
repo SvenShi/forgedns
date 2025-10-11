@@ -15,7 +15,7 @@ pub struct RequestMap {
 impl RequestMap {
     pub fn new() -> Self {
         let mut slots = Vec::with_capacity(MAX_IDS);
-        for _ in 0..MAX_IDS {
+        for _ in 0..MAX_IDS + 1 {
             slots.push(AtomicPtr::new(ptr::null_mut()));
         }
         Self {
@@ -69,7 +69,7 @@ mod test {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::task::JoinSet;
-    use tokio::time::{sleep, Instant};
+    use tokio::time::{Instant, sleep};
 
     #[tokio::test]
     async fn test() {
