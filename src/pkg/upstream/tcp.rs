@@ -15,20 +15,20 @@ use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
-use hickory_proto::ProtoError;
-use hickory_proto::op::{Message, MessageType, OpCode, Query};
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use hickory_proto::op::Message;
+use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
 use tokio::select;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio::sync::{Mutex, Notify, oneshot};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::{oneshot, Notify};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
@@ -50,8 +50,6 @@ pub struct TcpConnection {
     writeable: AtomicBool,
 
     last_used: AtomicU64,
-
-    serial_lock: Mutex<()>,
 }
 
 #[async_trait]
@@ -67,7 +65,7 @@ impl Connection for TcpConnection {
     }
 
     /// Sends a DNS query over TCP and waits for the response
-    async fn query(&self, query: Query) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(ProtoError::from(format!(
                 "Connection id {} TCP connection closed",
@@ -75,8 +73,6 @@ impl Connection for TcpConnection {
             )));
         }
 
-        self.last_used
-            .store(AppClock::run_millis(), Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
 
         // Generate and register a unique query ID
@@ -89,15 +85,16 @@ impl Connection for TcpConnection {
         );
 
         // Build DNS message
-        let mut msg = Message::new(query_id, MessageType::Query, OpCode::Query);
-        msg.add_query(query);
+        let mut header = request.header().clone();
+        header.set_id(query_id);
+        request.set_header(header);
         // Encode message with TCP 2-byte length prefix
-        let buf = msg.to_bytes()?;
+        let buf = request.to_bytes()?;
         let mut bytes_mut = BytesMut::with_capacity(2 + buf.len());
         bytes_mut.put_u16(buf.len() as u16);
         bytes_mut.put_slice(&buf);
         if let Err(e) = self.sender.send(bytes_mut.freeze()) {
-            self.request_map.remove(&query_id);
+            self.request_map.take(query_id);
             error!(
                 "Connection id {} Failed to send TCP DNS query: {:?}",
                 self.id, e
@@ -107,19 +104,19 @@ impl Connection for TcpConnection {
 
         // Wait for response or timeout
         match timeout(self.timeout, rx).await {
-            Ok(Ok(message)) => {
+            Ok(Ok(res)) => {
                 debug!("Connection id {} Response received", self.id);
-                Ok(DnsResponse::from_message(message)?)
+                Ok(res)
             }
             Ok(Err(_)) => {
-                self.request_map.remove(&query_id);
+                self.request_map.take(query_id);
                 Err(ProtoError::from(format!(
                     "Connection id {} request canceled",
                     self.id
                 )))
             }
             Err(_) => {
-                self.request_map.remove(&query_id);
+                self.request_map.take(query_id);
                 Err(ProtoError::from(format!(
                     "Connection id {} DNS query timeout",
                     self.id
@@ -130,7 +127,7 @@ impl Connection for TcpConnection {
 
     /// Returns the number of active queries using this connection
     fn using_count(&self) -> u16 {
-        self.request_map.len() as u16
+        self.request_map.size()
     }
 
     /// Check if the connection is writable (usable)
@@ -159,7 +156,6 @@ impl TcpConnection {
             closed: AtomicBool::new(false),
             writeable: AtomicBool::new(true),
             last_used: AtomicU64::new(AppClock::run_millis()),
-            serial_lock: Mutex::new(()),
         }
     }
 
@@ -233,11 +229,13 @@ impl TcpConnection {
                                    if total - offset < 2 + msg_len { break; }
 
                                    let msg_body = &buf[offset+2..offset+2+msg_len];
-                                match Message::from_bytes(msg_body) {
+                                match DnsResponse::from_buffer(Vec::from(msg_body)) {
                                     Ok(msg) => {
                                         let id = msg.header().id();
-                                        if let Some((_, sender)) = self.request_map.remove(&id) {
-                                            let _ = sender.send(msg);
+                                        if let Some(sender) = self.request_map.take(id) {
+                                            let _ =  sender.send(msg);
+                                            self.last_used
+                                                .store(AppClock::run_millis(), Ordering::Relaxed);
                                         } else {
                                             debug!("Connection id {} Discarded unmatched TCP response id={}",self.id, id);
                                         }
@@ -303,7 +301,10 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
         match TcpStream::connect(remote).await {
             Ok(stream) => {
                 if let Err(e) = stream.set_nodelay(true) {
-                    warn!("Connection id {} Failed to set TCP nodelay", conn_id);
+                    warn!(
+                        "Connection id {} Failed to set TCP nodelay, reason: {e}",
+                        conn_id
+                    );
                 }
                 info!(
                     "Connection id {} Connected to TCP DNS server: {:?}, Local addr: {:?}",

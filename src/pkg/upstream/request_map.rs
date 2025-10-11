@@ -1,77 +1,124 @@
-/*
- * Copyright 2025 Sven Shi
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *     http://www.apache.org/licenses/LICENSE-2.0
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-use dashmap::DashMap;
-use dashmap::mapref::one::Ref;
-use hickory_proto::op::Message;
-use std::sync::atomic::{AtomicU16, Ordering};
+use hickory_proto::xfer::DnsResponse;
+use rand::random;
+use std::ptr;
+use std::sync::atomic::{AtomicPtr, AtomicU16, Ordering};
 use tokio::sync::oneshot::Sender;
 
-/// the dns request map
+const MAX_IDS: usize = u16::MAX as usize;
+
 #[derive(Debug)]
-pub(crate) struct RequestMap {
-    current_id: AtomicU16,
-    requests: DashMap<u16, Sender<Message>>,
+pub struct RequestMap {
+    slots: Vec<AtomicPtr<Sender<DnsResponse>>>,
+    size: AtomicU16,
 }
 
-#[allow(unused)]
 impl RequestMap {
     pub fn new() -> Self {
+        let mut slots = Vec::with_capacity(MAX_IDS);
+        for _ in 0..MAX_IDS {
+            slots.push(AtomicPtr::new(ptr::null_mut()));
+        }
         Self {
-            current_id: AtomicU16::new(0),
-            requests: DashMap::with_capacity(65535),
+            slots,
+            size: AtomicU16::new(0),
         }
     }
 
-    pub fn store(&self, tx: Sender<Message>) -> u16 {
-        let query_id = self.next_id();
-        self.requests.insert(query_id, tx);
-        query_id
-    }
+    #[inline(always)]
+    pub fn store(&self, tx: Sender<DnsResponse>) -> u16 {
+        let ptr = Box::into_raw(Box::new(tx));
 
-    pub fn next_id(&self) -> u16 {
-        for _ in 0..65535 {
-            let id = self
-                .current_id
-                .fetch_add(1, Ordering::Relaxed)
-                .wrapping_add(1);
-            if !self.requests.contains_key(&id) {
-                return id;
+        loop {
+            let id = random::<u16>() as usize;
+            // 尝试 CAS 插入空槽
+            if self.slots[id]
+                .compare_exchange(ptr::null_mut(), ptr, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                self.size.fetch_add(1, Ordering::Relaxed);
+                return id as u16;
             }
         }
-        panic!("RequestMap exhausted all IDs");
     }
 
-    pub fn current_id(&self) -> u16 {
-        self.current_id.load(Ordering::Relaxed)
+    #[inline(always)]
+    pub fn take(&self, id: u16) -> Option<Sender<DnsResponse>> {
+        let slot = &self.slots[id as usize];
+        let ptr = slot.swap(ptr::null_mut(), Ordering::AcqRel);
+        if ptr.is_null() {
+            None
+        } else {
+            self.size.fetch_sub(1, Ordering::Relaxed);
+            unsafe { Some(*Box::from_raw(ptr)) }
+        }
     }
 
-    pub fn insert(&self, id: u16, tx: Sender<Message>) {
-        self.requests.insert(id, tx);
-    }
-
-    pub fn get(&'_ self, id: &u16) -> Option<Ref<'_, u16, Sender<Message>>> {
-        self.requests.get(id)
-    }
-
-    pub fn remove(&self, id: &u16) -> Option<(u16, Sender<Message>)> {
-        self.requests.remove(id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.requests.len()
+    pub fn size(&self) -> u16 {
+        self.size.load(Ordering::Relaxed)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.requests.is_empty()
+        self.size.load(Ordering::Relaxed) == 0
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::pkg::upstream::request_map::RequestMap;
+    use hickory_proto::xfer::DnsResponse;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::task::JoinSet;
+    use tokio::time::{sleep, Instant};
+
+    #[tokio::test]
+    async fn test() {
+        for i in 0..5 {
+            let map = Arc::new(RequestMap::new());
+            let mut set = JoinSet::new();
+            for _ in 0..1000 {
+                let map = map.clone();
+                set.spawn(async move {
+                    let mut nanos = 0;
+                    for _ in 0..100 {
+                        let sender = tokio::sync::oneshot::channel::<DnsResponse>();
+                        let instant = Instant::now();
+                        let id = map.store(sender.0);
+                        nanos += instant.elapsed().as_nanos();
+                        sleep(Duration::from_millis(30)).await;
+                        map.take(id);
+                    }
+                    nanos / 100
+                });
+            }
+            println!(
+                "avg store using time {}ns",
+                set.join_all().await.iter().sum::<u128>() / 1000
+            )
+        }
+
+        for i in 0..5 {
+            let map = Arc::new(RequestMap::new());
+            let mut set = JoinSet::new();
+            for _ in 0..1000 {
+                let map = map.clone();
+                set.spawn(async move {
+                    let mut nanos = 0;
+                    for _ in 0..100 {
+                        let sender = tokio::sync::oneshot::channel::<DnsResponse>();
+                        let id = map.store(sender.0);
+                        sleep(Duration::from_millis(30)).await;
+                        let instant = Instant::now();
+                        map.take(id);
+                        nanos += instant.elapsed().as_nanos();
+                    }
+                    nanos / 100
+                });
+            }
+            println!(
+                "avg take using time {}ns",
+                set.join_all().await.iter().sum::<u128>() / 1000
+            )
+        }
     }
 }
