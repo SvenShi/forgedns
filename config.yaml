@@ -17,4 +17,4 @@ plugins:
     type: "udp_server"
     args:
       entry: "forward"
-      listen: "0.0.0.0:5335"
+      listen: "0.0.0.0:5366"

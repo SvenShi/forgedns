@@ -12,7 +12,7 @@
  */
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::plugin::{get_plugin, Plugin, PluginFactory, PluginInfo, PluginMainType};
+use crate::plugin::{Plugin, PluginFactory, PluginInfo, PluginMainType, get_plugin};
 use async_trait::async_trait;
 use futures::StreamExt;
 use hickory_proto::op::{Message, OpCode};
@@ -30,7 +30,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::task::JoinSet;
-use tracing::{debug, event_enabled, info, warn, Level};
+use tracing::{Level, debug, event_enabled, info, warn};
 
 #[derive(Deserialize)]
 pub struct UdpServerConfig {

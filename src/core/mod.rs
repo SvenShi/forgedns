@@ -11,18 +11,18 @@
  * limitations under the License.
  */
 use crate::config::config::LogConfig;
+use crate::core::app_clock::AppClock;
 use crate::core::log::RustDnsLogFormatter;
 use crate::core::runtime::{Options, Runtime};
 use clap::Parser;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, EnvFilter, Registry};
-use crate::core::app_clock::AppClock;
+use tracing_subscriber::{EnvFilter, Registry, fmt};
 
+pub mod app_clock;
 pub mod context;
 pub mod handler;
-pub mod app_clock;
 
 mod log;
 mod runtime;
@@ -33,11 +33,8 @@ pub fn init() -> Runtime {
 
     AppClock::run();
 
-    Runtime {
-        options,
-    }
+    Runtime { options }
 }
-
 
 ///初始化log
 pub fn log_init(log: LogConfig) -> WorkerGuard {
@@ -53,7 +50,6 @@ pub fn log_init(log: LogConfig) -> WorkerGuard {
         (None, None)
     };
 
-
     // 构建控制台layer
     let console_layer = fmt::layer()
         .event_format(RustDnsLogFormatter)
@@ -66,15 +62,12 @@ pub fn log_init(log: LogConfig) -> WorkerGuard {
             .with_writer(writer)
     });
 
-    let mut filter = EnvFilter::try_new(&log.level)
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let mut filter = EnvFilter::try_new(&log.level).unwrap_or_else(|_| EnvFilter::new("info"));
 
     // 屏蔽 hickory_server::server
     filter = filter.add_directive("hickory_server::server=off".parse().unwrap());
 
-    let subscriber = Registry::default()
-        .with(filter)
-        .with(console_layer);
+    let subscriber = Registry::default().with(filter).with(console_layer);
 
     // 添加文件layer（如果存在）
     if let Some(file_layer) = file_layer {

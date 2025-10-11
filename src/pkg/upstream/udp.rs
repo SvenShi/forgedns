@@ -14,20 +14,20 @@ use crate::core::app_clock::AppClock;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use socket2::{Domain, Socket, Type};
 use std::fmt::Debug;
 use std::io::Error;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
@@ -54,6 +54,7 @@ impl Connection for UdpConnection {
         self.close_notify.notify_waiters();
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
         let (tx, rx) = oneshot::channel();
         let query_id = self.request_map.store(tx);
@@ -71,7 +72,6 @@ impl Connection for UdpConnection {
 
         match timeout(self.timeout, rx).await {
             Ok(Ok(response)) => {
-                self.request_map.take(query_id);
                 Ok(response)
             }
             Ok(Err(_canceled)) => {

@@ -10,13 +10,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use hickory_proto::rustls::default_provider;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use hickory_proto::rustls::default_provider;
 
 pub(crate) fn secure_client_config() -> ClientConfig {
     let builder = ClientConfig::builder_with_provider(Arc::new(default_provider()))

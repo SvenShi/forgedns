@@ -11,10 +11,10 @@
  * limitations under the License.
  */
 
-use std::fmt;
 use chrono::Local;
+use std::fmt;
 use tracing::{Event, Subscriber};
-use tracing_subscriber::fmt::{format, FmtContext, FormatEvent, FormatFields, FormattedFields};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields, format};
 use tracing_subscriber::registry::LookupSpan;
 
 pub struct RustDnsLogFormatter;

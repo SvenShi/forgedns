@@ -18,10 +18,12 @@ fn main() {
     // 获取 `OUT_DIR` 环境变量（构建输出目录）
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let target_dir = Path::new(&out_dir)
-        .parent().unwrap()  // `target/debug/build/<hash>/` → `target/debug/build/`
-        .parent().unwrap()  // → `target/debug/`
-        .parent().unwrap(); // → `target/`（可选，如果希望直接复制到 `target/debug/`）
-
+        .parent()
+        .unwrap() // `target/debug/build/<hash>/` → `target/debug/build/`
+        .parent()
+        .unwrap() // → `target/debug/`
+        .parent()
+        .unwrap(); // → `target/`（可选，如果希望直接复制到 `target/debug/`）
 
     let src = "./resource/config.yaml";
 

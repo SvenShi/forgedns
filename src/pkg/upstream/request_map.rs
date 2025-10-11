@@ -25,6 +25,7 @@ impl RequestMap {
     }
 
     #[inline(always)]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn store(&self, tx: Sender<DnsResponse>) -> u16 {
         let ptr = Box::into_raw(Box::new(tx));
 
@@ -42,6 +43,7 @@ impl RequestMap {
     }
 
     #[inline(always)]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn take(&self, id: u16) -> Option<Sender<DnsResponse>> {
         let slot = &self.slots[id as usize];
         let ptr = slot.swap(ptr::null_mut(), Ordering::AcqRel);

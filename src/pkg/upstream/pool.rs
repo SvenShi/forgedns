@@ -13,14 +13,14 @@
 use crate::core::app_clock::AppClock;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::task::yield_now;
 use tracing::{debug, info, warn};
@@ -100,12 +100,14 @@ impl<C: Connection> ConnectionPool<C> {
     }
 
     /// Send DNS request and wait for the response or timeout
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
         let conn = self.get().await?;
         conn.query(request).await
     }
 
     /// Get a connection from the pool with load balancing
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn get(&'_ self) -> Result<Arc<C>, ProtoError> {
         loop {
             let conns = self.connections.load();
@@ -118,12 +120,12 @@ impl<C: Connection> ConnectionPool<C> {
                 continue;
             }
             let mut idx = self.index.load(Ordering::Relaxed) % len;
-            let raw_idx = idx.clone();
+            let raw_idx = idx;
             for _ in 0..len {
                 let conn = &conns[idx];
                 if conn.available() && conn.using_count() < self.max_load {
                     if raw_idx != idx {
-                        self.index.store(raw_idx, Ordering::Relaxed);
+                        self.index.store(idx, Ordering::Relaxed);
                     }
                     return Ok(conn.clone());
                 }
