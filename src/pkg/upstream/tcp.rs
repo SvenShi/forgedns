@@ -15,20 +15,20 @@ use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::select;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
@@ -105,7 +105,6 @@ impl Connection for TcpConnection {
         // Wait for response or timeout
         match timeout(self.timeout, rx).await {
             Ok(Ok(res)) => {
-                debug!("Connection id {} Response received", self.id);
                 Ok(res)
             }
             Ok(Err(_)) => {

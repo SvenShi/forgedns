@@ -10,13 +10,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::path::PathBuf;
 use clap::Parser;
+use std::path::PathBuf;
 
-pub struct Runtime {  
+pub struct Runtime {
     pub options: Options,
 }
-
 
 #[derive(Parser)]
 #[clap(version = "1.0", author = "Sven <shiwei@vankeytech.com>")]
@@ -26,4 +25,3 @@ pub struct Options {
     #[clap(short, long)]
     pub log_level: Option<String>,
 }
-

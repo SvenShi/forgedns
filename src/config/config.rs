@@ -34,15 +34,16 @@ pub struct LogConfig {
 
 impl Default for LogConfig {
     fn default() -> LogConfig {
-        LogConfig { level: default_level(), file: None }
-
+        LogConfig {
+            level: default_level(),
+            file: None,
+        }
     }
 }
 
 fn default_level() -> String {
     "info".to_string()
 }
-
 
 /// 插件配置
 #[derive(Debug, Clone, Deserialize)]

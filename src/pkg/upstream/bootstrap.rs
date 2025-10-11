@@ -3,7 +3,7 @@
 // use std::net::IpAddr;
 // use tokio::sync::RwLock;
 // use tokio::task::yield_now;
-// 
+//
 // #[derive(Clone)]
 // enum CacheState {
 //     None,
@@ -11,13 +11,13 @@
 //     Cached(IpAddr),
 //     Failed,
 // }
-// 
+//
 // pub(crate) struct Bootstrap {
 //     upstream: IpAddrUpStream,
 //     next_update: RwLock<DateTime<Local>>,
 //     cache_state: RwLock<CacheState>,
 // }
-// 
+//
 // impl Bootstrap {
 //     pub fn new(ip_addr: &str) -> Bootstrap {
 //         Bootstrap {
@@ -26,13 +26,13 @@
 //             cache_state: RwLock::new(CacheState::None),
 //         }
 //     }
-// 
+//
 //     pub async fn get(&self) -> Result<IpAddr, String> {
 //         let mut failed_count = 0;
-// 
+//
 //         loop {
 //             let state = { self.cache_state.read().await.clone() };
-// 
+//
 //             match state {
 //                 CacheState::None => {
 //                     self.query().await;
@@ -58,17 +58,17 @@
 //             }
 //         }
 //     }
-// 
+//
 //     async fn query(&self) {
 //         let mut state = self.cache_state.write().await;
 //         *state = CacheState::Querying;
-// 
+//
 //         // TODO: 这里执行真正的查询逻辑，比如调用 upstream 解析 IP
 //         // 假设成功获得 ip:
 //         // let ip = self.upstream.query().await.unwrap();
 //         // *state = CacheState::Cached(ip);
 //         // *self.next_update.write().await = Local::now() + chrono::Duration::minutes(10);
-// 
+//
 //         // 如果失败:
 //         *state = CacheState::Failed;
 //     }

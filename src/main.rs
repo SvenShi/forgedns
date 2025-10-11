@@ -15,7 +15,8 @@
  */
 use std::future;
 
-use tokio::runtime;
+use tokio::sync::oneshot;
+use tokio::{runtime, signal};
 use tracing::info;
 
 mod config;
@@ -25,19 +26,6 @@ mod plugin;
 
 fn main() -> Result<(), String> {
     tokio_run()
-}
-
-async fn app_run() {
-    let runtime = core::init();
-    let options = runtime.options;
-    let config = config::init(&options.config);
-    let mut log_config = config.log.clone();
-    match options.log_level {
-        None => {}
-        Some(level) => log_config.level = level,
-    }
-    let _ = core::log_init(log_config);
-    plugin::init(config).await;
 }
 
 fn tokio_run() -> Result<(), String> {
@@ -53,8 +41,36 @@ fn tokio_run() -> Result<(), String> {
     tokio_runtime.block_on(async_run())
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::main(percentiles =[50,70,90]))]
 async fn async_run() -> Result<(), String> {
-    app_run().await;
-    future::pending::<()>().await;
+    // 创建一个 shutdown 通道
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    // 启动 app_run 任务
+    tokio::spawn(app_run());
+
+    // 启动一个监听信号的任务
+    tokio::spawn(async move {
+        signal::ctrl_c().await.expect("failed to listen for Ctrl+C");
+        info!("Received Ctrl+C, shutting down...");
+        let _ = shutdown_tx.send(());
+    });
+
+    // 等待关闭信号
+    shutdown_rx.await.ok();
+    info!("Graceful shutdown complete.");
     Ok(())
+}
+
+async fn app_run() {
+    let runtime = core::init();
+    let options = runtime.options;
+    let config = config::init(&options.config);
+    let mut log_config = config.log.clone();
+    match options.log_level {
+        None => {}
+        Some(level) => log_config.level = level,
+    }
+    let _ = core::log_init(log_config);
+    plugin::init(config).await;
 }
