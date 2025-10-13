@@ -12,12 +12,12 @@
  */
 
 use crate::core::context::DnsContext;
+use crate::pkg::upstream::pool::tcp::{TcpConnection, TcpConnectionBuilder};
+use crate::pkg::upstream::pool::udp::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionPool};
-use crate::pkg::upstream::tcp::{TcpConnection, TcpConnectionBuilder};
-use crate::pkg::upstream::udp::{UdpConnection, UdpConnectionBuilder};
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -27,10 +27,7 @@ use url::Url;
 
 mod bootstrap;
 mod pool;
-mod request_map;
-mod tcp;
 mod tls_client_config;
-pub mod udp;
 
 /// Supported upstream connection types
 #[derive(Clone, Copy, Debug)]
@@ -237,7 +234,7 @@ impl UpStreamBuilder {
                     );
                     Box::new(PooledUpstream::<UdpConnection> {
                         connect_info,
-                        pool: ConnectionPool::new(1, 64, 64, Box::new(builder)),
+                        pool: ConnectionPool::new_pipeline(1, 64, 64, Box::new(builder)),
                     })
                 }
                 ConnectType::TCP => {
@@ -254,7 +251,7 @@ impl UpStreamBuilder {
                     );
                     Box::new(PooledUpstream::<TcpConnection> {
                         connect_info,
-                        pool: ConnectionPool::new(1, 64, 16, Box::new(builder)),
+                        pool: ConnectionPool::new_reuse(1, 64, Box::new(builder)),
                     })
                 }
                 ConnectType::DoT => {
@@ -282,7 +279,7 @@ pub struct PooledUpstream<C: Connection> {
     /// Connection metadata (remote address, port, etc.)
     pub connect_info: ConnectInfo,
     /// Lazy-initialized UDP connection pool
-    pub pool: Arc<ConnectionPool<C>>,
+    pub pool: ConnectionPool<C>,
 }
 
 #[async_trait]

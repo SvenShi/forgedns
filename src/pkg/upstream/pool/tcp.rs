@@ -11,8 +11,8 @@
  * limitations under the License.
  */
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::pool::request_map::RequestMap;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
-use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use hickory_proto::ProtoError;
@@ -104,9 +104,7 @@ impl Connection for TcpConnection {
 
         // Wait for response or timeout
         match timeout(self.timeout, rx).await {
-            Ok(Ok(res)) => {
-                Ok(res)
-            }
+            Ok(Ok(res)) => Ok(res),
             Ok(Err(_)) => {
                 self.request_map.take(query_id);
                 Err(ProtoError::from(format!(
