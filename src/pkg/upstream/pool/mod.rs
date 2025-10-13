@@ -12,6 +12,8 @@
  */
 
 mod pipeline_connections;
+mod reuse_connections;
+
 mod request_map;
 pub(crate) mod tcp;
 pub(crate) mod udp;
