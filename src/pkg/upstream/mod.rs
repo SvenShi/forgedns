@@ -12,6 +12,8 @@
  */
 
 use crate::core::context::DnsContext;
+use crate::pkg::upstream::pool::pipeline::PipelinePool;
+use crate::pkg::upstream::pool::reuse::ReusePool;
 use crate::pkg::upstream::pool::tcp::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::pool::udp::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionPool};
@@ -234,7 +236,7 @@ impl UpStreamBuilder {
                     );
                     Box::new(PooledUpstream::<UdpConnection> {
                         connect_info,
-                        pool: ConnectionPool::new_pipeline(1, 64, 64, Box::new(builder)),
+                        pool: PipelinePool::new(1, 64, 64, Box::new(builder)),
                     })
                 }
                 ConnectType::TCP => {
@@ -251,7 +253,7 @@ impl UpStreamBuilder {
                     );
                     Box::new(PooledUpstream::<TcpConnection> {
                         connect_info,
-                        pool: ConnectionPool::new_reuse(1, 64, Box::new(builder)),
+                        pool: ReusePool::new(1, 64, Box::new(builder)),
                     })
                 }
                 ConnectType::DoT => {
@@ -279,7 +281,7 @@ pub struct PooledUpstream<C: Connection> {
     /// Connection metadata (remote address, port, etc.)
     pub connect_info: ConnectInfo,
     /// Lazy-initialized UDP connection pool
-    pub pool: ConnectionPool<C>,
+    pub pool: Arc<dyn ConnectionPool<C>>,
 }
 
 #[async_trait]

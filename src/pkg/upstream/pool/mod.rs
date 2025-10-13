@@ -11,21 +11,21 @@
  * limitations under the License.
  */
 
-mod pipeline_connections;
-mod reuse_connections;
+pub mod pipeline;
+pub mod reuse;
 
 mod request_map;
 pub(crate) mod tcp;
 pub(crate) mod udp;
 
-use crate::pkg::upstream::pool::pipeline_connections::PipelineConnectionFetcher;
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::info;
+use std::time::Duration;
+use tokio::task::yield_now;
 
 #[async_trait]
 pub trait Connection: Send + Sized + Debug + Sync + 'static {
@@ -47,55 +47,33 @@ pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
 }
 
 #[async_trait]
-pub trait ConnectionFetcher<C: Connection>: Send + Sync + Debug + 'static {
-    async fn get(&self) -> Result<Arc<C>, ProtoError>;
+pub trait ConnectionPool<C: Connection>: Send + Sync + Debug + 'static {
+    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError>;
+
+    async fn scan_pool(&self);
 }
 
-/// A pool of connections used for DNS queries
-#[derive(Debug)]
-pub struct ConnectionPool<C: Connection> {
-    conn_fetcher: Arc<dyn ConnectionFetcher<C>>,
-}
+const MAINTENANCE_DURATION: Duration = Duration::from_secs(30);
 
-impl<C: Connection> ConnectionPool<C> {
-    pub fn new_reuse(
-        min_size: usize,
-        max_size: usize,
-        connection_builder: Box<dyn ConnectionBuilder<C>>,
-    ) -> Self {
-        todo!()
-    }
-
-    pub fn new_pipeline(
-        min_size: usize,
-        max_size: usize,
-        max_load: u16,
-        connection_builder: Box<dyn ConnectionBuilder<C>>,
-    ) -> Self {
-        info!(
-            "new pipeline connection pool, min_size:{}, max_size:{}, max_load:{}",
-            min_size, max_size, max_load
-        );
-        Self {
-            conn_fetcher: PipelineConnectionFetcher::new(
-                min_size,
-                max_size,
-                max_load,
-                connection_builder,
-            ),
+/// Periodically remove idle connections
+#[inline]
+fn start_maintenance<C: Connection>(pool: Arc<dyn ConnectionPool<C>>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(MAINTENANCE_DURATION).await;
+            // run scan in background (not awaiting here would drop errors), we await to ensure fairness
+            pool.scan_pool().await;
+            // small yield to let other tasks run
+            yield_now().await;
         }
-    }
+    });
+}
 
-    /// Send DNS request and wait for the response or timeout
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
-        let conn = self.get().await?;
-        conn.query(request).await
-    }
-
-    /// Get a connection from the pool with load balancing
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn get(&'_ self) -> Result<Arc<C>, ProtoError> {
-        self.conn_fetcher.get().await
+/// Synchronous close helper (close() is sync)
+#[inline]
+fn close_conns<C: Connection>(conns: &Vec<Arc<C>>) {
+    for conn in conns {
+        // it's fine if close() is sync: call directly
+        conn.close();
     }
 }

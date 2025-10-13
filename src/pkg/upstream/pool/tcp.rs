@@ -15,22 +15,22 @@ use crate::pkg::upstream::pool::request_map::RequestMap;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
-use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
 use tokio::select;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::{oneshot, Notify};
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// Represents a single persistent TCP DNS connection
 #[derive(Debug)]
@@ -60,7 +60,6 @@ impl Connection for TcpConnection {
             return; // already closed
         }
 
-        debug!("Connection id {} Closing TCP connection", self.id);
         self.close_notify.notify_waiters();
     }
 
@@ -167,17 +166,15 @@ impl TcpConnection {
             select! {
                 res = receiver.recv() => {
                     if let Some(res) = res {
-                        let  instant = Instant::now();
                         if let Err(e) = writer.write_all(res.as_ref()).await {
                             error!("Write error: {:?}", e);
                             self.writeable.store(false, Ordering::Relaxed);
                             self.close();
-                            break;
                         }
-                        info!("Connection id {} send DNS request, using time {:?}", self.id,instant.elapsed());
                     }
                 }
                 _ = self.close_notify.notified() => {
+                   let _ = writer.shutdown().await;
                     closing = true;
                 }
             }
@@ -190,10 +187,6 @@ impl TcpConnection {
         let mut buf = vec![0u8; 16384];
         let mut start = 0;
 
-        info!(
-            "Connection id {} Start listening for TCP DNS responses",
-            self.id
-        );
         let mut closing = false;
         loop {
             if closing && self.request_map.is_empty() {
@@ -290,11 +283,6 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
         let remote = self.remote_addr;
         let timeout = self.timeout_secs;
 
-        info!(
-            "Connection id {} Connecting to TCP DNS server: {:?}",
-            conn_id, remote
-        );
-
         match TcpStream::connect(remote).await {
             Ok(stream) => {
                 if let Err(e) = stream.set_nodelay(true) {
@@ -303,7 +291,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                         conn_id
                     );
                 }
-                info!(
+                debug!(
                     "Connection id {} Connected to TCP DNS server: {:?}, Local addr: {:?}",
                     conn_id,
                     stream.peer_addr()?,
