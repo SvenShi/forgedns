@@ -11,8 +11,8 @@
  * limitations under the License.
  */
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::pool::request_map::RequestMap;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
-use crate::pkg::upstream::request_map::RequestMap;
 use async_trait::async_trait;
 use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
@@ -71,9 +71,7 @@ impl Connection for UdpConnection {
         };
 
         match timeout(self.timeout, rx).await {
-            Ok(Ok(response)) => {
-                Ok(response)
-            }
+            Ok(Ok(response)) => Ok(response),
             Ok(Err(_canceled)) => {
                 self.request_map.take(query_id);
                 Err(ProtoError::from("request canceled"))

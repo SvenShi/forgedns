@@ -11,49 +11,28 @@
  * limitations under the License.
  */
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionFetcher};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use hickory_proto::ProtoError;
-use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::yield_now;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
-#[async_trait]
-pub trait Connection: Send + Sized + Sync + 'static {
-    /// Mark this connection as closed and notify listeners
-    fn close(&self);
-
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError>;
-
-    fn using_count(&self) -> u16;
-
-    fn available(&self) -> bool;
-
-    fn last_used(&self) -> u64;
-}
-
-#[async_trait]
-pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
-    async fn new_conn(&self, conn_id: u16) -> Result<Arc<C>, ProtoError>;
-}
-
-/// A pool of UDP connections used for DNS queries
 #[derive(Debug)]
-pub struct ConnectionPool<C: Connection> {
+pub struct PipelineConnectionFetcher<C: Connection> {
     /// Round-robin index for load balancing across connections
     index: AtomicUsize,
-    /// List of active UDP connections
+    /// List of active connections
     connections: ArcSwap<Vec<Arc<C>>>,
-    /// Maximum number of UDP connections allowed
+    /// Maximum number of connections allowed
     max_size: usize,
-    /// Minimum number of UDP connections to maintain
+    /// Minimum number of connections to maintain
     min_size: usize,
     /// Maximum number of concurrent queries per connection
     max_load: u16,
@@ -65,50 +44,9 @@ pub struct ConnectionPool<C: Connection> {
     next_id: AtomicU16,
 }
 
-impl<C: Connection> ConnectionPool<C> {
-    pub fn new(
-        min_size: usize,
-        max_size: usize,
-        max_load: u16,
-        connection_builder: Box<dyn ConnectionBuilder<C>>,
-    ) -> Arc<Self> {
-        info!(
-            "Initializing UDP connection pool: min_size={}, max_size={}",
-            min_size, max_size
-        );
-        let pool = Arc::new(Self {
-            index: AtomicUsize::new(0),
-            connections: ArcSwap::from_pointee(Vec::new()),
-            max_size,
-            min_size,
-            max_load,
-            max_idle: Duration::from_secs(60),
-            connection_builder,
-            next_id: AtomicU16::new(0),
-        });
-
-        pool.clone().start_maintenance();
-
-        if min_size > 0 {
-            let arc = pool.clone();
-            // fire-and-forget async expand to prefill pool
-            tokio::spawn(async move {
-                let _ = arc.expand().await;
-            });
-        }
-        pool
-    }
-
-    /// Send DNS request and wait for the response or timeout
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
-        let conn = self.get().await?;
-        conn.query(request).await
-    }
-
-    /// Get a connection from the pool with load balancing
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn get(&'_ self) -> Result<Arc<C>, ProtoError> {
+#[async_trait]
+impl<C: Connection> ConnectionFetcher<C> for PipelineConnectionFetcher<C> {
+    async fn get(&self) -> Result<Arc<C>, ProtoError> {
         loop {
             let conns = self.connections.load();
             let len = conns.len();
@@ -142,8 +80,37 @@ impl<C: Connection> ConnectionPool<C> {
             }
         }
     }
+}
 
-    /// Expand the pool by creating new UDP connections
+impl<C: Connection> PipelineConnectionFetcher<C> {
+    pub fn new(
+        min_size: usize,
+        max_size: usize,
+        max_load: u16,
+        connection_builder: Box<dyn ConnectionBuilder<C>>,
+    ) -> Arc<PipelineConnectionFetcher<C>> {
+        let fetcher = Arc::new(Self {
+            index: AtomicUsize::new(0),
+            connections: ArcSwap::from_pointee(Vec::new()),
+            max_size,
+            min_size,
+            max_load,
+            max_idle: Duration::from_secs(60),
+            connection_builder,
+            next_id: AtomicU16::new(0),
+        });
+        fetcher.clone().start_maintenance();
+        if min_size > 0 {
+            let arc = fetcher.clone();
+            // fire-and-forget async expand to prefill pool
+            tokio::spawn(async move {
+                let _ = arc.expand().await;
+            });
+        }
+        fetcher
+    }
+
+    /// Expand the pool by creating new connections
     async fn expand(&self) -> Result<(), ProtoError> {
         let conns_len = self.connections.load().len();
         if conns_len >= self.max_size {
@@ -214,7 +181,7 @@ impl<C: Connection> ConnectionPool<C> {
             ) {
                 // set index near the end to give round robin fairness
                 self.index.store(new_len - 1, Ordering::Relaxed);
-                debug!("UDP connections pool expanded, new total: {}", new_len);
+                debug!("connections pool expanded, new total: {}", new_len);
                 break Ok(());
             } else {
                 // lost the race (someone else updated), retry: reload conns and try again, but re-use any remaining created (should be none)
@@ -235,6 +202,7 @@ impl<C: Connection> ConnectionPool<C> {
             }
         }
     }
+
     const MAINTENANCE_DURATION: Duration = Duration::from_secs(30);
 
     /// Periodically remove idle connections
@@ -295,7 +263,7 @@ impl<C: Connection> ConnectionPool<C> {
         close_conns(&invalid_vec);
 
         debug!(
-            "UDP connection pool maintenance: dropped {} idle connections, dropped {} invalid connections, active={}",
+            "connection pool maintenance: dropped {} idle connections, dropped {} invalid connections, active={}",
             drop_vec.len(),
             invalid_vec.len(),
             new_len
