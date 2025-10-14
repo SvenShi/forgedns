@@ -7,7 +7,7 @@ use rustls::crypto::ring;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme};
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 pub(crate) fn secure_client_config() -> ClientConfig {
     let builder = ClientConfig::builder_with_provider(Arc::new(default_provider()))
@@ -22,11 +22,15 @@ pub(crate) fn secure_client_config() -> ClientConfig {
 
     builder.with_no_client_auth()
 }
+static INIT_RING: Once = Once::new();
 
 pub(crate) fn insecure_client_config() -> ClientConfig {
-    ring::default_provider()
-        .install_default()
-        .expect("failed to install default CryptoProvider");
+    INIT_RING.call_once(|| {
+        ring::default_provider()
+            .install_default()
+            .expect("failed to install default CryptoProvider");
+    });
+
     ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoCertVerification))
