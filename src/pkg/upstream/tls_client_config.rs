@@ -21,7 +21,8 @@ pub(crate) fn secure_client_config() -> ClientConfig {
         root_store
     });
 
-    builder.with_no_client_auth()
+    let config = builder.with_no_client_auth();
+    set_alpn(config)
 }
 static INIT_RING: Once = Once::new();
 
@@ -32,10 +33,26 @@ pub(crate) fn insecure_client_config() -> ClientConfig {
             .expect("failed to install default CryptoProvider");
     });
 
-    ClientConfig::builder()
+    let config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoCertVerification))
-        .with_no_client_auth()
+        .with_no_client_auth();
+    set_alpn(config)
+}
+
+fn set_alpn(mut config: ClientConfig) -> ClientConfig {
+    config.alpn_protocols = vec![
+        b"h3".to_vec(),
+        b"h3-29".to_vec(),
+        b"h3-30".to_vec(),
+        b"h3-31".to_vec(),
+        b"h3-32".to_vec(),
+        b"h2".to_vec(),
+        b"http/1.1".to_vec(),
+        b"dot".to_vec(),
+        b"doq".to_vec(),
+    ];
+    config
 }
 
 struct NoCertVerification;

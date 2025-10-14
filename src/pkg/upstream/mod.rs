@@ -4,16 +4,17 @@
  */
 
 use crate::core::context::DnsContext;
+use crate::pkg::upstream::pool::doh_cnn::{DoHConnection, DoHConnectionBuilder};
 use crate::pkg::upstream::pool::pipeline::PipelinePool;
 use crate::pkg::upstream::pool::reuse::ReusePool;
 use crate::pkg::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionPool};
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use serde::Deserialize;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -201,6 +202,17 @@ impl ConnectInfo {
 
         (connect_type, host, url.port(), url.path().to_string())
     }
+
+    pub fn get_full_remote_socket_addr(&self) -> SocketAddr {
+        SocketAddr::new(
+            self.remote_addr.parse().expect("Invalid remote address"),
+            self.port,
+        )
+    }
+
+    pub fn get_bind_socket_addr(&self) -> SocketAddr {
+        self.bind_addr.parse().unwrap()
+    }
 }
 
 /// Builder for creating upstream instances
@@ -251,8 +263,17 @@ impl UpStreamBuilder {
                     todo!()
                 }
                 ConnectType::DoH => {
-                    warn!("DoH upstream not yet implemented");
-                    todo!()
+                    info!("Using DoH upstream");
+                    let builder = DoHConnectionBuilder::new(&connect_info);
+                    Box::new(PooledUpstream::<DoHConnection> {
+                        connect_info,
+                        pool: PipelinePool::new(
+                            1,
+                            DEFAULT_MAX_CONNS_SIZE,
+                            DEFAULT_MAX_CONNS_LOAD,
+                            Box::new(builder),
+                        ),
+                    })
                 }
             }
         } else {
@@ -263,6 +284,7 @@ impl UpStreamBuilder {
 }
 
 /// UDP-based upstream resolver implementation
+#[allow(unused)]
 pub struct PooledUpstream<C: Connection> {
     /// Connection metadata (remote address, port, etc.)
     pub connect_info: ConnectInfo,
@@ -279,7 +301,7 @@ impl<C: Connection> UpStream for PooledUpstream<C> {
         }
     }
 
-    fn connect_type(&self) -> ConnectType {
+     fn connect_type(&self) -> ConnectType {
         self.connect_info.connect_type
     }
 }
