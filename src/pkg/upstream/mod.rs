@@ -27,7 +27,7 @@ const DEFAULT_MAX_CONNS_SIZE: usize = 64;
 const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
 
 /// Supported upstream connection types
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ConnectType {
     UDP,
     TCP,
@@ -235,18 +235,15 @@ impl UpStreamBuilder {
                         fallback_pool,
                     })
                 }
-                ConnectType::TCP => {
-                    info!("Using TCP upstream");
+                ConnectType::TCP | ConnectType::DoT => {
+                    info!("Using {:?} upstream", connect_info.connect_type);
                     let builder = TcpConnectionBuilder::new(&connect_info);
                     Box::new(PooledUpstream::<TcpConnection> {
                         connect_info,
                         pool: ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
                     })
                 }
-                ConnectType::DoT => {
-                    warn!("DoT upstream not yet implemented");
-                    todo!()
-                }
+
                 ConnectType::DoQ => {
                     warn!("DoQ upstream not yet implemented");
                     todo!()
