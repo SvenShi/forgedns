@@ -173,6 +173,7 @@ fn build_udp_socket(addr: &str) -> Result<UdpSocket, Error> {
 
     let _ = sock.set_nonblocking(true);
     let _ = sock.set_reuse_address(true);
+    #[cfg(not(target_os = "windows"))]
     let _ = sock.set_reuse_port(true);
 
     sock.bind(&addr.into())?;
