@@ -9,6 +9,7 @@ futures = "0.3.31"
 socket2 = "0.6.0"
 hickory-proto = { version = "0.25.2", features = ["https-ring", "tls-ring", "quic-ring", "webpki-roots"] }
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26.4"
 async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
@@ -32,5 +33,5 @@ hotpath = { version = "0.4.1", optional = true }
 [features]
 hotpath = ["dep:hotpath", "hotpath/hotpath"]
 hotpath-alloc-bytes-total = ["hotpath/hotpath-alloc-bytes-total"]
-hotpath-alloc-count-total= ["hotpath/hotpath-alloc-count-total"]
+hotpath-alloc-count-total = ["hotpath/hotpath-alloc-count-total"]
 hotpath-off = ["hotpath/hotpath-off"]
