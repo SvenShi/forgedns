@@ -13,7 +13,6 @@ use tracing_subscriber::{EnvFilter, Registry, fmt};
 
 pub mod app_clock;
 pub mod context;
-pub mod handler;
 
 mod log;
 mod runtime;
