@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-use hickory_proto::rustls::default_provider;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -12,7 +11,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Once};
 
 pub(crate) fn secure_client_config() -> ClientConfig {
-    let builder = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+    let builder = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
         .with_safe_default_protocol_versions()
         .unwrap();
 
