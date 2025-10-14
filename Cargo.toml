@@ -7,7 +7,7 @@ build = "build.rs"
 [dependencies]
 futures = "0.3.31"
 socket2 = "0.6.0"
-hickory-proto = { version = "0.25.2", features = ["https-ring", "tls-ring", "quic-ring", "webpki-roots"] }
+hickory-proto = "0.25.2"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26.4"
 async-trait = "0.1"
@@ -21,7 +21,7 @@ tracing-appender = "0.2.3"
 lazy_static = "1.5"
 dashmap = "6"
 url = "2.5.7"
-rustls = "0.23"
+rustls = { version = "0.23.32", features = ["ring"] }
 webpki-roots = "1.0.2"
 arc-swap = "1.7.1"
 bytes = "1.10.1"
