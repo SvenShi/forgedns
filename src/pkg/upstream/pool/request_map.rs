@@ -44,7 +44,7 @@ impl RequestMap {
 
         loop {
             let id = random::<u16>() as usize;
-            // 尝试 CAS 插入空槽
+            // cas
             if self.slots[id]
                 .compare_exchange(ptr::null_mut(), ptr, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()

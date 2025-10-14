@@ -15,13 +15,13 @@ pub mod pipeline;
 pub mod reuse;
 
 mod request_map;
-pub(crate) mod tcp;
-pub(crate) mod udp;
+pub(crate) mod tcp_conn;
+pub(crate) mod udp_conn;
 
 use async_trait::async_trait;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;

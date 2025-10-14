@@ -11,6 +11,7 @@
  * limitations under the License.
  */
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::ConnectInfo;
 use crate::pkg::upstream::pool::request_map::RequestMap;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use async_trait::async_trait;
@@ -18,9 +19,7 @@ use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use socket2::{Domain, Socket, Type};
 use std::fmt::Debug;
-use std::io::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +46,8 @@ pub struct UdpConnection {
     last_used: AtomicU64,
 }
 
+const RETRY_TIMEOUT: Duration = Duration::from_secs(1);
+
 #[async_trait]
 impl Connection for UdpConnection {
     fn close(&self) {
@@ -56,31 +57,38 @@ impl Connection for UdpConnection {
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
-        let (tx, rx) = oneshot::channel();
-        let query_id = self.request_map.store(tx);
-        let mut header = request.header().clone();
-        header.set_id(query_id);
-        request.set_header(header);
+        let raw_id = request.id();
 
-        match self.socket.send(request.to_bytes()?.as_slice()).await {
-            Ok(_sent) => {}
-            Err(e) => {
-                self.request_map.take(query_id);
-                return Err(ProtoError::from(e));
+        let mut _timeout = RETRY_TIMEOUT;
+        for _ in 0..2 {
+            let (tx, rx) = oneshot::channel();
+            let query_id = self.request_map.store(tx);
+            request.set_id(query_id);
+            let msg = request.to_bytes()?;
+            match self.socket.send(msg.as_slice()).await {
+                Ok(_sent) => {}
+                Err(e) => {
+                    self.request_map.take(query_id);
+                    return Err(ProtoError::from(e));
+                }
+            };
+            // first will retry timeout
+            match timeout(_timeout, rx).await {
+                Ok(Ok(mut response)) => {
+                    response.set_id(raw_id);
+                    return Ok(response);
+                }
+                Ok(Err(_canceled)) => {
+                    self.request_map.take(query_id);
+                    return Err(ProtoError::from("request canceled"));
+                }
+                Err(_elapsed) => {
+                    self.request_map.take(query_id);
+                }
             }
-        };
-
-        match timeout(self.timeout, rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_canceled)) => {
-                self.request_map.take(query_id);
-                Err(ProtoError::from("request canceled"))
-            }
-            Err(_elapsed) => {
-                self.request_map.take(query_id);
-                Err(ProtoError::from("dns query timeout"))
-            }
+            _timeout = self.timeout;
         }
+        Err(ProtoError::from("dns query timeout"))
     }
 
     fn using_count(&self) -> u16 {
@@ -97,13 +105,13 @@ impl Connection for UdpConnection {
 }
 
 impl UdpConnection {
-    fn new(conn_id: u16, socket: UdpSocket, timeout_secs: u64) -> UdpConnection {
+    fn new(conn_id: u16, socket: UdpSocket, timeout: Duration) -> UdpConnection {
         Self {
             id: conn_id,
             socket,
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
-            timeout: Duration::from_secs(timeout_secs),
+            timeout,
             last_used: AtomicU64::new(AppClock::run_millis()),
         }
     }
@@ -155,15 +163,24 @@ pub struct UdpConnectionBuilder {
     /// Upstream DNS server address
     remote_addr: SocketAddr,
     /// Query timeout in seconds
-    timeout_secs: u64,
+    timeout: Duration,
 }
 
 impl UdpConnectionBuilder {
-    pub fn new(bind_addr: SocketAddr, remote_addr: SocketAddr, timeout_secs: u64) -> Self {
+    pub fn new(connect_info: &ConnectInfo) -> Self {
         Self {
-            bind_addr,
-            remote_addr,
-            timeout_secs,
+            bind_addr: connect_info
+                .bind_addr
+                .parse()
+                .expect("Invalid bind address"),
+            remote_addr: SocketAddr::new(
+                connect_info
+                    .remote_addr
+                    .parse()
+                    .expect("Invalid remote address"),
+                connect_info.port,
+            ),
+            timeout: connect_info.timeout,
         }
     }
 }
@@ -171,31 +188,11 @@ impl UdpConnectionBuilder {
 #[async_trait]
 impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
     async fn new_conn(&self, conn_id: u16) -> Result<Arc<UdpConnection>, ProtoError> {
-        let socket = connect_udp_socket(self.bind_addr, self.remote_addr).unwrap();
-        let connection = UdpConnection::new(conn_id, socket, self.timeout_secs);
+        let socket = UdpSocket::bind(self.bind_addr).await?;
+        socket.connect(self.remote_addr).await?;
+        let connection = UdpConnection::new(conn_id, socket, self.timeout);
         let arc = Arc::new(connection);
         tokio::spawn(UdpConnection::listen_dns_response(arc.clone()));
         Ok(arc)
     }
-}
-
-/// Create and bind a new UDP socket
-#[inline]
-fn connect_udp_socket(bind_addr: SocketAddr, remote_addr: SocketAddr) -> Result<UdpSocket, Error> {
-    let sock = if bind_addr.is_ipv4() {
-        Socket::new(Domain::IPV4, Type::DGRAM, None)?
-    } else {
-        let s = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
-        s.set_only_v6(true)?;
-        s
-    };
-
-    sock.set_nonblocking(true)?;
-    sock.bind(&bind_addr.into())?;
-    sock.connect(&remote_addr.into())?;
-    debug!(
-        "Created UDP socket bind={:?} remote={:?}",
-        bind_addr, remote_addr
-    );
-    UdpSocket::from_std(sock.into())
 }

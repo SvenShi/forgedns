@@ -16,7 +16,8 @@ use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpstreamConfig};
 use crate::plugin::{Plugin, PluginFactory, PluginMainType};
 use async_trait::async_trait;
 use serde::Deserialize;
-use tracing::{debug, error, info};
+use std::time::Duration;
+use tracing::{error, info, warn};
 
 /// A single-upstream DNS forwarder
 /// - Forwards DNS queries to the configured upstream
@@ -24,6 +25,8 @@ use tracing::{debug, error, info};
 pub struct SingleDnsForwarder {
     /// Plugin identifier
     pub tag: String,
+
+    pub timeout: Duration,
 
     /// Upstream DNS resolver
     pub upstream: Box<dyn UpStream>,
@@ -38,17 +41,20 @@ impl Plugin for SingleDnsForwarder {
     async fn init(&mut self) {}
 
     async fn execute(&self, context: &mut DnsContext) {
-        match self.upstream.query(context).await {
-            Ok(res) => {
+        match tokio::time::timeout(self.timeout, self.upstream.query(context)).await {
+            Ok(Ok(res)) => {
                 context.response = Some(res);
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!(
                     "DNS request failed source:{}, queries:{:?}, query_id: {} reason: {e}",
                     context.src_addr,
                     context.request.queries(),
                     context.request.id()
                 );
+            }
+            Err(e) => {
+                warn!("DNS forward time out {:?}", self.timeout)
             }
         }
     }
@@ -88,14 +94,16 @@ impl PluginFactory for ForwardFactory {
             }
         };
         if forward_config.upstreams.len() == 1 {
+            let upstream_config = &forward_config.upstreams[0];
             info!(
                 "Creating SingleDnsForwarder with upstream {:?}",
-                forward_config.upstreams[0]
+                upstream_config
             );
 
             Box::new(SingleDnsForwarder {
                 tag: plugin_info.tag.clone(),
-                upstream: UpStreamBuilder::with_upstream_config(&forward_config.upstreams[0]),
+                timeout: upstream_config.timeout.unwrap_or(Duration::from_secs(5)),
+                upstream: UpStreamBuilder::with_upstream_config(&upstream_config),
             })
         } else {
             todo!("concurrent dns forward not implemented yet")

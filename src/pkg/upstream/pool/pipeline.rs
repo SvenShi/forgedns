@@ -11,17 +11,19 @@
  * limitations under the License.
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::{close_conns, start_maintenance, Connection, ConnectionBuilder, ConnectionPool};
+use crate::pkg::upstream::pool::{
+    Connection, ConnectionBuilder, ConnectionPool, close_conns, start_maintenance,
+};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::task::yield_now;
 use tracing::{debug, info, warn};
@@ -139,7 +141,6 @@ impl<C: Connection> PipelinePool<C> {
         pool
     }
 
-
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn get(&self) -> Result<Arc<C>, ProtoError> {
         loop {
@@ -179,7 +180,7 @@ impl<C: Connection> PipelinePool<C> {
     /// Expand the pool by creating new connections
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn expand(&self) -> Result<(), ProtoError> {
-        let conns_len = self.connections.load().len();
+        let mut conns_len = self.connections.load().len();
         if conns_len >= self.max_size {
             debug!("Connection pool already at max size");
             return Err(ProtoError::from("Connection pool already at maximum size"));
@@ -191,15 +192,15 @@ impl<C: Connection> PipelinePool<C> {
             self.min_size - conns_len
         };
 
+        conns_len = self.connections.load().len();
         // clamp to not exceed max_size
         if conns_len + new_conns_count > self.max_size {
             new_conns_count = self.max_size - conns_len;
         }
 
-        debug!(
-            "Expanding connection pool by {} connections",
-            new_conns_count
-        );
+        if new_conns_count == 0 {
+            return Ok(());
+        }
 
         let mut futs = FuturesUnordered::new();
 
@@ -213,13 +214,6 @@ impl<C: Connection> PipelinePool<C> {
             });
         }
 
-        info!(
-            "Expanding pool: creating {} new connections (current={}/{})",
-            new_conns_count,
-            conns_len,
-            self.max_size
-        );
-
         // collect results
         let mut created: Vec<Arc<C>> = Vec::with_capacity(new_conns_count);
         while let Some(res) = futs.next().await {
@@ -227,15 +221,16 @@ impl<C: Connection> PipelinePool<C> {
                 Ok(conn) => created.push(conn),
                 Err(e) => {
                     // close any already created connections, return error
-                    close_conns(&created);
-                    return Err(e);
+                    debug!("Failed to create new connection: {:?}", e);
                 }
             }
         }
+
         if created.is_empty() {
             // nothing created (race or other), just return
             return Ok(());
         }
+        let new_conns_len = created.len();
 
         loop {
             let conns = self.connections.load().clone();
@@ -255,7 +250,10 @@ impl<C: Connection> PipelinePool<C> {
             ) {
                 // set index near the end to give round robin fairness
                 self.index.store(new_len - 1, Ordering::Relaxed);
-                debug!("connections pool expanded, new total: {}", new_len);
+                info!(
+                    "Expanding pool: creating {} new connections (current={}/{})",
+                    new_conns_len, new_len, self.max_size
+                );
                 break Ok(());
             } else {
                 // lost the race (someone else updated), retry: reload conns and try again, but re-use any remaining created (should be none)
