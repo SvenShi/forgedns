@@ -15,7 +15,6 @@ fn main() -> Result<(), String> {
 }
 
 fn tokio_run() -> Result<(), String> {
-    // info!("RustDNS {} starting...", hickory_client::version());
     let mut tokio_runtime = runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
