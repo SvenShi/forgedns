@@ -117,7 +117,7 @@ impl<C: Connection> PipelinePool<C> {
             max_size,
             min_size,
             max_load,
-            max_idle: Duration::from_secs(60),
+            max_idle: Duration::from_secs(10),
             connection_builder,
             next_id: AtomicU16::new(0),
         });
