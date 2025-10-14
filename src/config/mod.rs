@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: 2025 Sven Shi
-// SPDX-License-Identifier: GPL-3.0-or-later
+/*
+ * SPDX-FileCopyrightText: 2025 Sven Shi
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 
 use crate::config::config::Config;
 use std::fs;
