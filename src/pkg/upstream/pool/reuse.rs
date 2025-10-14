@@ -145,7 +145,7 @@ impl<C: Connection> ReusePool<C> {
             min_size,
             max_size,
             connection_builder,
-            max_idle: Duration::from_secs(60),
+            max_idle: Duration::from_secs(10),
             active_count: AtomicUsize::new(0),
             next_id: AtomicU16::new(1),
             release_notified: Notify::new(),

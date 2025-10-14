@@ -43,7 +43,7 @@ pub trait ConnectionPool<C: Connection>: Send + Sync + Debug + 'static {
     async fn scan_pool(&self);
 }
 
-const MAINTENANCE_DURATION: Duration = Duration::from_secs(30);
+const MAINTENANCE_DURATION: Duration = Duration::from_secs(5);
 
 /// Periodically remove idle connections
 #[inline]
