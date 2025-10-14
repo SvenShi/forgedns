@@ -1,14 +1,14 @@
-#log:
-#  level: debug
+log:
+  level: debug
 
 plugins:
   - tag: forward
     type: forward
     args:
       upstreams:
-        - addr: "tls://dns.google.com"  # 阿里 DNS
-          dial_addr: "8.8.8.8"
-          insecure_skip_verify: true
+        - addr: "https://dns.alidns.com/dns-query"  # 阿里 DNS
+          dial_addr: "223.5.5.5"
+          insecure_skip_verify: false
         # 当配置多个上游服务器时，会自动启用并发模式
         # - addr: "119.29.29.29"  # 腾讯 DNS
         # - addr: "114.114.114.114"  # 114 DNS

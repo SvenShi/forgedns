@@ -199,17 +199,8 @@ impl UdpConnectionBuilder {
     /// Initialize a new builder using upstream connection info.
     pub fn new(connect_info: &ConnectInfo) -> Self {
         Self {
-            bind_addr: connect_info
-                .bind_addr
-                .parse()
-                .expect("Invalid bind address"),
-            remote_addr: SocketAddr::new(
-                connect_info
-                    .remote_addr
-                    .parse()
-                    .expect("Invalid remote address"),
-                connect_info.port,
-            ),
+            bind_addr: connect_info.get_bind_socket_addr(),
+            remote_addr: connect_info.get_full_remote_socket_addr(),
             timeout: connect_info.timeout,
         }
     }
@@ -219,6 +210,7 @@ impl UdpConnectionBuilder {
 impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
     /// Create a new UDP connection, bind it locally, connect to remote server,
     /// and spawn a background listener task to handle responses.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn new_conn(&self, conn_id: u16) -> Result<Arc<UdpConnection>, ProtoError> {
         let socket = UdpSocket::bind(self.bind_addr).await?;
         socket.connect(self.remote_addr).await?;

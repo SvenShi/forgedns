@@ -5,8 +5,8 @@
 
 use crate::core::app_clock::AppClock;
 use crate::pkg::upstream::pool::request_map::RequestMap;
+use crate::pkg::upstream::pool::utils::connect_tls;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
-use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use crate::pkg::upstream::{ConnectInfo, ConnectType, DEFAULT_TIMEOUT};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -14,7 +14,6 @@ use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
-use rustls::pki_types::ServerName;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -22,10 +21,7 @@ use std::time::Duration;
 use tokio::io::{
     split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
 };
-use tokio::net::{
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
-    TcpStream,
-};
+use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -33,7 +29,6 @@ use tokio::sync::{
     Notify,
 };
 use tokio::time::timeout;
-use tokio_rustls::TlsConnector;
 use tracing::{debug, error, warn};
 
 /// Represents a single persistent TCP-based DNS connection.
@@ -275,13 +270,7 @@ pub struct TcpConnectionBuilder {
 impl TcpConnectionBuilder {
     pub fn new(connect_info: &ConnectInfo) -> Self {
         Self {
-            remote_addr: SocketAddr::new(
-                connect_info
-                    .remote_addr
-                    .parse()
-                    .expect("Invalid remote address"),
-                connect_info.port,
-            ),
+            remote_addr: connect_info.get_full_remote_socket_addr(),
             timeout: connect_info.timeout,
             tls_enabled: matches!(connect_info.connect_type, ConnectType::DoT),
             server_name: connect_info.host.clone(),
@@ -294,6 +283,7 @@ impl TcpConnectionBuilder {
 #[async_trait]
 impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
     /// Establish a new TCP or TLS connection to the DNS server.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn new_conn(&self, conn_id: u16) -> Result<Arc<TcpConnection>, ProtoError> {
         let remote = self.remote_addr;
 
@@ -317,26 +307,15 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                 let arc = Arc::new(connection);
 
                 if self.tls_enabled {
-                    let config = if self.insecure_skip_verify {
-                        insecure_client_config()
-                    } else {
-                        secure_client_config()
-                    };
-                    let connector = TlsConnector::from(Arc::new(config));
+                    let tls_stream = connect_tls(
+                        stream,
+                        self.insecure_skip_verify,
+                        self.server_name.clone(),
+                        DEFAULT_TIMEOUT,
+                    )
+                    .await?;
 
-                    let dns_name = ServerName::try_from(self.server_name.clone())
-                        .map_err(|_| ProtoError::from("invalid dns server name"))?;
-
-                    let stream =
-                        match timeout(DEFAULT_TIMEOUT, connector.connect(dns_name, stream)).await {
-                            Ok(Ok(s)) => s,
-                            Ok(Err(e)) => {
-                                return Err(ProtoError::from(format!("tls connect error: {e}")));
-                            }
-                            Err(_) => return Err(ProtoError::from("TLS handshake timeout")),
-                        };
-
-                    let (reader, writer) = split(stream);
+                    let (reader, writer) = split(tls_stream);
                     tokio::spawn(TcpConnection::listen_dns_response(arc.clone(), reader));
                     tokio::spawn(TcpConnection::send_dns_request(
                         arc.clone(),

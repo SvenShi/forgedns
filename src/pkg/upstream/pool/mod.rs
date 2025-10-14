@@ -3,17 +3,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+mod request_map;
+
+mod utils;
 pub mod pipeline;
 pub mod reuse;
 
-mod request_map;
+pub(crate) mod doh_cnn;
 pub(crate) mod tcp_conn;
 pub(crate) mod udp_conn;
 
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,13 +62,4 @@ fn start_maintenance<C: Connection>(pool: Arc<dyn ConnectionPool<C>>) {
             yield_now().await;
         }
     });
-}
-
-/// Synchronous close helper (close() is sync)
-#[inline]
-fn close_conns<C: Connection>(conns: &Vec<Arc<C>>) {
-    for conn in conns {
-        // it's fine if close() is sync: call directly
-        conn.close();
-    }
 }
