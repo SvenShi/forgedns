@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // use crate::pkg::upstream::upstream::{IpAddrUpStream, UpStreamBuilder};
 // use chrono::{DateTime, Local};
 // use std::net::IpAddr;
