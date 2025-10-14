@@ -11,24 +11,25 @@
  * limitations under the License.
  */
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::ConnectInfo;
 use crate::pkg::upstream::pool::request_map::RequestMap;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::select;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
@@ -84,9 +85,8 @@ impl Connection for TcpConnection {
         );
 
         // Build DNS message
-        let mut header = request.header().clone();
-        header.set_id(query_id);
-        request.set_header(header);
+        let raw_id = request.id();
+        request.set_id(query_id);
         // Encode message with TCP 2-byte length prefix
         let buf = request.to_bytes()?;
         let mut bytes_mut = BytesMut::with_capacity(2 + buf.len());
@@ -103,7 +103,10 @@ impl Connection for TcpConnection {
 
         // Wait for response or timeout
         match timeout(self.timeout, rx).await {
-            Ok(Ok(res)) => Ok(res),
+            Ok(Ok(mut res)) => {
+                res.set_id(raw_id);
+                Ok(res)
+            }
             Ok(Err(_)) => {
                 self.request_map.take(query_id);
                 Err(ProtoError::from(format!(
@@ -142,13 +145,13 @@ impl Connection for TcpConnection {
 
 impl TcpConnection {
     /// Create a new TCP connection wrapper
-    fn new(conn_id: u16, sender: UnboundedSender<Bytes>, timeout_secs: u64) -> Self {
+    fn new(conn_id: u16, sender: UnboundedSender<Bytes>, timeout: Duration) -> Self {
         Self {
             id: conn_id,
             sender,
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
-            timeout: Duration::from_secs(timeout_secs),
+            timeout,
             closed: AtomicBool::new(false),
             writeable: AtomicBool::new(true),
             last_used: AtomicU64::new(AppClock::run_millis()),
@@ -264,14 +267,20 @@ pub struct TcpConnectionBuilder {
     /// Upstream DNS server address
     pub remote_addr: SocketAddr,
     /// Timeout duration for queries (seconds)
-    pub timeout_secs: u64,
+    pub timeout: Duration,
 }
 
 impl TcpConnectionBuilder {
-    pub fn new(remote_addr: SocketAddr, timeout_secs: u64) -> Self {
+    pub fn new(connect_info: &ConnectInfo) -> Self {
         Self {
-            remote_addr,
-            timeout_secs,
+            remote_addr: SocketAddr::new(
+                connect_info
+                    .remote_addr
+                    .parse()
+                    .expect("Invalid remote address"),
+                connect_info.port,
+            ),
+            timeout: connect_info.timeout,
         }
     }
 }
@@ -281,7 +290,6 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
     /// Establish a new TCP connection to the DNS server
     async fn new_conn(&self, conn_id: u16) -> Result<Arc<TcpConnection>, ProtoError> {
         let remote = self.remote_addr;
-        let timeout = self.timeout_secs;
 
         match TcpStream::connect(remote).await {
             Ok(stream) => {
@@ -300,7 +308,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                 let (reader, writer) = stream.into_split();
                 let (sender, receiver) = unbounded_channel();
 
-                let connection = TcpConnection::new(conn_id, sender, timeout);
+                let connection = TcpConnection::new(conn_id, sender, self.timeout);
                 let arc = Arc::new(connection);
 
                 // Spawn a background task to read responses

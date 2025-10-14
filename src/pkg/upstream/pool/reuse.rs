@@ -57,7 +57,10 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
         let conn = self.get().await?;
-        debug!("Got connection from pool, using_count={}", conn.using_count());
+        debug!(
+            "Got connection from pool, using_count={}",
+            conn.using_count()
+        );
         let result = conn.query(request).await;
         self.release(conn);
         result
@@ -90,7 +93,6 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
                         }
                     } else {
                         // idle timeout
-                        warn!("Dropping idle connection after {} ms", idle);
                         drop_vec.push(conn);
                         self.active_count.fetch_sub(1, Ordering::Relaxed);
                     }
@@ -142,7 +144,10 @@ impl<C: Connection> ReusePool<C> {
         max_size: usize,
         connection_builder: Box<dyn ConnectionBuilder<C>>,
     ) -> Arc<ReusePool<C>> {
-        info!("Creating ReusePool (min_size={}, max_size={})", min_size, max_size);
+        info!(
+            "Creating ReusePool (min_size={}, max_size={})",
+            min_size, max_size
+        );
 
         let pool = Arc::new(Self {
             connections: ArrayQueue::new(max_size),
@@ -246,13 +251,6 @@ impl<C: Connection> ReusePool<C> {
             return Ok(());
         }
 
-        info!(
-            "Expanding pool: creating {} new connections (current={}/{})",
-            actually_reserved,
-            conns_len,
-            self.max_size
-        );
-
         let mut created = Vec::with_capacity(actually_reserved);
         for _ in 0..actually_reserved {
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -262,25 +260,25 @@ impl<C: Connection> ReusePool<C> {
                         created.push(conn);
                         self.release_notified.notify_one();
                     } else {
-                        warn!("Pool queue is full while expanding, closing new connection");
+                        debug!("Pool queue is full while expanding, closing new connection");
                         conn.close();
-                        self.active_count.fetch_sub(1, Ordering::SeqCst);
+                        self.active_count.fetch_sub(1, Ordering::Relaxed);
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to create new connection: {:?}", e);
-                    for c in created.iter() {
-                        c.close();
-                    }
-                    self.active_count.fetch_sub(created.len(), Ordering::SeqCst);
-                    return Err(e);
+                    debug!("Failed to create new connection: {:?}", e);
+                    self.active_count.fetch_sub(1, Ordering::Relaxed);
                 }
             }
         }
 
-        debug!(
-            "Successfully expanded pool, total active connections={}",
-            self.active_count.load(Ordering::SeqCst)
+        let created_len = created.len();
+
+        info!(
+            "Expanding pool: creating {} new connections (current={}/{})",
+            created_len,
+            created_len + conns_len,
+            self.max_size
         );
 
         Ok(())

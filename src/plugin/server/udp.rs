@@ -15,14 +15,14 @@ use crate::core::context::DnsContext;
 use crate::plugin::{Plugin, PluginFactory, PluginInfo, PluginMainType, get_plugin};
 use async_trait::async_trait;
 use futures::StreamExt;
-use hickory_proto::op::{Message, OpCode};
+use hickory_proto::op::{Message, MessageType, OpCode};
 use hickory_proto::runtime::TokioRuntimeProvider;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::udp::UdpStream;
 use hickory_proto::xfer::SerialMessage;
 use hickory_proto::{BufDnsStreamHandle, DnsStreamHandle};
 use serde::Deserialize;
-use socket2::{Domain, Socket, Type};
+use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::io::Error;
 use std::net::SocketAddr;
@@ -135,11 +135,14 @@ async fn handler_message(
         // 执行程序入口执行
         entry_executor.plugin.execute(&mut context).await;
 
-        let response;
+        let mut response;
         match context.response {
             None => {
                 debug!("No response received");
-                response = Message::response(context.request.id(), OpCode::Query)
+                response = Message::new();
+                response.set_id(context.request.id());
+                response.set_op_code(OpCode::Query);
+                response.set_message_type(MessageType::Query);
             }
             Some(res) => {
                 response = Message::from(res);
@@ -170,14 +173,14 @@ fn build_udp_socket(addr: &str) -> Result<UdpSocket, Error> {
     let addr = SocketAddr::from_str(addr).unwrap();
 
     let sock = if addr.is_ipv4() {
-        Socket::new(Domain::IPV4, Type::DGRAM, None)?
+        Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?
     } else {
-        let s = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
-        s.set_only_v6(true)?;
-        s
+        Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?
     };
 
-    sock.set_nonblocking(true)?;
+    let _ = sock.set_nonblocking(true);
+    let _ = sock.set_reuse_address(true);
+    let _ = sock.set_reuse_port(true);
 
     sock.bind(&addr.into())?;
 

@@ -14,22 +14,27 @@
 use crate::core::context::DnsContext;
 use crate::pkg::upstream::pool::pipeline::PipelinePool;
 use crate::pkg::upstream::pool::reuse::ReusePool;
-use crate::pkg::upstream::pool::tcp::{TcpConnection, TcpConnectionBuilder};
-use crate::pkg::upstream::pool::udp::{UdpConnection, UdpConnectionBuilder};
+use crate::pkg::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
+use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionPool};
 use async_trait::async_trait;
 use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
 use serde::Deserialize;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, info, warn};
 use url::Url;
 
 mod bootstrap;
 mod pool;
 mod tls_client_config;
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_MAX_CONNS_SIZE: usize = 64;
+const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
 
 /// Supported upstream connection types
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +86,8 @@ pub struct UpstreamConfig {
     pub dial_addr: Option<IpAddr>,
     /// Skip TLS certificate verification (not recommended)
     pub insecure_skip_verify: Option<bool>,
+    /// DNS request timeout
+    pub timeout: Option<Duration>,
 }
 
 #[async_trait]
@@ -117,6 +124,8 @@ pub struct ConnectInfo {
     is_ip_host: bool,
     /// Whether to skip TLS certificate verification
     insecure_skip_verify: bool,
+    /// DNS request timeout
+    timeout: Duration,
 }
 
 impl ConnectInfo {
@@ -146,6 +155,7 @@ impl ConnectInfo {
             connect_type,
             bootstrap: upstream_config.bootstrap.clone(),
             path,
+            timeout: upstream_config.timeout.unwrap_or(DEFAULT_TIMEOUT),
             host: host.clone(),
             is_ip_host: IpAddr::from_str(&host).is_ok(),
             insecure_skip_verify: upstream_config.insecure_skip_verify.unwrap_or(false),
@@ -204,56 +214,43 @@ impl ConnectInfo {
 /// Builder for creating upstream instances
 pub struct UpStreamBuilder;
 
-const TIMEOUT_SECS: u64 = 1;
-
 impl UpStreamBuilder {
     /// Build an upstream instance from configuration
-    pub fn with_upstream_config(up_stream_config: &UpstreamConfig) -> Box<dyn UpStream> {
-        let connect_info = ConnectInfo::with_upstream_config(up_stream_config);
+    pub fn with_upstream_config(upstream_config: &UpstreamConfig) -> Box<dyn UpStream> {
+        let connect_info = ConnectInfo::with_upstream_config(upstream_config);
 
         info!(
             "Creating upstream: type={:?}, remote={}, port={}",
             connect_info.connect_type, connect_info.remote_addr, connect_info.port
         );
 
-        if up_stream_config.dial_addr.is_some() || connect_info.is_ip_host {
+        if upstream_config.dial_addr.is_some() || connect_info.is_ip_host {
             match connect_info.connect_type {
                 ConnectType::UDP => {
                     info!("Using UDP upstream");
-                    let builder = UdpConnectionBuilder::new(
-                        connect_info
-                            .bind_addr
-                            .parse()
-                            .expect("Invalid bind address"),
-                        SocketAddr::new(
-                            connect_info
-                                .remote_addr
-                                .parse()
-                                .expect("Invalid remote address"),
-                            connect_info.port,
-                        ),
-                        TIMEOUT_SECS,
+                    let builder = UdpConnectionBuilder::new(&connect_info);
+                    let main_pool = PipelinePool::new(
+                        1,
+                        DEFAULT_MAX_CONNS_SIZE,
+                        DEFAULT_MAX_CONNS_LOAD,
+                        Box::new(builder),
                     );
-                    Box::new(PooledUpstream::<UdpConnection> {
-                        connect_info,
-                        pool: PipelinePool::new(1, 64, 64, Box::new(builder)),
+
+                    let tcp_builder = TcpConnectionBuilder::new(&connect_info);
+                    let fallback_pool =
+                        ReusePool::new(0, DEFAULT_MAX_CONNS_SIZE, Box::new(tcp_builder));
+
+                    Box::new(UdpTruncatedUpstream {
+                        main_pool,
+                        fallback_pool,
                     })
                 }
                 ConnectType::TCP => {
                     info!("Using TCP upstream");
-                    let builder = TcpConnectionBuilder::new(
-                        SocketAddr::new(
-                            connect_info
-                                .remote_addr
-                                .parse()
-                                .expect("Invalid remote address"),
-                            connect_info.port,
-                        ),
-                        TIMEOUT_SECS,
-                    );
+                    let builder = TcpConnectionBuilder::new(&connect_info);
                     Box::new(PooledUpstream::<TcpConnection> {
                         connect_info,
-                        pool: ReusePool::new(1, 64, Box::new(builder)),
+                        pool: ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
                     })
                 }
                 ConnectType::DoT => {
@@ -288,17 +285,34 @@ pub struct PooledUpstream<C: Connection> {
 impl<C: Connection> UpStream for PooledUpstream<C> {
     async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
         match self.pool.query(context.request.clone()).await {
-            Ok(mut res) => {
-                let mut header = res.header().clone();
-                header.set_id(context.request.id());
-                res.set_header(header);
-                Ok(res)
-            }
+            Ok(res) => Ok(res),
             Err(e) => Err(e),
         }
     }
 
     fn connect_type(&self) -> ConnectType {
         self.connect_info.connect_type
+    }
+}
+
+pub struct UdpTruncatedUpstream {
+    pub main_pool: Arc<dyn ConnectionPool<UdpConnection>>,
+    pub fallback_pool: Arc<dyn ConnectionPool<TcpConnection>>,
+}
+
+#[async_trait]
+impl UpStream for UdpTruncatedUpstream {
+    async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
+        let response = self.main_pool.query(context.request.clone()).await?;
+
+        if response.truncated() {
+            self.fallback_pool.query(context.request.clone()).await
+        } else {
+            Ok(response)
+        }
+    }
+
+    fn connect_type(&self) -> ConnectType {
+        ConnectType::UDP
     }
 }
