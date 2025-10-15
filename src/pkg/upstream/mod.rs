@@ -11,8 +11,8 @@ use crate::pkg::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionPool};
 use async_trait::async_trait;
-use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
+use hickory_proto::xfer::DnsResponse;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -121,7 +121,7 @@ pub struct ConnectInfo {
     insecure_skip_verify: bool,
     /// DNS request timeout
     timeout: Duration,
-    enable_pipeline: bool,
+    enable_pipeline: Option<bool>,
 }
 
 impl ConnectInfo {
@@ -156,7 +156,7 @@ impl ConnectInfo {
             is_ip_host: IpAddr::from_str(&host).is_ok(),
             insecure_skip_verify: upstream_config.insecure_skip_verify.unwrap_or(false),
             raw_addr: upstream_config.addr.clone(),
-            enable_pipeline: upstream_config.enable_pipeline.unwrap_or(false),
+            enable_pipeline: upstream_config.enable_pipeline,
         }
     }
 
@@ -257,7 +257,7 @@ impl UpStreamBuilder {
                 ConnectType::TCP | ConnectType::DoT => {
                     info!("Using {:?} upstream", connect_info.connect_type);
                     let builder = TcpConnectionBuilder::new(&connect_info);
-                    if connect_info.enable_pipeline {
+                    if connect_info.enable_pipeline.unwrap_or(false) {
                         Box::new(PooledUpstream::<TcpConnection> {
                             connect_info,
                             pool: PipelinePool::new(
@@ -282,7 +282,7 @@ impl UpStreamBuilder {
                 ConnectType::DoH => {
                     info!("Using DoH upstream");
                     let builder = DoHConnectionBuilder::new(&connect_info);
-                    if connect_info.enable_pipeline {
+                    if connect_info.enable_pipeline.unwrap_or(true) {
                         Box::new(PooledUpstream::<DoHConnection> {
                             connect_info,
                             pool: PipelinePool::new(
