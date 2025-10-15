@@ -11,8 +11,8 @@ use crate::pkg::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionPool};
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -81,6 +81,7 @@ pub struct UpstreamConfig {
     pub insecure_skip_verify: Option<bool>,
     /// DNS request timeout
     pub timeout: Option<Duration>,
+    pub enable_pipeline: Option<bool>,
 }
 
 #[async_trait]
@@ -99,6 +100,7 @@ pub trait UpStream: Send + Sync {
 pub struct ConnectInfo {
     /// Connection type (UDP, TCP, DoT, DoQ, DoH)
     connect_type: ConnectType,
+    raw_addr: String,
     /// Local bind address, defaults to 0.0.0.0:0
     bind_addr: String,
     /// Upstream DNS server address (hostname or IP)
@@ -119,7 +121,7 @@ pub struct ConnectInfo {
     insecure_skip_verify: bool,
     /// DNS request timeout
     timeout: Duration,
-    raw_addr: String,
+    enable_pipeline: bool,
 }
 
 impl ConnectInfo {
@@ -154,6 +156,7 @@ impl ConnectInfo {
             is_ip_host: IpAddr::from_str(&host).is_ok(),
             insecure_skip_verify: upstream_config.insecure_skip_verify.unwrap_or(false),
             raw_addr: upstream_config.addr.clone(),
+            enable_pipeline: upstream_config.enable_pipeline.unwrap_or(false),
         }
     }
 
@@ -254,10 +257,22 @@ impl UpStreamBuilder {
                 ConnectType::TCP | ConnectType::DoT => {
                     info!("Using {:?} upstream", connect_info.connect_type);
                     let builder = TcpConnectionBuilder::new(&connect_info);
-                    Box::new(PooledUpstream::<TcpConnection> {
-                        connect_info,
-                        pool: ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
-                    })
+                    if connect_info.enable_pipeline {
+                        Box::new(PooledUpstream::<TcpConnection> {
+                            connect_info,
+                            pool: PipelinePool::new(
+                                1,
+                                DEFAULT_MAX_CONNS_SIZE,
+                                DEFAULT_MAX_CONNS_LOAD,
+                                Box::new(builder),
+                            ),
+                        })
+                    } else {
+                        Box::new(PooledUpstream::<TcpConnection> {
+                            connect_info,
+                            pool: ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
+                        })
+                    }
                 }
 
                 ConnectType::DoQ => {
@@ -267,15 +282,22 @@ impl UpStreamBuilder {
                 ConnectType::DoH => {
                     info!("Using DoH upstream");
                     let builder = DoHConnectionBuilder::new(&connect_info);
-                    Box::new(PooledUpstream::<DoHConnection> {
-                        connect_info,
-                        pool: PipelinePool::new(
-                            1,
-                            DEFAULT_MAX_CONNS_SIZE,
-                            DEFAULT_MAX_CONNS_LOAD,
-                            Box::new(builder),
-                        ),
-                    })
+                    if connect_info.enable_pipeline {
+                        Box::new(PooledUpstream::<DoHConnection> {
+                            connect_info,
+                            pool: PipelinePool::new(
+                                1,
+                                DEFAULT_MAX_CONNS_SIZE,
+                                DEFAULT_MAX_CONNS_LOAD,
+                                Box::new(builder),
+                            ),
+                        })
+                    } else {
+                        Box::new(PooledUpstream::<DoHConnection> {
+                            connect_info,
+                            pool: ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
+                        })
+                    }
                 }
             }
         } else {
