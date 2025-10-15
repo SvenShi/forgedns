@@ -82,6 +82,7 @@ pub struct UpstreamConfig {
     /// DNS request timeout
     pub timeout: Option<Duration>,
     pub enable_pipeline: Option<bool>,
+    pub enable_http3: Option<bool>,
 }
 
 #[async_trait]
@@ -122,6 +123,7 @@ pub struct ConnectInfo {
     /// DNS request timeout
     timeout: Duration,
     enable_pipeline: Option<bool>,
+    enable_http3: bool,
 }
 
 impl ConnectInfo {
@@ -157,6 +159,7 @@ impl ConnectInfo {
             insecure_skip_verify: upstream_config.insecure_skip_verify.unwrap_or(false),
             raw_addr: upstream_config.addr.clone(),
             enable_pipeline: upstream_config.enable_pipeline,
+            enable_http3: upstream_config.enable_http3.unwrap_or(false),
         }
     }
 
@@ -282,11 +285,11 @@ impl UpStreamBuilder {
                 ConnectType::DoH => {
                     info!("Using DoH upstream");
                     let builder = DoHConnectionBuilder::new(&connect_info);
-                    if connect_info.enable_pipeline.unwrap_or(true) {
+                    if connect_info.enable_pipeline.unwrap_or(false) {
                         Box::new(PooledUpstream::<DoHConnection> {
                             connect_info,
                             pool: PipelinePool::new(
-                                1,
+                                0,
                                 DEFAULT_MAX_CONNS_SIZE,
                                 DEFAULT_MAX_CONNS_LOAD,
                                 Box::new(builder),
@@ -295,7 +298,7 @@ impl UpStreamBuilder {
                     } else {
                         Box::new(PooledUpstream::<DoHConnection> {
                             connect_info,
-                            pool: ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
+                            pool: ReusePool::new(0, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
                         })
                     }
                 }
