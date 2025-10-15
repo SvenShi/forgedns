@@ -3,34 +3,29 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::ConnectionBuilder;
 use crate::pkg::upstream::pool::utils::{connect_quic, connect_tls};
+use crate::pkg::upstream::pool::ConnectionBuilder;
 use crate::pkg::upstream::{ConnectInfo, ConnectType, Connection, DEFAULT_TIMEOUT};
-use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::SinkExt;
-use futures::TryFutureExt;
 use futures::future::poll_fn;
 use h2::client::{ResponseFuture, SendRequest as H2SendRequest};
 use h3::client::{RequestStream, SendRequest as H3SendRequest};
 use h3_quinn::{BidiStream, OpenStreams};
-use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
-use http::{HeaderValue, Method, Request, Response, Version, header};
-use std::cell::RefCell;
+use hickory_proto::ProtoError;
+use http::header::CONTENT_LENGTH;
+use http::{header, HeaderValue, Method, Request, Version};
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::rc::Rc;
-use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::select;
-use tokio::sync::oneshot::{Receiver, Sender, channel};
+use tokio::sync::oneshot::{channel, Receiver};
 use tokio::sync::{Mutex, Notify};
 use tokio::time::timeout;
 use tracing::{debug, warn};
@@ -86,7 +81,7 @@ impl Connection for DoHConnection {
         // 通过统一 sender 发送并等待 receiver 读取 body
         let mut sender_guard = self.sender.lock().await;
         let receiver = match sender_guard.send(request).await {
-            Ok(mut r) => r,
+            Ok(r) => r,
             Err(e) => {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
                 warn!(conn_id = self.id, raw_id, ?e, "DoH send error");
@@ -98,7 +93,7 @@ impl Connection for DoHConnection {
         let result = match timeout(self.timeout, receiver).await {
             Ok(Ok(bytes)) => {
                 let vec = bytes.map_err(ProtoError::from)?;
-                let mut resp = DnsResponse::from_buffer(vec)?;
+                let mut resp = DnsResponse::from_buffer(vec.to_vec())?;
                 resp.set_id(raw_id);
                 debug!(conn_id = self.id, raw_id, "Received DoH response");
                 Ok(resp)
@@ -276,7 +271,7 @@ trait HttpsSender: Send + Sync + Debug {
     async fn send(
         &mut self,
         request: Request<()>,
-    ) -> Result<Receiver<Result<Vec<u8>, ProtoError>>, ProtoError>;
+    ) -> Result<Receiver<Result<Bytes, ProtoError>>, ProtoError>;
 }
 
 /// ---------------- H2 实现 ----------------
@@ -290,7 +285,7 @@ impl HttpsSender for H2Sender {
     async fn send(
         &mut self,
         mut request: Request<()>,
-    ) -> Result<Receiver<Result<Vec<u8>, ProtoError>>, ProtoError> {
+    ) -> Result<Receiver<Result<Bytes, ProtoError>>, ProtoError> {
         *request.version_mut() = Version::HTTP_2;
         let (response_future, _send_stream) = self
             .sender
@@ -305,29 +300,34 @@ impl HttpsSender for H2Sender {
 }
 
 impl H2Sender {
-    async fn recv(response_future: ResponseFuture) -> Result<Vec<u8>, ProtoError> {
+    async fn recv(response_future: ResponseFuture) -> Result<Bytes, ProtoError> {
         let mut response = response_future
             .await
             .map_err(|e| ProtoError::from(format!("H3 response error: {}", e)))?;
 
         let status_code = response.status();
-        let is_success = status_code.is_success();
-
+        let mut response_bytes = BytesMut::with_capacity(
+            response
+                .headers()
+                .get(CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(4096),
+        );
         let mut body = response.into_body();
-        let mut response_bytes = BytesMut::with_capacity(4096);
 
         while let Some(Ok(partial_bytes)) = body.data().await {
             response_bytes.put(partial_bytes);
         }
         // Was it a successful request?
-        if !is_success {
+        if !status_code.is_success() {
             let error_string = String::from_utf8_lossy(response_bytes.as_ref());
             Err(ProtoError::from(format!(
                 "http unsuccessful code: {}, message: {}",
                 status_code, error_string
             )))
         } else {
-            Ok(response_bytes.to_vec())
+            Ok(response_bytes.freeze())
         }
     }
 }
@@ -348,7 +348,7 @@ impl HttpsSender for H3Sender {
     async fn send(
         &mut self,
         mut request: Request<()>,
-    ) -> Result<Receiver<Result<Vec<u8>, ProtoError>>, ProtoError> {
+    ) -> Result<Receiver<Result<Bytes, ProtoError>>, ProtoError> {
         *request.version_mut() = Version::HTTP_3;
         let (sender, receiver) = channel();
         let send_res = self
@@ -366,13 +366,20 @@ impl HttpsSender for H3Sender {
 impl H3Sender {
     async fn recv(
         mut request_stream: RequestStream<BidiStream<Bytes>, Bytes>,
-    ) -> Result<Vec<u8>, ProtoError> {
+    ) -> Result<Bytes, ProtoError> {
         let response = request_stream
             .recv_response()
             .await
             .map_err(|e| ProtoError::from(format!("H3 response error: {}", e)))?;
 
-        let mut response_bytes = BytesMut::with_capacity(4096);
+        let mut response_bytes = BytesMut::with_capacity(
+            response
+                .headers()
+                .get(CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(4096),
+        );
 
         while let Some(partial_bytes) = request_stream
             .recv_data()
@@ -392,7 +399,7 @@ impl H3Sender {
                 error_string
             )))
         } else {
-            Ok(response_bytes.to_vec())
+            Ok(response_bytes.freeze())
         }
     }
 }
