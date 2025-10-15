@@ -35,7 +35,7 @@ pub struct DoHConnection {
     last_used: AtomicU64,
     close_notify: Notify,
     timeout: std::time::Duration,
-    path: String,
+    request_uri: String,
 }
 
 #[async_trait::async_trait]
@@ -67,7 +67,7 @@ impl Connection for DoHConnection {
             .method("GET")
             .uri(format!(
                 "{}?dns={}",
-                self.path.clone(),
+                self.request_uri.clone(),
                 BASE64_URL_SAFE_NO_PAD.encode(body_bytes)
             ))
             .body(())
@@ -132,7 +132,7 @@ pub struct DoHConnectionBuilder {
     pub remote_addr: SocketAddr,
     pub timeout: std::time::Duration,
     pub server_name: String,
-    pub path: String,
+    pub request_uri: String,
     pub insecure_skip_verify: bool,
 }
 
@@ -142,7 +142,7 @@ impl DoHConnectionBuilder {
             remote_addr: connect_info.get_full_remote_socket_addr(),
             timeout: connect_info.timeout,
             server_name: connect_info.host.clone(),
-            path: connect_info.path.clone(),
+            request_uri: connect_info.raw_addr.clone(),
             insecure_skip_verify: connect_info.insecure_skip_verify,
         }
     }
@@ -179,7 +179,7 @@ impl ConnectionBuilder<DoHConnection> for DoHConnectionBuilder {
                     last_used: AtomicU64::new(AppClock::run_millis()),
                     close_notify: Notify::new(),
                     timeout: self.timeout,
-                    path: self.path.clone(),
+                    request_uri: self.request_uri.clone(),
                 }))
             }
             Err(e) => Err(ProtoError::from(format!("H2 handshake error: {}", e))),

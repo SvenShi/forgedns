@@ -11,8 +11,8 @@ use crate::pkg::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionPool};
 use async_trait::async_trait;
-use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
+use hickory_proto::xfer::DnsResponse;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -119,6 +119,7 @@ pub struct ConnectInfo {
     insecure_skip_verify: bool,
     /// DNS request timeout
     timeout: Duration,
+    raw_addr: String,
 }
 
 impl ConnectInfo {
@@ -152,6 +153,7 @@ impl ConnectInfo {
             host: host.clone(),
             is_ip_host: IpAddr::from_str(&host).is_ok(),
             insecure_skip_verify: upstream_config.insecure_skip_verify.unwrap_or(false),
+            raw_addr: upstream_config.addr.clone(),
         }
     }
 
@@ -301,7 +303,7 @@ impl<C: Connection> UpStream for PooledUpstream<C> {
         }
     }
 
-     fn connect_type(&self) -> ConnectType {
+    fn connect_type(&self) -> ConnectType {
         self.connect_info.connect_type
     }
 }
