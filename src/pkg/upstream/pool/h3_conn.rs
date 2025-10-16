@@ -125,12 +125,16 @@ impl H3ConnectionBuilder {
             timeout: connect_info.timeout,
             server_name: connect_info.host.clone(),
             request_uri: if connect_info.port != ConnectType::DoH.default_port() {
-                format!(
+                let mut uri = format!(
                     "https://{}{}:{}?dns=",
                     connect_info.host, connect_info.port, connect_info.path
-                )
+                );
+                uri.reserve(512);
+                uri
             } else {
-                format!("https://{}{}?dns=", connect_info.host, connect_info.path)
+                let mut uri = format!("https://{}{}?dns=", connect_info.host, connect_info.path);
+                uri.reserve(512);
+                uri
             },
             insecure_skip_verify: connect_info.insecure_skip_verify,
         }

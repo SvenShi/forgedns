@@ -120,7 +120,7 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
 
         // Expand if below min_size
         if self.active_count.load(Ordering::Relaxed) < self.min_size {
-            info!("Expanding connection pool to maintain minimum size");
+            debug!("Expanding connection pool to maintain minimum size");
             let _ = self.expand().await;
         }
 
@@ -268,7 +268,7 @@ impl<C: Connection> ReusePool<C> {
 
         let created_len = created.len();
 
-        info!(
+        debug!(
             "Expanding pool: creating {} new connections (current={}/{})",
             created_len,
             created_len + conns_len,

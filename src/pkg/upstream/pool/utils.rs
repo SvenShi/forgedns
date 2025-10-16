@@ -69,6 +69,7 @@ pub(crate) async fn connect_quic(
             QuicClientConfig::try_from(secure_client_config()).unwrap(),
         ))
     };
+
     endpoint.set_default_client_config(client_config);
     match timeout(
         conn_timeout,
@@ -94,8 +95,8 @@ pub fn close_conns<C: Connection>(conns: &Vec<Arc<C>>) {
 const DNS_HEADER_VALUE: HeaderValue = HeaderValue::from_static("application/dns-message");
 
 #[inline]
-pub fn build_dns_get_request(uri: String, buf: Vec<u8>, version: Version) -> Request<()> {
-    let uri = uri + &BASE64_URL_SAFE_NO_PAD.encode(buf);
+pub fn build_dns_get_request(mut uri: String, buf: Vec<u8>, version: Version) -> Request<()> {
+    uri.push_str(&BASE64_URL_SAFE_NO_PAD.encode(buf));
 
     http::Request::builder()
         .version(version)

@@ -280,7 +280,7 @@ impl UpStreamBuilder {
                         create_pipeline_pool(0, 100, 2, connect_info, Box::new(builder))
                     } else {
                         let builder = H2ConnectionBuilder::new(&connect_info);
-                        create_pipeline_pool(0, 100, 2, connect_info, Box::new(builder))
+                        create_pipeline_pool(0, 300, 2, connect_info, Box::new(builder))
                     }
                 }
             }
