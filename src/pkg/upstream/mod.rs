@@ -277,10 +277,22 @@ impl UpStreamBuilder {
                     info!("Using DoH upstream");
                     if connect_info.enable_http3 {
                         let builder = H3ConnectionBuilder::new(&connect_info);
-                        create_pipeline_pool(0, 100, 2, connect_info, Box::new(builder))
+                        create_pipeline_pool(
+                            0,
+                            DEFAULT_MAX_CONNS_SIZE,
+                            DEFAULT_MAX_CONNS_LOAD,
+                            connect_info,
+                            Box::new(builder),
+                        )
                     } else {
                         let builder = H2ConnectionBuilder::new(&connect_info);
-                        create_pipeline_pool(0, 100, 2, connect_info, Box::new(builder))
+                        create_pipeline_pool(
+                            0,
+                            DEFAULT_MAX_CONNS_SIZE,
+                            DEFAULT_MAX_CONNS_LOAD,
+                            connect_info,
+                            Box::new(builder),
+                        )
                     }
                 }
             }
