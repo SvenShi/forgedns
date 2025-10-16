@@ -4,7 +4,12 @@
  */
 use crate::pkg::upstream::pool::Connection;
 use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use base64::Engine;
+use bytes::BytesMut;
 use hickory_proto::ProtoError;
+use http::header::CONTENT_LENGTH;
+use http::{header, HeaderValue, Method, Request, Response, Version};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TokioRuntime};
 use rustls::pki_types::ServerName;
@@ -84,4 +89,32 @@ pub fn close_conns<C: Connection>(conns: &Vec<Arc<C>>) {
         // it's fine if close() is sync: call directly
         conn.close();
     }
+}
+
+const DNS_HEADER_VALUE: HeaderValue = HeaderValue::from_static("application/dns-message");
+
+#[inline]
+pub fn build_dns_get_request(uri: String, buf: Vec<u8>, version: Version) -> Request<()> {
+    let uri = uri + &BASE64_URL_SAFE_NO_PAD.encode(buf);
+
+    http::Request::builder()
+        .version(version)
+        .header(header::CONTENT_TYPE, DNS_HEADER_VALUE)
+        .method(Method::GET)
+        .uri(uri)
+        .body(())
+        .unwrap()
+}
+
+#[inline]
+pub fn get_buf_from_res<T>(response: &mut Response<T>) -> BytesMut {
+    let mut response_bytes = BytesMut::with_capacity(
+        response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(4096),
+    );
+    response_bytes
 }

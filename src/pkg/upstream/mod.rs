@@ -4,15 +4,16 @@
  */
 
 use crate::core::context::DnsContext;
-use crate::pkg::upstream::pool::doh_cnn::{DoHConnection, DoHConnectionBuilder};
+use crate::pkg::upstream::pool::h2_conn::H2ConnectionBuilder;
+use crate::pkg::upstream::pool::h3_conn::H3ConnectionBuilder;
 use crate::pkg::upstream::pool::pipeline::PipelinePool;
 use crate::pkg::upstream::pool::reuse::ReusePool;
 use crate::pkg::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
-use crate::pkg::upstream::pool::{Connection, ConnectionPool};
+use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -260,46 +261,20 @@ impl UpStreamBuilder {
                 ConnectType::TCP | ConnectType::DoT => {
                     info!("Using {:?} upstream", connect_info.connect_type);
                     let builder = TcpConnectionBuilder::new(&connect_info);
-                    if connect_info.enable_pipeline.unwrap_or(false) {
-                        Box::new(PooledUpstream::<TcpConnection> {
-                            connect_info,
-                            pool: PipelinePool::new(
-                                1,
-                                DEFAULT_MAX_CONNS_SIZE,
-                                DEFAULT_MAX_CONNS_LOAD,
-                                Box::new(builder),
-                            ),
-                        })
-                    } else {
-                        Box::new(PooledUpstream::<TcpConnection> {
-                            connect_info,
-                            pool: ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
-                        })
-                    }
+                    create_pipeline_or_reuse_pool(connect_info, Box::new(builder), 1)
                 }
-
                 ConnectType::DoQ => {
                     warn!("DoQ upstream not yet implemented");
                     todo!()
                 }
                 ConnectType::DoH => {
                     info!("Using DoH upstream");
-                    let builder = DoHConnectionBuilder::new(&connect_info);
-                    if connect_info.enable_pipeline.unwrap_or(false) {
-                        Box::new(PooledUpstream::<DoHConnection> {
-                            connect_info,
-                            pool: PipelinePool::new(
-                                0,
-                                DEFAULT_MAX_CONNS_SIZE,
-                                DEFAULT_MAX_CONNS_LOAD,
-                                Box::new(builder),
-                            ),
-                        })
+                    if connect_info.enable_http3 {
+                        let builder = H2ConnectionBuilder::new(&connect_info);
+                        create_pipeline_or_reuse_pool(connect_info, Box::new(builder), 0)
                     } else {
-                        Box::new(PooledUpstream::<DoHConnection> {
-                            connect_info,
-                            pool: ReusePool::new(0, DEFAULT_MAX_CONNS_SIZE, Box::new(builder)),
-                        })
+                        let builder = H3ConnectionBuilder::new(&connect_info);
+                        create_pipeline_or_reuse_pool(connect_info, Box::new(builder), 0)
                     }
                 }
             }
@@ -307,6 +282,29 @@ impl UpStreamBuilder {
             warn!("Upstream requires domain resolution: {}", connect_info.host);
             todo!("new domain upstream")
         }
+    }
+}
+
+fn create_pipeline_or_reuse_pool<C: Connection>(
+    connect_info: ConnectInfo,
+    builder: Box<dyn ConnectionBuilder<C>>,
+    min_size: usize,
+) -> Box<dyn UpStream> {
+    if connect_info.enable_pipeline.unwrap_or(false) {
+        Box::new(PooledUpstream::<C> {
+            connect_info,
+            pool: PipelinePool::new(
+                min_size,
+                DEFAULT_MAX_CONNS_SIZE,
+                DEFAULT_MAX_CONNS_LOAD,
+                builder,
+            ),
+        })
+    } else {
+        Box::new(PooledUpstream::<C> {
+            connect_info,
+            pool: ReusePool::new(min_size, DEFAULT_MAX_CONNS_SIZE, builder),
+        })
     }
 }
 

@@ -4,21 +4,21 @@
  */
 
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::pool::utils::close_conns;
 use crate::pkg::upstream::pool::{
-    start_maintenance, Connection, ConnectionBuilder, ConnectionPool,
+    Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
 };
 use async_trait::async_trait;
 use crossbeam_queue::ArrayQueue;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
 use tracing::{debug, info, warn};
-use crate::pkg::upstream::pool::utils::close_conns;
 
 /// A reusable connection pool implementation
 /// - Keeps a minimum number of active connections (`min_size`)

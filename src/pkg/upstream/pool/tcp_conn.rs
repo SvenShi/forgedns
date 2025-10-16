@@ -10,23 +10,23 @@ use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
 use crate::pkg::upstream::{ConnectInfo, ConnectType, DEFAULT_TIMEOUT};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{
-    split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
+    AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf, split,
 };
 use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    oneshot,
     Notify,
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    oneshot,
 };
 use tokio::time::timeout;
 use tracing::{debug, error, warn};

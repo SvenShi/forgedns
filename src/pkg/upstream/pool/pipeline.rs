@@ -4,8 +4,9 @@
  */
 
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::pool::utils::close_conns;
 use crate::pkg::upstream::pool::{
-    Connection, ConnectionBuilder, ConnectionPool,  start_maintenance,
+    Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
 };
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -20,7 +21,6 @@ use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::task::yield_now;
 use tracing::{debug, info, warn};
-use crate::pkg::upstream::pool::utils::close_conns;
 
 #[derive(Debug)]
 pub struct PipelinePool<C: Connection> {

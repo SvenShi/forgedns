@@ -5,18 +5,19 @@
 
 mod request_map;
 
-mod utils;
 pub mod pipeline;
 pub mod reuse;
+mod utils;
 
-pub(crate) mod doh_cnn;
+pub(crate) mod h2_conn;
+pub(crate) mod h3_conn;
 pub(crate) mod tcp_conn;
 pub(crate) mod udp_conn;
 
 use async_trait::async_trait;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
