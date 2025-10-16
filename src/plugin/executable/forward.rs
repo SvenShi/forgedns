@@ -46,7 +46,7 @@ impl Plugin for SingleDnsForwarder {
                     context.request.id()
                 );
             }
-            Err(e) => {
+            Err(_) => {
                 warn!("DNS forward time out {:?}", self.timeout)
             }
         }
