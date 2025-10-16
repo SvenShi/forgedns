@@ -4,22 +4,22 @@
  */
 
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::ConnectInfo;
 use crate::pkg::upstream::pool::request_map::RequestMap;
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
-use crate::pkg::upstream::ConnectInfo;
 use async_trait::async_trait;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
