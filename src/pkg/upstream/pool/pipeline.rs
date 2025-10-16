@@ -141,7 +141,6 @@ impl<C: Connection> PipelinePool<C> {
             let conns = self.connections.load();
             let len = conns.len();
             if len == 0 {
-                warn!("No available connections, expanding pool...");
                 self.expand().await?;
                 // yield to allow expand to make progress
                 yield_now().await;
@@ -244,7 +243,7 @@ impl<C: Connection> PipelinePool<C> {
             ) {
                 // set index near the end to give round robin fairness
                 self.index.store(new_len - 1, Ordering::Relaxed);
-                info!(
+                debug!(
                     "Expanding pool: creating {} new connections (current={}/{})",
                     new_conns_len, new_len, self.max_size
                 );

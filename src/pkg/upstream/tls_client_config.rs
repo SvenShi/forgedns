@@ -3,14 +3,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+use lazy_static::lazy_static;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme};
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 
-pub(crate) fn secure_client_config() -> ClientConfig {
+lazy_static::lazy_static! {
+    static ref SECURE_CONFIG: ClientConfig = build_secure_config();
+    static ref INSECURE_CONFIG: ClientConfig = build_insecure_config();
+}
+
+fn build_secure_config() -> ClientConfig {
     let builder = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
         .with_safe_default_protocol_versions()
         .unwrap();
@@ -21,32 +27,37 @@ pub(crate) fn secure_client_config() -> ClientConfig {
         root_store
     });
 
-    let config = builder.with_no_client_auth();
+    let mut config = builder.with_no_client_auth();
+    config.enable_early_data = true;
     set_alpn(config)
 }
-static INIT_RING: Once = Once::new();
-
-pub(crate) fn insecure_client_config() -> ClientConfig {
-    INIT_RING.call_once(|| {
-        ring::default_provider()
-            .install_default()
-            .expect("failed to install default CryptoProvider");
-    });
-
-    let config = ClientConfig::builder()
+fn build_insecure_config() -> ClientConfig {
+    ring::default_provider()
+        .install_default()
+        .expect("failed to install default CryptoProvider");
+    let mut config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoCertVerification))
         .with_no_client_auth();
+    config.enable_early_data = true;
     set_alpn(config)
 }
 
+pub(crate) fn secure_client_config() -> ClientConfig {
+    SECURE_CONFIG.clone()
+}
+pub(crate) fn insecure_client_config() -> ClientConfig {
+    INSECURE_CONFIG.clone()
+}
+
+static ALPN_PROTOCOLS: &[&[u8]] = &[b"h3", b"h2", b"dot", b"doq"];
+
+lazy_static! {
+    static ref alpn: Vec<Vec<u8>> = ALPN_PROTOCOLS.iter().map(|&p| p.to_vec()).collect();
+}
+
 fn set_alpn(mut config: ClientConfig) -> ClientConfig {
-    config.alpn_protocols = vec![
-        b"h3".to_vec(),
-        b"h2".to_vec(),
-        b"dot".to_vec(),
-        b"doq".to_vec(),
-    ];
+    config.alpn_protocols = alpn.clone();
     config
 }
 
