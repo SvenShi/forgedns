@@ -5,14 +5,15 @@
 
 mod request_map;
 
-pub mod pipeline;
-pub mod reuse;
 mod utils;
 
+pub(crate) mod pipeline;
+pub(crate) mod reuse;
+pub(crate) mod udp_conn;
+pub(crate) mod tcp_conn;
 pub(crate) mod h2_conn;
 pub(crate) mod h3_conn;
-pub(crate) mod tcp_conn;
-pub(crate) mod udp_conn;
+pub(crate) mod quic_conn;
 
 use async_trait::async_trait;
 use hickory_proto::ProtoError;

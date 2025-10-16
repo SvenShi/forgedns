@@ -6,9 +6,8 @@ plugins:
     type: forward
     args:
       upstreams:
-        - addr: "https://dns.alidns.com/dns-query"  # 阿里 DNS
-          dial_addr: "223.5.5.5"
-          insecure_skip_verify: false
+        - addr: "quic://172.16.2.53:5366"  # 阿里 DNS
+          insecure_skip_verify: true
           enable_pipeline: true
         # 当配置多个上游服务器时，会自动启用并发模式
         # - addr: "119.29.29.29"  # 腾讯 DNS
