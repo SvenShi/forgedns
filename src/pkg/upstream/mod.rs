@@ -27,7 +27,7 @@ mod pool;
 mod tls_client_config;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_MAX_CONNS_SIZE: usize = 100;
+const DEFAULT_MAX_CONNS_SIZE: usize = 64;
 const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
 
 /// Supported upstream connection types
@@ -276,10 +276,10 @@ impl UpStreamBuilder {
                 ConnectType::DoH => {
                     info!("Using DoH upstream");
                     if connect_info.enable_http3 {
-                        let builder = H2ConnectionBuilder::new(&connect_info);
+                        let builder = H3ConnectionBuilder::new(&connect_info);
                         create_pipeline_pool(0, 64, 10, connect_info, Box::new(builder))
                     } else {
-                        let builder = H3ConnectionBuilder::new(&connect_info);
+                        let builder = H2ConnectionBuilder::new(&connect_info);
                         create_pipeline_pool(0, 64, 10, connect_info, Box::new(builder))
                     }
                 }

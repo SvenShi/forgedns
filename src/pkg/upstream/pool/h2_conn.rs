@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::select;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
@@ -60,8 +60,11 @@ impl Connection for H2Connection {
 
         let request = build_dns_get_request(self.request_uri.clone(), body_bytes, Version::HTTP_2);
 
-        let (response_future, _send_stream) =
-            self.sender.clone().send_request(request, false).map_err(|e| {
+        let (response_future, _send_stream) = self
+            .sender
+            .clone()
+            .send_request(request, false)
+            .map_err(|e| {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
                 ProtoError::from(format!("H2 send_request error: {e}"))
             })?;

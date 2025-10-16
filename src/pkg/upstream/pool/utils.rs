@@ -108,7 +108,7 @@ pub fn build_dns_get_request(uri: String, buf: Vec<u8>, version: Version) -> Req
 
 #[inline]
 pub fn get_buf_from_res<T>(response: &mut Response<T>) -> BytesMut {
-    let mut response_bytes = BytesMut::with_capacity(
+    let response_bytes = BytesMut::with_capacity(
         response
             .headers()
             .get(CONTENT_LENGTH)

@@ -14,6 +14,8 @@ static GLOBAL_NOW: AtomicU64 = AtomicU64::new(0);
 static CLOCK_INIT: Once = Once::new();
 
 pub struct AppClock {}
+
+#[allow(unused)]
 impl AppClock {
     pub(crate) fn run() {
         CLOCK_INIT.call_once(|| {
