@@ -6,21 +6,21 @@
 use crate::core::app_clock::AppClock;
 use crate::pkg::upstream::pool::utils::close_conns;
 use crate::pkg::upstream::pool::{
-    Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
+    start_maintenance, Connection, ConnectionBuilder, ConnectionPool,
 };
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use hickory_proto::ProtoError;
+use futures::StreamExt;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::yield_now;
-use tracing::{debug, info, warn};
+use tracing::debug;
 
 #[derive(Debug)]
 pub struct PipelinePool<C: Connection> {
