@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::utils::{build_dns_get_request, connect_quic, get_buf_from_res};
+use crate::pkg::upstream::pool::utils::{
+    build_dns_get_request, build_doh_request_uri, connect_quic, get_buf_from_res,
+};
 use crate::pkg::upstream::pool::ConnectionBuilder;
-use crate::pkg::upstream::{ConnectInfo, ConnectType, Connection, DEFAULT_TIMEOUT};
+use crate::pkg::upstream::{ConnectInfo, Connection, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
 use futures::future::poll_fn;
 use h3::client::{RequestStream, SendRequest};
@@ -20,13 +22,13 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::select;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
 pub struct H3Connection {
     id: u16,
-    sender: Mutex<SendRequest<OpenStreams, Bytes>>,
+    sender: SendRequest<OpenStreams, Bytes>,
     using_count: AtomicU16,
     closed: AtomicBool,
     last_used: AtomicU64,
@@ -65,12 +67,20 @@ impl Connection for H3Connection {
 
         let request = build_dns_get_request(self.request_uri.clone(), body_bytes, Version::HTTP_3);
 
-        let mut sender_guard = self.sender.lock().await;
-        let request_stream = sender_guard.send_request(request).await.map_err(|e| {
-            self.using_count.fetch_sub(1, Ordering::Relaxed);
-            ProtoError::from(format!("H3 send_request error: {e}"))
-        })?;
-        drop(sender_guard);
+        let mut request_stream = self
+            .sender
+            .clone()
+            .send_request(request)
+            .await
+            .map_err(|e| {
+                self.using_count.fetch_sub(1, Ordering::Relaxed);
+                ProtoError::from(format!("H3 send_request error: {e}"))
+            })?;
+
+        request_stream
+            .finish()
+            .await
+            .map_err(|err| ProtoError::from(format!("H3 received a stream error: {err}")))?;
 
         let result = match timeout(self.timeout, recv(request_stream)).await {
             Ok(Ok(bytes)) => {
@@ -124,18 +134,7 @@ impl H3ConnectionBuilder {
             remote_addr: connect_info.get_full_remote_socket_addr(),
             timeout: connect_info.timeout,
             server_name: connect_info.host.clone(),
-            request_uri: if connect_info.port != ConnectType::DoH.default_port() {
-                let mut uri = format!(
-                    "https://{}{}:{}?dns=",
-                    connect_info.host, connect_info.port, connect_info.path
-                );
-                uri.reserve(512);
-                uri
-            } else {
-                let mut uri = format!("https://{}{}?dns=", connect_info.host, connect_info.path);
-                uri.reserve(512);
-                uri
-            },
+            request_uri: build_doh_request_uri(connect_info),
             insecure_skip_verify: connect_info.insecure_skip_verify,
         }
     }
@@ -162,7 +161,7 @@ impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
 
         let h3_conn = Arc::new(H3Connection {
             id: conn_id,
-            sender: Mutex::new(send_request),
+            sender: send_request,
             closed: AtomicBool::new(false),
             last_used: AtomicU64::new(AppClock::run_millis()),
             using_count: AtomicU16::new(0),

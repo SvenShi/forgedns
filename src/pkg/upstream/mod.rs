@@ -7,6 +7,7 @@ use crate::core::context::DnsContext;
 use crate::pkg::upstream::pool::h2_conn::H2ConnectionBuilder;
 use crate::pkg::upstream::pool::h3_conn::H3ConnectionBuilder;
 use crate::pkg::upstream::pool::pipeline::PipelinePool;
+use crate::pkg::upstream::pool::quic_conn::QuicConnectionBuilder;
 use crate::pkg::upstream::pool::reuse::ReusePool;
 use crate::pkg::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
@@ -270,8 +271,15 @@ impl UpStreamBuilder {
                     )
                 }
                 ConnectType::DoQ => {
-                    warn!("DoQ upstream not yet implemented");
-                    todo!()
+                    info!("Using Quic upstream");
+                    let builder = QuicConnectionBuilder::new(&connect_info);
+                    create_pipeline_pool(
+                        1,
+                        DEFAULT_MAX_CONNS_SIZE,
+                        DEFAULT_MAX_CONNS_LOAD,
+                        connect_info,
+                        Box::new(builder),
+                    )
                 }
                 ConnectType::DoH => {
                     info!("Using DoH upstream");

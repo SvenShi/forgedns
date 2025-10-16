@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::utils::{build_dns_get_request, connect_tls, get_buf_from_res};
+use crate::pkg::upstream::pool::utils::{build_dns_get_request, build_doh_request_uri, connect_tls, get_buf_from_res};
 use crate::pkg::upstream::pool::ConnectionBuilder;
-use crate::pkg::upstream::{ConnectInfo, ConnectType, Connection, DEFAULT_TIMEOUT};
+use crate::pkg::upstream::{ConnectInfo, Connection, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
 use h2::client::{ResponseFuture, SendRequest};
 use hickory_proto::op::Message;
@@ -118,21 +118,12 @@ impl H2ConnectionBuilder {
             remote_addr: connect_info.get_full_remote_socket_addr(),
             timeout: connect_info.timeout,
             server_name: connect_info.host.clone(),
-            request_uri: if connect_info.port != ConnectType::DoH.default_port() {
-                let mut uri = format!(
-                    "https://{}{}:{}?dns=",
-                    connect_info.host, connect_info.port, connect_info.path
-                );
-                uri.reserve(512);
-                uri
-            } else {
-                let mut uri = format!("https://{}{}?dns=", connect_info.host, connect_info.path);
-                uri.reserve(512);
-                uri
-            },
+            request_uri: build_doh_request_uri(connect_info),
             insecure_skip_verify: connect_info.insecure_skip_verify,
         }
     }
+
+
 }
 
 #[async_trait::async_trait]

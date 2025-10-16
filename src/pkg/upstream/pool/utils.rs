@@ -4,6 +4,7 @@
  */
 use crate::pkg::upstream::pool::Connection;
 use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
+use crate::pkg::upstream::{ConnectInfo, ConnectType};
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
 use bytes::BytesMut;
@@ -118,4 +119,19 @@ pub fn get_buf_from_res<T>(response: &mut Response<T>) -> BytesMut {
             .unwrap_or(4096),
     );
     response_bytes
+}
+
+pub fn build_doh_request_uri(connect_info: &ConnectInfo) -> String {
+    if connect_info.port != ConnectType::DoH.default_port() {
+        let mut uri = format!(
+            "https://{}{}:{}?dns=",
+            connect_info.host, connect_info.port, connect_info.path
+        );
+        uri.reserve(512);
+        uri
+    } else {
+        let mut uri = format!("https://{}{}?dns=", connect_info.host, connect_info.path);
+        uri.reserve(512);
+        uri
+    }
 }
