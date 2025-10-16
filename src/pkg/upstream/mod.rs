@@ -27,7 +27,7 @@ mod pool;
 mod tls_client_config;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_MAX_CONNS_SIZE: usize = 64;
+const DEFAULT_MAX_CONNS_SIZE: usize = 100;
 const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
 
 /// Supported upstream connection types
@@ -261,7 +261,13 @@ impl UpStreamBuilder {
                 ConnectType::TCP | ConnectType::DoT => {
                     info!("Using {:?} upstream", connect_info.connect_type);
                     let builder = TcpConnectionBuilder::new(&connect_info);
-                    create_pipeline_or_reuse_pool(connect_info, Box::new(builder), 1)
+                    create_pipeline_or_reuse_pool(
+                        1,
+                        DEFAULT_MAX_CONNS_SIZE,
+                        DEFAULT_MAX_CONNS_LOAD,
+                        connect_info,
+                        Box::new(builder),
+                    )
                 }
                 ConnectType::DoQ => {
                     warn!("DoQ upstream not yet implemented");
@@ -271,10 +277,10 @@ impl UpStreamBuilder {
                     info!("Using DoH upstream");
                     if connect_info.enable_http3 {
                         let builder = H2ConnectionBuilder::new(&connect_info);
-                        create_pipeline_or_reuse_pool(connect_info, Box::new(builder), 0)
+                        create_pipeline_pool(0, 64, 10, connect_info, Box::new(builder))
                     } else {
                         let builder = H3ConnectionBuilder::new(&connect_info);
-                        create_pipeline_or_reuse_pool(connect_info, Box::new(builder), 0)
+                        create_pipeline_pool(0, 64, 10, connect_info, Box::new(builder))
                     }
                 }
             }
@@ -285,26 +291,42 @@ impl UpStreamBuilder {
     }
 }
 
-fn create_pipeline_or_reuse_pool<C: Connection>(
+fn create_pipeline_pool<C: Connection>(
+    min_size: usize,
+    max_size: usize,
+    max_load: u16,
     connect_info: ConnectInfo,
     builder: Box<dyn ConnectionBuilder<C>>,
+) -> Box<dyn UpStream> {
+    Box::new(PooledUpstream::<C> {
+        connect_info,
+        pool: PipelinePool::new(min_size, max_size, max_load, builder),
+    })
+}
+
+fn create_reuse_pool<C: Connection>(
     min_size: usize,
+    max_size: usize,
+    connect_info: ConnectInfo,
+    builder: Box<dyn ConnectionBuilder<C>>,
+) -> Box<dyn UpStream> {
+    Box::new(PooledUpstream::<C> {
+        connect_info,
+        pool: ReusePool::new(min_size, max_size, builder),
+    })
+}
+
+fn create_pipeline_or_reuse_pool<C: Connection>(
+    min_size: usize,
+    max_size: usize,
+    max_load: u16,
+    connect_info: ConnectInfo,
+    builder: Box<dyn ConnectionBuilder<C>>,
 ) -> Box<dyn UpStream> {
     if connect_info.enable_pipeline.unwrap_or(false) {
-        Box::new(PooledUpstream::<C> {
-            connect_info,
-            pool: PipelinePool::new(
-                min_size,
-                DEFAULT_MAX_CONNS_SIZE,
-                DEFAULT_MAX_CONNS_LOAD,
-                builder,
-            ),
-        })
+        create_pipeline_pool(min_size, max_size, max_load, connect_info, builder)
     } else {
-        Box::new(PooledUpstream::<C> {
-            connect_info,
-            pool: ReusePool::new(min_size, DEFAULT_MAX_CONNS_SIZE, builder),
-        })
+        create_reuse_pool(min_size, max_size, connect_info, builder)
     }
 }
 
