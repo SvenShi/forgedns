@@ -6,17 +6,13 @@ use crate::core::app_clock::AppClock;
 use crate::pkg::upstream::pool::utils::{build_dns_get_request, connect_tls, get_buf_from_res};
 use crate::pkg::upstream::pool::ConnectionBuilder;
 use crate::pkg::upstream::{ConnectInfo, ConnectType, Connection, DEFAULT_TIMEOUT};
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
-use base64::Engine;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes};
 use h2::client::{ResponseFuture, SendRequest};
-use h2::RecvStream;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
-use http::header::CONTENT_LENGTH;
-use http::{Response, Version};
+use http::Version;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
@@ -30,7 +26,7 @@ use tracing::{debug, warn};
 #[derive(Debug)]
 pub struct H2Connection {
     id: u16,
-    sender: Mutex<SendRequest<Bytes>>,
+    sender: SendRequest<Bytes>,
     using_count: AtomicU16,
     closed: AtomicBool,
     last_used: AtomicU64,
@@ -64,14 +60,11 @@ impl Connection for H2Connection {
 
         let request = build_dns_get_request(self.request_uri.clone(), body_bytes, Version::HTTP_2);
 
-        let mut sender_guard = self.sender.lock().await;
         let (response_future, _send_stream) =
-            sender_guard.send_request(request, false).map_err(|e| {
+            self.sender.clone().send_request(request, false).map_err(|e| {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
                 ProtoError::from(format!("H2 send_request error: {e}"))
             })?;
-
-        drop(sender_guard);
 
         let result = match timeout(self.timeout, recv(response_future)).await {
             Ok(Ok(bytes)) => {
@@ -159,7 +152,7 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
 
         let h2_conn = Arc::new(H2Connection {
             id: conn_id,
-            sender: Mutex::new(sender),
+            sender,
             closed: AtomicBool::new(false),
             last_used: AtomicU64::new(AppClock::run_millis()),
             using_count: AtomicU16::new(0),

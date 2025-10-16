@@ -43,12 +43,7 @@ pub(crate) fn insecure_client_config() -> ClientConfig {
 fn set_alpn(mut config: ClientConfig) -> ClientConfig {
     config.alpn_protocols = vec![
         b"h3".to_vec(),
-        b"h3-29".to_vec(),
-        b"h3-30".to_vec(),
-        b"h3-31".to_vec(),
-        b"h3-32".to_vec(),
         b"h2".to_vec(),
-        b"http/1.1".to_vec(),
         b"dot".to_vec(),
         b"doq".to_vec(),
     ];
