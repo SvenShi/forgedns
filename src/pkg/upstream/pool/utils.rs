@@ -53,7 +53,6 @@ pub(crate) async fn connect_quic(
     conn_timeout: Duration,
 ) -> Result<quinn::Connection, ProtoError> {
     let udp_socket = UdpSocket::bind(bind_addr).await?;
-    udp_socket.connect(remote_addr).await?;
 
     let mut endpoint = Endpoint::new(
         EndpointConfig::default(),
