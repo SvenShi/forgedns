@@ -49,7 +49,7 @@ impl ConnectType {
             ConnectType::UDP => 53,
             ConnectType::TCP => 53,
             ConnectType::DoT => 853,
-            ConnectType::DoQ => 784,
+            ConnectType::DoQ => 853,
             ConnectType::DoH => 443,
         }
     }
