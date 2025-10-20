@@ -80,7 +80,7 @@ mod test {
 
     #[tokio::test]
     async fn test() {
-        for i in 0..5 {
+        for _ in 0..5 {
             let map = Arc::new(RequestMap::new());
             let mut set = JoinSet::new();
             for _ in 0..1000 {
@@ -104,7 +104,7 @@ mod test {
             )
         }
 
-        for i in 0..5 {
+        for _ in 0..5 {
             let map = Arc::new(RequestMap::new());
             let mut set = JoinSet::new();
             for _ in 0..1000 {
