@@ -15,7 +15,7 @@
 //! - Pre-parsed DNS queries to avoid repeated allocations
 
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpstreamConfig};
+use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RecordType};
 use std::net::IpAddr;
@@ -47,7 +47,7 @@ struct CacheData {
 #[derive(Debug)]
 pub(crate) struct Bootstrap {
     /// Upstream resolver for DNS queries
-    upstream: Box<dyn UpStream>,
+    upstream: Box<dyn Upstream>,
 
     /// Atomic state flag for lock-free fast path
     state: AtomicU8,
@@ -100,7 +100,7 @@ impl Bootstrap {
         message.add_query(Query::query(parsed_name.clone(), RecordType::A));
 
         Bootstrap {
-            upstream: UpStreamBuilder::with_upstream_config(&config),
+            upstream: UpstreamBuilder::with_upstream_config(&config),
             state: AtomicU8::new(STATE_NONE),
             cache: RwLock::new(None),
             query_done: Notify::new(),
@@ -126,7 +126,7 @@ impl Bootstrap {
                     // Hot path: check cache validity
                     let cache = self.cache.read().await;
                     if let Some(ref data) = *cache {
-                        if AppClock::run_millis() < data.expires_at {
+                        if AppClock::elapsed_millis() < data.expires_at {
                             // Cache hit - most common case
                             return Ok(data.ip);
                         }
@@ -225,7 +225,7 @@ impl Bootstrap {
                             );
 
                             // Update cache
-                            let expires_at = AppClock::run_millis() + ttl;
+                            let expires_at = AppClock::elapsed_millis() + ttl;
                             *self.cache.write().await = Some(CacheData { ip, expires_at });
 
                             // Transition to CACHED and wake waiting tasks

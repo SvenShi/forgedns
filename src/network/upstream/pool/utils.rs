@@ -11,9 +11,9 @@
 //! - DoH request construction
 //! - Connection cleanup
 
-use crate::pkg::upstream::pool::Connection;
-use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
-use crate::pkg::upstream::{ConnectInfo, ConnectType};
+use crate::network::upstream::pool::Connection;
+use crate::network::upstream::tls_client_config::{insecure_client_config, secure_client_config};
+use crate::network::upstream::{ConnectionInfo, ConnectionType};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use bytes::BytesMut;
@@ -168,16 +168,16 @@ pub fn get_buf_from_res<T>(response: &mut Response<T>) -> BytesMut {
 /// Build DoH request URI from connection info
 ///
 /// Constructs the full HTTPS URI for DoH requests, handling non-standard ports.
-pub fn build_doh_request_uri(connect_info: &ConnectInfo) -> String {
-    if connect_info.port != ConnectType::DoH.default_port() {
+pub fn build_doh_request_uri(connection_info: &ConnectionInfo) -> String {
+    if connection_info.port != ConnectionType::DoH.default_port() {
         let mut uri = format!(
             "https://{}:{}{}?dns=",
-            connect_info.host, connect_info.port, connect_info.path
+            connection_info.host, connection_info.port, connection_info.path
         );
         uri.reserve(512); // Pre-allocate for base64 query
         uri
     } else {
-        let mut uri = format!("https://{}{}?dns=", connect_info.host, connect_info.path);
+        let mut uri = format!("https://{}{}?dns=", connection_info.host, connection_info.path);
         uri.reserve(512);
         uri
     }

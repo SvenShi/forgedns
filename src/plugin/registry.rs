@@ -8,7 +8,7 @@
 //! Provides a centralized registry for managing plugin lifecycle,
 //! enabling better testability and support for multiple server instances.
 
-use crate::config::config::PluginConfig;
+use crate::config::types::PluginConfig;
 use crate::plugin::{PluginFactory, PluginInfo};
 use dashmap::DashMap;
 use std::collections::HashMap;
