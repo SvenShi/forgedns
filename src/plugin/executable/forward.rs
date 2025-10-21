@@ -12,9 +12,10 @@
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpstreamConfig};
-use crate::plugin::{Plugin, PluginFactory, PluginMainType};
+use crate::plugin::{Plugin, PluginFactory, PluginMainType, PluginRegistry};
 use async_trait::async_trait;
 use serde::Deserialize;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
@@ -102,12 +103,16 @@ pub struct ForwardConfig {
 pub struct ForwardFactory;
 
 impl PluginFactory for ForwardFactory {
-    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin> {
+    fn create(
+        &self,
+        plugin_info: &PluginConfig,
+        _registry: Arc<PluginRegistry>,
+    ) -> Result<Box<dyn Plugin>, String> {
         let forward_config = match plugin_info.args.clone() {
             Some(args) => serde_yml::from_value::<ForwardConfig>(args)
-                .unwrap_or_else(|e| panic!("Failed to parse Forward plugin config: {}", e)),
+                .map_err(|e| format!("Failed to parse Forward plugin config: {}", e))?,
             None => {
-                panic!("Forward plugin requires 'concurrent' and 'upstreams' configuration")
+                return Err("Forward plugin requires 'concurrent' and 'upstreams' configuration".to_string());
             }
         };
 
@@ -119,18 +124,17 @@ impl PluginFactory for ForwardFactory {
                 plugin_info.tag, upstream_config.addr
             );
 
-            Box::new(SingleDnsForwarder {
+            Ok(Box::new(SingleDnsForwarder {
                 tag: plugin_info.tag.clone(),
                 timeout: upstream_config.timeout.unwrap_or(Duration::from_secs(5)),
                 upstream: UpStreamBuilder::with_upstream_config(&upstream_config),
-            })
+            }))
         } else {
             // Multi-upstream configuration (not yet implemented)
-            warn!(
+            Err(format!(
                 "Multi-upstream forwarding not yet implemented, {} upstreams configured",
                 forward_config.upstreams.len()
-            );
-            todo!("Concurrent DNS forwarding with multiple upstreams not implemented yet")
+            ))
         }
     }
 
@@ -139,5 +143,19 @@ impl PluginFactory for ForwardFactory {
             tag: tag.to_string(),
             type_name: "forward".to_string(),
         }
+    }
+    
+    /// Validate forward plugin configuration
+    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<(), String> {
+        // Parse and validate forward-specific configuration
+        let _forward_config = match plugin_info.args.clone() {
+            Some(args) => serde_yml::from_value::<ForwardConfig>(args)
+                .map_err(|e| format!("Failed to parse Forward plugin config: {}", e))?,
+            None => {
+                return Err("Forward plugin requires 'concurrent' and 'upstreams' configuration".to_string());
+            }
+        };
+        
+        Ok(())
     }
 }

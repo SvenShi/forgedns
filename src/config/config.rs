@@ -9,8 +9,6 @@
 
 use serde::Deserialize;
 use serde_yml::Value;
-use std::net::SocketAddr;
-use std::str::FromStr;
 use thiserror::Error;
 
 /// Configuration validation errors
@@ -18,9 +16,6 @@ use thiserror::Error;
 pub enum ConfigError {
     #[error("Plugin tag cannot be empty")]
     EmptyPluginTag,
-
-    #[error("Invalid listen address: {0}")]
-    InvalidListenAddr(String),
 
     #[error("Invalid log level: {0}")]
     InvalidLogLevel(String),
@@ -43,8 +38,9 @@ pub struct Config {
 impl Config {
     /// Validate configuration
     ///
-    /// Checks for common configuration errors such as invalid log levels,
-    /// empty plugin tags, and invalid listen addresses.
+    /// Validates the configuration structure (log level, plugin tags/types).
+    /// Plugin-specific validation (e.g., listen addresses, upstreams) is delegated
+    /// to each PluginFactory during plugin initialization.
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Validate log level
         match self.log.level.to_lowercase().as_str() {
@@ -52,7 +48,7 @@ impl Config {
             _ => return Err(ConfigError::InvalidLogLevel(self.log.level.clone())),
         }
 
-        // Validate plugins
+        // Validate plugins - basic structure checks
         for plugin in &self.plugins {
             // Check for empty tag
             if plugin.tag.is_empty() {
@@ -62,19 +58,6 @@ impl Config {
             // Check for empty type
             if plugin.plugin_type.is_empty() {
                 return Err(ConfigError::EmptyPluginType);
-            }
-
-            // Validate server plugin listen addresses
-            if plugin.plugin_type == "udp_server" || plugin.plugin_type == "tcp_server" {
-                if let Some(args) = &plugin.args {
-                    if let Some(listen) = args.get("listen") {
-                        if let Some(listen_str) = listen.as_str() {
-                            if SocketAddr::from_str(listen_str).is_err() {
-                                return Err(ConfigError::InvalidListenAddr(listen_str.to_string()));
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -119,26 +102,4 @@ pub struct PluginConfig {
 
     /// Plugin-specific arguments (parsed by plugin factory)
     pub args: Option<Value>,
-}
-
-impl PluginConfig {
-    /// Extract dependencies from plugin configuration
-    ///
-    /// Returns a list of plugin tags that this plugin depends on.
-    /// Used for dependency resolution during initialization.
-    pub fn get_dependencies(&self) -> Vec<String> {
-        match self.plugin_type.as_str() {
-            "udp_server" | "tcp_server" => {
-                if let Some(args) = &self.args {
-                    if let Some(entry) = args.get("entry") {
-                        if let Some(entry_str) = entry.as_str() {
-                            return vec![entry_str.to_string()];
-                        }
-                    }
-                }
-                vec![]
-            }
-            _ => vec![],
-        }
-    }
 }

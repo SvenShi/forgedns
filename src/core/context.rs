@@ -13,6 +13,7 @@ use hickory_proto::xfer::DnsResponse;
 use std::any::Any;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 /// Context object for a DNS request/response lifecycle
 ///
@@ -22,8 +23,8 @@ use std::net::SocketAddr;
 /// - Optional DNS response
 /// - Marks for plugin decision tracking
 /// - Custom attributes for plugin communication
+/// - Reference to the plugin registry for runtime plugin access
 #[allow(unused)]
-#[derive(Debug)]
 pub struct DnsContext {
     /// Client's socket address
     pub src_addr: SocketAddr,
@@ -39,6 +40,12 @@ pub struct DnsContext {
 
     /// Custom attributes for inter-plugin communication
     pub attributes: HashMap<String, Box<dyn Any + Send + Sync>>,
+    
+    /// Reference to the plugin registry for runtime plugin lookup
+    /// 
+    /// Allows plugins to access other plugins during execution without
+    /// relying on global state.
+    pub registry: Arc<crate::plugin::PluginRegistry>,
 }
 
 #[allow(unused)]

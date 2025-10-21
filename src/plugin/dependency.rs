@@ -19,11 +19,15 @@ use std::collections::{HashMap, VecDeque};
 ///
 /// # Arguments
 /// * `configs` - Vector of plugin configurations
+/// * `get_deps` - Function to extract dependencies from a plugin configuration
 ///
 /// # Returns
 /// * `Ok(Vec<PluginConfig>)` - Plugins sorted in dependency order
 /// * `Err(String)` - Error message if circular dependency detected
-pub fn resolve_dependencies(configs: Vec<PluginConfig>) -> Result<Vec<PluginConfig>, String> {
+pub fn resolve_dependencies(
+    configs: Vec<PluginConfig>,
+    get_deps: &dyn Fn(&PluginConfig) -> Vec<String>,
+) -> Result<Vec<PluginConfig>, String> {
     // Build dependency graph (tag -> list of tags that depend on it)
     let mut reverse_graph: HashMap<String, Vec<String>> = HashMap::new();
     let mut in_degree: HashMap<String, usize> = HashMap::new();
@@ -36,7 +40,7 @@ pub fn resolve_dependencies(configs: Vec<PluginConfig>) -> Result<Vec<PluginConf
 
     // Build the reverse dependency graph and calculate in-degrees
     for config in &configs {
-        let deps = config.get_dependencies();
+        let deps = get_deps(config);
         
         // Set in-degree to number of dependencies
         *in_degree.get_mut(&config.tag).unwrap() = deps.len();
@@ -87,6 +91,23 @@ pub fn resolve_dependencies(configs: Vec<PluginConfig>) -> Result<Vec<PluginConf
 mod tests {
     use super::*;
 
+    // Mock dependency extraction function for tests
+    fn mock_get_deps(config: &PluginConfig) -> Vec<String> {
+        match config.plugin_type.as_str() {
+            "udp_server" | "tcp_server" => {
+                if let Some(args) = &config.args {
+                    if let Some(entry) = args.get("entry") {
+                        if let Some(entry_str) = entry.as_str() {
+                            return vec![entry_str.to_string()];
+                        }
+                    }
+                }
+                vec![]
+            }
+            _ => vec![],
+        }
+    }
+
     #[test]
     fn test_resolve_simple_dependency() {
         let configs = vec![
@@ -109,7 +130,7 @@ mod tests {
             },
         ];
 
-        let sorted = resolve_dependencies(configs).unwrap();
+        let sorted = resolve_dependencies(configs, &mock_get_deps).unwrap();
         assert_eq!(sorted[0].tag, "forward");
         assert_eq!(sorted[1].tag, "server");
     }
@@ -122,7 +143,7 @@ mod tests {
             args: None,
         }];
 
-        let sorted = resolve_dependencies(configs).unwrap();
+        let sorted = resolve_dependencies(configs, &mock_get_deps).unwrap();
         assert_eq!(sorted.len(), 1);
         assert_eq!(sorted[0].tag, "forward");
     }
