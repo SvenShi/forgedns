@@ -3,14 +3,30 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+//! Configuration module
+//!
+//! Handles loading and parsing of YAML configuration files.
+//! Defines the structure for server configuration including:
+//! - Logging settings
+//! - Plugin configurations
+
 use crate::config::config::Config;
 use std::fs;
 use std::path::PathBuf;
 
 pub mod config;
 
+/// Load and parse configuration from YAML file
+///
+/// # Panics
+/// Panics if the file cannot be read or if YAML parsing fails.
+/// This is intentional as the server cannot operate without valid configuration.
 pub fn init(file: &PathBuf) -> Config {
-    let string = fs::read_to_string(file).unwrap();
-    let config: Config = serde_yml::from_str(&string).expect("Failed to parse config file");
+    let string = fs::read_to_string(file)
+        .unwrap_or_else(|e| panic!("Failed to read config file {:?}: {}", file, e));
+    let config: Config = serde_yml::from_str(&string)
+        .unwrap_or_else(|e| panic!("Failed to parse config file {:?}: {}", file, e));
+    
+    eprintln!("Configuration loaded: {} plugin(s) configured", config.plugins.len());
     config
 }

@@ -3,21 +3,42 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+//! Lock-free request/response correlation map
+//!
+//! Maps DNS query IDs to response channels using lock-free atomic operations.
+//! This is a hot path - all operations are wait-free for maximum performance.
+//!
+//! # Performance Characteristics
+//! - Store operation: O(1) average case with random retry
+//! - Take operation: O(1) atomic swap
+//! - No locks or async operations
+//! - Cache-friendly: slots are inline in the array
+
 use hickory_proto::xfer::DnsResponse;
 use rand::random;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU16, Ordering};
 use tokio::sync::oneshot::Sender;
 
+/// Maximum number of concurrent requests (DNS ID space is u16)
 const MAX_IDS: usize = u16::MAX as usize;
 
+/// Lock-free request correlation map
+///
+/// Uses atomic pointers to map DNS query IDs to response channels.
+/// All operations are wait-free for hot-path performance.
 #[derive(Debug)]
 pub struct RequestMap {
+    /// Array of atomic pointers to response senders
+    /// Index = DNS query ID
     slots: Vec<AtomicPtr<Sender<DnsResponse>>>,
+    
+    /// Current number of active requests
     size: AtomicU16,
 }
 
 impl RequestMap {
+    /// Create a new empty request map
     pub fn new() -> Self {
         let mut slots = Vec::with_capacity(MAX_IDS);
         for _ in 0..MAX_IDS + 1 {
@@ -29,6 +50,13 @@ impl RequestMap {
         }
     }
 
+    /// Store a response sender and get a unique query ID
+    ///
+    /// Uses randomized probing to find an empty slot.
+    /// This is wait-free - never blocks or yields.
+    ///
+    /// # Returns
+    /// A unique u16 query ID that can be used to retrieve the sender later
     #[inline(always)]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn store(&self, tx: Sender<DnsResponse>) -> u16 {
@@ -36,7 +64,7 @@ impl RequestMap {
 
         loop {
             let id = random::<u16>() as usize;
-            // cas
+            // Try to claim this slot with compare-and-swap
             if self.slots[id]
                 .compare_exchange(ptr::null_mut(), ptr, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
@@ -47,6 +75,16 @@ impl RequestMap {
         }
     }
 
+    /// Take a response sender by query ID
+    ///
+    /// Atomically removes and returns the sender for the given ID.
+    /// Returns None if no sender exists for this ID.
+    ///
+    /// # Arguments
+    /// * `id` - The DNS query ID
+    ///
+    /// # Returns
+    /// The response sender if it exists, None otherwise
     #[inline(always)]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn take(&self, id: u16) -> Option<Sender<DnsResponse>> {
@@ -60,10 +98,12 @@ impl RequestMap {
         }
     }
 
+    /// Get the current number of active requests
     pub fn size(&self) -> u16 {
         self.size.load(Ordering::Relaxed)
     }
 
+    /// Check if the map is empty
     pub fn is_empty(&self) -> bool {
         self.size.load(Ordering::Relaxed) == 0
     }
@@ -80,6 +120,7 @@ mod test {
 
     #[tokio::test]
     async fn test() {
+        // Test store performance
         for _ in 0..5 {
             let map = Arc::new(RequestMap::new());
             let mut set = JoinSet::new();
@@ -104,6 +145,7 @@ mod test {
             )
         }
 
+        // Test take performance
         for _ in 0..5 {
             let map = Arc::new(RequestMap::new());
             let mut set = JoinSet::new();

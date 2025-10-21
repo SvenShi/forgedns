@@ -3,6 +3,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+//! Core functionality module
+//!
+//! Provides essential infrastructure including:
+//! - Runtime initialization and command-line argument parsing
+//! - Logging system setup with custom formatters
+//! - Application clock for high-performance time tracking
+//! - DNS request/response context management
+
 use crate::config::config::LogConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::log::RustDnsLogFormatter;
@@ -19,19 +27,33 @@ pub mod context;
 mod log;
 mod runtime;
 
-/// 初始化核心包
+/// Initialize the core runtime system
+///
+/// Parses command-line options and starts the application clock.
+/// The clock runs in the background to provide high-performance timestamps.
 pub fn init() -> Runtime {
     let options = Options::parse();
 
+    // Start background clock for efficient timestamp generation
     AppClock::run();
+    
+    eprintln!("Core runtime initialized (clock started)");
 
     Runtime { options }
 }
 
-///初始化log
+/// Initialize the logging system with console and optional file output
+///
+/// Sets up a dual-layer logging system:
+/// - Console output (always enabled)
+/// - File output (optional, based on config)
+///
+/// Both use the custom RustDnsLogFormatter for consistent formatting.
+/// Returns a WorkerGuard that must be kept alive to ensure log flushing.
 pub fn log_init(log: LogConfig) -> WorkerGuard {
-    // 创建文件appender（如果配置了文件路径）
-    let (file_writer, guard) = if let Some(file_path) = log.file {
+    // Create file appender if a file path is configured
+    let (file_writer, guard) = if let Some(ref file_path) = log.file {
+        eprintln!("Logging to file: {}", file_path);
         let file_appender = tracing_appender::rolling::never(
             std::path::Path::new(&file_path).parent().unwrap(),
             std::path::Path::new(&file_path).file_name().unwrap(),
@@ -42,37 +64,41 @@ pub fn log_init(log: LogConfig) -> WorkerGuard {
         (None, None)
     };
 
-    // 构建控制台layer
+    // Build console logging layer
     let console_layer = fmt::layer()
         .event_format(RustDnsLogFormatter)
         .with_writer(std::io::stdout);
 
-    // 构建文件layer（如果配置了文件路径）
+    // Build file logging layer (if configured)
     let file_layer = file_writer.map(|writer| {
         fmt::layer()
             .event_format(RustDnsLogFormatter)
             .with_writer(writer)
     });
 
-    let mut filter = EnvFilter::try_new(&log.level).unwrap_or_else(|_| EnvFilter::new("info"));
+    let mut filter = EnvFilter::try_new(&log.level).unwrap_or_else(|_| {
+        eprintln!("Invalid log level '{}', defaulting to 'info'", log.level);
+        EnvFilter::new("info")
+    });
 
-    // 屏蔽 hickory_server::server
+    // Suppress noisy hickory_server logs
     filter = filter.add_directive("hickory_server::server=off".parse().unwrap());
 
     let subscriber = Registry::default().with(filter).with(console_layer);
 
-    // 添加文件layer（如果存在）
+    // Add file layer if it exists
     if let Some(file_layer) = file_layer {
         let subscriber = subscriber.with(file_layer);
-        // 设置全局默认subscriber
         subscriber.init();
     } else {
         subscriber.init();
     };
+    
+    eprintln!("Logging system initialized with level: {}", log.level);
 
-    // 返回WorkerGuard以确保日志在程序退出前被刷新
+    // Return WorkerGuard to ensure logs are flushed before program exit
     guard.unwrap_or_else(|| {
-        // 如果没有文件日志，返回一个空的guard
+        // If no file logging, return a dummy guard
         tracing_appender::non_blocking(std::io::sink()).1
     })
 }

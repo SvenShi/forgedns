@@ -93,12 +93,14 @@ impl<C: Connection> ConnectionPool<C> for PipelinePool<C> {
         close_conns(&drop_vec);
         close_conns(&invalid_vec);
 
-        debug!(
-            "connection pool maintenance: dropped {} idle connections, dropped {} invalid connections, active={}",
-            drop_vec.len(),
-            invalid_vec.len(),
-            new_len
-        );
+        if !drop_vec.is_empty() || !invalid_vec.is_empty() {
+            debug!(
+                "Pipeline pool maintenance: dropped {} idle, {} invalid, {} active",
+                drop_vec.len(),
+                invalid_vec.len(),
+                new_len
+            );
+        }
 
         // try to keep min_size connections
         if new_len < self.min_size {
@@ -243,10 +245,12 @@ impl<C: Connection> PipelinePool<C> {
             ) {
                 // set index near the end to give round robin fairness
                 self.index.store(new_len - 1, Ordering::Relaxed);
-                debug!(
-                    "Expanding pool: creating {} new connections (current={}/{})",
-                    new_conns_len, new_len, self.max_size
-                );
+                if new_conns_len > 0 {
+                    debug!(
+                        "Pipeline pool expanded: +{} connections (total={}/{})",
+                        new_conns_len, new_len, self.max_size
+                    );
+                }
                 break Ok(());
             } else {
                 // lost the race (someone else updated), retry: reload conns and try again, but re-use any remaining created (should be none)

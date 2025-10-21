@@ -21,7 +21,7 @@ use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 /// Represents a single UDP connection used in DNS upstream queries.
 /// Each connection manages its own socket and maintains a mapping
@@ -124,7 +124,6 @@ impl Connection for UdpConnection {
 impl UdpConnection {
     /// Construct a new UDP connection with the given parameters.
     fn new(conn_id: u16, socket: UdpSocket, timeout: Duration) -> UdpConnection {
-        debug!(conn_id, "Creating new UDP connection");
         Self {
             id: conn_id,
             socket,
@@ -215,7 +214,7 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
         let socket = UdpSocket::bind(self.bind_addr).await?;
         socket.connect(self.remote_addr).await?;
 
-        debug!(conn_id, local = ?self.bind_addr, remote = ?self.remote_addr, "Establishing new UDP connection");
+        info!("Established UDP connection (id={}, remote={})", conn_id, self.remote_addr);
 
         let connection = UdpConnection::new(conn_id, socket, self.timeout);
         let arc = Arc::new(connection);

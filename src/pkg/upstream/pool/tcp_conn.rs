@@ -29,7 +29,7 @@ use tokio::sync::{
     oneshot,
 };
 use tokio::time::timeout;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 /// Represents a single persistent TCP-based DNS connection.
 /// Handles both plaintext TCP and TLS (DoT) connections, supporting
@@ -293,13 +293,9 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                     warn!(conn_id, ?e, "Failed to enable TCP_NODELAY");
                 }
 
-                debug!(
-                    conn_id,
-                    local = ?stream.local_addr(),
-                    remote = ?stream.peer_addr(),
-                    tls = self.tls_enabled,
-                    "Established new {:?} connection",
-                    self.connect_type
+                info!(
+                    "Established {:?} connection (id={}, remote={:?})",
+                    self.connect_type, conn_id, stream.peer_addr()
                 );
 
                 let (sender, receiver) = unbounded_channel();

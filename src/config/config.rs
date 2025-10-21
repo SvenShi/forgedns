@@ -3,25 +3,32 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+//! Configuration structure definitions
+//!
+//! Defines the schema for RustDNS configuration files (YAML format).
+
 use serde::Deserialize;
 use serde_yml::Value;
 
+/// Main server configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    /// log 配置
+    /// Logging configuration (level, file output)
     #[serde(default)]
     pub log: LogConfig,
-    /// 插件
+    
+    /// List of plugins to load and their configurations
     pub plugins: Vec<PluginConfig>,
 }
 
-/// 日志配置
+/// Logging configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct LogConfig {
-    ///等级 off trace debug info warn error
+    /// Log level: off, trace, debug, info, warn, error
     #[serde(default = "default_level")]
     pub level: String,
-    /// 日志是否保存到文件中
+    
+    /// Optional file path for log output (in addition to console)
     pub file: Option<String>,
 }
 
@@ -34,18 +41,21 @@ impl Default for LogConfig {
     }
 }
 
+/// Default log level
 fn default_level() -> String {
     "info".to_string()
 }
 
-/// 插件配置
+/// Plugin configuration entry
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginConfig {
-    /// 插件标识符
+    /// Unique identifier for this plugin instance
     pub tag: String,
-    /// 插件类型
+    
+    /// Plugin type (e.g., "udp_server", "forward")
     #[serde(rename = "type")]
     pub plugin_type: String,
-    /// 插件参数
+    
+    /// Plugin-specific arguments (parsed by plugin factory)
     pub args: Option<Value>,
 }

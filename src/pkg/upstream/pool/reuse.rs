@@ -67,13 +67,12 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
         let now = AppClock::run_millis();
         let mut drop_vec = Vec::new();
         let mut invalid_vec = Vec::new();
-        let check_count = self.connections.len();
 
-        debug!(
-            "Scanning connection pool: total={}, active={}",
-            check_count,
-            self.active_count.load(Ordering::Relaxed)
-        );
+        // Only log if there are connections to scan
+        let check_count = self.connections.len();
+        if check_count == 0 {
+            return;
+        }
 
         for _ in 0..check_count {
             if let Some(conn) = self.connections.pop() {
@@ -118,16 +117,21 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
         close_conns(&drop_vec);
         close_conns(&invalid_vec);
 
+        // Log maintenance results if significant
+        if !drop_vec.is_empty() || !invalid_vec.is_empty() {
+            debug!(
+                "Reuse pool maintenance: dropped {} idle, {} invalid, {} active",
+                drop_vec.len(),
+                invalid_vec.len(),
+                self.active_count.load(Ordering::Relaxed)
+            );
+        }
+        
         // Expand if below min_size
         if self.active_count.load(Ordering::Relaxed) < self.min_size {
-            debug!("Expanding connection pool to maintain minimum size");
+            debug!("Reuse pool expanding to maintain minimum size");
             let _ = self.expand().await;
         }
-
-        debug!(
-            "Connection pool scan complete: active_count={}",
-            self.active_count.load(Ordering::Relaxed)
-        );
     }
 }
 
@@ -268,12 +272,14 @@ impl<C: Connection> ReusePool<C> {
 
         let created_len = created.len();
 
-        debug!(
-            "Expanding pool: creating {} new connections (current={}/{})",
-            created_len,
-            created_len + conns_len,
-            self.max_size
-        );
+        if created_len > 0 {
+            debug!(
+                "Reuse pool expanded: +{} connections (total={}/{})",
+                created_len,
+                self.active_count.load(Ordering::Relaxed),
+                self.max_size
+            );
+        }
 
         Ok(())
     }
