@@ -91,12 +91,17 @@ async fn app_run() {
     info!("RustDNS server initializing...");
 
     // Initialize plugins with dependency resolution
-    if let Err(e) = plugin::init(config).await {
-        error!("Plugin initialization failed: {}", e);
-        std::process::exit(1);
+    // The registry is created and returned by init()
+    match plugin::init(config).await {
+        Ok(_registry) => {
+            info!("RustDNS server started successfully");
+            // Registry is now available for the application lifetime
+        }
+        Err(e) => {
+            error!("Plugin initialization failed: {}", e);
+            std::process::exit(1);
+        }
     }
-
-    info!("RustDNS server started successfully");
 
     // Runtime (and log_guard) will be dropped here, ensuring logs are flushed
 }

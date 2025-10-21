@@ -18,81 +18,44 @@ use crate::core::context::DnsContext;
 use crate::plugin::executable::forward::ForwardFactory;
 use crate::plugin::server::udp::UdpServerFactory;
 use async_trait::async_trait;
-use dashmap::DashMap;
-use lazy_static::lazy_static;
 use serde::Deserialize;
 use serde_yml::Value;
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use tracing::info;
 
 mod dependency;
 pub mod executable;
+mod registry;
 mod server;
 
-lazy_static! {
-    /// Global registry of plugin factories
-    /// Maps plugin type names to their factory implementations
-    static ref FACTORIES: HashMap<&'static str, Box<dyn PluginFactory>> = {
-        let mut m: HashMap<&str, Box<dyn PluginFactory>> = HashMap::new();
-        m.insert("forward", Box::new(ForwardFactory {}));
-        m.insert("udp_server", Box::new(UdpServerFactory {}));
-        m
-    };
-
-    /// Global registry of initialized plugin instances
-    /// Maps plugin tags to their runtime instances
-    static ref PLUGINS: DashMap<String, Arc<PluginInfo>> = DashMap::new();
-}
+pub use registry::PluginRegistry;
 
 /// Initialize all configured plugins
 ///
-/// Automatically resolves plugin dependencies and initializes plugins in the
-/// correct order. This ensures that dependency plugins are initialized before
-/// plugins that depend on them, regardless of the order in the config file.
-pub async fn init(config: Config) -> Result<(), String> {
-    info!("Resolving plugin dependencies...");
-    let sorted_plugins = dependency::resolve_dependencies(config.plugins)?;
-
-    info!(
-        "Initializing {} plugins in dependency order",
-        sorted_plugins.len()
-    );
-
-    for (idx, plugin_config) in sorted_plugins.iter().enumerate() {
-        info!(
-            "  [{}/{}] Initializing plugin: {} (type: {})",
-            idx + 1,
-            sorted_plugins.len(),
-            plugin_config.tag,
-            plugin_config.plugin_type
-        );
-
-        let factory = FACTORIES
-            .get(plugin_config.plugin_type.as_str())
-            .ok_or_else(|| format!("Unknown plugin type: {}", plugin_config.plugin_type))?;
-
-        let mut plugin_info = PluginInfo::from(&plugin_config, &factory);
-        plugin_info.plugin.as_mut().init().await;
-        PLUGINS.insert(plugin_config.tag.clone(), Arc::new(plugin_info));
-    }
-
-    info!("All plugins initialized successfully");
-    Ok(())
-}
-
-/// Get a plugin instance by tag
+/// Creates a registry, registers all built-in factories, and initializes plugins
+/// in dependency order. Returns the initialized registry.
 ///
-/// Returns None if no plugin with the given tag exists
-pub fn get_plugin(tag: &str) -> Option<Arc<PluginInfo>> {
-    Some(PLUGINS.get(tag)?.clone())
-}
-
-/// Register or update a plugin instance
-#[allow(unused)]
-pub fn set_plugin(plugin_info: Arc<PluginInfo>) {
-    PLUGINS.insert(plugin_info.tag.to_owned(), plugin_info);
+/// # Arguments
+/// * `config` - Server configuration containing plugin definitions
+///
+/// # Returns
+/// * `Ok(Arc<PluginRegistry>)` - Initialized plugin registry
+/// * `Err(String)` - Error message if initialization fails
+pub async fn init(config: Config) -> Result<Arc<PluginRegistry>, String> {
+    // Create and configure the registry
+    let mut registry = PluginRegistry::new();
+    
+    // Register all built-in plugin factories
+    registry.register_factory("forward", Box::new(ForwardFactory {}));
+    registry.register_factory("udp_server", Box::new(UdpServerFactory {}));
+    
+    // Wrap in Arc for sharing
+    let registry = Arc::new(registry);
+    
+    // Initialize all plugins (clone Arc to keep a reference)
+    registry.clone().init_plugins(config.plugins).await?;
+    
+    Ok(registry)
 }
 
 /// Plugin category classification
@@ -172,11 +135,38 @@ pub trait Plugin: Send + Sync + 'static {
 /// Plugin factory trait for creating plugin instances from configuration
 #[async_trait]
 pub trait PluginFactory: Send + Sync + 'static {
-    /// Create a new plugin instance from configuration
-    fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin>;
+    /// Create a new plugin instance from configuration with registry access
+    /// 
+    /// # Arguments
+    /// * `plugin_info` - Plugin configuration from the config file
+    /// * `registry` - Shared reference to the plugin registry for accessing other plugins
+    /// 
+    /// This method receives a reference-counted pointer to the plugin registry,
+    /// allowing plugins to store and use it during their lifecycle.
+    fn create(
+        &self,
+        plugin_info: &PluginConfig,
+        registry: Arc<PluginRegistry>,
+    ) -> Result<Box<dyn Plugin>, String>;
 
     /// Get the plugin type for a given tag
     fn plugin_type(&self, tag: &str) -> PluginMainType;
+
+    /// Validate plugin-specific configuration
+    ///
+    /// Each plugin factory can validate its own configuration format.
+    /// Default implementation does nothing (assumes valid).
+    fn validate_config(&self, _plugin_info: &PluginConfig) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Get plugin dependencies from configuration
+    ///
+    /// Returns a list of plugin tags that this plugin depends on.
+    /// Default implementation returns empty (no dependencies).
+    fn get_dependencies(&self, _plugin_info: &PluginConfig) -> Vec<String> {
+        vec![]
+    }
 }
 
 /// Plugin metadata and instance container
@@ -193,17 +183,4 @@ pub struct PluginInfo {
 
     /// The actual plugin implementation
     pub plugin: Box<dyn Plugin>,
-}
-
-impl PluginInfo {
-    pub fn from(config: &PluginConfig, factory: &Box<dyn PluginFactory>) -> PluginInfo {
-        let plugin = factory.create(config);
-
-        PluginInfo {
-            tag: config.tag.clone(),
-            plugin_type: factory.plugin_type(&config.tag),
-            args: config.args.clone(),
-            plugin,
-        }
-    }
 }
