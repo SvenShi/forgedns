@@ -443,6 +443,23 @@ impl ConnectionBuilderFactory {
         ConnectionBuilderFactory { connect_info }
     }
 
+    /// Build a ConnectionBuilder with the resolved IP address.
+    ///
+    /// # Safety
+    ///
+    /// This method uses `unsafe transmute` to convert concrete ConnectionBuilder types
+    /// to the generic type `C`. This is SAFE because:
+    ///
+    /// 1. The generic parameter `C` in `DomainUpstream<C>` is determined at creation time
+    ///    based on `connect_info.connect_type`
+    /// 2. `connect_info.connect_type` is immutable and never changes at runtime
+    /// 3. The match ensures we always transmute the correct concrete type to `C`:
+    ///    - ConnectType::UDP → always used with DomainUpstream<UdpConnection>
+    ///    - ConnectType::TCP → always used with DomainUpstream<TcpConnection>
+    ///    - etc.
+    ///
+    /// The type invariant is established in `UpStreamBuilder::with_upstream_config()`
+    /// where `DomainUpstream<C>` is created with the matching `C` for each ConnectType.
     pub fn build<C: Connection>(&self, ip: IpAddr) -> Box<dyn ConnectionBuilder<C>> {
         let mut info = self.connect_info.clone();
         info.remote_addr = ip.to_string();
@@ -569,6 +586,7 @@ impl<C: Connection> DomainUpstream<C> {
                 } else {
                     ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, builder)
                 }
+
             }
             ConnectType::DoQ | ConnectType::DoH => {
                 PipelinePool::new(1, DEFAULT_MAX_CONNS_SIZE, DEFAULT_MAX_CONNS_LOAD, builder)
@@ -614,3 +632,4 @@ impl<C: Connection> ConnectionBuilder<C> for DummyConnectionBuilder {
         ))
     }
 }
+
