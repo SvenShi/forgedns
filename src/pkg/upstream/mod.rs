@@ -38,9 +38,9 @@ use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -286,7 +286,10 @@ impl UpStreamBuilder {
                     })
                 }
                 ConnectType::TCP | ConnectType::DoT => {
-                    debug!("Creating {:?} upstream for {}", connect_info.connect_type, connect_info.raw_addr);
+                    debug!(
+                        "Creating {:?} upstream for {}",
+                        connect_info.connect_type, connect_info.raw_addr
+                    );
                     let builder = TcpConnectionBuilder::new(&connect_info);
                     create_pipeline_or_reuse_pool(
                         1,
@@ -308,9 +311,11 @@ impl UpStreamBuilder {
                     )
                 }
                 ConnectType::DoH => {
-                    debug!("Creating DoH upstream for {} (HTTP/{})", 
-                           connect_info.raw_addr, 
-                           if connect_info.enable_http3 { "3" } else { "2" });
+                    debug!(
+                        "Creating DoH upstream for {} (HTTP/{})",
+                        connect_info.raw_addr,
+                        if connect_info.enable_http3 { "3" } else { "2" }
+                    );
                     if connect_info.enable_http3 {
                         let builder = H3ConnectionBuilder::new(&connect_info);
                         create_pipeline_pool(

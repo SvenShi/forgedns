@@ -40,14 +40,16 @@ impl AppClock {
     /// Safe to call multiple times (only runs once via `Once`)
     pub(crate) fn run() {
         CLOCK_INIT.call_once(|| {
-            START_INSTANT.set(Instant::now()).expect("Clock initialization should never fail");
+            START_INSTANT
+                .set(Instant::now())
+                .expect("Clock initialization should never fail");
 
             // Spawn background task to update time every millisecond
             tokio::spawn(async move {
                 loop {
                     let base = START_INSTANT.get().unwrap();
                     GLOBAL_NOW.store(base.elapsed().as_millis() as u64, Ordering::Relaxed);
-                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    tokio::time::sleep(Duration::from_millis(30)).await;
                 }
             });
         })

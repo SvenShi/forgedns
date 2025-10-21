@@ -126,7 +126,7 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
                 self.active_count.load(Ordering::Relaxed)
             );
         }
-        
+
         // Expand if below min_size
         if self.active_count.load(Ordering::Relaxed) < self.min_size {
             debug!("Reuse pool expanding to maintain minimum size");

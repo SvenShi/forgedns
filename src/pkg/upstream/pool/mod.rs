@@ -126,7 +126,7 @@ pub trait ConnectionPool<C: Connection>: Send + Sync + Debug + 'static {
 }
 
 /// Maintenance interval for pool cleanup
-const MAINTENANCE_DURATION: Duration = Duration::from_secs(5);
+const MAINTENANCE_DURATION: Duration = Duration::from_secs(10);
 
 /// Start background maintenance task for a connection pool
 ///

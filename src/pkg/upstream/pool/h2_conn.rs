@@ -181,7 +181,7 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
 async fn recv(response_future: ResponseFuture) -> Result<Bytes, ProtoError> {
     let mut response = response_future
         .await
-        .map_err(|e| ProtoError::from(format!("H3 response error: {}", e)))?;
+        .map_err(|e| ProtoError::from(format!("H2 response error: {}", e)))?;
 
     let status_code = response.status();
     let mut response_bytes = get_buf_from_res(&mut response);

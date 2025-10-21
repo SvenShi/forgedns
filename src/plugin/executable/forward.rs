@@ -41,7 +41,10 @@ impl Plugin for SingleDnsForwarder {
     }
 
     async fn init(&mut self) {
-        info!("DNS forwarder initialized (tag: {}, timeout: {:?})", self.tag, self.timeout);
+        info!(
+            "DNS forwarder initialized (tag: {}, timeout: {:?})",
+            self.tag, self.timeout
+        );
     }
 
     async fn execute(&self, context: &mut DnsContext) {
@@ -107,7 +110,7 @@ impl PluginFactory for ForwardFactory {
                 panic!("Forward plugin requires 'concurrent' and 'upstreams' configuration")
             }
         };
-        
+
         if forward_config.upstreams.len() == 1 {
             // Single upstream configuration
             let upstream_config = &forward_config.upstreams[0];
@@ -123,7 +126,10 @@ impl PluginFactory for ForwardFactory {
             })
         } else {
             // Multi-upstream configuration (not yet implemented)
-            warn!("Multi-upstream forwarding not yet implemented, {} upstreams configured", forward_config.upstreams.len());
+            warn!(
+                "Multi-upstream forwarding not yet implemented, {} upstreams configured",
+                forward_config.upstreams.len()
+            );
             todo!("Concurrent DNS forwarding with multiple upstreams not implemented yet")
         }
     }

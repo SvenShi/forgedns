@@ -92,10 +92,6 @@ impl Connection for UdpConnection {
                 }
                 Err(_) => {
                     self.request_map.take(query_id);
-                    warn!(
-                        conn_id = self.id,
-                        query_id, "Query timed out (will retry if possible)"
-                    );
                 }
             }
 
@@ -214,7 +210,10 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
         let socket = UdpSocket::bind(self.bind_addr).await?;
         socket.connect(self.remote_addr).await?;
 
-        info!("Established UDP connection (id={}, remote={})", conn_id, self.remote_addr);
+        info!(
+            "Established UDP connection (id={}, remote={})",
+            conn_id, self.remote_addr
+        );
 
         let connection = UdpConnection::new(conn_id, socket, self.timeout);
         let arc = Arc::new(connection);

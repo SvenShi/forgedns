@@ -25,10 +25,10 @@ use tokio::sync::{Notify, RwLock};
 use tracing::{debug, error, info, warn};
 
 // State machine constants for atomic state transitions
-const STATE_NONE: u8 = 0;      // Initial state, needs query
-const STATE_QUERYING: u8 = 1;  // Currently performing DNS lookup
-const STATE_CACHED: u8 = 2;    // Valid cached result available
-const STATE_FAILED: u8 = 3;    // Previous query failed
+const STATE_NONE: u8 = 0; // Initial state, needs query
+const STATE_QUERYING: u8 = 1; // Currently performing DNS lookup
+const STATE_CACHED: u8 = 2; // Valid cached result available
+const STATE_FAILED: u8 = 3; // Previous query failed
 
 /// Cached DNS resolution result
 #[derive(Clone, Debug)]
@@ -47,19 +47,19 @@ struct CacheData {
 pub(crate) struct Bootstrap {
     /// Upstream resolver for DNS queries
     upstream: Box<dyn UpStream>,
-    
+
     /// Atomic state flag for lock-free fast path
     state: AtomicU8,
-    
+
     /// Cached resolution data with TTL
     cache: RwLock<Option<CacheData>>,
-    
+
     /// Notifier for query completion (wakes waiting tasks)
     query_done: Notify,
 
     /// Pre-built DNS query message (optimization)
     message: Message,
-    
+
     /// Domain name being resolved (for logging only)
     domain: String,
 }
@@ -89,7 +89,7 @@ impl Bootstrap {
         // Pre-parse domain name (fail fast during initialization)
         let parsed_name = Name::from_str(domain)
             .unwrap_or_else(|e| panic!("Invalid domain name '{}': {}", domain, e));
-        
+
         // Pre-build DNS query message (optimization: avoid repeated allocations)
         let mut message = Message::new();
         message.set_id(rand::random());
@@ -97,7 +97,7 @@ impl Bootstrap {
         message.set_op_code(OpCode::Query);
         message.set_recursion_desired(true);
         message.add_query(Query::query(parsed_name.clone(), RecordType::A));
-        
+
         Bootstrap {
             upstream: UpStreamBuilder::with_upstream_config(&config),
             state: AtomicU8::new(STATE_NONE),
@@ -211,10 +211,17 @@ impl Bootstrap {
 
                 // Find first A or AAAA record
                 for answer in answers {
-                    if answer.record_type() == RecordType::A || answer.record_type() == RecordType::AAAA {
+                    if answer.record_type() == RecordType::A
+                        || answer.record_type() == RecordType::AAAA
+                    {
                         if let Some(ip) = answer.data().ip_addr() {
                             let ttl = answer.ttl() as u64 * 1000; // Convert to milliseconds
-                            info!("Bootstrap resolved {} to {} (TTL: {}s)", self.domain, ip, ttl / 1000);
+                            info!(
+                                "Bootstrap resolved {} to {} (TTL: {}s)",
+                                self.domain,
+                                ip,
+                                ttl / 1000
+                            );
 
                             // Update cache
                             let expires_at = AppClock::run_millis() + ttl;

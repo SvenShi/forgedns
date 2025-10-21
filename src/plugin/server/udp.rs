@@ -36,7 +36,7 @@ use tracing::{Level, debug, error, event_enabled, info, warn};
 pub struct UdpServerConfig {
     /// Entry executor plugin tag to process incoming requests
     pub entry: String,
-    
+
     /// UDP listen address (e.g., "0.0.0.0:53")
     pub listen: String,
 }
@@ -59,8 +59,11 @@ impl Plugin for UdpServer {
         let listen = self.listen.clone();
         let addr = listen.clone();
         let entry_executor = self.entry.clone();
-        
-        info!("Starting UDP server on {} (entry: {})", listen, entry_executor.tag);
+
+        info!(
+            "Starting UDP server on {} (entry: {})",
+            listen, entry_executor.tag
+        );
         tokio::spawn(run_server(addr, entry_executor));
         info!("UDP server listening on {}", listen);
     }
@@ -89,17 +92,15 @@ async fn run_server(addr: String, entry_executor: Arc<PluginInfo>) {
             return;
         }
     };
-    
-    let (mut stream, stream_handle) = UdpStream::<TokioRuntimeProvider>::with_bound(
-        socket,
-        ([127, 255, 255, 254], 0).into(),
-    );
+
+    let (mut stream, stream_handle) =
+        UdpStream::<TokioRuntimeProvider>::with_bound(socket, ([127, 255, 255, 254], 0).into());
 
     let mut inner_join_set = JoinSet::new();
     let stream_handle = Arc::new(stream_handle);
-    
+
     debug!("UDP server event loop started on {}", addr);
-    
+
     loop {
         let message = tokio::select! {
             message = stream.next() => match message {
@@ -107,7 +108,7 @@ async fn run_server(addr: String, entry_executor: Arc<PluginInfo>) {
                 Some(message) => message,
             },
         };
-        
+
         let message = match message {
             Err(error) => {
                 warn!(%error, "Error receiving message on UDP socket");
@@ -138,7 +139,7 @@ async fn handler_message(
     message: SerialMessage,
 ) {
     let (message, src_addr) = message.into_parts();
-    
+
     // Parse DNS message
     if let Ok(msg) = Message::from_bytes(message.as_slice()) {
         let mut context = DnsContext {
@@ -177,7 +178,7 @@ async fn handler_message(
                 response = Message::from(res);
             }
         }
-        
+
         // Log response details only when debug logging is enabled
         if event_enabled!(Level::DEBUG) {
             debug!(
