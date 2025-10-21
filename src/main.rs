@@ -17,18 +17,18 @@ use tracing::{error, info};
 
 mod config;
 mod core;
-mod pkg;
+mod network;
 mod plugin;
 
 /// Application entry point
 fn main() -> Result<(), String> {
-    tokio_run()
+    init_runtime()
 }
 
 /// Initialize and run the Tokio runtime with multi-threading enabled
 ///
 /// Creates an 8-worker-thread Tokio runtime optimized for DNS server workloads
-fn tokio_run() -> Result<(), String> {
+fn init_runtime() -> Result<(), String> {
     let mut tokio_runtime = runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
@@ -37,7 +37,7 @@ fn tokio_run() -> Result<(), String> {
     let tokio_runtime = tokio_runtime
         .build()
         .map_err(|err| format!("Failed to initialize Tokio runtime: {err}"))?;
-    tokio_runtime.block_on(async_run())
+    tokio_runtime.block_on(run_async_main())
 }
 
 /// Main async runtime loop
@@ -45,12 +45,12 @@ fn tokio_run() -> Result<(), String> {
 /// Sets up signal handlers and spawns the application task.
 /// Waits for Ctrl+C signal for graceful shutdown.
 #[cfg_attr(feature = "hotpath", hotpath::main(percentiles =[50,70,90]))]
-async fn async_run() -> Result<(), String> {
+async fn run_async_main() -> Result<(), String> {
     // Create shutdown channel for graceful termination
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
     // Spawn main application task
-    tokio::spawn(app_run());
+    tokio::spawn(run_app());
 
     // Spawn signal handler task for Ctrl+C
     tokio::spawn(async move {
@@ -72,7 +72,7 @@ async fn async_run() -> Result<(), String> {
 /// 2. Loads configuration from file
 /// 3. Sets up logging system
 /// 4. Initializes all configured plugins
-async fn app_run() {
+async fn run_app() {
     let mut runtime = core::init();
     let options = runtime.options.clone();
 
@@ -87,7 +87,7 @@ async fn app_run() {
     }
 
     // Initialize logging and save the guard to ensure logs are flushed
-    runtime.log_guard = Some(core::log_init(log_config));
+    runtime.log_guard = Some(core::init_log(log_config));
     info!("RustDNS server initializing...");
 
     // Initialize plugins with dependency resolution

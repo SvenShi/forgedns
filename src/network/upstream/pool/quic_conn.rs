@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::ConnectionBuilder;
-use crate::pkg::upstream::pool::utils::connect_quic;
-use crate::pkg::upstream::{ConnectInfo, Connection, DEFAULT_TIMEOUT};
+use crate::network::upstream::pool::ConnectionBuilder;
+use crate::network::upstream::pool::utils::connect_quic;
+use crate::network::upstream::{ConnectionInfo, Connection, DEFAULT_TIMEOUT};
 use bytes::{Bytes, BytesMut};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
@@ -109,7 +109,7 @@ impl Connection for QuicConnection {
             }
         };
         self.last_used
-            .store(AppClock::run_millis(), Ordering::Relaxed);
+            .store(AppClock::elapsed_millis(), Ordering::Relaxed);
         self.using_count.fetch_sub(1, Ordering::Relaxed);
         result
     }
@@ -138,13 +138,13 @@ pub struct QuicConnectionBuilder {
 }
 
 impl QuicConnectionBuilder {
-    pub fn new(connect_info: &ConnectInfo) -> Self {
+    pub fn new(connection_info: &ConnectionInfo) -> Self {
         Self {
-            bind_addr: connect_info.get_bind_socket_addr(),
-            remote_addr: connect_info.get_full_remote_socket_addr(),
-            timeout: connect_info.timeout,
-            server_name: connect_info.host.clone(),
-            insecure_skip_verify: connect_info.insecure_skip_verify,
+            bind_addr: connection_info.bind_socket_addr(),
+            remote_addr: connection_info.remote_socket_addr(),
+            timeout: connection_info.timeout,
+            server_name: connection_info.host.clone(),
+            insecure_skip_verify: connection_info.insecure_skip_verify,
         }
     }
 }
@@ -152,7 +152,7 @@ impl QuicConnectionBuilder {
 #[async_trait::async_trait]
 impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn new_conn(&self, conn_id: u16) -> Result<Arc<QuicConnection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<QuicConnection>, ProtoError> {
         // connect_quic should return a `quinn::Connection`
         let quic_conn = connect_quic(
             self.bind_addr,
@@ -167,7 +167,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
             id: conn_id,
             conn: quic_conn,
             closed: AtomicBool::new(false),
-            last_used: AtomicU64::new(AppClock::run_millis()),
+            last_used: AtomicU64::new(AppClock::elapsed_millis()),
             using_count: AtomicU16::new(0),
             timeout: self.timeout,
             close_notify: Notify::new(),

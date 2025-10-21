@@ -4,10 +4,10 @@
  */
 
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::request_map::RequestMap;
-use crate::pkg::upstream::pool::utils::connect_tls;
-use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
-use crate::pkg::upstream::{ConnectInfo, ConnectType, DEFAULT_TIMEOUT};
+use crate::network::upstream::pool::request_map::RequestMap;
+use crate::network::upstream::pool::utils::connect_tls;
+use crate::network::upstream::pool::{Connection, ConnectionBuilder};
+use crate::network::upstream::{ConnectionInfo, ConnectionType, DEFAULT_TIMEOUT};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use hickory_proto::ProtoError;
@@ -146,7 +146,7 @@ impl TcpConnection {
             timeout,
             closed: AtomicBool::new(false),
             writeable: AtomicBool::new(true),
-            last_used: AtomicU64::new(AppClock::run_millis()),
+            last_used: AtomicU64::new(AppClock::elapsed_millis()),
         }
     }
 
@@ -229,7 +229,7 @@ impl TcpConnection {
                                         let id = msg.header().id();
                                         if let Some(sender) = self.request_map.take(id) {
                                             let _ = sender.send(msg);
-                                            self.last_used.store(AppClock::run_millis(), Ordering::Relaxed);
+                                            self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
                                             debug!(conn_id = self.id, id, "Delivered TCP DNS response");
                                         } else {
                                             debug!(conn_id = self.id, id, "Discarded unmatched TCP response");
@@ -272,18 +272,18 @@ pub struct TcpConnectionBuilder {
     pub tls_enabled: bool,
     pub server_name: String,
     pub insecure_skip_verify: bool,
-    pub connect_type: ConnectType,
+    pub connection_type: ConnectionType,
 }
 
 impl TcpConnectionBuilder {
-    pub fn new(connect_info: &ConnectInfo) -> Self {
+    pub fn new(connection_info: &ConnectionInfo) -> Self {
         Self {
-            remote_addr: connect_info.get_full_remote_socket_addr(),
-            timeout: connect_info.timeout,
-            tls_enabled: matches!(connect_info.connect_type, ConnectType::DoT),
-            server_name: connect_info.host.clone(),
-            insecure_skip_verify: connect_info.insecure_skip_verify,
-            connect_type: connect_info.connect_type,
+            remote_addr: connection_info.remote_socket_addr(),
+            timeout: connection_info.timeout,
+            tls_enabled: matches!(connection_info.connection_type, ConnectionType::DoT),
+            server_name: connection_info.host.clone(),
+            insecure_skip_verify: connection_info.insecure_skip_verify,
+            connection_type: connection_info.connection_type,
         }
     }
 }
@@ -292,7 +292,7 @@ impl TcpConnectionBuilder {
 impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
     /// Establish a new TCP or TLS connection to the DNS server.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn new_conn(&self, conn_id: u16) -> Result<Arc<TcpConnection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<TcpConnection>, ProtoError> {
         let remote = self.remote_addr;
 
         match TcpStream::connect(remote).await {
@@ -303,7 +303,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
 
                 info!(
                     "Established {:?} connection (id={}, remote={:?})",
-                    self.connect_type,
+                    self.connection_type,
                     conn_id,
                     stream.peer_addr()
                 );
@@ -346,7 +346,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                     ?remote,
                     ?e,
                     "Failed to connect to {:?} DNS server",
-                    self.connect_type
+                    self.connection_type
                 );
                 Err(ProtoError::from(e))
             }

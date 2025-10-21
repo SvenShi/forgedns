@@ -100,7 +100,7 @@ pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
     ///
     /// # Returns
     /// Arc-wrapped connection on success, or error if connection establishment fails
-    async fn new_conn(&self, conn_id: u16) -> Result<Arc<C>, ProtoError>;
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<C>, ProtoError>;
 }
 
 /// Connection pool trait - manages a pool of connections for load balancing
@@ -122,7 +122,7 @@ pub trait ConnectionPool<C: Connection>: Send + Sync + Debug + 'static {
     /// - Remove idle connections
     /// - Drop failed connections
     /// - Ensure minimum pool size
-    async fn scan_pool(&self);
+    async fn maintain(&self);
 }
 
 /// Maintenance interval for pool cleanup
@@ -130,15 +130,15 @@ const MAINTENANCE_DURATION: Duration = Duration::from_secs(10);
 
 /// Start background maintenance task for a connection pool
 ///
-/// Periodically calls `scan_pool()` to clean up idle/dead connections.
+/// Periodically calls `maintain()` to clean up idle/dead connections.
 /// The task runs for the lifetime of the pool.
 #[inline]
 fn start_maintenance<C: Connection>(pool: Arc<dyn ConnectionPool<C>>) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(MAINTENANCE_DURATION).await;
-            // Perform scan (awaiting ensures fairness and proper error handling)
-            pool.scan_pool().await;
+            // Perform maintenance (awaiting ensures fairness and proper error handling)
+            pool.maintain().await;
             // Yield to allow other tasks to run
             yield_now().await;
         }

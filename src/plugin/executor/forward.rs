@@ -9,9 +9,9 @@
 //! Currently supports single-upstream forwarding with timeout handling.
 //! Multi-upstream load balancing is planned for future implementation.
 
-use crate::config::config::PluginConfig;
+use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpstreamConfig};
+use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::Executor;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use async_trait::async_trait;
@@ -34,7 +34,7 @@ pub struct SingleDnsForwarder {
     pub timeout: Duration,
 
     /// Upstream DNS resolver
-    pub upstream: Box<dyn UpStream>,
+    pub upstream: Box<dyn Upstream>,
 }
 
 #[async_trait]
@@ -122,7 +122,7 @@ impl PluginFactory for ForwardFactory {
             Ok(UninitializedPlugin::Executor(Box::new(SingleDnsForwarder {
                 tag: plugin_info.tag.clone(),
                 timeout: upstream_config.timeout.unwrap_or(Duration::from_secs(5)),
-                upstream: UpStreamBuilder::with_upstream_config(&upstream_config),
+                upstream: UpstreamBuilder::with_upstream_config(&upstream_config),
             })))
         } else {
             // Multi-upstream configuration (not yet implemented)

@@ -4,8 +4,8 @@
  */
 
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::utils::close_conns;
-use crate::pkg::upstream::pool::{
+use crate::network::upstream::pool::utils::close_conns;
+use crate::network::upstream::pool::{
     Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
 };
 use async_trait::async_trait;
@@ -63,8 +63,8 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
     /// Periodic pool maintenance task
     /// - Removes idle/invalid connections
     /// - Ensures minimum connection count
-    async fn scan_pool(&self) {
-        let now = AppClock::run_millis();
+    async fn maintain(&self) {
+        let now = AppClock::elapsed_millis();
         let mut drop_vec = Vec::new();
         let mut invalid_vec = Vec::new();
 
@@ -252,7 +252,7 @@ impl<C: Connection> ReusePool<C> {
         let mut created = Vec::with_capacity(actually_reserved);
         for _ in 0..actually_reserved {
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            match self.connection_builder.new_conn(id).await {
+            match self.connection_builder.create_connection(id).await {
                 Ok(conn) => {
                     if self.connections.push(conn.clone()).is_ok() {
                         created.push(conn);

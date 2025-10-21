@@ -38,7 +38,7 @@ impl AppClock {
     /// Start the background clock updater task
     ///
     /// Safe to call multiple times (only runs once via `Once`)
-    pub(crate) fn run() {
+    pub(crate) fn start() {
         CLOCK_INIT.call_once(|| {
             START_INSTANT
                 .set(Instant::now())
@@ -58,30 +58,30 @@ impl AppClock {
     /// Get current time as Instant (based on cached milliseconds)
     pub fn now() -> Instant {
         let base = START_INSTANT.get().unwrap();
-        base.add(AppClock::run_dur())
+        base.add(AppClock::elapsed())
     }
 
     /// Get milliseconds elapsed since application start
     ///
     /// This is a hot-path function used extensively for timeout checks.
     /// Uses relaxed atomic load for maximum performance.
-    pub fn run_millis() -> u64 {
+    pub fn elapsed_millis() -> u64 {
         GLOBAL_NOW.load(Ordering::Relaxed)
     }
 
     /// Get duration since application start
-    pub fn run_dur() -> Duration {
-        Duration::from_millis(Self::run_millis())
+    pub fn elapsed() -> Duration {
+        Duration::from_millis(Self::elapsed_millis())
     }
 }
 
 #[tokio::test]
 async fn test() {
-    AppClock::run();
+    AppClock::start();
 
     for _ in 0..5 {
-        println!("ms = {}", AppClock::run_millis());
-        println!("dur = {:?}", AppClock::run_dur());
+        println!("ms = {}", AppClock::elapsed_millis());
+        println!("dur = {:?}", AppClock::elapsed());
         println!("now = {:?}", AppClock::now());
 
         tokio::time::sleep(Duration::from_millis(100)).await;

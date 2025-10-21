@@ -9,7 +9,7 @@
 //! entry plugin executor. Handles concurrent requests efficiently and manages
 //! task spawning with automatic cleanup.
 
-use crate::config::config::PluginConfig;
+use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::executor::Executor;
 use crate::plugin::server::Server;
@@ -124,7 +124,7 @@ async fn run_server(
         };
 
         // Spawn handler task for this request (non-blocking)
-        inner_join_set.spawn(handler_message(
+        inner_join_set.spawn(handle_message(
             entry_executor.clone(),
             stream_handle.clone(),
             message,
@@ -140,7 +140,7 @@ async fn run_server(
 ///
 /// Parses the incoming message, creates a context, executes the entry plugin,
 /// and sends the response back to the client.
-async fn handler_message(
+async fn handle_message(
     entry_executor: Arc<dyn Executor>,
     stream_handle: Arc<BufDnsStreamHandle>,
     message: SerialMessage,

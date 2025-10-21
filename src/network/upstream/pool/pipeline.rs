@@ -4,8 +4,8 @@
  */
 
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::utils::close_conns;
-use crate::pkg::upstream::pool::{
+use crate::network::upstream::pool::utils::close_conns;
+use crate::network::upstream::pool::{
     Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
 };
 use async_trait::async_trait;
@@ -49,8 +49,8 @@ impl<C: Connection> ConnectionPool<C> for PipelinePool<C> {
         self.get().await?.query(request).await
     }
 
-    async fn scan_pool(&self) {
-        let now = AppClock::run_millis();
+    async fn maintain(&self) {
+        let now = AppClock::elapsed_millis();
         let mut new_vec = Vec::new();
         let mut drop_vec = Vec::new();
         let mut invalid_vec = Vec::new();
@@ -212,7 +212,7 @@ impl<C: Connection> PipelinePool<C> {
         for _ in 0..new_conns_count {
             let builder = &self.connection_builder;
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            futs.push(async move { builder.new_conn(id).await });
+            futs.push(async move { builder.create_connection(id).await });
         }
 
         // Collect results

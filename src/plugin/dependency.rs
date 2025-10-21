@@ -9,7 +9,7 @@
 //! This ensures plugins are initialized in the correct order, even if they are
 //! declared in any order in the configuration file.
 
-use crate::config::config::PluginConfig;
+use crate::config::types::PluginConfig;
 use std::collections::{HashMap, VecDeque};
 
 /// Resolve plugin dependencies and return plugins in initialization order

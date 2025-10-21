@@ -11,7 +11,7 @@
 //! - Application clock for high-performance time tracking
 //! - DNS request/response context management
 
-use crate::config::config::LogConfig;
+use crate::config::types::LogConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::log::RustDnsLogFormatter;
 use crate::core::runtime::{Options, Runtime};
@@ -35,7 +35,7 @@ pub fn init() -> Runtime {
     let options = Options::parse();
 
     // Start background clock for efficient timestamp generation
-    AppClock::run();
+    AppClock::start();
 
     eprintln!("Core runtime initialized (clock started)");
 
@@ -53,7 +53,7 @@ pub fn init() -> Runtime {
 ///
 /// Both use the custom RustDnsLogFormatter for consistent formatting.
 /// Returns a WorkerGuard that must be kept alive to ensure log flushing.
-pub fn log_init(log: LogConfig) -> WorkerGuard {
+pub fn init_log(log: LogConfig) -> WorkerGuard {
     // Create file appender if a file path is configured
     let (file_writer, guard) = if let Some(ref file_path) = log.file {
         eprintln!("Logging to file: {}", file_path);

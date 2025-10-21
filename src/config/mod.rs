@@ -10,11 +10,11 @@
 //! - Logging settings
 //! - Plugin configurations
 
-use crate::config::config::Config;
+use crate::config::types::Config;
 use std::fs;
 use std::path::PathBuf;
 
-pub mod config;
+pub mod types;
 
 /// Load and parse configuration from YAML file
 ///

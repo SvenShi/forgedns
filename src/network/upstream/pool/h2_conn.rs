@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::ConnectionBuilder;
-use crate::pkg::upstream::pool::utils::{
+use crate::network::upstream::pool::ConnectionBuilder;
+use crate::network::upstream::pool::utils::{
     build_dns_get_request, build_doh_request_uri, connect_tls, get_buf_from_res,
 };
-use crate::pkg::upstream::{ConnectInfo, Connection, DEFAULT_TIMEOUT};
+use crate::network::upstream::{ConnectionInfo, Connection, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
 use h2::client::{ResponseFuture, SendRequest};
 use hickory_proto::ProtoError;
@@ -54,7 +54,7 @@ impl Connection for H2Connection {
         }
         self.using_count.fetch_add(1, Ordering::Relaxed);
         self.last_used
-            .store(AppClock::run_millis(), Ordering::Relaxed);
+            .store(AppClock::elapsed_millis(), Ordering::Relaxed);
 
         let raw_id = request.id();
         request.set_id(0);
@@ -115,13 +115,13 @@ pub struct H2ConnectionBuilder {
 }
 
 impl H2ConnectionBuilder {
-    pub fn new(connect_info: &ConnectInfo) -> Self {
+    pub fn new(connection_info: &ConnectionInfo) -> Self {
         Self {
-            remote_addr: connect_info.get_full_remote_socket_addr(),
-            timeout: connect_info.timeout,
-            server_name: connect_info.host.clone(),
-            request_uri: build_doh_request_uri(connect_info),
-            insecure_skip_verify: connect_info.insecure_skip_verify,
+            remote_addr: connection_info.remote_socket_addr(),
+            timeout: connection_info.timeout,
+            server_name: connection_info.host.clone(),
+            request_uri: build_doh_request_uri(connection_info),
+            insecure_skip_verify: connection_info.insecure_skip_verify,
         }
     }
 }
@@ -129,7 +129,7 @@ impl H2ConnectionBuilder {
 #[async_trait::async_trait]
 impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn new_conn(&self, conn_id: u16) -> Result<Arc<H2Connection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<H2Connection>, ProtoError> {
         // 建立 TCP -> TLS -> H2
         let stream = TcpStream::connect(self.remote_addr)
             .await
@@ -152,7 +152,7 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
             id: conn_id,
             sender,
             closed: AtomicBool::new(false),
-            last_used: AtomicU64::new(AppClock::run_millis()),
+            last_used: AtomicU64::new(AppClock::elapsed_millis()),
             using_count: AtomicU16::new(0),
             timeout: self.timeout,
             request_uri: self.request_uri.clone(),

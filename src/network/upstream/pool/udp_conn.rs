@@ -4,9 +4,9 @@
  */
 
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::ConnectInfo;
-use crate::pkg::upstream::pool::request_map::RequestMap;
-use crate::pkg::upstream::pool::{Connection, ConnectionBuilder};
+use crate::network::upstream::ConnectionInfo;
+use crate::network::upstream::pool::request_map::RequestMap;
+use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use async_trait::async_trait;
 use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
@@ -83,7 +83,7 @@ impl Connection for UdpConnection {
                     response.set_id(raw_id);
                     debug!(conn_id = self.id, query_id, "Received DNS response");
                     self.last_used
-                        .store(AppClock::run_millis(), Ordering::Relaxed);
+                        .store(AppClock::elapsed_millis(), Ordering::Relaxed);
                     return Ok(response);
                 }
                 Ok(Err(_)) => {
@@ -126,7 +126,7 @@ impl UdpConnection {
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
             timeout,
-            last_used: AtomicU64::new(AppClock::run_millis()),
+            last_used: AtomicU64::new(AppClock::elapsed_millis()),
         }
     }
 
@@ -153,7 +153,7 @@ impl UdpConnection {
                                     let id = msg.header().id();
                                     if let Some(sender) = self.request_map.take(id) {
                                         let _ = sender.send(msg);
-                                        self.last_used.store(AppClock::run_millis(), Ordering::Relaxed);
+                                        self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
                                         debug!(conn_id = self.id, id, "Delivered DNS response to waiting query");
                                     } else {
                                         debug!(conn_id = self.id, id, "Discarded unmatched DNS response");
@@ -192,11 +192,11 @@ pub struct UdpConnectionBuilder {
 
 impl UdpConnectionBuilder {
     /// Initialize a new builder using upstream connection info.
-    pub fn new(connect_info: &ConnectInfo) -> Self {
+    pub fn new(connection_info: &ConnectionInfo) -> Self {
         Self {
-            bind_addr: connect_info.get_bind_socket_addr(),
-            remote_addr: connect_info.get_full_remote_socket_addr(),
-            timeout: connect_info.timeout,
+            bind_addr: connection_info.bind_socket_addr(),
+            remote_addr: connection_info.remote_socket_addr(),
+            timeout: connection_info.timeout,
         }
     }
 }
@@ -206,7 +206,7 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
     /// Create a new UDP connection, bind it locally, connect to remote server,
     /// and spawn a background listener task to handle responses.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn new_conn(&self, conn_id: u16) -> Result<Arc<UdpConnection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<UdpConnection>, ProtoError> {
         let socket = UdpSocket::bind(self.bind_addr).await?;
         socket.connect(self.remote_addr).await?;
 

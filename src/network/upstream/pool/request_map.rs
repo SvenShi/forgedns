@@ -125,7 +125,7 @@ impl RequestMap {
 
 #[cfg(test)]
 mod test {
-    use crate::pkg::upstream::pool::request_map::RequestMap;
+    use crate::network::upstream::pool::request_map::RequestMap;
     use hickory_proto::xfer::DnsResponse;
     use std::sync::Arc;
     use std::time::Duration;

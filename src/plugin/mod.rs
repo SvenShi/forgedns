@@ -13,7 +13,7 @@
 //!
 //! All plugins are registered via factories and instantiated from config.
 
-use crate::config::config::{Config, PluginConfig};
+use crate::config::types::{Config, PluginConfig};
 use crate::plugin::executor::forward::ForwardFactory;
 use crate::plugin::executor::Executor;
 use crate::plugin::server::udp::UdpServerFactory;
