@@ -12,7 +12,8 @@
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpstreamConfig};
-use crate::plugin::{Plugin, PluginFactory, PluginMainType, PluginRegistry};
+use crate::plugin::executor::Executor;
+use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -24,6 +25,7 @@ use tracing::{error, info, warn};
 /// Forwards DNS queries to a single configured upstream server.
 /// Handles timeouts and logs errors appropriately.
 #[allow(unused)]
+#[derive(Debug)]
 pub struct SingleDnsForwarder {
     /// Plugin identifier
     pub tag: String,
@@ -48,6 +50,11 @@ impl Plugin for SingleDnsForwarder {
         );
     }
 
+    async fn destroy(&mut self) {}
+}
+
+#[async_trait]
+impl Executor for SingleDnsForwarder {
     async fn execute(&self, context: &mut DnsContext) {
         match tokio::time::timeout(self.timeout, self.upstream.query(context.request.clone())).await
         {
@@ -76,15 +83,6 @@ impl Plugin for SingleDnsForwarder {
             }
         }
     }
-
-    fn main_type(&self) -> PluginMainType {
-        PluginMainType::Executor {
-            tag: self.tag.to_string(),
-            type_name: "SingleDnsForwarder".to_string(),
-        }
-    }
-
-    async fn destroy(&mut self) {}
 }
 
 /// Forward plugin configuration
@@ -100,6 +98,7 @@ pub struct ForwardConfig {
 }
 
 /// Factory for creating DNS forwarder plugins
+#[derive(Debug)]
 pub struct ForwardFactory;
 
 impl PluginFactory for ForwardFactory {
@@ -107,14 +106,10 @@ impl PluginFactory for ForwardFactory {
         &self,
         plugin_info: &PluginConfig,
         _registry: Arc<PluginRegistry>,
-    ) -> Result<Box<dyn Plugin>, String> {
-        let forward_config = match plugin_info.args.clone() {
-            Some(args) => serde_yml::from_value::<ForwardConfig>(args)
-                .map_err(|e| format!("Failed to parse Forward plugin config: {}", e))?,
-            None => {
-                return Err("Forward plugin requires 'concurrent' and 'upstreams' configuration".to_string());
-            }
-        };
+    ) -> Result<UninitializedPlugin, String> {
+        // valid config
+        let forward_config =
+            serde_yml::from_value::<ForwardConfig>(plugin_info.args.clone().unwrap()).unwrap();
 
         if forward_config.upstreams.len() == 1 {
             // Single upstream configuration
@@ -124,11 +119,11 @@ impl PluginFactory for ForwardFactory {
                 plugin_info.tag, upstream_config.addr
             );
 
-            Ok(Box::new(SingleDnsForwarder {
+            Ok(UninitializedPlugin::Executor(Box::new(SingleDnsForwarder {
                 tag: plugin_info.tag.clone(),
                 timeout: upstream_config.timeout.unwrap_or(Duration::from_secs(5)),
                 upstream: UpStreamBuilder::with_upstream_config(&upstream_config),
-            }))
+            })))
         } else {
             // Multi-upstream configuration (not yet implemented)
             Err(format!(
@@ -138,24 +133,19 @@ impl PluginFactory for ForwardFactory {
         }
     }
 
-    fn plugin_type(&self, tag: &str) -> PluginMainType {
-        PluginMainType::Executor {
-            tag: tag.to_string(),
-            type_name: "forward".to_string(),
-        }
-    }
-    
-    /// Validate forward plugin configuration
     fn validate_config(&self, plugin_info: &PluginConfig) -> Result<(), String> {
         // Parse and validate forward-specific configuration
         let _forward_config = match plugin_info.args.clone() {
             Some(args) => serde_yml::from_value::<ForwardConfig>(args)
                 .map_err(|e| format!("Failed to parse Forward plugin config: {}", e))?,
             None => {
-                return Err("Forward plugin requires 'concurrent' and 'upstreams' configuration".to_string());
+                return Err(
+                    "Forward plugin requires 'concurrent' and 'upstreams' configuration"
+                        .to_string(),
+                );
             }
         };
-        
+
         Ok(())
     }
 }

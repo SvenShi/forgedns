@@ -11,7 +11,9 @@
 
 use crate::config::config::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::plugin::{Plugin, PluginFactory, PluginInfo, PluginMainType, PluginRegistry};
+use crate::plugin::executor::Executor;
+use crate::plugin::server::Server;
+use crate::plugin::{Plugin, PluginFactory, PluginInfo, PluginRegistry};
 use async_trait::async_trait;
 use futures::StreamExt;
 use hickory_proto::op::{Message, MessageType, OpCode};
@@ -29,7 +31,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::task::JoinSet;
-use tracing::{Level, debug, error, event_enabled, info, warn};
+use tracing::{debug, error, event_enabled, info, warn, Level};
 
 /// UDP server configuration
 #[derive(Deserialize)]
@@ -43,6 +45,7 @@ pub struct UdpServerConfig {
 
 /// UDP DNS server plugin
 #[allow(unused)]
+#[derive(Debug)]
 pub struct UdpServer {
     pub tag: String,
     pub entry: Arc<PluginInfo>,
@@ -57,6 +60,14 @@ impl Plugin for UdpServer {
     }
 
     async fn init(&mut self) {
+        self.run();
+    }
+
+    async fn destroy(&mut self) {}
+}
+
+impl Server for UdpServer {
+    fn run(&self) {
         let listen = self.listen.clone();
         let addr = listen.clone();
         let entry_executor = self.entry.clone();
@@ -66,20 +77,9 @@ impl Plugin for UdpServer {
             "Starting UDP server on {} (entry: {})",
             listen, entry_executor.tag
         );
-        tokio::spawn(run_server(addr, entry_executor, registry));
+        tokio::spawn(run_server(addr, entry_executor.to_executor(), registry));
         info!("UDP server listening on {}", listen);
     }
-
-    async fn execute(&self, _: &mut DnsContext) {}
-
-    fn main_type(&self) -> PluginMainType {
-        PluginMainType::Server {
-            tag: self.tag.to_string(),
-            type_name: "UdpServer".to_string(),
-        }
-    }
-
-    async fn destroy(&mut self) {}
 }
 
 /// Main UDP server loop
@@ -88,7 +88,7 @@ impl Plugin for UdpServer {
 /// handler tasks for each request. Performs periodic cleanup of finished tasks.
 async fn run_server(
     addr: String,
-    entry_executor: Arc<PluginInfo>,
+    entry_executor: Arc<dyn Executor>,
     registry: Arc<PluginRegistry>,
 ) {
     let socket = match build_udp_socket(&addr) {
@@ -141,7 +141,7 @@ async fn run_server(
 /// Parses the incoming message, creates a context, executes the entry plugin,
 /// and sends the response back to the client.
 async fn handler_message(
-    entry_executor: Arc<PluginInfo>,
+    entry_executor: Arc<dyn Executor>,
     stream_handle: Arc<BufDnsStreamHandle>,
     message: SerialMessage,
     registry: Arc<PluginRegistry>,
@@ -171,7 +171,7 @@ async fn handler_message(
         }
 
         // Execute entry plugin to process the request
-        entry_executor.plugin.execute(&mut context).await;
+        entry_executor.execute(&mut context).await;
 
         // Construct response message
         let mut response;
@@ -238,6 +238,7 @@ fn build_udp_socket(addr: &str) -> Result<UdpSocket, Error> {
 }
 
 /// Factory for creating UDP server plugin instances
+#[derive(Debug)]
 pub struct UdpServerFactory {}
 
 #[async_trait]
@@ -246,14 +247,10 @@ impl PluginFactory for UdpServerFactory {
         &self,
         plugin_info: &PluginConfig,
         registry: Arc<PluginRegistry>,
-    ) -> Result<Box<dyn Plugin>, String> {
-        let udp_config = match plugin_info.args.clone() {
-            Some(args) => serde_yml::from_value::<UdpServerConfig>(args)
-                .map_err(|e| format!("UDP Server config parsing failed: {}", e))?,
-            None => {
-                return Err("UDP Server must configure 'listen' and 'entry' in config file".to_string());
-            }
-        };
+    ) -> Result<crate::plugin::UninitializedPlugin, String> {
+
+        let udp_config =
+            serde_yml::from_value::<UdpServerConfig>(plugin_info.args.clone().unwrap()).unwrap();
 
         // Look up the entry plugin using the registry
         let entry = registry.get_plugin(&udp_config.entry).ok_or_else(|| {
@@ -263,48 +260,43 @@ impl PluginFactory for UdpServerFactory {
             )
         })?;
 
-        Ok(Box::new(UdpServer {
+        Ok(crate::plugin::UninitializedPlugin::Server(Box::new(UdpServer {
             tag: plugin_info.tag.clone(),
             entry: entry.clone(),
             listen: udp_config.listen,
             registry,
-        }))
+        })))
     }
 
-    fn plugin_type(&self, tag: &str) -> PluginMainType {
-        PluginMainType::Server {
-            tag: tag.to_string(),
-            type_name: "udp".to_string(),
-        }
-    }
-    
     /// Validate UDP server configuration
     fn validate_config(&self, plugin_info: &PluginConfig) -> Result<(), String> {
         use std::net::SocketAddr;
         use std::str::FromStr;
-        
+
         // Parse and validate UDP-specific configuration
         let udp_config = match plugin_info.args.clone() {
             Some(args) => serde_yml::from_value::<UdpServerConfig>(args)
                 .map_err(|e| format!("UDP Server config parsing failed: {}", e))?,
             None => {
-                return Err("UDP Server must configure 'listen' and 'entry' in config file".to_string());
+                return Err(
+                    "UDP Server must configure 'listen' and 'entry' in config file".to_string(),
+                );
             }
         };
-        
+
         // Validate listen address format
         if SocketAddr::from_str(&udp_config.listen).is_err() {
             return Err(format!("Invalid listen address: {}", udp_config.listen));
         }
-        
+
         // Validate entry is not empty
         if udp_config.entry.is_empty() {
             return Err("UDP Server 'entry' field cannot be empty".to_string());
         }
-        
+
         Ok(())
     }
-    
+
     /// Get dependencies (the entry executor plugin)
     fn get_dependencies(&self, plugin_info: &PluginConfig) -> Vec<String> {
         if let Some(args) = &plugin_info.args {

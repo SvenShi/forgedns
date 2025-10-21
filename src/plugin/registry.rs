@@ -21,17 +21,19 @@ use tracing::info;
 /// - Multiple DNS server instances in the same process
 /// - Better testability (no shared state between tests)
 /// - Proper dependency injection
+#[derive(Debug)]
 pub struct PluginRegistry {
     /// Map of plugin type names to their factory implementations
     factories: HashMap<String, Box<dyn PluginFactory>>,
 
     /// Map of plugin tags to their runtime instances
-    /// 
+    ///
     /// Uses DashMap for interior mutability, allowing plugins to be registered
     /// even when the registry is behind an Arc.
     plugins: DashMap<String, Arc<PluginInfo>>,
 }
 
+#[allow(unused)]
 impl PluginRegistry {
     /// Create a new empty plugin registry
     pub fn new() -> Self {
@@ -61,10 +63,7 @@ impl PluginRegistry {
     /// # Returns
     /// * `Ok(())` - All plugins initialized successfully
     /// * `Err(String)` - Error message if initialization fails
-    pub async fn init_plugins(
-        self: Arc<Self>,
-        configs: Vec<PluginConfig>,
-    ) -> Result<(), String> {
+    pub async fn init_plugins(self: Arc<Self>, configs: Vec<PluginConfig>) -> Result<(), String> {
         use crate::plugin::dependency;
 
         // Step 1: Validate all plugin configurations
@@ -74,7 +73,7 @@ impl PluginRegistry {
                 .factories
                 .get(&config.plugin_type)
                 .ok_or_else(|| format!("Unknown plugin type: {}", config.plugin_type))?;
-            
+
             factory.validate_config(config)?;
         }
 
@@ -109,8 +108,9 @@ impl PluginRegistry {
                 .ok_or_else(|| format!("Unknown plugin type: {}", plugin_config.plugin_type))?;
 
             // Create plugin using the factory and registry
-            let mut plugin_info = self.create_plugin_info(plugin_config, factory)?;
-            plugin_info.plugin.as_mut().init().await;
+            let mut plugin_info = self
+                .create_plugin_info_and_init(plugin_config, factory)
+                .await?;
 
             // DashMap allows insertion even with Arc<Self>
             self.plugins
@@ -124,21 +124,24 @@ impl PluginRegistry {
     /// Create a PluginInfo with access to the registry for dependency resolution
     ///
     /// Uses the factory's create method which receives the registry directly.
-    fn create_plugin_info(
+    async fn create_plugin_info_and_init(
         self: &Arc<Self>,
         config: &PluginConfig,
         factory: &Box<dyn PluginFactory>,
     ) -> Result<PluginInfo, String> {
-        let plugin = factory.create(config, self.clone())?;
+        // Factory creates uninitialized plugin
+        let uninitialized = factory.create(config, self.clone())?;
+
+        // Initialize and wrap into PluginType (with Arc)
+        let plugin_type = uninitialized.init_and_wrap().await;
 
         Ok(PluginInfo {
             tag: config.tag.clone(),
-            plugin_type: factory.plugin_type(&config.tag),
+            plugin_type,
             args: config.args.clone(),
-            plugin,
         })
     }
-    
+
     /// Get a plugin instance by tag
     pub fn get_plugin(&self, tag: &str) -> Option<Arc<PluginInfo>> {
         self.plugins.get(tag).map(|entry| entry.clone())
@@ -146,7 +149,10 @@ impl PluginRegistry {
 
     /// Get all registered plugin tags
     pub fn plugin_tags(&self) -> Vec<String> {
-        self.plugins.iter().map(|entry| entry.key().clone()).collect()
+        self.plugins
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     /// Get the number of registered plugins
@@ -178,4 +184,3 @@ mod tests {
         assert!(registry.get_plugin("nonexistent").is_none());
     }
 }
-

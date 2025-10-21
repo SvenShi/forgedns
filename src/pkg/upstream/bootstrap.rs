@@ -44,6 +44,7 @@ struct CacheData {
 /// Uses a lock-free state machine to coordinate multiple concurrent
 /// resolution requests efficiently. Only one query is performed at a time,
 /// with other requests waiting for the result.
+#[derive(Debug)]
 pub(crate) struct Bootstrap {
     /// Upstream resolver for DNS queries
     upstream: Box<dyn UpStream>,
