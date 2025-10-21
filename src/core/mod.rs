@@ -36,10 +36,13 @@ pub fn init() -> Runtime {
 
     // Start background clock for efficient timestamp generation
     AppClock::run();
-    
+
     eprintln!("Core runtime initialized (clock started)");
 
-    Runtime { options }
+    Runtime {
+        options,
+        log_guard: None, // Will be set later during logging initialization
+    }
 }
 
 /// Initialize the logging system with console and optional file output
@@ -93,7 +96,7 @@ pub fn log_init(log: LogConfig) -> WorkerGuard {
     } else {
         subscriber.init();
     };
-    
+
     eprintln!("Logging system initialized with level: {}", log.level);
 
     // Return WorkerGuard to ensure logs are flushed before program exit

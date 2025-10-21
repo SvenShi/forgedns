@@ -22,7 +22,7 @@ use std::sync::Arc;
 lazy_static::lazy_static! {
     /// Secure TLS configuration with certificate validation
     static ref SECURE_CONFIG: ClientConfig = build_secure_config();
-    
+
     /// Insecure TLS configuration (no certificate validation)
     static ref INSECURE_CONFIG: ClientConfig = build_insecure_config();
 }
@@ -54,12 +54,12 @@ fn build_insecure_config() -> ClientConfig {
     ring::default_provider()
         .install_default()
         .expect("Failed to install default crypto provider");
-    
+
     let mut config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoCertVerification))
         .with_no_client_auth();
-    
+
     config.enable_early_data = true;
     set_alpn(config)
 }

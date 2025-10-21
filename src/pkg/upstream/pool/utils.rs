@@ -56,7 +56,7 @@ pub(crate) async fn connect_tls(
     let connector = TlsConnector::from(Arc::new(config));
     let dns_name = ServerName::try_from(server_name)
         .map_err(|_| ProtoError::from("Invalid DNS server name"))?;
-    
+
     match timeout(conn_timeout, connector.connect(dns_name, tcp_stream)).await {
         Ok(Ok(s)) => Ok(s),
         Ok(Err(e)) => Err(ProtoError::from(format!("TLS connection error: {}", e))),
@@ -89,7 +89,7 @@ pub(crate) async fn connect_quic(
         udp_socket.into_std()?,
         Arc::new(TokioRuntime),
     )?;
-    
+
     let client_config = if skip_cert {
         ClientConfig::new(Arc::new(
             QuicClientConfig::try_from(insecure_client_config()).unwrap(),
@@ -101,7 +101,7 @@ pub(crate) async fn connect_quic(
     };
 
     endpoint.set_default_client_config(client_config);
-    
+
     match timeout(
         conn_timeout,
         endpoint.connect(remote_addr, server_name.as_ref()).unwrap(),

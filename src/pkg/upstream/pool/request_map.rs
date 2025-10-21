@@ -32,7 +32,7 @@ pub struct RequestMap {
     /// Array of atomic pointers to response senders
     /// Index = DNS query ID
     slots: Vec<AtomicPtr<Sender<DnsResponse>>>,
-    
+
     /// Current number of active requests
     size: AtomicU16,
 }
@@ -52,18 +52,25 @@ impl RequestMap {
 
     /// Store a response sender and get a unique query ID
     ///
-    /// Uses randomized probing to find an empty slot.
-    /// This is wait-free - never blocks or yields.
+    /// Uses linear probing with a random starting point to find an empty slot.
+    /// This is much more efficient than pure random probing, especially at high
+    /// load factors.
     ///
     /// # Returns
     /// A unique u16 query ID that can be used to retrieve the sender later
+    ///
+    /// # Panics
+    /// Panics if all slots are occupied (extremely rare in practice)
     #[inline(always)]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn store(&self, tx: Sender<DnsResponse>) -> u16 {
         let ptr = Box::into_raw(Box::new(tx));
+        let start = random::<u16>() as usize;
 
-        loop {
-            let id = random::<u16>() as usize;
+        // Linear probing instead of pure random
+        for offset in 0..MAX_IDS {
+            let id = (start + offset) % MAX_IDS;
+
             // Try to claim this slot with compare-and-swap
             if self.slots[id]
                 .compare_exchange(ptr::null_mut(), ptr, Ordering::AcqRel, Ordering::Relaxed)
@@ -73,6 +80,13 @@ impl RequestMap {
                 return id as u16;
             }
         }
+
+        // All slots occupied - clean up and panic
+        // This should be extremely rare in practice (requires 65536 concurrent requests)
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
+        panic!("RequestMap exhausted: all {} slots are occupied", MAX_IDS);
     }
 
     /// Take a response sender by query ID

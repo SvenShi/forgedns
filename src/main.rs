@@ -13,7 +13,7 @@
 
 use tokio::sync::oneshot;
 use tokio::{runtime, signal};
-use tracing::info;
+use tracing::{error, info};
 
 mod config;
 mod core;
@@ -73,21 +73,30 @@ async fn async_run() -> Result<(), String> {
 /// 3. Sets up logging system
 /// 4. Initializes all configured plugins
 async fn app_run() {
-    let runtime = core::init();
-    let options = runtime.options;
-    
+    let mut runtime = core::init();
+    let options = runtime.options.clone();
+
     info!("Loading configuration from: {:?}", options.config);
     let config = config::init(&options.config);
-    
+
     // Override log level from command line if provided
     let mut log_config = config.log.clone();
     if let Some(level) = options.log_level {
         info!("Overriding log level from config to: {}", level);
         log_config.level = level;
     }
-    
-    let _ = core::log_init(log_config);
+
+    // Initialize logging and save the guard to ensure logs are flushed
+    runtime.log_guard = Some(core::log_init(log_config));
     info!("RustDNS server initializing...");
-    plugin::init(config).await;
+
+    // Initialize plugins with dependency resolution
+    if let Err(e) = plugin::init(config).await {
+        error!("Plugin initialization failed: {}", e);
+        std::process::exit(1);
+    }
+
     info!("RustDNS server started successfully");
+
+    // Runtime (and log_guard) will be dropped here, ensuring logs are flushed
 }

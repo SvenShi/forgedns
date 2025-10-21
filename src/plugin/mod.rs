@@ -27,6 +27,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use tracing::info;
 
+mod dependency;
 pub mod executable;
 mod server;
 
@@ -39,7 +40,7 @@ lazy_static! {
         m.insert("udp_server", Box::new(UdpServerFactory {}));
         m
     };
-    
+
     /// Global registry of initialized plugin instances
     /// Maps plugin tags to their runtime instances
     static ref PLUGINS: DashMap<String, Arc<PluginInfo>> = DashMap::new();
@@ -47,26 +48,38 @@ lazy_static! {
 
 /// Initialize all configured plugins
 ///
-/// Iterates through the config, creating each plugin via its factory,
-/// calling its init() method, and registering it in the global plugin map.
-pub async fn init(config: Config) {
-    info!("Starting plugin initialization ({} plugins)", config.plugins.len());
-    
-    // Each plugin type has a factory that creates plugin instances
-    for plugin_config in config.plugins {
-        let key = plugin_config.plugin_type.as_str();
+/// Automatically resolves plugin dependencies and initializes plugins in the
+/// correct order. This ensures that dependency plugins are initialized before
+/// plugins that depend on them, regardless of the order in the config file.
+pub async fn init(config: Config) -> Result<(), String> {
+    info!("Resolving plugin dependencies...");
+    let sorted_plugins = dependency::resolve_dependencies(config.plugins)?;
+
+    info!(
+        "Initializing {} plugins in dependency order",
+        sorted_plugins.len()
+    );
+
+    for (idx, plugin_config) in sorted_plugins.iter().enumerate() {
+        info!(
+            "  [{}/{}] Initializing plugin: {} (type: {})",
+            idx + 1,
+            sorted_plugins.len(),
+            plugin_config.tag,
+            plugin_config.plugin_type
+        );
+
         let factory = FACTORIES
-            .get(key)
-            .unwrap_or_else(|| panic!("Plugin type '{}' not found in registry", key));
+            .get(plugin_config.plugin_type.as_str())
+            .ok_or_else(|| format!("Unknown plugin type: {}", plugin_config.plugin_type))?;
+
         let mut plugin_info = PluginInfo::from(&plugin_config, &factory);
-
-        info!("Initializing plugin: {} (tag: {})", plugin_info.plugin_type, plugin_info.tag);
         plugin_info.plugin.as_mut().init().await;
-
-        PLUGINS.insert(plugin_config.tag.to_owned(), Arc::new(plugin_info));
+        PLUGINS.insert(plugin_config.tag.clone(), Arc::new(plugin_info));
     }
-    
+
     info!("All plugins initialized successfully");
+    Ok(())
 }
 
 /// Get a plugin instance by tag
@@ -87,13 +100,13 @@ pub fn set_plugin(plugin_info: Arc<PluginInfo>) {
 pub enum PluginMainType {
     /// Server plugins run continuously (e.g., UDP/TCP listeners)
     Server { tag: String, type_name: String },
-    
+
     /// Executor plugins process DNS queries (e.g., forwarders, filters)
     Executor { tag: String, type_name: String },
-    
+
     /// Matcher plugins test queries against rules (e.g., domain lists)
     Matcher { tag: String, type_name: String },
-    
+
     /// DataProvider plugins provide data sources (e.g., IP sets, GeoIP)
     DataProvider { tag: String, type_name: String },
 }
@@ -171,13 +184,13 @@ pub trait PluginFactory: Send + Sync + 'static {
 pub struct PluginInfo {
     /// Plugin instance tag (unique identifier)
     pub tag: String,
-    
+
     /// Plugin type information
     pub plugin_type: PluginMainType,
-    
+
     /// Plugin-specific configuration arguments
     pub args: Option<Value>,
-    
+
     /// The actual plugin implementation
     pub plugin: Box<dyn Plugin>,
 }

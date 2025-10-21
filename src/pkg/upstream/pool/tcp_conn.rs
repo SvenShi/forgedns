@@ -182,7 +182,7 @@ impl TcpConnection {
     /// Background task: reads DNS responses from the upstream TCP connection.
     async fn listen_dns_response<T: AsyncRead>(self: Arc<Self>, reader: ReadHalf<T>) {
         let mut reader = BufReader::new(reader);
-        let mut buf = vec![0u8; 16384];
+        let mut buf = vec![0u8; 4096];
         let mut start = 0;
         let mut closing = false;
 
@@ -213,6 +213,14 @@ impl TcpConnection {
                             // Parse length-prefixed DNS messages
                             while total - offset >= 2 {
                                 let msg_len = u16::from_be_bytes([buf[offset], buf[offset + 1]]) as usize;
+
+                                // Validate message length
+                                if msg_len == 0 {
+                                    warn!(conn_id = self.id, "Zero-length DNS message received");
+                                    offset += 2;
+                                    continue;
+                                }
+
                                 if total - offset < 2 + msg_len { break; }
 
                                 let msg_body = &buf[offset + 2..offset + 2 + msg_len];
@@ -295,7 +303,9 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
 
                 info!(
                     "Established {:?} connection (id={}, remote={:?})",
-                    self.connect_type, conn_id, stream.peer_addr()
+                    self.connect_type,
+                    conn_id,
+                    stream.peer_addr()
                 );
 
                 let (sender, receiver) = unbounded_channel();
