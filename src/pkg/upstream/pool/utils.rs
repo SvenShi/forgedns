@@ -5,12 +5,12 @@
 use crate::pkg::upstream::pool::Connection;
 use crate::pkg::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use crate::pkg::upstream::{ConnectInfo, ConnectType};
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use bytes::BytesMut;
 use hickory_proto::ProtoError;
 use http::header::CONTENT_LENGTH;
-use http::{header, HeaderValue, Method, Request, Response, Version};
+use http::{HeaderValue, Method, Request, Response, Version, header};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TokioRuntime};
 use rustls::pki_types::ServerName;
@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
-use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 
 #[inline]
 pub(crate) async fn connect_tls(

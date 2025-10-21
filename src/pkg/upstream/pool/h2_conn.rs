@@ -3,20 +3,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::utils::{build_dns_get_request, build_doh_request_uri, connect_tls, get_buf_from_res};
 use crate::pkg::upstream::pool::ConnectionBuilder;
+use crate::pkg::upstream::pool::utils::{
+    build_dns_get_request, build_doh_request_uri, connect_tls, get_buf_from_res,
+};
 use crate::pkg::upstream::{ConnectInfo, Connection, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
 use h2::client::{ResponseFuture, SendRequest};
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use http::Version;
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::Notify;
@@ -122,8 +124,6 @@ impl H2ConnectionBuilder {
             insecure_skip_verify: connect_info.insecure_skip_verify,
         }
     }
-
-
 }
 
 #[async_trait::async_trait]

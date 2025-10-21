@@ -6,18 +6,18 @@
 use crate::core::app_clock::AppClock;
 use crate::pkg::upstream::pool::utils::close_conns;
 use crate::pkg::upstream::pool::{
-    start_maintenance, Connection, ConnectionBuilder, ConnectionPool,
+    Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
 };
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::task::yield_now;
 use tracing::debug;

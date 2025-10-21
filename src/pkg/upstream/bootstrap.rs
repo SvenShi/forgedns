@@ -3,16 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-use crate::core::context::DnsContext;
 use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpstreamConfig};
-use arc_swap::ArcSwap;
 use chrono::{DateTime, Duration, Local};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
-use hickory_proto::rr::{DNSClass, Name, RecordType};
+use hickory_proto::rr::{Name, RecordType};
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use tokio::task::yield_now;
 use tracing::{debug, error, info, warn};
@@ -114,21 +110,19 @@ impl Bootstrap {
         message.add_query(query);
 
         // 执行查询
-        let mut context = DnsContext::new(message);
-        match self.upstream.query(&mut context).await {
+        match self.upstream.query(message).await {
             Ok(response) => {
                 // 处理响应
                 let answers = response.answers();
                 if !answers.is_empty() {
                     for answer in answers {
                         if answer.record_type() == RecordType::A {
-                            if let Some(ip) = answer.data().and_then(|data| data.as_a().ok()) {
-                                let ip_addr = IpAddr::from(*ip);
-                                info!("Resolved {} to {}", self.domain, ip_addr);
-                                
+                            if let Some(ip) = answer.data().ip_addr() {
+                                info!("Resolved {} to {}", self.domain, ip);
+
                                 let mut state = self.cache_state.write().await;
-                                *state = CacheState::Cached(ip_addr);
-                                
+                                *state = CacheState::Cached(ip);
+
                                 let mut next_update = self.next_update.write().await;
                                 *next_update = Local::now() + Duration::minutes(10);
                                 return;
@@ -136,7 +130,7 @@ impl Bootstrap {
                         }
                     }
                 }
-                
+
                 warn!("No A records found for {}", self.domain);
                 let mut state = self.cache_state.write().await;
                 *state = CacheState::Failed;

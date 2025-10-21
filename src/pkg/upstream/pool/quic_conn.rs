@@ -3,19 +3,19 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
-use crate::pkg::upstream::pool::utils::connect_quic;
 use crate::pkg::upstream::pool::ConnectionBuilder;
+use crate::pkg::upstream::pool::utils::connect_quic;
 use crate::pkg::upstream::{ConnectInfo, Connection, DEFAULT_TIMEOUT};
 use bytes::{Bytes, BytesMut};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use hickory_proto::{ProtoError, ProtoErrorKind};
+use quinn::{SendStream, VarInt};
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
-use quinn::{SendStream, VarInt};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -60,6 +60,7 @@ impl Connection for QuicConnection {
             Ok(Ok(bi)) => bi,
             Ok(Err(e)) => {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
+                self.close();
                 return Err(ProtoError::from(format!("quic open_bi error: {e}")));
             }
             Err(_) => {
@@ -192,7 +193,10 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
 }
 
 /// Read a length-prefixed (2-byte BE) DNS response from a `quinn::RecvStream`.
-async fn recv_dns_response(recv: &mut quinn::RecvStream, send: SendStream) -> Result<Bytes, ProtoError> {
+async fn recv_dns_response(
+    recv: &mut quinn::RecvStream,
+    send: SendStream,
+) -> Result<Bytes, ProtoError> {
     // following above, the data should be first the length, followed by the message(s)
     let mut len = [0u8; 2];
     recv.read_exact(&mut len).await.unwrap();

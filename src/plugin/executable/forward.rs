@@ -34,7 +34,8 @@ impl Plugin for SingleDnsForwarder {
     async fn init(&mut self) {}
 
     async fn execute(&self, context: &mut DnsContext) {
-        match tokio::time::timeout(self.timeout, self.upstream.query(context)).await {
+        match tokio::time::timeout(self.timeout, self.upstream.query(context.request.clone())).await
+        {
             Ok(Ok(res)) => {
                 context.response = Some(res);
             }

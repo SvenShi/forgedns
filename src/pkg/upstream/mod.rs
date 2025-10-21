@@ -2,26 +2,25 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-
-use crate::core::context::DnsContext;
-use crate::pkg::upstream::pool::h2_conn::H2ConnectionBuilder;
-use crate::pkg::upstream::pool::h3_conn::H3ConnectionBuilder;
+use crate::pkg::upstream::pool::h2_conn::{H2Connection, H2ConnectionBuilder};
+use crate::pkg::upstream::pool::h3_conn::{H3Connection, H3ConnectionBuilder};
 use crate::pkg::upstream::pool::pipeline::PipelinePool;
-use crate::pkg::upstream::pool::quic_conn::QuicConnectionBuilder;
+use crate::pkg::upstream::pool::quic_conn::{QuicConnection, QuicConnectionBuilder};
 use crate::pkg::upstream::pool::reuse::ReusePool;
 use crate::pkg::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
 use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
-use crate::pkg::upstream::pool::{h2_conn, h3_conn, quic_conn, Connection, ConnectionBuilder, ConnectionPool};
+use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use hickory_proto::xfer::DnsResponse;
 use hickory_proto::ProtoError;
+use hickory_proto::op::Message;
+use hickory_proto::xfer::DnsResponse;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use url::Url;
 
 mod bootstrap;
@@ -92,14 +91,14 @@ pub struct UpstreamConfig {
 #[allow(unused)]
 pub trait UpStream: Send + Sync {
     /// Send a DNS query and wait for the response
-    async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError>;
+    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError>;
 
     /// Return the connection type of this upstream
     fn connect_type(&self) -> ConnectType;
 }
 
 /// Connection metadata used by all upstreams
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(unused)]
 pub struct ConnectInfo {
     /// Connection type (UDP, TCP, DoT, DoQ, DoH)
@@ -306,31 +305,46 @@ impl UpStreamBuilder {
                 }
             }
         } else {
-            warn!("Upstream requires domain resolution: {}", connect_info.host);
-
             // 使用bootstrap服务器解析域名
-            if let Some(bootstrap_server) = &connect_info.bootstrap {
-                info!("Using bootstrap server {} to resolve {}", bootstrap_server, connect_info.host);
-                match connect_info.connect_type {
+            let option = connect_info.bootstrap.clone();
+            if let Some(bootstrap_server) = option {
+                info!(
+                    "Using bootstrap server {} to resolve {}",
+                    bootstrap_server, &connect_info.host
+                );
+                match &connect_info.connect_type {
                     ConnectType::UDP => {
-                        Box::new(DomainUpstream::new_udp(connect_info, bootstrap_server))
+                        let upstream: DomainUpstream<UdpConnection> =
+                            DomainUpstream::new(connect_info, &bootstrap_server);
+                        Box::new(upstream)
                     }
                     ConnectType::TCP | ConnectType::DoT => {
-                        Box::new(DomainUpstream::new_tcp(connect_info, bootstrap_server))
+                        let upstream: DomainUpstream<TcpConnection> =
+                            DomainUpstream::new(connect_info, &bootstrap_server);
+                        Box::new(upstream)
                     }
                     ConnectType::DoQ => {
-                        Box::new(DomainUpstream::new_quic(connect_info, bootstrap_server))
+                        let upstream: DomainUpstream<QuicConnection> =
+                            DomainUpstream::new(connect_info, &bootstrap_server);
+                        Box::new(upstream)
                     }
                     ConnectType::DoH => {
                         if connect_info.enable_http3 {
-                            Box::new(DomainUpstream::new_h3(connect_info, bootstrap_server))
+                            let upstream: DomainUpstream<H3Connection> =
+                                DomainUpstream::new(connect_info, &bootstrap_server);
+                            Box::new(upstream)
                         } else {
-                            Box::new(DomainUpstream::new_h2(connect_info, bootstrap_server))
+                            let upstream: DomainUpstream<H2Connection> =
+                                DomainUpstream::new(connect_info, &bootstrap_server);
+                            Box::new(upstream)
                         }
                     }
                 }
             } else {
-                panic!("Domain upstream requires bootstrap server: {}", connect_info.host);
+                panic!(
+                    "Domain upstream requires bootstrap server: {}",
+                    &connect_info.host
+                );
             }
         }
     }
@@ -386,8 +400,8 @@ pub struct PooledUpstream<C: Connection> {
 
 #[async_trait]
 impl<C: Connection> UpStream for PooledUpstream<C> {
-    async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
-        match self.pool.query(context.request.clone()).await {
+    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
+        match self.pool.query(request).await {
             Ok(res) => Ok(res),
             Err(e) => Err(e),
         }
@@ -405,11 +419,11 @@ pub struct UdpTruncatedUpstream {
 
 #[async_trait]
 impl UpStream for UdpTruncatedUpstream {
-    async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
-        let response = self.main_pool.query(context.request.clone()).await?;
+    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
+        let response = self.main_pool.query(request.clone()).await?;
 
         if response.truncated() {
-            self.fallback_pool.query(context.request.clone()).await
+            self.fallback_pool.query(request).await
         } else {
             Ok(response)
         }
@@ -420,6 +434,74 @@ impl UpStream for UdpTruncatedUpstream {
     }
 }
 
+pub struct ConnectionBuilderFactory {
+    connect_info: ConnectInfo,
+}
+
+impl ConnectionBuilderFactory {
+    pub fn new(connect_info: ConnectInfo) -> Self {
+        ConnectionBuilderFactory { connect_info }
+    }
+
+    pub fn build<C: Connection>(&self, ip: IpAddr) -> Box<dyn ConnectionBuilder<C>> {
+        let mut info = self.connect_info.clone();
+        info.remote_addr = ip.to_string();
+        match info.connect_type {
+            ConnectType::UDP => {
+                let src: Box<dyn ConnectionBuilder<UdpConnection>> =
+                    Box::new(UdpConnectionBuilder::new(&info));
+                unsafe {
+                    std::mem::transmute::<
+                        Box<dyn ConnectionBuilder<UdpConnection>>,
+                        Box<dyn ConnectionBuilder<C>>,
+                    >(src)
+                }
+            }
+            ConnectType::TCP | ConnectType::DoT => {
+                let src: Box<dyn ConnectionBuilder<TcpConnection>> =
+                    Box::new(TcpConnectionBuilder::new(&info));
+                unsafe {
+                    std::mem::transmute::<
+                        Box<dyn ConnectionBuilder<TcpConnection>>,
+                        Box<dyn ConnectionBuilder<C>>,
+                    >(src)
+                }
+            }
+            ConnectType::DoQ => {
+                let src: Box<dyn ConnectionBuilder<QuicConnection>> =
+                    Box::new(QuicConnectionBuilder::new(&info));
+                unsafe {
+                    std::mem::transmute::<
+                        Box<dyn ConnectionBuilder<QuicConnection>>,
+                        Box<dyn ConnectionBuilder<C>>,
+                    >(src)
+                }
+            }
+            ConnectType::DoH => {
+                if info.enable_http3 {
+                    let src: Box<dyn ConnectionBuilder<H3Connection>> =
+                        Box::new(H3ConnectionBuilder::new(&info));
+                    unsafe {
+                        std::mem::transmute::<
+                            Box<dyn ConnectionBuilder<H3Connection>>,
+                            Box<dyn ConnectionBuilder<C>>,
+                        >(src)
+                    }
+                } else {
+                    let src: Box<dyn ConnectionBuilder<H2Connection>> =
+                        Box::new(H2ConnectionBuilder::new(&info));
+                    unsafe {
+                        std::mem::transmute::<
+                            Box<dyn ConnectionBuilder<H2Connection>>,
+                            Box<dyn ConnectionBuilder<C>>,
+                        >(src)
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Domain-based upstream resolver that uses bootstrap to resolve domain names
 pub struct DomainUpstream<C: Connection> {
     /// Connection metadata
@@ -427,113 +509,31 @@ pub struct DomainUpstream<C: Connection> {
     /// Bootstrap resolver for domain name resolution
     bootstrap: Arc<bootstrap::Bootstrap>,
     /// Connection pool for DNS queries
-    pool: RwLock<Arc<dyn ConnectionPool<C>>>,
-    /// Connection type
-    connect_type: ConnectType,
+    pool: ArcSwap<(Option<IpAddr>, Arc<dyn ConnectionPool<C>>)>,
     /// Builder for creating new connections
-    builder_factory: Box<dyn Fn(IpAddr) -> Box<dyn ConnectionBuilder<C>> + Send + Sync>,
+    builder_factory: ConnectionBuilderFactory,
 }
 
 impl<C: Connection> DomainUpstream<C> {
     /// Create a new domain upstream with the given connection info and bootstrap server
-    fn new(
-        connect_info: ConnectInfo,
-        bootstrap_server: &str,
-        connect_type: ConnectType,
-        builder_factory: Box<dyn Fn(IpAddr) -> Box<dyn ConnectionBuilder<C>> + Send + Sync>,
-    ) -> Self {
-        let bootstrap = Arc::new(bootstrap::Bootstrap::new(bootstrap_server, &connect_info.host));
+    fn new(connect_info: ConnectInfo, bootstrap_server: &str) -> Self {
+        let bootstrap = Arc::new(bootstrap::Bootstrap::new(
+            bootstrap_server,
+            &connect_info.host,
+        ));
 
         // 创建一个空的连接池，将在第一次查询时初始化
-        let pool = RwLock::new(Arc::new(ReusePool::new(0, 0, Box::new(DummyConnectionBuilder {}))) as Arc<dyn ConnectionPool<C>>);
+        let pool: Arc<dyn ConnectionPool<C>> =
+            ReusePool::<C>::new(0, 1, Box::new(DummyConnectionBuilder {}));
 
+        let conn_info = connect_info.clone();
+        let builder_factory = ConnectionBuilderFactory::new(conn_info.clone());
         DomainUpstream {
             connect_info,
             bootstrap,
-            pool,
-            connect_type,
+            pool: ArcSwap::from_pointee((None, pool)),
             builder_factory,
         }
-    }
-
-    /// Create a new UDP domain upstream
-    pub fn new_udp(connect_info: ConnectInfo, bootstrap_server: &str) -> DomainUpstream<UdpConnection> {
-        let builder_factory = Box::new(move |ip: IpAddr| {
-            let mut new_info = connect_info.clone();
-            new_info.remote_addr = ip.to_string();
-            Box::new(UdpConnectionBuilder::new(&new_info))
-        });
-
-        DomainUpstream::new(
-            connect_info,
-            bootstrap_server,
-            ConnectType::UDP,
-            builder_factory,
-        )
-    }
-
-    /// Create a new TCP domain upstream
-    pub fn new_tcp(connect_info: ConnectInfo, bootstrap_server: &str) -> DomainUpstream<TcpConnection> {
-        let builder_factory = Box::new(move |ip: IpAddr| {
-            let mut new_info = connect_info.clone();
-            new_info.remote_addr = ip.to_string();
-            Box::new(TcpConnectionBuilder::new(&new_info))
-        });
-
-        DomainUpstream::new(
-            connect_info,
-            bootstrap_server,
-            connect_info.connect_type,
-            builder_factory,
-        )
-    }
-
-    /// Create a new QUIC domain upstream
-    pub fn new_quic(connect_info: ConnectInfo, bootstrap_server: &str) -> DomainUpstream<quic_conn::QuicConnection> {
-        let builder_factory = Box::new(move |ip: IpAddr| {
-            let mut new_info = connect_info.clone();
-            new_info.remote_addr = ip.to_string();
-            Box::new(QuicConnectionBuilder::new(&new_info))
-        });
-
-        DomainUpstream::new(
-            connect_info,
-            bootstrap_server,
-            ConnectType::DoQ,
-            builder_factory,
-        )
-    }
-
-    /// Create a new HTTP/2 domain upstream
-    pub fn new_h2(connect_info: ConnectInfo, bootstrap_server: &str) -> DomainUpstream<h2_conn::H2Connection> {
-        let builder_factory = Box::new(move |ip: IpAddr| {
-            let mut new_info = connect_info.clone();
-            new_info.remote_addr = ip.to_string();
-            Box::new(H2ConnectionBuilder::new(&new_info))
-        });
-
-        DomainUpstream::new(
-            connect_info,
-            bootstrap_server,
-            ConnectType::DoH,
-            builder_factory,
-        )
-    }
-
-    /// Create a new HTTP/3 domain upstream
-    pub fn new_h3(connect_info: ConnectInfo, bootstrap_server: &str) -> DomainUpstream<h3_conn::H3Connection> {
-        let builder_factory = Box::new(move |ip: IpAddr| {
-            let mut new_info = connect_info.clone();
-            new_info.remote_addr = ip.to_string();
-            Box::new(H3ConnectionBuilder::new(&new_info))
-        });
-
-        DomainUpstream::new(
-            connect_info,
-            bootstrap_server,
-            ConnectType::DoH,
-            builder_factory,
-        )
     }
 
     /// Initialize or refresh the connection pool with the resolved IP
@@ -545,8 +545,9 @@ impl<C: Connection> DomainUpstream<C> {
         };
 
         // 检查当前池是否已经使用了这个IP
-        let current_pool = self.pool.read().await.clone();
-        if let Some(current_ip) = self.get_pool_ip(&current_pool).await {
+        let guard = &(*self.pool.load());
+        let pool_ip = guard.0;
+        if let Some(current_ip) = pool_ip {
             if current_ip == ip {
                 // IP没有变化，继续使用当前池
                 return Ok(());
@@ -554,74 +555,50 @@ impl<C: Connection> DomainUpstream<C> {
         }
 
         // IP已变化或首次初始化，创建新的连接池
-        info!("Creating new connection pool for {} with IP {}", self.connect_info.host, ip);
-        let builder = (self.builder_factory)(ip);
+        info!(
+            "Creating new connection pool for {} with IP {}",
+            self.connect_info.host, ip
+        );
+        let builder: Box<dyn ConnectionBuilder<C>> = self.builder_factory.build(ip);
+        info!("Created new connection builder {:?}", builder);
 
         let new_pool: Arc<dyn ConnectionPool<C>> = match self.connect_info.connect_type {
             ConnectType::UDP | ConnectType::TCP | ConnectType::DoT => {
                 if self.connect_info.enable_pipeline.unwrap_or(false) {
-                    Arc::new(PipelinePool::new(
-                        1,
-                        DEFAULT_MAX_CONNS_SIZE,
-                        DEFAULT_MAX_CONNS_LOAD,
-                        builder,
-                    ))
+                    PipelinePool::new(1, DEFAULT_MAX_CONNS_SIZE, DEFAULT_MAX_CONNS_LOAD, builder)
                 } else {
-                    Arc::new(ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, builder))
+                    ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, builder)
                 }
             }
             ConnectType::DoQ | ConnectType::DoH => {
-                Arc::new(PipelinePool::new(
-                    1,
-                    DEFAULT_MAX_CONNS_SIZE,
-                    DEFAULT_MAX_CONNS_LOAD,
-                    builder,
-                ))
+                PipelinePool::new(1, DEFAULT_MAX_CONNS_SIZE, DEFAULT_MAX_CONNS_LOAD, builder)
             }
         };
 
         // 更新连接池
-        let mut pool_write = self.pool.write().await;
-        *pool_write = new_pool;
-
+        self.pool.swap(Arc::from((Some(ip), new_pool)));
         Ok(())
-    }
-
-    /// 获取当前池使用的IP地址
-    async fn get_pool_ip(&self, _pool: &Arc<dyn ConnectionPool<C>>) -> Option<IpAddr> {
-        // 这里可以实现一个机制来跟踪连接池使用的IP
-        // 简化实现，总是返回None，强制刷新连接池
-        None
     }
 }
 
 #[async_trait]
 impl<C: Connection> UpStream for DomainUpstream<C> {
-    async fn query(&self, context: &mut DnsContext) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
         // 确保连接池已初始化
         self.ensure_pool_initialized().await?;
 
         // 获取当前连接池
-        let pool = self.pool.read().await.clone();
+        let pool = &*self.pool.load();
 
         // 执行查询
-        match pool.query(context.request.clone()).await {
+        match pool.1.query(request.clone()).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                // 如果查询失败，尝试刷新连接池并重试一次
-                if let Err(refresh_err) = self.ensure_pool_initialized().await {
-                    warn!("Failed to refresh connection pool: {}", refresh_err);
-                    return Err(e);
-                }
-
-                let new_pool = self.pool.read().await.clone();
-                new_pool.query(context.request.clone()).await
-            }
+            Err(e) => Err(e),
         }
     }
 
     fn connect_type(&self) -> ConnectType {
-        self.connect_type
+        self.connect_info.connect_type
     }
 }
 
@@ -632,6 +609,8 @@ struct DummyConnectionBuilder {}
 #[async_trait]
 impl<C: Connection> ConnectionBuilder<C> for DummyConnectionBuilder {
     async fn new_conn(&self, _conn_id: u16) -> Result<Arc<C>, ProtoError> {
-        Err(ProtoError::from("DummyConnectionBuilder cannot create connections"))
+        Err(ProtoError::from(
+            "DummyConnectionBuilder cannot create connections",
+        ))
     }
 }
