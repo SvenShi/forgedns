@@ -38,10 +38,11 @@ use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use serde::Deserialize;
+use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -115,7 +116,7 @@ pub struct UpstreamConfig {
 
 #[async_trait]
 #[allow(unused)]
-pub trait UpStream: Send + Sync {
+pub trait UpStream: Send + Sync + Debug {
     /// Send a DNS query and wait for the response
     async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError>;
 
@@ -427,6 +428,7 @@ fn create_pipeline_or_reuse_pool<C: Connection>(
 
 /// UDP-based upstream resolver implementation
 #[allow(unused)]
+#[derive(Debug)]
 pub struct PooledUpstream<C: Connection> {
     /// Connection metadata (remote address, port, etc.)
     pub connect_info: ConnectInfo,
@@ -448,6 +450,7 @@ impl<C: Connection> UpStream for PooledUpstream<C> {
     }
 }
 
+#[derive(Debug)]
 pub struct UdpTruncatedUpstream {
     pub main_pool: Arc<dyn ConnectionPool<UdpConnection>>,
     pub fallback_pool: Arc<dyn ConnectionPool<TcpConnection>>,
@@ -470,6 +473,7 @@ impl UpStream for UdpTruncatedUpstream {
     }
 }
 
+#[derive(Debug)]
 pub struct ConnectionBuilderFactory {
     connect_info: ConnectInfo,
 }
@@ -556,6 +560,7 @@ impl ConnectionBuilderFactory {
 }
 
 /// Domain-based upstream resolver that uses bootstrap to resolve domain names
+#[derive(Debug)]
 pub struct DomainUpstream<C: Connection> {
     /// Connection metadata
     connect_info: ConnectInfo,
