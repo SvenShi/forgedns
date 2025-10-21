@@ -12,9 +12,9 @@ use crate::pkg::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
 use crate::pkg::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
+use hickory_proto::ProtoError;
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -305,46 +305,49 @@ impl UpStreamBuilder {
                 }
             }
         } else {
-            // 使用bootstrap服务器解析域名
-            let option = connect_info.bootstrap.clone();
-            if let Some(bootstrap_server) = option {
+            // 域名上游：使用 bootstrap 或系统 DNS 解析
+            let bootstrap_server = connect_info.bootstrap.clone();
+
+            if let Some(ref server) = bootstrap_server {
                 info!(
                     "Using bootstrap server {} to resolve {}",
-                    bootstrap_server, &connect_info.host
+                    server, &connect_info.host
                 );
-                match &connect_info.connect_type {
-                    ConnectType::UDP => {
-                        let upstream: DomainUpstream<UdpConnection> =
-                            DomainUpstream::new(connect_info, &bootstrap_server);
-                        Box::new(upstream)
-                    }
-                    ConnectType::TCP | ConnectType::DoT => {
-                        let upstream: DomainUpstream<TcpConnection> =
-                            DomainUpstream::new(connect_info, &bootstrap_server);
-                        Box::new(upstream)
-                    }
-                    ConnectType::DoQ => {
-                        let upstream: DomainUpstream<QuicConnection> =
-                            DomainUpstream::new(connect_info, &bootstrap_server);
-                        Box::new(upstream)
-                    }
-                    ConnectType::DoH => {
-                        if connect_info.enable_http3 {
-                            let upstream: DomainUpstream<H3Connection> =
-                                DomainUpstream::new(connect_info, &bootstrap_server);
-                            Box::new(upstream)
-                        } else {
-                            let upstream: DomainUpstream<H2Connection> =
-                                DomainUpstream::new(connect_info, &bootstrap_server);
-                            Box::new(upstream)
-                        }
-                    }
-                }
             } else {
-                panic!(
-                    "Domain upstream requires bootstrap server: {}",
+                info!(
+                    "Using system DNS to resolve {} (one-time resolution)",
                     &connect_info.host
                 );
+            }
+
+            let bootstrap_opt = bootstrap_server.as_deref();
+            match &connect_info.connect_type {
+                ConnectType::UDP => {
+                    let upstream: DomainUpstream<UdpConnection> =
+                        DomainUpstream::new(connect_info, bootstrap_opt);
+                    Box::new(upstream)
+                }
+                ConnectType::TCP | ConnectType::DoT => {
+                    let upstream: DomainUpstream<TcpConnection> =
+                        DomainUpstream::new(connect_info, bootstrap_opt);
+                    Box::new(upstream)
+                }
+                ConnectType::DoQ => {
+                    let upstream: DomainUpstream<QuicConnection> =
+                        DomainUpstream::new(connect_info, bootstrap_opt);
+                    Box::new(upstream)
+                }
+                ConnectType::DoH => {
+                    if connect_info.enable_http3 {
+                        let upstream: DomainUpstream<H3Connection> =
+                            DomainUpstream::new(connect_info, bootstrap_opt);
+                        Box::new(upstream)
+                    } else {
+                        let upstream: DomainUpstream<H2Connection> =
+                            DomainUpstream::new(connect_info, bootstrap_opt);
+                        Box::new(upstream)
+                    }
+                }
             }
         }
     }
@@ -523,8 +526,8 @@ impl ConnectionBuilderFactory {
 pub struct DomainUpstream<C: Connection> {
     /// Connection metadata
     connect_info: ConnectInfo,
-    /// Bootstrap resolver for domain name resolution
-    bootstrap: Arc<bootstrap::Bootstrap>,
+    /// Bootstrap resolver for domain name resolution (None = use system resolver once)
+    bootstrap: Option<Arc<bootstrap::Bootstrap>>,
     /// Connection pool for DNS queries
     pool: ArcSwap<(Option<IpAddr>, Arc<dyn ConnectionPool<C>>)>,
     /// Builder for creating new connections
@@ -532,12 +535,10 @@ pub struct DomainUpstream<C: Connection> {
 }
 
 impl<C: Connection> DomainUpstream<C> {
-    /// Create a new domain upstream with the given connection info and bootstrap server
-    fn new(connect_info: ConnectInfo, bootstrap_server: &str) -> Self {
-        let bootstrap = Arc::new(bootstrap::Bootstrap::new(
-            bootstrap_server,
-            &connect_info.host,
-        ));
+    /// Create a new domain upstream with the given connection info and optional bootstrap server
+    fn new(connect_info: ConnectInfo, bootstrap_server: Option<&str>) -> Self {
+        let bootstrap = bootstrap_server
+            .map(|server| Arc::new(bootstrap::Bootstrap::new(server, &connect_info.host)));
 
         // 创建一个空的连接池，将在第一次查询时初始化
         let pool: Arc<dyn ConnectionPool<C>> =
@@ -555,29 +556,39 @@ impl<C: Connection> DomainUpstream<C> {
 
     /// Initialize or refresh the connection pool with the resolved IP
     async fn ensure_pool_initialized(&self) -> Result<(), ProtoError> {
-        // 解析域名
-        let ip = match self.bootstrap.get().await {
-            Ok(ip) => ip,
-            Err(e) => return Err(ProtoError::from(format!("Failed to resolve domain: {}", e))),
-        };
-
-        // 检查当前池是否已经使用了这个IP
+        // 检查当前池状态
         let guard = &(*self.pool.load());
         let pool_ip = guard.0;
-        if let Some(current_ip) = pool_ip {
-            if current_ip == ip {
-                // IP没有变化，继续使用当前池
-                return Ok(());
-            }
+
+        // 如果没有 bootstrap，且已经解析过一次，直接返回（永久缓存）
+        if self.bootstrap.is_none() && pool_ip.is_some() {
+            return Ok(());
         }
 
-        // IP已变化或首次初始化，创建新的连接池
+        let ip = match self.get_ip().await {
+            Ok(value) => value,
+            Err(value) => return Err(value),
+        };
+
+        // 检查 IP 是否变化
+        if let Some(current_ip) = pool_ip {
+            if current_ip == ip {
+                // IP 没有变化，继续使用当前池
+                return Ok(());
+            }
+            info!(
+                "IP changed for {}: {} -> {}",
+                self.connect_info.host, current_ip, ip
+            );
+        }
+
+        // IP 已变化或首次初始化，创建新的连接池
         info!(
             "Creating new connection pool for {} with IP {}",
             self.connect_info.host, ip
         );
         let builder: Box<dyn ConnectionBuilder<C>> = self.builder_factory.build(ip);
-        info!("Created new connection builder {:?}", builder);
+        debug!("Created new connection builder {:?}", builder);
 
         let new_pool: Arc<dyn ConnectionPool<C>> = match self.connect_info.connect_type {
             ConnectType::UDP | ConnectType::TCP | ConnectType::DoT => {
@@ -586,7 +597,6 @@ impl<C: Connection> DomainUpstream<C> {
                 } else {
                     ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, builder)
                 }
-
             }
             ConnectType::DoQ | ConnectType::DoH => {
                 PipelinePool::new(1, DEFAULT_MAX_CONNS_SIZE, DEFAULT_MAX_CONNS_LOAD, builder)
@@ -596,6 +606,49 @@ impl<C: Connection> DomainUpstream<C> {
         // 更新连接池
         self.pool.swap(Arc::from((Some(ip), new_pool)));
         Ok(())
+    }
+
+    async fn get_ip(&self) -> Result<IpAddr, ProtoError> {
+        // 解析域名获取 IP
+        let ip = if let Some(ref bootstrap) = self.bootstrap {
+            // 使用 bootstrap 解析（支持定期刷新）
+            match bootstrap.get().await {
+                Ok(ip) => ip,
+                Err(e) => {
+                    return Err(ProtoError::from(format!(
+                        "Bootstrap resolve failed for {}: {}",
+                        self.connect_info.host, e
+                    )));
+                }
+            }
+        } else {
+            // 使用系统 DNS 解析一次
+            match tokio::net::lookup_host(format!("{}:0", self.connect_info.host)).await {
+                Ok(mut addrs) => match addrs.next() {
+                    Some(addr) => {
+                        let ip = addr.ip();
+                        info!(
+                            "Resolved {} to {} using system DNS (one-time)",
+                            self.connect_info.host, ip
+                        );
+                        ip
+                    }
+                    None => {
+                        return Err(ProtoError::from(format!(
+                            "System DNS returned no addresses for {}",
+                            self.connect_info.host
+                        )));
+                    }
+                },
+                Err(e) => {
+                    return Err(ProtoError::from(format!(
+                        "System DNS resolution failed for {}: {}",
+                        self.connect_info.host, e
+                    )));
+                }
+            }
+        };
+        Ok(ip)
     }
 }
 
@@ -632,4 +685,3 @@ impl<C: Connection> ConnectionBuilder<C> for DummyConnectionBuilder {
         ))
     }
 }
-
