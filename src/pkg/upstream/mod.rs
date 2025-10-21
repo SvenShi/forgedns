@@ -2,6 +2,32 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
+
+//! Upstream DNS resolver infrastructure
+//!
+//! Provides comprehensive support for various DNS protocols with connection
+//! pooling, automatic failover, and performance optimizations.
+//!
+//! # Supported Protocols
+//! - **UDP**: Standard DNS over UDP (port 53)
+//! - **TCP**: DNS over TCP (port 53) with pipelining support
+//! - **DoT**: DNS over TLS (port 853)
+//! - **DoQ**: DNS over QUIC (port 853)
+//! - **DoH**: DNS over HTTPS via HTTP/2 or HTTP/3 (port 443)
+//!
+//! # Connection Management
+//! - **Pipeline Pool**: Multiple concurrent requests per connection
+//! - **Reuse Pool**: Connection recycling with idle timeout
+//! - **Bootstrap**: Efficient hostname resolution for upstream servers
+//! - **Fallback**: UDP → TCP fallback for truncated responses
+//!
+//! # Performance Features
+//! - Lock-free connection pooling
+//! - Automatic connection scaling
+//! - Request pipelining for TCP/TLS
+//! - Connection reuse with idle management
+//! - Zero-copy DNS message handling where possible
+
 use crate::pkg::upstream::pool::h2_conn::{H2Connection, H2ConnectionBuilder};
 use crate::pkg::upstream::pool::h3_conn::{H3Connection, H3ConnectionBuilder};
 use crate::pkg::upstream::pool::pipeline::PipelinePool;
@@ -138,7 +164,7 @@ impl ConnectInfo {
             .or(port)
             .unwrap_or(connect_type.default_port());
 
-        info!(
+        debug!(
             "Building ConnectInfo: type={:?}, host={}, port={}, path={}",
             connect_type, host, port, path
         );
@@ -233,7 +259,7 @@ impl UpStreamBuilder {
     pub fn with_upstream_config(upstream_config: &UpstreamConfig) -> Box<dyn UpStream> {
         let connect_info = ConnectInfo::with_upstream_config(upstream_config);
 
-        info!(
+        debug!(
             "Creating upstream: type={:?}, remote={}, port={}",
             connect_info.connect_type, connect_info.remote_addr, connect_info.port
         );
@@ -241,7 +267,7 @@ impl UpStreamBuilder {
         if upstream_config.dial_addr.is_some() || connect_info.is_ip_host {
             match connect_info.connect_type {
                 ConnectType::UDP => {
-                    info!("Using UDP upstream");
+                    debug!("Creating UDP upstream for {}", connect_info.raw_addr);
                     let builder = UdpConnectionBuilder::new(&connect_info);
                     let main_pool = PipelinePool::new(
                         1,
@@ -260,7 +286,7 @@ impl UpStreamBuilder {
                     })
                 }
                 ConnectType::TCP | ConnectType::DoT => {
-                    info!("Using {:?} upstream", connect_info.connect_type);
+                    debug!("Creating {:?} upstream for {}", connect_info.connect_type, connect_info.raw_addr);
                     let builder = TcpConnectionBuilder::new(&connect_info);
                     create_pipeline_or_reuse_pool(
                         1,
@@ -271,7 +297,7 @@ impl UpStreamBuilder {
                     )
                 }
                 ConnectType::DoQ => {
-                    info!("Using Quic upstream");
+                    debug!("Creating QUIC upstream for {}", connect_info.raw_addr);
                     let builder = QuicConnectionBuilder::new(&connect_info);
                     create_pipeline_pool(
                         1,
@@ -282,7 +308,9 @@ impl UpStreamBuilder {
                     )
                 }
                 ConnectType::DoH => {
-                    info!("Using DoH upstream");
+                    debug!("Creating DoH upstream for {} (HTTP/{})", 
+                           connect_info.raw_addr, 
+                           if connect_info.enable_http3 { "3" } else { "2" });
                     if connect_info.enable_http3 {
                         let builder = H3ConnectionBuilder::new(&connect_info);
                         create_pipeline_pool(
@@ -305,7 +333,7 @@ impl UpStreamBuilder {
                 }
             }
         } else {
-            // 域名上游：使用 bootstrap 或系统 DNS 解析
+            // Domain-based upstream: use bootstrap or system DNS for resolution
             let bootstrap_server = connect_info.bootstrap.clone();
 
             if let Some(ref server) = bootstrap_server {
@@ -555,12 +583,17 @@ impl<C: Connection> DomainUpstream<C> {
     }
 
     /// Initialize or refresh the connection pool with the resolved IP
+    ///
+    /// This method handles:
+    /// - Initial pool creation on first query
+    /// - IP change detection and pool refresh
+    /// - Caching for non-bootstrap upstreams (permanent cache)
     async fn ensure_pool_initialized(&self) -> Result<(), ProtoError> {
-        // 检查当前池状态
+        // Check current pool state
         let guard = &(*self.pool.load());
         let pool_ip = guard.0;
 
-        // 如果没有 bootstrap，且已经解析过一次，直接返回（永久缓存）
+        // If no bootstrap and already resolved once, use permanent cache
         if self.bootstrap.is_none() && pool_ip.is_some() {
             return Ok(());
         }
@@ -570,19 +603,19 @@ impl<C: Connection> DomainUpstream<C> {
             Err(value) => return Err(value),
         };
 
-        // 检查 IP 是否变化
+        // Check if IP has changed
         if let Some(current_ip) = pool_ip {
             if current_ip == ip {
-                // IP 没有变化，继续使用当前池
+                // IP unchanged, continue using current pool
                 return Ok(());
             }
             info!(
-                "IP changed for {}: {} -> {}",
+                "IP address changed for {}: {} -> {}",
                 self.connect_info.host, current_ip, ip
             );
         }
 
-        // IP 已变化或首次初始化，创建新的连接池
+        // IP changed or first initialization - create new connection pool
         info!(
             "Creating new connection pool for {} with IP {}",
             self.connect_info.host, ip
@@ -603,32 +636,35 @@ impl<C: Connection> DomainUpstream<C> {
             }
         };
 
-        // 更新连接池
+        // Atomically update connection pool
         self.pool.swap(Arc::from((Some(ip), new_pool)));
         Ok(())
     }
 
+    /// Resolve domain to IP address
+    ///
+    /// Uses bootstrap resolver if configured, otherwise falls back to system DNS.
+    /// System DNS results are cached permanently (no refresh).
     async fn get_ip(&self) -> Result<IpAddr, ProtoError> {
-        // 解析域名获取 IP
         let ip = if let Some(ref bootstrap) = self.bootstrap {
-            // 使用 bootstrap 解析（支持定期刷新）
+            // Use bootstrap resolver (supports periodic refresh via TTL)
             match bootstrap.get().await {
                 Ok(ip) => ip,
                 Err(e) => {
                     return Err(ProtoError::from(format!(
-                        "Bootstrap resolve failed for {}: {}",
+                        "Bootstrap resolution failed for {}: {}",
                         self.connect_info.host, e
                     )));
                 }
             }
         } else {
-            // 使用系统 DNS 解析一次
+            // Use system DNS one-time resolution (permanent cache)
             match tokio::net::lookup_host(format!("{}:0", self.connect_info.host)).await {
                 Ok(mut addrs) => match addrs.next() {
                     Some(addr) => {
                         let ip = addr.ip();
                         info!(
-                            "Resolved {} to {} using system DNS (one-time)",
+                            "Resolved {} to {} using system DNS (one-time, permanent cache)",
                             self.connect_info.host, ip
                         );
                         ip
@@ -655,13 +691,13 @@ impl<C: Connection> DomainUpstream<C> {
 #[async_trait]
 impl<C: Connection> UpStream for DomainUpstream<C> {
     async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
-        // 确保连接池已初始化
+        // Ensure connection pool is initialized (handles IP resolution and pool creation)
         self.ensure_pool_initialized().await?;
 
-        // 获取当前连接池
+        // Get current connection pool
         let pool = &*self.pool.load();
 
-        // 执行查询
+        // Execute DNS query through the pool
         match pool.1.query(request.clone()).await {
             Ok(res) => Ok(res),
             Err(e) => Err(e),
@@ -673,7 +709,10 @@ impl<C: Connection> UpStream for DomainUpstream<C> {
     }
 }
 
-/// 用于创建初始空连接池的虚拟ConnectionBuilder
+/// Dummy connection builder for initial empty pool
+///
+/// This is used as a placeholder before the first DNS resolution completes.
+/// Any attempt to create a connection will fail with an error.
 #[derive(Debug)]
 struct DummyConnectionBuilder {}
 
@@ -681,7 +720,7 @@ struct DummyConnectionBuilder {}
 impl<C: Connection> ConnectionBuilder<C> for DummyConnectionBuilder {
     async fn new_conn(&self, _conn_id: u16) -> Result<Arc<C>, ProtoError> {
         Err(ProtoError::from(
-            "DummyConnectionBuilder cannot create connections",
+            "DummyConnectionBuilder cannot create connections (pool not yet initialized)",
         ))
     }
 }

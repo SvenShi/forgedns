@@ -3,6 +3,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+//! Plugin system for RustDNS
+//!
+//! Provides a flexible plugin architecture supporting:
+//! - Server plugins (UDP/TCP listeners)
+//! - Executor plugins (DNS forwarding, filtering, etc.)
+//! - Matcher plugins (query matching rules)
+//! - DataProvider plugins (IP sets, domain lists, etc.)
+//!
+//! All plugins are registered via factories and instantiated from config.
+
 use crate::config::config::{Config, PluginConfig};
 use crate::core::context::DnsContext;
 use crate::plugin::executable::forward::ForwardFactory;
@@ -21,54 +31,75 @@ pub mod executable;
 mod server;
 
 lazy_static! {
+    /// Global registry of plugin factories
+    /// Maps plugin type names to their factory implementations
     static ref FACTORIES: HashMap<&'static str, Box<dyn PluginFactory>> = {
         let mut m: HashMap<&str, Box<dyn PluginFactory>> = HashMap::new();
         m.insert("forward", Box::new(ForwardFactory {}));
         m.insert("udp_server", Box::new(UdpServerFactory {}));
         m
     };
+    
+    /// Global registry of initialized plugin instances
+    /// Maps plugin tags to their runtime instances
     static ref PLUGINS: DashMap<String, Arc<PluginInfo>> = DashMap::new();
 }
 
-/// 初始化插件
+/// Initialize all configured plugins
+///
+/// Iterates through the config, creating each plugin via its factory,
+/// calling its init() method, and registering it in the global plugin map.
 pub async fn init(config: Config) {
-    // 每种插件都要实现一个插件构造工厂，通过构造工厂来创造插件
+    info!("Starting plugin initialization ({} plugins)", config.plugins.len());
+    
+    // Each plugin type has a factory that creates plugin instances
     for plugin_config in config.plugins {
         let key = plugin_config.plugin_type.as_str();
         let factory = FACTORIES
             .get(key)
-            .unwrap_or_else(|| panic!("Plugin {key} not found"));
+            .unwrap_or_else(|| panic!("Plugin type '{}' not found in registry", key));
         let mut plugin_info = PluginInfo::from(&plugin_config, &factory);
 
-        info!("Plugin init {} start", plugin_info.plugin_type);
+        info!("Initializing plugin: {} (tag: {})", plugin_info.plugin_type, plugin_info.tag);
         plugin_info.plugin.as_mut().init().await;
 
         PLUGINS.insert(plugin_config.tag.to_owned(), Arc::new(plugin_info));
     }
+    
+    info!("All plugins initialized successfully");
 }
 
+/// Get a plugin instance by tag
+///
+/// Returns None if no plugin with the given tag exists
 pub fn get_plugin(tag: &str) -> Option<Arc<PluginInfo>> {
     Some(PLUGINS.get(tag)?.clone())
 }
 
+/// Register or update a plugin instance
 #[allow(unused)]
 pub fn set_plugin(plugin_info: Arc<PluginInfo>) {
     PLUGINS.insert(plugin_info.tag.to_owned(), plugin_info);
 }
 
+/// Plugin category classification
 #[derive(Clone, Debug, Deserialize)]
 pub enum PluginMainType {
-    /// 持续运行的服务插件
+    /// Server plugins run continuously (e.g., UDP/TCP listeners)
     Server { tag: String, type_name: String },
-    /// 可执行的执行插件
+    
+    /// Executor plugins process DNS queries (e.g., forwarders, filters)
     Executor { tag: String, type_name: String },
-    /// 用于匹配某种规则的匹配器
+    
+    /// Matcher plugins test queries against rules (e.g., domain lists)
     Matcher { tag: String, type_name: String },
-    /// 用于提供数据的数据提供器
+    
+    /// DataProvider plugins provide data sources (e.g., IP sets, GeoIP)
     DataProvider { tag: String, type_name: String },
 }
 
 impl PluginMainType {
+    /// Get the plugin instance tag
     pub fn tag(&self) -> &str {
         match self {
             PluginMainType::Server { tag, .. }
@@ -78,6 +109,7 @@ impl PluginMainType {
         }
     }
 
+    /// Get the plugin type name
     pub fn type_name(&self) -> &str {
         match self {
             PluginMainType::Server { type_name, .. }
@@ -87,6 +119,7 @@ impl PluginMainType {
         }
     }
 
+    /// Get the plugin category kind
     pub fn kind(&self) -> &'static str {
         match self {
             PluginMainType::Server { .. } => "Server",
@@ -103,39 +136,49 @@ impl Display for PluginMainType {
     }
 }
 
-/// 插件
+/// Core plugin trait that all plugins must implement
 #[async_trait]
 #[allow(unused)]
 pub trait Plugin: Send + Sync + 'static {
+    /// Get the plugin's unique tag
     fn tag(&self) -> &str;
 
+    /// Initialize the plugin (called once during server startup)
     async fn init(&mut self);
 
+    /// Execute the plugin's logic on a DNS request context
     async fn execute(&self, context: &mut DnsContext);
 
+    /// Get the plugin's type information
     fn main_type(&self) -> PluginMainType;
 
+    /// Clean up plugin resources (called during shutdown)
     async fn destroy(&mut self);
 }
 
-/// 插件构造工厂
+/// Plugin factory trait for creating plugin instances from configuration
 #[async_trait]
 pub trait PluginFactory: Send + Sync + 'static {
+    /// Create a new plugin instance from configuration
     fn create(&self, plugin_info: &PluginConfig) -> Box<dyn Plugin>;
 
+    /// Get the plugin type for a given tag
     fn plugin_type(&self, tag: &str) -> PluginMainType;
 }
 
-/// 插件信息
+/// Plugin metadata and instance container
 #[allow(unused)]
 pub struct PluginInfo {
-    /// 插件tag
+    /// Plugin instance tag (unique identifier)
     pub tag: String,
-    /// 插件类型
+    
+    /// Plugin type information
     pub plugin_type: PluginMainType,
-    /// 插件参数
+    
+    /// Plugin-specific configuration arguments
     pub args: Option<Value>,
-    ///插件
+    
+    /// The actual plugin implementation
     pub plugin: Box<dyn Plugin>,
 }
 

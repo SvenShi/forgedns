@@ -3,6 +3,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+//! Bootstrap DNS resolver for domain name resolution
+//!
+//! Provides efficient hostname-to-IP resolution for upstream servers.
+//! Implements a lock-free caching mechanism with automatic refresh.
+//!
+//! # Performance Optimizations
+//! - Lock-free state machine using atomic operations
+//! - Cached results with TTL-based expiration
+//! - Single resolver instance for multiple concurrent queries
+//! - Pre-parsed DNS queries to avoid repeated allocations
+
 use crate::core::app_clock::AppClock;
 use crate::pkg::upstream::{UpStream, UpStreamBuilder, UpstreamConfig};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
@@ -13,33 +24,55 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use tokio::sync::{Notify, RwLock};
 use tracing::{debug, error, info, warn};
 
-// 状态常量
-const STATE_NONE: u8 = 0;
-const STATE_QUERYING: u8 = 1;
-const STATE_CACHED: u8 = 2;
-const STATE_FAILED: u8 = 3;
+// State machine constants for atomic state transitions
+const STATE_NONE: u8 = 0;      // Initial state, needs query
+const STATE_QUERYING: u8 = 1;  // Currently performing DNS lookup
+const STATE_CACHED: u8 = 2;    // Valid cached result available
+const STATE_FAILED: u8 = 3;    // Previous query failed
 
+/// Cached DNS resolution result
 #[derive(Clone, Debug)]
 struct CacheData {
+    /// Resolved IP address
     ip: IpAddr,
+    /// Expiration time in milliseconds since app start
     expires_at: u64,
 }
 
+/// Bootstrap DNS resolver for upstream hostname resolution
+///
+/// Uses a lock-free state machine to coordinate multiple concurrent
+/// resolution requests efficiently. Only one query is performed at a time,
+/// with other requests waiting for the result.
 pub(crate) struct Bootstrap {
+    /// Upstream resolver for DNS queries
     upstream: Box<dyn UpStream>,
-    /// 原子状态标志，用于快速路径检查
+    
+    /// Atomic state flag for lock-free fast path
     state: AtomicU8,
-    /// 缓存数据 - 使用 parking_lot 的同步 RwLock（比 tokio 的快）
+    
+    /// Cached resolution data with TTL
     cache: RwLock<Option<CacheData>>,
-    /// 查询完成通知
+    
+    /// Notifier for query completion (wakes waiting tasks)
     query_done: Notify,
 
+    /// Pre-built DNS query message (optimization)
     message: Message,
-    /// 原始域名（仅用于日志）
+    
+    /// Domain name being resolved (for logging only)
     domain: String,
 }
 
 impl Bootstrap {
+    /// Create a new bootstrap resolver
+    ///
+    /// # Arguments
+    /// * `bootstrap_server` - DNS server address for resolution (e.g., "8.8.8.8")
+    /// * `domain` - Domain name to resolve
+    ///
+    /// # Panics
+    /// Panics if the domain name is invalid (should be caught during init)
     pub fn new(bootstrap_server: &str, domain: &str) -> Self {
         let config = UpstreamConfig {
             addr: bootstrap_server.to_string(),
@@ -53,15 +86,18 @@ impl Bootstrap {
             enable_http3: None,
         };
 
-        // 预解析域名，如果失败则 panic（在初始化时就应该发现）
+        // Pre-parse domain name (fail fast during initialization)
         let parsed_name = Name::from_str(domain)
-            .unwrap_or_else(|e| panic!("Invalid domain name {}: {}", domain, e));
+            .unwrap_or_else(|e| panic!("Invalid domain name '{}': {}", domain, e));
+        
+        // Pre-build DNS query message (optimization: avoid repeated allocations)
         let mut message = Message::new();
         message.set_id(rand::random());
         message.set_message_type(MessageType::Query);
         message.set_op_code(OpCode::Query);
         message.set_recursion_desired(true);
         message.add_query(Query::query(parsed_name.clone(), RecordType::A));
+        
         Bootstrap {
             upstream: UpStreamBuilder::with_upstream_config(&config),
             state: AtomicU8::new(STATE_NONE),
@@ -72,28 +108,31 @@ impl Bootstrap {
         }
     }
 
+    /// Get the resolved IP address, using cache or triggering a new query
+    ///
+    /// This is the hot path - optimized for minimal overhead when cache is valid.
+    /// Uses a lock-free state machine for coordination.
     #[inline]
     pub async fn get(&self) -> Result<IpAddr, String> {
         let mut failed_count = 0;
 
         loop {
-            // 【优化1】快速路径：使用原子 load，无锁检查
+            // Fast path: atomic load without locking
             let state = self.state.load(Ordering::Acquire);
 
             match state {
                 STATE_CACHED => {
-                    // 【优化2】使用同步 RwLock（parking_lot），比 tokio 的异步锁快
+                    // Hot path: check cache validity
                     let cache = self.cache.read().await;
                     if let Some(ref data) = *cache {
-                        // 【优化3】使用 Instant 而不是 DateTime<Local>
                         if AppClock::run_millis() < data.expires_at {
-                            // 热路径：缓存命中 - 这是最常见的情况
+                            // Cache hit - most common case
                             return Ok(data.ip);
                         }
                     }
                     drop(cache);
 
-                    // 缓存过期，尝试触发刷新
+                    // Cache expired, try to trigger refresh
                     debug!("Bootstrap cache expired for {}, refreshing", self.domain);
                     if self
                         .state
@@ -105,14 +144,14 @@ impl Bootstrap {
                         )
                         .is_ok()
                     {
-                        // 继续到下一次循环，触发查询
+                        // Successfully transitioned to NONE, loop to trigger query
                         continue;
                     }
-                    // 其他协程已经在刷新了，等待通知
+                    // Someone else is already refreshing, wait for result
                     self.query_done.notified().await;
                 }
                 STATE_NONE => {
-                    // 尝试获取查询权限
+                    // Try to acquire query permission
                     if self
                         .state
                         .compare_exchange(
@@ -123,15 +162,15 @@ impl Bootstrap {
                         )
                         .is_ok()
                     {
-                        // 我们获得了查询权限
+                        // We won the race, perform the query
                         self.query().await;
                         continue;
                     }
-                    // 其他协程已经在查询，等待
+                    // Someone else is querying, wait for result
                     self.query_done.notified().await;
                 }
                 STATE_QUERYING => {
-                    // 【优化4】使用 Notify 替代 yield_now 的自旋等待
+                    // Wait for query to complete
                     self.query_done.notified().await;
                 }
                 STATE_FAILED => {
@@ -140,7 +179,7 @@ impl Bootstrap {
                     }
                     failed_count += 1;
 
-                    // 重试
+                    // Retry by transitioning back to NONE
                     if self
                         .state
                         .compare_exchange(
@@ -160,27 +199,28 @@ impl Bootstrap {
         }
     }
 
+    /// Perform DNS query for the domain
+    ///
+    /// Uses pre-built query message for efficiency.
+    /// Updates cache and notifies waiting tasks on completion.
     async fn query(&self) {
-        // 【优化5】使用预解析的域名，避免重复解析
-        // 【优化6】直接构建查询消息，减少中间步骤
-
-        // 执行查询
+        // Execute DNS query using pre-built message
         match self.upstream.query(self.message.clone()).await {
             Ok(response) => {
                 let answers = response.answers();
 
-                // 【优化7】直接迭代，避免多余的检查
+                // Find first A or AAAA record
                 for answer in answers {
                     if answer.record_type() == RecordType::A || answer.record_type() == RecordType::AAAA {
                         if let Some(ip) = answer.data().ip_addr() {
-                            let ttl = answer.ttl() as u64 * 1000;
-                            info!("Resolved {} to {}, tll {}", self.domain, ip, ttl);
+                            let ttl = answer.ttl() as u64 * 1000; // Convert to milliseconds
+                            info!("Bootstrap resolved {} to {} (TTL: {}s)", self.domain, ip, ttl / 1000);
 
-                            // 更新缓存
+                            // Update cache
                             let expires_at = AppClock::run_millis() + ttl;
                             *self.cache.write().await = Some(CacheData { ip, expires_at });
 
-                            // 更新状态并通知
+                            // Transition to CACHED and wake waiting tasks
                             self.state.store(STATE_CACHED, Ordering::Release);
                             self.query_done.notify_waiters();
                             return;
@@ -188,11 +228,13 @@ impl Bootstrap {
                     }
                 }
 
-                warn!("No A records found for {}", self.domain);
+                // No A/AAAA records found
+                warn!("No A/AAAA records found for {}", self.domain);
                 self.state.store(STATE_FAILED, Ordering::Release);
                 self.query_done.notify_waiters();
             }
             Err(e) => {
+                // DNS query failed
                 error!("Failed to query DNS for {}: {}", self.domain, e);
                 self.state.store(STATE_FAILED, Ordering::Release);
                 self.query_done.notify_waiters();
