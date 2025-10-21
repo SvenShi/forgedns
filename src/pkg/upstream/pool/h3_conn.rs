@@ -3,24 +3,24 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
+use crate::pkg::upstream::pool::ConnectionBuilder;
 use crate::pkg::upstream::pool::utils::{
     build_dns_get_request, build_doh_request_uri, connect_quic, get_buf_from_res,
 };
-use crate::pkg::upstream::pool::ConnectionBuilder;
 use crate::pkg::upstream::{ConnectInfo, Connection, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
 use futures::future::poll_fn;
 use h3::client::{RequestStream, SendRequest};
 use h3_quinn::{BidiStream, OpenStreams};
+use hickory_proto::ProtoError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use http::Version;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::timeout;
