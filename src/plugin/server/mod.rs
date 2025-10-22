@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-use crate::plugin::{Plugin};
+use crate::plugin::Plugin;
 
 pub mod udp;
 

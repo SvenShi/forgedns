@@ -19,13 +19,14 @@ use clap::Parser;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Registry, fmt};
+use tracing_subscriber::{fmt, EnvFilter, Registry};
 
 pub mod app_clock;
 pub mod context;
 
 mod log;
 mod runtime;
+pub mod error;
 
 /// Initialize the core runtime system
 ///

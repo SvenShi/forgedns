@@ -14,6 +14,7 @@
 //! All plugins are registered via factories and instantiated from config.
 
 use crate::config::types::{Config, PluginConfig};
+use crate::core::error::Result;
 use crate::plugin::executor::Executor;
 use crate::plugin::executor::forward::ForwardFactory;
 use crate::plugin::server::udp::UdpServerFactory;
@@ -81,8 +82,8 @@ impl UninitializedPlugin {
 ///
 /// # Returns
 /// * `Ok(Arc<PluginRegistry>)` - Initialized plugin registry
-/// * `Err(String)` - Error message if initialization fails
-pub async fn init(config: Config) -> Result<Arc<PluginRegistry>, String> {
+/// * `Err(DnsError)` - Error message if initialization fails
+pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     // Create and configure the registry
     let mut registry = PluginRegistry::new();
 
@@ -166,13 +167,13 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
         &self,
         plugin_info: &PluginConfig,
         registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin, String>;
+    ) -> Result<UninitializedPlugin>;
 
     /// Validate plugin-specific configuration
     ///
     /// Each plugin factory can validate its own configuration format.
     /// Default implementation does nothing (assumes valid).
-    fn validate_config(&self, _plugin_info: &PluginConfig) -> Result<(), String> {
+    fn validate_config(&self, _plugin_info: &PluginConfig) -> Result<()> {
         Ok(())
     }
 

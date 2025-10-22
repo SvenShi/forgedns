@@ -17,7 +17,7 @@ use crate::network::upstream::{ConnectionInfo, ConnectionType};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use bytes::BytesMut;
-use hickory_proto::ProtoError;
+use crate::core::error::{DnsError, Result};
 use http::header::CONTENT_LENGTH;
 use http::{HeaderValue, Method, Request, Response, Version, header};
 use quinn::crypto::rustls::QuicClientConfig;
@@ -46,7 +46,7 @@ pub(crate) async fn connect_tls(
     skip_cert: bool,
     server_name: String,
     conn_timeout: Duration,
-) -> Result<TlsStream<TcpStream>, ProtoError> {
+) -> Result<TlsStream<TcpStream>> {
     let config = if skip_cert {
         insecure_client_config()
     } else {
@@ -55,12 +55,12 @@ pub(crate) async fn connect_tls(
 
     let connector = TlsConnector::from(Arc::new(config));
     let dns_name = ServerName::try_from(server_name)
-        .map_err(|_| ProtoError::from("Invalid DNS server name"))?;
+        .map_err(|_| DnsError::protocol("Invalid DNS server name"))?;
 
     match timeout(conn_timeout, connector.connect(dns_name, tcp_stream)).await {
         Ok(Ok(s)) => Ok(s),
-        Ok(Err(e)) => Err(ProtoError::from(format!("TLS connection error: {}", e))),
-        Err(_) => Err(ProtoError::from("TLS handshake timeout")),
+        Ok(Err(e)) => Err(DnsError::protocol(format!("TLS connection error: {}", e))),
+        Err(_) => Err(DnsError::protocol("TLS handshake timeout")),
     }
 }
 
@@ -80,7 +80,7 @@ pub(crate) async fn connect_quic(
     skip_cert: bool,
     server_name: String,
     conn_timeout: Duration,
-) -> Result<quinn::Connection, ProtoError> {
+) -> Result<quinn::Connection> {
     let udp_socket = UdpSocket::bind(bind_addr).await?;
 
     let mut endpoint = Endpoint::new(
@@ -109,8 +109,8 @@ pub(crate) async fn connect_quic(
     .await
     {
         Ok(Ok(s)) => Ok(s),
-        Ok(Err(e)) => Err(ProtoError::from(format!("QUIC connection error: {}", e))),
-        Err(_) => Err(ProtoError::from("QUIC handshake timeout")),
+        Ok(Err(e)) => Err(DnsError::protocol(format!("QUIC connection error: {}", e))),
+        Err(_) => Err(DnsError::protocol("QUIC handshake timeout")),
     }
 }
 
@@ -177,7 +177,10 @@ pub fn build_doh_request_uri(connection_info: &ConnectionInfo) -> String {
         uri.reserve(512); // Pre-allocate for base64 query
         uri
     } else {
-        let mut uri = format!("https://{}{}?dns=", connection_info.host, connection_info.path);
+        let mut uri = format!(
+            "https://{}{}?dns=",
+            connection_info.host, connection_info.path
+        );
         uri.reserve(512);
         uri
     }

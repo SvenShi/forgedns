@@ -11,6 +11,7 @@
 //! - Plugin configurations
 
 use crate::config::types::Config;
+use crate::core::error::Result;
 use std::fs;
 use std::path::PathBuf;
 
@@ -18,24 +19,19 @@ pub mod types;
 
 /// Load and parse configuration from YAML file
 ///
-/// # Panics
-/// Panics if the file cannot be read, if YAML parsing fails, or if validation fails.
-/// This is intentional as the server cannot operate without valid configuration.
-pub fn init(file: &PathBuf) -> Config {
-    let string = fs::read_to_string(file)
-        .unwrap_or_else(|e| panic!("Failed to read config file {:?}: {}", file, e));
+/// # Errors
+/// Returns an error if the file cannot be read, if YAML parsing fails, or if validation fails.
+pub fn init(file: &PathBuf) -> Result<Config> {
+    // Using ? operator - errors are automatically converted via From trait
+    let string = fs::read_to_string(file)?;
+    let config: Config = serde_yml::from_str(&string)?;
 
-    let config: Config = serde_yml::from_str(&string)
-        .unwrap_or_else(|e| panic!("Failed to parse config file {:?}: {}", file, e));
-
-    // Validate configuration
-    config
-        .validate()
-        .unwrap_or_else(|e| panic!("Configuration validation failed: {}", e));
+    // Validate configuration - ConfigError is auto-converted to RustDnsError
+    config.validate()?;
 
     eprintln!(
         "Configuration loaded and validated: {} plugin(s) configured",
         config.plugins.len()
     );
-    config
+    Ok(config)
 }

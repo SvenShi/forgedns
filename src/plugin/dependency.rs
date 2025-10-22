@@ -10,6 +10,7 @@
 //! declared in any order in the configuration file.
 
 use crate::config::types::PluginConfig;
+use crate::core::error::{DnsError, Result};
 use std::collections::{HashMap, VecDeque};
 
 /// Resolve plugin dependencies and return plugins in initialization order
@@ -23,11 +24,11 @@ use std::collections::{HashMap, VecDeque};
 ///
 /// # Returns
 /// * `Ok(Vec<PluginConfig>)` - Plugins sorted in dependency order
-/// * `Err(String)` - Error message if circular dependency detected
+/// * `Err(DnsError)` - Error message if circular dependency detected
 pub fn resolve_dependencies(
     configs: Vec<PluginConfig>,
     get_deps: &dyn Fn(&PluginConfig) -> Vec<String>,
-) -> Result<Vec<PluginConfig>, String> {
+) -> Result<Vec<PluginConfig>> {
     // Build dependency graph (tag -> list of tags that depend on it)
     let mut reverse_graph: HashMap<String, Vec<String>> = HashMap::new();
     let mut in_degree: HashMap<String, usize> = HashMap::new();
@@ -35,19 +36,24 @@ pub fn resolve_dependencies(
     // Initialize all plugin tags
     for config in &configs {
         in_degree.insert(config.tag.clone(), 0);
-        reverse_graph.entry(config.tag.clone()).or_insert_with(Vec::new);
+        reverse_graph
+            .entry(config.tag.clone())
+            .or_insert_with(Vec::new);
     }
 
     // Build the reverse dependency graph and calculate in-degrees
     for config in &configs {
         let deps = get_deps(config);
-        
+
         // Set in-degree to number of dependencies
         *in_degree.get_mut(&config.tag).unwrap() = deps.len();
-        
+
         // Add reverse edges: dependency -> who depends on it
         for dep in deps {
-            reverse_graph.entry(dep.clone()).or_insert_with(Vec::new).push(config.tag.clone());
+            reverse_graph
+                .entry(dep.clone())
+                .or_insert_with(Vec::new)
+                .push(config.tag.clone());
         }
     }
 
@@ -81,7 +87,9 @@ pub fn resolve_dependencies(
 
     // Check for circular dependencies
     if sorted.len() != config_map.len() {
-        return Err("Circular dependency detected in plugin configuration".to_string());
+        return Err(DnsError::dependency(
+            "Circular dependency detected in plugin configuration",
+        ));
     }
 
     Ok(sorted)

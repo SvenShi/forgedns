@@ -9,6 +9,7 @@
 //! enabling better testability and support for multiple server instances.
 
 use crate::config::types::PluginConfig;
+use crate::core::error::{DnsError, Result};
 use crate::plugin::{PluginFactory, PluginInfo};
 use dashmap::DashMap;
 use std::collections::HashMap;
@@ -62,17 +63,16 @@ impl PluginRegistry {
     ///
     /// # Returns
     /// * `Ok(())` - All plugins initialized successfully
-    /// * `Err(String)` - Error message if initialization fails
-    pub async fn init_plugins(self: Arc<Self>, configs: Vec<PluginConfig>) -> Result<(), String> {
+    /// * `Err(DnsError)` - Error message if initialization fails
+    pub async fn init_plugins(self: Arc<Self>, configs: Vec<PluginConfig>) -> Result<()> {
         use crate::plugin::dependency;
 
         // Step 1: Validate all plugin configurations
         info!("Validating plugin configurations...");
         for config in &configs {
-            let factory = self
-                .factories
-                .get(&config.plugin_type)
-                .ok_or_else(|| format!("Unknown plugin type: {}", config.plugin_type))?;
+            let factory = self.factories.get(&config.plugin_type).ok_or_else(|| {
+                DnsError::plugin(format!("Unknown plugin type: {}", config.plugin_type))
+            })?;
 
             factory.validate_config(config)?;
         }
@@ -105,7 +105,12 @@ impl PluginRegistry {
             let factory = self
                 .factories
                 .get(&plugin_config.plugin_type)
-                .ok_or_else(|| format!("Unknown plugin type: {}", plugin_config.plugin_type))?;
+                .ok_or_else(|| {
+                    DnsError::plugin(format!(
+                        "Unknown plugin type: {}",
+                        plugin_config.plugin_type
+                    ))
+                })?;
 
             // Create plugin using the factory and registry
             let mut plugin_info = self
@@ -128,7 +133,7 @@ impl PluginRegistry {
         self: &Arc<Self>,
         config: &PluginConfig,
         factory: &Box<dyn PluginFactory>,
-    ) -> Result<PluginInfo, String> {
+    ) -> Result<PluginInfo> {
         // Factory creates uninitialized plugin
         let uninitialized = factory.create(config, self.clone())?;
 

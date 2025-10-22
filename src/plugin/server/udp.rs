@@ -11,6 +11,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
+use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
 use crate::plugin::server::Server;
 use crate::plugin::{Plugin, PluginFactory, PluginInfo, PluginRegistry};
@@ -31,7 +32,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::task::JoinSet;
-use tracing::{debug, error, event_enabled, info, warn, Level};
+use tracing::{Level, debug, error, event_enabled, info, warn};
 
 /// UDP server configuration
 #[derive(Deserialize)]
@@ -201,10 +202,16 @@ async fn handle_message(
         }
 
         // Send response back to client
-        stream_handle
-            .with_remote_addr(src_addr)
-            .send(SerialMessage::new(response.to_bytes().unwrap(), src_addr))
-            .unwrap();
+        if let Ok(bytes) = response.to_bytes() {
+            if let Err(e) = stream_handle
+                .with_remote_addr(src_addr)
+                .send(SerialMessage::new(bytes, src_addr))
+            {
+                warn!("Failed to send response to {}: {}", src_addr, e);
+            }
+        } else {
+            warn!("Failed to serialize response for {}", src_addr);
+        }
     }
 }
 
@@ -218,8 +225,13 @@ fn reap_tasks(join_set: &mut JoinSet<()>) {
 /// Build a UDP socket with reuse_address and reuse_port options
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
-fn build_udp_socket(addr: &str) -> Result<UdpSocket, Error> {
-    let addr = SocketAddr::from_str(addr).unwrap();
+fn build_udp_socket(addr: &str) -> std::result::Result<UdpSocket, Error> {
+    let addr = SocketAddr::from_str(addr).map_err(|e| {
+        Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Invalid address {}: {}", addr, e),
+        )
+    })?;
 
     let sock = if addr.is_ipv4() {
         Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?
@@ -247,51 +259,61 @@ impl PluginFactory for UdpServerFactory {
         &self,
         plugin_info: &PluginConfig,
         registry: Arc<PluginRegistry>,
-    ) -> Result<crate::plugin::UninitializedPlugin, String> {
-
-        let udp_config =
-            serde_yml::from_value::<UdpServerConfig>(plugin_info.args.clone().unwrap()).unwrap();
+    ) -> Result<crate::plugin::UninitializedPlugin> {
+        let udp_config = serde_yml::from_value::<UdpServerConfig>(
+            plugin_info
+                .args
+                .clone()
+                .ok_or_else(|| DnsError::plugin("UDP Server requires configuration arguments"))?,
+        )
+        .map_err(|e| DnsError::plugin(format!("Failed to parse UDP Server config: {}", e)))?;
 
         // Look up the entry plugin using the registry
         let entry = registry.get_plugin(&udp_config.entry).ok_or_else(|| {
-            format!(
+            DnsError::plugin(format!(
                 "UDP Server [{}] entry plugin [{}] not found",
                 plugin_info.tag, udp_config.entry
-            )
+            ))
         })?;
 
-        Ok(crate::plugin::UninitializedPlugin::Server(Box::new(UdpServer {
-            tag: plugin_info.tag.clone(),
-            entry: entry.clone(),
-            listen: udp_config.listen,
-            registry,
-        })))
+        Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
+            UdpServer {
+                tag: plugin_info.tag.clone(),
+                entry: entry.clone(),
+                listen: udp_config.listen,
+                registry,
+            },
+        )))
     }
 
     /// Validate UDP server configuration
-    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<(), String> {
+    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<()> {
         use std::net::SocketAddr;
         use std::str::FromStr;
 
         // Parse and validate UDP-specific configuration
         let udp_config = match plugin_info.args.clone() {
-            Some(args) => serde_yml::from_value::<UdpServerConfig>(args)
-                .map_err(|e| format!("UDP Server config parsing failed: {}", e))?,
+            Some(args) => serde_yml::from_value::<UdpServerConfig>(args).map_err(|e| {
+                DnsError::plugin(format!("UDP Server config parsing failed: {}", e))
+            })?,
             None => {
-                return Err(
-                    "UDP Server must configure 'listen' and 'entry' in config file".to_string(),
-                );
+                return Err(DnsError::plugin(
+                    "UDP Server must configure 'listen' and 'entry' in config file",
+                ));
             }
         };
 
         // Validate listen address format
         if SocketAddr::from_str(&udp_config.listen).is_err() {
-            return Err(format!("Invalid listen address: {}", udp_config.listen));
+            return Err(DnsError::plugin(format!(
+                "Invalid listen address: {}",
+                udp_config.listen
+            )));
         }
 
         // Validate entry is not empty
         if udp_config.entry.is_empty() {
-            return Err("UDP Server 'entry' field cannot be empty".to_string());
+            return Err(DnsError::plugin("UDP Server 'entry' field cannot be empty"));
         }
 
         Ok(())

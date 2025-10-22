@@ -20,15 +20,17 @@ mod core;
 mod network;
 mod plugin;
 
+use core::error::{DnsError, Result};
+
 /// Application entry point
-fn main() -> Result<(), String> {
+fn main() -> Result<()> {
     init_runtime()
 }
 
 /// Initialize and run the Tokio runtime with multi-threading enabled
 ///
 /// Creates an 8-worker-thread Tokio runtime optimized for DNS server workloads
-fn init_runtime() -> Result<(), String> {
+fn init_runtime() -> Result<()> {
     let mut tokio_runtime = runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
@@ -36,7 +38,7 @@ fn init_runtime() -> Result<(), String> {
         .worker_threads(8);
     let tokio_runtime = tokio_runtime
         .build()
-        .map_err(|err| format!("Failed to initialize Tokio runtime: {err}"))?;
+        .map_err(|err| DnsError::runtime(format!("Failed to initialize Tokio runtime: {err}")))?;
     tokio_runtime.block_on(run_async_main())
 }
 
@@ -45,7 +47,7 @@ fn init_runtime() -> Result<(), String> {
 /// Sets up signal handlers and spawns the application task.
 /// Waits for Ctrl+C signal for graceful shutdown.
 #[cfg_attr(feature = "hotpath", hotpath::main(percentiles =[50,70,90]))]
-async fn run_async_main() -> Result<(), String> {
+async fn run_async_main() -> Result<()> {
     // Create shutdown channel for graceful termination
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
@@ -77,7 +79,13 @@ async fn run_app() {
     let options = runtime.options.clone();
 
     info!("Loading configuration from: {:?}", options.config);
-    let config = config::init(&options.config);
+    let config = match config::init(&options.config) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            error!("Configuration initialization failed: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // Override log level from command line if provided
     let mut log_config = config.log.clone();

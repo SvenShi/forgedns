@@ -5,12 +5,12 @@
 use crate::core::app_clock::AppClock;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::pool::utils::connect_quic;
-use crate::network::upstream::{ConnectionInfo, Connection, DEFAULT_TIMEOUT};
+use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
 use bytes::{Bytes, BytesMut};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::{ProtoError, ProtoErrorKind};
+use crate::core::error::{DnsError, Result};
 use quinn::{SendStream, VarInt};
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
@@ -50,9 +50,9 @@ impl Connection for QuicConnection {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
         if self.closed.load(Ordering::Relaxed) {
-            return Err(ProtoError::from("QUIC connection closed"));
+            return Err(DnsError::protocol("QUIC connection closed"));
         }
         self.using_count.fetch_add(1, Ordering::Relaxed);
         // open a bidirectional stream and send
@@ -61,11 +61,11 @@ impl Connection for QuicConnection {
             Ok(Err(e)) => {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
                 self.close();
-                return Err(ProtoError::from(format!("quic open_bi error: {e}")));
+                return Err(DnsError::protocol(format!("quic open_bi error: {e}")));
             }
             Err(_) => {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
-                return Err(ProtoError::from("quic open_bi timeout"));
+                return Err(DnsError::protocol("quic open_bi timeout"));
             }
         };
 
@@ -73,7 +73,7 @@ impl Connection for QuicConnection {
         request.set_id(0);
         let body_bytes = Bytes::from(request.to_bytes()?); // DNS wire format
         let bytes_len = u16::try_from(body_bytes.len())
-            .map_err(|_e| ProtoErrorKind::MaxBufferSizeExceeded(body_bytes.len()))?;
+            .map_err(|_e| DnsError::protocol(format!("DNS message too large: {} bytes (max: 65535)", body_bytes.len())))?;
         let len = bytes_len.to_be_bytes().to_vec();
         let len = Bytes::from(len);
 
@@ -81,7 +81,7 @@ impl Connection for QuicConnection {
             Ok(_) => {}
             Err(e) => {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
-                return Err(ProtoError::from(format!("quic send err: {e}")));
+                return Err(DnsError::protocol(format!("quic send err: {e}")));
             }
         };
 
@@ -105,7 +105,7 @@ impl Connection for QuicConnection {
             }
             Err(_) => {
                 warn!(conn_id = self.id, raw_id, "QUIC request timeout");
-                Err(ProtoError::from("dns query timeout"))
+                Err(DnsError::protocol("dns query timeout"))
             }
         };
         self.last_used
@@ -152,7 +152,7 @@ impl QuicConnectionBuilder {
 #[async_trait::async_trait]
 impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn create_connection(&self, conn_id: u16) -> Result<Arc<QuicConnection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<QuicConnection>> {
         // connect_quic should return a `quinn::Connection`
         let quic_conn = connect_quic(
             self.bind_addr,
@@ -196,7 +196,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
 async fn recv_dns_response(
     recv: &mut quinn::RecvStream,
     send: SendStream,
-) -> Result<Bytes, ProtoError> {
+) -> Result<Bytes> {
     // following above, the data should be first the length, followed by the message(s)
     let mut len = [0u8; 2];
     recv.read_exact(&mut len).await.unwrap();
@@ -222,9 +222,9 @@ async fn recv_dns_response(
     Ok(bytes.freeze())
 }
 
-fn reset(mut send: SendStream, code: DoqErrorCode) -> Result<(), ProtoError> {
+fn reset(mut send: SendStream, code: DoqErrorCode) -> Result<()> {
     send.reset(code.into())
-        .map_err(|_| ProtoError::from("an unknown quic stream was used"))
+        .map_err(|_| DnsError::protocol("an unknown quic stream was used"))
 }
 
 #[derive(Clone, Copy)]

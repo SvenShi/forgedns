@@ -7,10 +7,10 @@ use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::pool::utils::{
     build_dns_get_request, build_doh_request_uri, connect_tls, get_buf_from_res,
 };
-use crate::network::upstream::{ConnectionInfo, Connection, DEFAULT_TIMEOUT};
+use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
 use h2::client::{ResponseFuture, SendRequest};
-use hickory_proto::ProtoError;
+use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
@@ -48,9 +48,9 @@ impl Connection for H2Connection {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
         if self.closed.load(Ordering::Relaxed) {
-            return Err(ProtoError::from("DoH connection closed"));
+            return Err(DnsError::protocol("DoH connection closed"));
         }
         self.using_count.fetch_add(1, Ordering::Relaxed);
         self.last_used
@@ -68,7 +68,7 @@ impl Connection for H2Connection {
             .send_request(request, false)
             .map_err(|e| {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
-                ProtoError::from(format!("H2 send_request error: {e}"))
+                DnsError::protocol(format!("H2 send_request error: {e}"))
             })?;
 
         let result = match timeout(self.timeout, recv(response_future)).await {
@@ -84,7 +84,7 @@ impl Connection for H2Connection {
             }
             Err(_) => {
                 warn!(conn_id = self.id, raw_id, "H2 request timeout");
-                Err(ProtoError::from("dns query timeout"))
+                Err(DnsError::protocol("dns query timeout"))
             }
         };
         self.using_count.fetch_sub(1, Ordering::Relaxed);
@@ -129,11 +129,11 @@ impl H2ConnectionBuilder {
 #[async_trait::async_trait]
 impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn create_connection(&self, conn_id: u16) -> Result<Arc<H2Connection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<H2Connection>> {
         // 建立 TCP -> TLS -> H2
         let stream = TcpStream::connect(self.remote_addr)
             .await
-            .map_err(|e| ProtoError::from(format!("Unable to connect to H2 remote tcp: {}", e)))?;
+            .map_err(|e| DnsError::protocol(format!("Unable to connect to H2 remote tcp: {}", e)))?;
 
         let tls_stream = connect_tls(
             stream,
@@ -146,7 +146,7 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
         let (sender, connection) = h2::client::Builder::new()
             .handshake(tls_stream)
             .await
-            .map_err(|e| ProtoError::from(format!("H2 handshake error: {}", e)))?;
+            .map_err(|e| DnsError::protocol(format!("H2 handshake error: {}", e)))?;
 
         let h2_conn = Arc::new(H2Connection {
             id: conn_id,
@@ -178,10 +178,10 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
     }
 }
 
-async fn recv(response_future: ResponseFuture) -> Result<Bytes, ProtoError> {
+async fn recv(response_future: ResponseFuture) -> Result<Bytes> {
     let mut response = response_future
         .await
-        .map_err(|e| ProtoError::from(format!("H2 response error: {}", e)))?;
+        .map_err(|e| DnsError::protocol(format!("H2 response error: {}", e)))?;
 
     let status_code = response.status();
     let mut response_bytes = get_buf_from_res(&mut response);
@@ -193,7 +193,7 @@ async fn recv(response_future: ResponseFuture) -> Result<Bytes, ProtoError> {
 
     if !status_code.is_success() {
         let error_string = String::from_utf8_lossy(response_bytes.as_ref());
-        Err(ProtoError::from(format!(
+        Err(DnsError::protocol(format!(
             "http unsuccessful code: {}, message: {}",
             status_code, error_string
         )))

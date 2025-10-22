@@ -10,7 +10,7 @@ use crate::network::upstream::pool::{
 };
 use async_trait::async_trait;
 use crossbeam_queue::ArrayQueue;
-use hickory_proto::ProtoError;
+use crate::core::error::Result;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
@@ -49,7 +49,7 @@ pub struct ReusePool<C: Connection> {
 impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
     /// Obtain a connection, execute query, and release it back to the pool
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, request: Message) -> Result<DnsResponse> {
         let conn = self.get().await?;
         debug!(
             "Got connection from pool, using_count={}",
@@ -174,7 +174,7 @@ impl<C: Connection> ReusePool<C> {
 
     /// Borrow a connection from the pool or create a new one if needed
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn get(&self) -> Result<Arc<C>, ProtoError> {
+    async fn get(&self) -> Result<Arc<C>> {
         loop {
             if let Some(conn) = self.connections.pop() {
                 if conn.available() {
@@ -213,7 +213,7 @@ impl<C: Connection> ReusePool<C> {
 
     /// Expand pool by creating new connections up to desired size
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn expand(&self) -> Result<(), ProtoError> {
+    async fn expand(&self) -> Result<()> {
         let conns_len = self.active_count.load(Ordering::Relaxed);
         if conns_len >= self.max_size {
             debug!("Pool already at max capacity ({})", self.max_size);

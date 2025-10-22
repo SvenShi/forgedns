@@ -40,9 +40,9 @@ pub struct DnsContext {
 
     /// Custom attributes for inter-plugin communication
     pub attributes: HashMap<String, Box<dyn Any + Send + Sync>>,
-    
+
     /// Reference to the plugin registry for runtime plugin lookup
-    /// 
+    ///
     /// Allows plugins to access other plugins during execution without
     /// relying on global state.
     pub registry: Arc<crate::plugin::PluginRegistry>,
