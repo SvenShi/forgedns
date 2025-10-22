@@ -96,5 +96,5 @@ GPL-3.0-or-later
 
 ## 作者
 
-Sven Shi <shiwei@vankeytech.com>
+Sven Shi <isvenshi@gmail.com>
 
