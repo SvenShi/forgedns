@@ -22,7 +22,7 @@ pub struct Runtime {
 /// - Configuration file path (default: config.yaml)
 /// - Log level override (overrides config file setting)
 #[derive(Parser, Clone)]
-#[clap(version = "1.0", author = "Sven <shiwei@vankeytech.com>")]
+#[clap(version = "1.0", author = "Sven Shi <isvenshi@gmail.com>")]
 pub struct Options {
     /// Path to configuration file
     #[clap(short, long, default_value = "config.yaml")]
