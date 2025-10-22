@@ -14,8 +14,8 @@
 //! All plugins are registered via factories and instantiated from config.
 
 use crate::config::types::{Config, PluginConfig};
-use crate::plugin::executor::forward::ForwardFactory;
 use crate::plugin::executor::Executor;
+use crate::plugin::executor::forward::ForwardFactory;
 use crate::plugin::server::udp::UdpServerFactory;
 use async_trait::async_trait;
 use serde_yml::Value;
@@ -32,16 +32,17 @@ pub use registry::PluginRegistry;
 use crate::plugin::server::Server;
 
 /// Uninitialized plugin returned by factories
+#[allow(unused)]
 pub enum UninitializedPlugin {
     /// Server plugin (not yet initialized)
     Server(Box<dyn Server>),
-    
+
     /// Executor plugin (not yet initialized)
     Executor(Box<dyn Executor>),
-    
+
     /// Matcher plugin (not yet initialized)
     Matcher(Box<dyn Plugin>),
-    
+
     /// DataProvider plugin (not yet initialized)
     DataProvider(Box<dyn Plugin>),
 }
@@ -100,6 +101,7 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>, String> {
 
 /// Initialized plugin categorized by type
 #[derive(Debug)]
+#[allow(unused)]
 pub enum PluginType {
     /// Server plugins run continuously (e.g., UDP/TCP listeners)
     Server(Arc<dyn Server>),
@@ -114,6 +116,7 @@ pub enum PluginType {
     DataProvider(Arc<dyn Plugin>),
 }
 
+#[allow(unused)]
 impl PluginType {
     /// Get the plugin category kind
     pub fn kind(&self) -> &'static str {
@@ -196,6 +199,7 @@ pub struct PluginInfo {
     pub args: Option<Value>,
 }
 
+#[allow(unused)]
 impl PluginInfo {
     /// Get Arc clone of the executor (panics if not an Executor plugin)
     pub fn to_executor(&self) -> Arc<dyn Executor> {
