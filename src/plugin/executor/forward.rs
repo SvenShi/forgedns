@@ -11,6 +11,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
+use crate::core::error::{DnsError, Result};
 use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::Executor;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -106,10 +107,15 @@ impl PluginFactory for ForwardFactory {
         &self,
         plugin_info: &PluginConfig,
         _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin, String> {
+    ) -> Result<UninitializedPlugin> {
         // valid config
         let forward_config =
-            serde_yml::from_value::<ForwardConfig>(plugin_info.args.clone().unwrap()).unwrap();
+            serde_yml::from_value::<ForwardConfig>(plugin_info.args.clone().ok_or_else(|| {
+                DnsError::plugin("Forward plugin requires configuration arguments")
+            })?)
+            .map_err(|e| {
+                DnsError::plugin(format!("Failed to parse Forward plugin config: {}", e))
+            })?;
 
         if forward_config.upstreams.len() == 1 {
             // Single upstream configuration
@@ -119,30 +125,32 @@ impl PluginFactory for ForwardFactory {
                 plugin_info.tag, upstream_config.addr
             );
 
-            Ok(UninitializedPlugin::Executor(Box::new(SingleDnsForwarder {
-                tag: plugin_info.tag.clone(),
-                timeout: upstream_config.timeout.unwrap_or(Duration::from_secs(5)),
-                upstream: UpstreamBuilder::with_upstream_config(&upstream_config),
-            })))
+            Ok(UninitializedPlugin::Executor(Box::new(
+                SingleDnsForwarder {
+                    tag: plugin_info.tag.clone(),
+                    timeout: upstream_config.timeout.unwrap_or(Duration::from_secs(5)),
+                    upstream: UpstreamBuilder::with_upstream_config(&upstream_config),
+                },
+            )))
         } else {
             // Multi-upstream configuration (not yet implemented)
-            Err(format!(
+            Err(DnsError::plugin(format!(
                 "Multi-upstream forwarding not yet implemented, {} upstreams configured",
                 forward_config.upstreams.len()
-            ))
+            )))
         }
     }
 
-    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<(), String> {
+    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<()> {
         // Parse and validate forward-specific configuration
         let _forward_config = match plugin_info.args.clone() {
-            Some(args) => serde_yml::from_value::<ForwardConfig>(args)
-                .map_err(|e| format!("Failed to parse Forward plugin config: {}", e))?,
+            Some(args) => serde_yml::from_value::<ForwardConfig>(args).map_err(|e| {
+                DnsError::plugin(format!("Failed to parse Forward plugin config: {}", e))
+            })?,
             None => {
-                return Err(
-                    "Forward plugin requires 'concurrent' and 'upstreams' configuration"
-                        .to_string(),
-                );
+                return Err(DnsError::plugin(
+                    "Forward plugin requires 'concurrent' and 'upstreams' configuration",
+                ));
             }
         };
 

@@ -47,7 +47,7 @@ pub(crate) mod tcp_conn;
 pub(crate) mod udp_conn;
 
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
+use crate::core::error::Result;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
@@ -69,7 +69,7 @@ pub trait Connection: Send + Sized + Debug + Sync + 'static {
     /// Send a DNS query and asynchronously wait for the response
     ///
     /// This is a hot path - implementations should minimize overhead
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError>;
+    async fn query(&self, request: Message) -> Result<DnsResponse>;
 
     /// Get the number of queries currently in flight on this connection
     ///
@@ -100,7 +100,7 @@ pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
     ///
     /// # Returns
     /// Arc-wrapped connection on success, or error if connection establishment fails
-    async fn create_connection(&self, conn_id: u16) -> Result<Arc<C>, ProtoError>;
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<C>>;
 }
 
 /// Connection pool trait - manages a pool of connections for load balancing
@@ -114,7 +114,7 @@ pub trait ConnectionPool<C: Connection>: Send + Sync + Debug + 'static {
     ///
     /// The pool automatically selects or creates an appropriate connection.
     /// This is the main hot path for DNS queries.
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError>;
+    async fn query(&self, request: Message) -> Result<DnsResponse>;
 
     /// Perform maintenance on the pool
     ///

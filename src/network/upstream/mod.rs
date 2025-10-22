@@ -28,6 +28,7 @@
 //! - Connection reuse with idle management
 //! - Zero-copy DNS message handling where possible
 
+use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::h2_conn::{H2Connection, H2ConnectionBuilder};
 use crate::network::upstream::pool::h3_conn::{H3Connection, H3ConnectionBuilder};
 use crate::network::upstream::pool::pipeline::PipelinePool;
@@ -40,7 +41,6 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
-use hickory_proto::ProtoError;
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
@@ -118,7 +118,7 @@ pub struct UpstreamConfig {
 #[allow(unused)]
 pub trait Upstream: Send + Sync + Debug {
     /// Send a DNS query and wait for the response
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError>;
+    async fn query(&self, request: Message) -> Result<DnsResponse>;
 
     /// Return the connection type of this upstream
     fn connection_type(&self) -> ConnectionType;
@@ -158,7 +158,8 @@ pub struct ConnectionInfo {
 impl ConnectionInfo {
     /// Build `ConnectionInfo` from `UpstreamConfig`
     pub fn with_upstream_config(upstream_config: &UpstreamConfig) -> Self {
-        let (connection_type, host, port, path) = Self::detect_connection_type(&upstream_config.addr);
+        let (connection_type, host, port, path) =
+            Self::detect_connection_type(&upstream_config.addr);
 
         let port = upstream_config
             .port
@@ -315,7 +316,11 @@ impl UpstreamBuilder {
                     debug!(
                         "Creating DoH upstream for {} (HTTP/{})",
                         connection_info.raw_addr,
-                        if connection_info.enable_http3 { "3" } else { "2" }
+                        if connection_info.enable_http3 {
+                            "3"
+                        } else {
+                            "2"
+                        }
                     );
                     if connection_info.enable_http3 {
                         let builder = H3ConnectionBuilder::new(&connection_info);
@@ -438,7 +443,7 @@ pub struct PooledUpstream<C: Connection> {
 
 #[async_trait]
 impl<C: Connection> Upstream for PooledUpstream<C> {
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, request: Message) -> Result<DnsResponse> {
         match self.pool.query(request).await {
             Ok(res) => Ok(res),
             Err(e) => Err(e),
@@ -458,7 +463,7 @@ pub struct UdpTruncatedUpstream {
 
 #[async_trait]
 impl Upstream for UdpTruncatedUpstream {
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, request: Message) -> Result<DnsResponse> {
         let response = self.main_pool.query(request.clone()).await?;
 
         if response.truncated() {
@@ -598,7 +603,7 @@ impl<C: Connection> DomainUpstream<C> {
     /// - Initial pool creation on first query
     /// - IP change detection and pool refresh
     /// - Caching for non-bootstrap upstreams (permanent cache)
-    async fn init_pool_if_needed(&self) -> Result<(), ProtoError> {
+    async fn init_pool_if_needed(&self) -> Result<()> {
         // Check current pool state
         let guard = &(*self.pool.load());
         let pool_ip = guard.0;
@@ -655,13 +660,13 @@ impl<C: Connection> DomainUpstream<C> {
     ///
     /// Uses bootstrap resolver if configured, otherwise falls back to system DNS.
     /// System DNS results are cached permanently (no refresh).
-    async fn get_ip(&self) -> Result<IpAddr, ProtoError> {
+    async fn get_ip(&self) -> Result<IpAddr> {
         let ip = if let Some(ref bootstrap) = self.bootstrap {
             // Use bootstrap resolver (supports periodic refresh via TTL)
             match bootstrap.get().await {
                 Ok(ip) => ip,
                 Err(e) => {
-                    return Err(ProtoError::from(format!(
+                    return Err(DnsError::protocol(format!(
                         "Bootstrap resolution failed for {}: {}",
                         self.connection_info.host, e
                     )));
@@ -680,14 +685,14 @@ impl<C: Connection> DomainUpstream<C> {
                         ip
                     }
                     None => {
-                        return Err(ProtoError::from(format!(
+                        return Err(DnsError::protocol(format!(
                             "System DNS returned no addresses for {}",
                             self.connection_info.host
                         )));
                     }
                 },
                 Err(e) => {
-                    return Err(ProtoError::from(format!(
+                    return Err(DnsError::protocol(format!(
                         "System DNS resolution failed for {}: {}",
                         self.connection_info.host, e
                     )));
@@ -700,7 +705,7 @@ impl<C: Connection> DomainUpstream<C> {
 
 #[async_trait]
 impl<C: Connection> Upstream for DomainUpstream<C> {
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, request: Message) -> Result<DnsResponse> {
         // Ensure connection pool is initialized (handles IP resolution and pool creation)
         self.init_pool_if_needed().await?;
 
@@ -728,8 +733,8 @@ struct DummyConnectionBuilder {}
 
 #[async_trait]
 impl<C: Connection> ConnectionBuilder<C> for DummyConnectionBuilder {
-    async fn create_connection(&self, _conn_id: u16) -> Result<Arc<C>, ProtoError> {
-        Err(ProtoError::from(
+    async fn create_connection(&self, _conn_id: u16) -> Result<Arc<C>> {
+        Err(DnsError::protocol(
             "DummyConnectionBuilder cannot create connections (pool not yet initialized)",
         ))
     }

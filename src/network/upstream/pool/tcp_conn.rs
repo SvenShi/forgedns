@@ -10,7 +10,7 @@ use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, DEFAULT_TIMEOUT};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
-use hickory_proto::ProtoError;
+use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
@@ -66,9 +66,9 @@ impl Connection for TcpConnection {
     }
 
     /// Sends a DNS query and waits asynchronously for its corresponding response.
-    async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
         if self.closed.load(Ordering::Relaxed) {
-            return Err(ProtoError::from(format!(
+            return Err(DnsError::protocol(format!(
                 "Connection id {} closed",
                 self.id
             )));
@@ -95,7 +95,7 @@ impl Connection for TcpConnection {
         if let Err(e) = self.sender.send(bytes_mut.freeze()) {
             self.request_map.take(query_id);
             error!(conn_id = self.id, ?e, "Failed to queue TCP DNS query");
-            return Err(ProtoError::from(e.to_string()));
+            return Err(DnsError::protocol(e.to_string()));
         }
 
         // Await response or timeout
@@ -111,12 +111,12 @@ impl Connection for TcpConnection {
                     conn_id = self.id,
                     query_id, "TCP DNS query canceled before response"
                 );
-                Err(ProtoError::from("request canceled"))
+                Err(DnsError::protocol("request canceled"))
             }
             Err(_) => {
                 self.request_map.take(query_id);
                 warn!(conn_id = self.id, query_id, "TCP DNS query timed out");
-                Err(ProtoError::from("dns query timeout"))
+                Err(DnsError::protocol("dns query timeout"))
             }
         }
     }
@@ -292,7 +292,7 @@ impl TcpConnectionBuilder {
 impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
     /// Establish a new TCP or TLS connection to the DNS server.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn create_connection(&self, conn_id: u16) -> Result<Arc<TcpConnection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<TcpConnection>> {
         let remote = self.remote_addr;
 
         match TcpStream::connect(remote).await {
@@ -348,7 +348,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                     "Failed to connect to {:?} DNS server",
                     self.connection_type
                 );
-                Err(ProtoError::from(e))
+                Err(DnsError::protocol(e.to_string()))
             }
         }
     }

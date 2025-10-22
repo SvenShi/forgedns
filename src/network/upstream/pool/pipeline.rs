@@ -11,7 +11,7 @@ use crate::network::upstream::pool::{
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use hickory_proto::ProtoError;
+use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
@@ -45,7 +45,7 @@ pub struct PipelinePool<C: Connection> {
 #[async_trait]
 impl<C: Connection> ConnectionPool<C> for PipelinePool<C> {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, request: Message) -> Result<DnsResponse> {
         self.get().await?.query(request).await
     }
 
@@ -138,7 +138,7 @@ impl<C: Connection> PipelinePool<C> {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn get(&self) -> Result<Arc<C>, ProtoError> {
+    async fn get(&self) -> Result<Arc<C>> {
         loop {
             // Fast read path
             {
@@ -183,7 +183,7 @@ impl<C: Connection> PipelinePool<C> {
 
     /// Expand the pool by creating new connections
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn expand(&self) -> Result<(), ProtoError> {
+    async fn expand(&self) -> Result<()> {
         // Determine how many connections to create (outside lock)
         let new_conns_count = {
             let conns = self.connections.read().await;
@@ -191,7 +191,7 @@ impl<C: Connection> PipelinePool<C> {
 
             if conns_len >= self.max_size {
                 debug!("Connection pool already at max size");
-                return Err(ProtoError::from("Connection pool already at maximum size"));
+                return Err(DnsError::protocol("Connection pool already at maximum size"));
             }
 
             let target = if conns_len >= self.min_size {

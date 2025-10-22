@@ -15,6 +15,7 @@
 //! - Pre-parsed DNS queries to avoid repeated allocations
 
 use crate::core::app_clock::AppClock;
+use crate::core::error::DnsError;
 use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RecordType};
@@ -114,7 +115,7 @@ impl Bootstrap {
     /// This is the hot path - optimized for minimal overhead when cache is valid.
     /// Uses a lock-free state machine for coordination.
     #[inline]
-    pub async fn get(&self) -> Result<IpAddr, String> {
+    pub async fn get(&self) -> std::result::Result<IpAddr, DnsError> {
         let mut failed_count = 0;
 
         loop {
@@ -176,7 +177,10 @@ impl Bootstrap {
                 }
                 STATE_FAILED => {
                     if failed_count > 3 {
-                        return Err(format!("Bootstrap query failed for {}", self.domain));
+                        return Err(DnsError::protocol(format!(
+                            "Bootstrap query failed for {}",
+                            self.domain
+                        )));
                     }
                     failed_count += 1;
 

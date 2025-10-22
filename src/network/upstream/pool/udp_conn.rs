@@ -8,7 +8,7 @@ use crate::network::upstream::ConnectionInfo;
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use async_trait::async_trait;
-use hickory_proto::ProtoError;
+use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
@@ -56,7 +56,7 @@ impl Connection for UdpConnection {
     /// Send a DNS query and wait asynchronously for its response.
     /// Retries once with a shorter timeout, then uses the normal timeout.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
         let raw_id = request.id();
         let mut current_timeout = RETRY_TIMEOUT;
 
@@ -73,7 +73,7 @@ impl Connection for UdpConnection {
                 Ok(_sent) => {}
                 Err(e) => {
                     self.request_map.take(query_id);
-                    return Err(ProtoError::from(e));
+                    return Err(DnsError::protocol(e.to_string()));
                 }
             };
 
@@ -88,7 +88,7 @@ impl Connection for UdpConnection {
                 }
                 Ok(Err(_)) => {
                     self.request_map.take(query_id);
-                    return Err(ProtoError::from("request canceled"));
+                    return Err(DnsError::protocol("request canceled"));
                 }
                 Err(_) => {
                     self.request_map.take(query_id);
@@ -98,7 +98,7 @@ impl Connection for UdpConnection {
             current_timeout = self.timeout;
         }
 
-        Err(ProtoError::from("dns query timeout"))
+        Err(DnsError::protocol("dns query timeout"))
     }
 
     /// Return the number of active queries currently tracked by this connection.
@@ -206,7 +206,7 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
     /// Create a new UDP connection, bind it locally, connect to remote server,
     /// and spawn a background listener task to handle responses.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn create_connection(&self, conn_id: u16) -> Result<Arc<UdpConnection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<UdpConnection>> {
         let socket = UdpSocket::bind(self.bind_addr).await?;
         socket.connect(self.remote_addr).await?;
 

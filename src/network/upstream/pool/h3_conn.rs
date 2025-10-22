@@ -7,12 +7,12 @@ use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::pool::utils::{
     build_dns_get_request, build_doh_request_uri, connect_quic, get_buf_from_res,
 };
-use crate::network::upstream::{ConnectionInfo, Connection, DEFAULT_TIMEOUT};
+use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
 use futures::future::poll_fn;
 use h3::client::{RequestStream, SendRequest};
 use h3_quinn::{BidiStream, OpenStreams};
-use hickory_proto::ProtoError;
+use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
@@ -53,9 +53,9 @@ impl Connection for H3Connection {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, mut request: Message) -> Result<DnsResponse, ProtoError> {
+    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
         if self.closed.load(Ordering::Relaxed) {
-            return Err(ProtoError::from("H3 connection closed"));
+            return Err(DnsError::protocol("H3 connection closed"));
         }
         self.using_count.fetch_add(1, Ordering::Relaxed);
         self.last_used
@@ -74,13 +74,13 @@ impl Connection for H3Connection {
             .await
             .map_err(|e| {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
-                ProtoError::from(format!("H3 send_request error: {e}"))
+                DnsError::protocol(format!("H3 send_request error: {e}"))
             })?;
 
         request_stream
             .finish()
             .await
-            .map_err(|err| ProtoError::from(format!("H3 received a stream error: {err}")))?;
+            .map_err(|err| DnsError::protocol(format!("H3 received a stream error: {err}")))?;
 
         let result = match timeout(self.timeout, recv(request_stream)).await {
             Ok(Ok(bytes)) => {
@@ -95,7 +95,7 @@ impl Connection for H3Connection {
             }
             Err(_) => {
                 warn!(conn_id = self.id, raw_id, "H3 request timeout");
-                Err(ProtoError::from("dns query timeout"))
+                Err(DnsError::protocol("dns query timeout"))
             }
         };
 
@@ -143,7 +143,7 @@ impl H3ConnectionBuilder {
 #[async_trait::async_trait]
 impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn create_connection(&self, conn_id: u16) -> Result<Arc<H3Connection>, ProtoError> {
+    async fn create_connection(&self, conn_id: u16) -> Result<Arc<H3Connection>> {
         let quic_conn = connect_quic(
             self.bind_addr,
             self.remote_addr,
@@ -157,7 +157,7 @@ impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
 
         let (mut driver, send_request) = h3::client::new(h3_conn)
             .await
-            .map_err(|e| ProtoError::from(format!("h3 connection failed: {e}")))?;
+            .map_err(|e| DnsError::protocol(format!("h3 connection failed: {e}")))?;
 
         let h3_conn = Arc::new(H3Connection {
             id: conn_id,
@@ -190,18 +190,18 @@ impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
 
 async fn recv(
     mut request_stream: RequestStream<BidiStream<Bytes>, Bytes>,
-) -> Result<Bytes, ProtoError> {
+) -> Result<Bytes> {
     let mut response = request_stream
         .recv_response()
         .await
-        .map_err(|e| ProtoError::from(format!("H3 response error: {}", e)))?;
+        .map_err(|e| DnsError::protocol(format!("H3 response error: {}", e)))?;
 
     let mut response_bytes = get_buf_from_res(&mut response);
 
     while let Some(partial_bytes) = request_stream
         .recv_data()
         .await
-        .map_err(|e| ProtoError::from(format!("h3 recv_data error: {e}")))?
+        .map_err(|e| DnsError::protocol(format!("h3 recv_data error: {e}")))?
     {
         response_bytes.put(partial_bytes);
     }
@@ -210,7 +210,7 @@ async fn recv(
     if !response.status().is_success() {
         let error_string = String::from_utf8_lossy(response_bytes.as_ref());
 
-        Err(ProtoError::from(format!(
+        Err(DnsError::protocol(format!(
             "http unsuccessful code: {}, message: {}",
             response.status(),
             error_string
