@@ -37,13 +37,13 @@
 
 mod request_map;
 
-pub(crate) mod h2_conn;
-pub(crate) mod h3_conn;
-pub(crate) mod pipeline;
-pub(crate) mod quic_conn;
-pub(crate) mod reuse;
-pub(crate) mod tcp_conn;
-pub(crate) mod udp_conn;
+pub(crate) mod conn_h2;
+pub(crate) mod conn_h3;
+pub(crate) mod pool_pipeline;
+pub(crate) mod conn_quic;
+pub(crate) mod pool_reuse;
+pub(crate) mod conn_tcp;
+pub(crate) mod conn_udp;
 
 use crate::core::error::Result;
 use async_trait::async_trait;

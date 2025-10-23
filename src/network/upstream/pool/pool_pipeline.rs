@@ -114,6 +114,7 @@ impl<C: Connection> PipelinePool<C> {
         min_size: usize,
         max_size: usize,
         max_load: u16,
+        idle_time: u64,
         connection_builder: Box<dyn ConnectionBuilder<C>>,
     ) -> Arc<PipelinePool<C>> {
         let pool = Arc::new(Self {
@@ -122,7 +123,7 @@ impl<C: Connection> PipelinePool<C> {
             max_size,
             min_size,
             max_load,
-            max_idle: Duration::from_secs(10),
+            max_idle: Duration::from_secs(idle_time),
             connection_builder,
             next_id: AtomicU16::new(0),
         });
