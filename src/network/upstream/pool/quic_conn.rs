@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
+use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::ConnectionBuilder;
-use crate::network::upstream::pool::utils::connect_quic;
+use crate::network::upstream::utils::{connect_quic, try_lookup_server_name};
 use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
 use bytes::{Bytes, BytesMut};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use crate::core::error::{DnsError, Result};
 use quinn::{SendStream, VarInt};
 use std::fmt::{Debug, Formatter};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::select;
@@ -72,8 +72,12 @@ impl Connection for QuicConnection {
         let raw_id = request.id();
         request.set_id(0);
         let body_bytes = Bytes::from(request.to_bytes()?); // DNS wire format
-        let bytes_len = u16::try_from(body_bytes.len())
-            .map_err(|_e| DnsError::protocol(format!("DNS message too large: {} bytes (max: 65535)", body_bytes.len())))?;
+        let bytes_len = u16::try_from(body_bytes.len()).map_err(|_e| {
+            DnsError::protocol(format!(
+                "DNS message too large: {} bytes (max: 65535)",
+                body_bytes.len()
+            ))
+        })?;
         let len = bytes_len.to_be_bytes().to_vec();
         let len = Bytes::from(len);
 
@@ -130,8 +134,8 @@ impl Connection for QuicConnection {
 /// Builder
 #[derive(Debug)]
 pub struct QuicConnectionBuilder {
-    pub bind_addr: SocketAddr,
-    pub remote_addr: SocketAddr,
+    pub remote_ip: Option<IpAddr>,
+    pub port: u16,
     pub timeout: std::time::Duration,
     pub server_name: String,
     pub insecure_skip_verify: bool,
@@ -140,10 +144,10 @@ pub struct QuicConnectionBuilder {
 impl QuicConnectionBuilder {
     pub fn new(connection_info: &ConnectionInfo) -> Self {
         Self {
-            bind_addr: connection_info.bind_socket_addr(),
-            remote_addr: connection_info.remote_socket_addr(),
+            remote_ip: connection_info.remote_ip,
+            port: connection_info.port,
             timeout: connection_info.timeout,
-            server_name: connection_info.host.clone(),
+            server_name: connection_info.server_name.clone(),
             insecure_skip_verify: connection_info.insecure_skip_verify,
         }
     }
@@ -153,10 +157,16 @@ impl QuicConnectionBuilder {
 impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<QuicConnection>> {
+        let remote_ip = if let Some(remote_ip) = self.remote_ip {
+            remote_ip
+        } else {
+            try_lookup_server_name(&self.server_name)?
+        };
+
         // connect_quic should return a `quinn::Connection`
         let quic_conn = connect_quic(
-            self.bind_addr,
-            self.remote_addr,
+            "0.0.0.0:0".parse()?,
+            SocketAddr::new(remote_ip, self.port),
             self.insecure_skip_verify,
             self.server_name.clone(),
             DEFAULT_TIMEOUT,
@@ -193,10 +203,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
 }
 
 /// Read a length-prefixed (2-byte BE) DNS response from a `quinn::RecvStream`.
-async fn recv_dns_response(
-    recv: &mut quinn::RecvStream,
-    send: SendStream,
-) -> Result<Bytes> {
+async fn recv_dns_response(recv: &mut quinn::RecvStream, send: SendStream) -> Result<Bytes> {
     // following above, the data should be first the length, followed by the message(s)
     let mut len = [0u8; 2];
     recv.read_exact(&mut len).await.unwrap();

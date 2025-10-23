@@ -4,14 +4,14 @@
  */
 
 use crate::core::app_clock::AppClock;
-use crate::network::upstream::pool::utils::close_conns;
+use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::{
     Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
 };
+use crate::network::upstream::utils::close_conns;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
@@ -191,7 +191,9 @@ impl<C: Connection> PipelinePool<C> {
 
             if conns_len >= self.max_size {
                 debug!("Connection pool already at max size");
-                return Err(DnsError::protocol("Connection pool already at maximum size"));
+                return Err(DnsError::protocol(
+                    "Connection pool already at maximum size",
+                ));
             }
 
             let target = if conns_len >= self.min_size {

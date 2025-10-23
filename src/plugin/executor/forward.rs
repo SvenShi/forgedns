@@ -129,7 +129,7 @@ impl PluginFactory for ForwardFactory {
                 SingleDnsForwarder {
                     tag: plugin_info.tag.clone(),
                     timeout: upstream_config.timeout.unwrap_or(Duration::from_secs(5)),
-                    upstream: UpstreamBuilder::with_upstream_config(&upstream_config),
+                    upstream: UpstreamBuilder::with_upstream_config(upstream_config.clone()),
                 },
             )))
         } else {

@@ -4,13 +4,13 @@
  */
 
 use crate::core::app_clock::AppClock;
-use crate::network::upstream::pool::utils::close_conns;
+use crate::core::error::Result;
 use crate::network::upstream::pool::{
     Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
 };
+use crate::network::upstream::utils::close_conns;
 use async_trait::async_trait;
 use crossbeam_queue::ArrayQueue;
-use crate::core::error::Result;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;

@@ -3,22 +3,23 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::app_clock::AppClock;
+use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::ConnectionBuilder;
-use crate::network::upstream::pool::utils::{
+use crate::network::upstream::utils::{
     build_dns_get_request, build_doh_request_uri, connect_quic, get_buf_from_res,
+    try_lookup_server_name,
 };
 use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
 use futures::future::poll_fn;
 use h3::client::{RequestStream, SendRequest};
 use h3_quinn::{BidiStream, OpenStreams};
-use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use http::Version;
 use std::fmt::{Debug, Formatter};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::select;
@@ -119,8 +120,8 @@ impl Connection for H3Connection {
 /// Builder
 #[derive(Debug)]
 pub struct H3ConnectionBuilder {
-    pub bind_addr: SocketAddr,
-    pub remote_addr: SocketAddr,
+    pub remote_ip: Option<IpAddr>,
+    pub port: u16,
     pub timeout: std::time::Duration,
     pub server_name: String,
     pub request_uri: String,
@@ -130,10 +131,10 @@ pub struct H3ConnectionBuilder {
 impl H3ConnectionBuilder {
     pub fn new(connection_info: &ConnectionInfo) -> Self {
         Self {
-            bind_addr: connection_info.bind_socket_addr(),
-            remote_addr: connection_info.remote_socket_addr(),
+            remote_ip: connection_info.remote_ip,
+            port: connection_info.port,
             timeout: connection_info.timeout,
-            server_name: connection_info.host.clone(),
+            server_name: connection_info.server_name.clone(),
             request_uri: build_doh_request_uri(connection_info),
             insecure_skip_verify: connection_info.insecure_skip_verify,
         }
@@ -144,9 +145,15 @@ impl H3ConnectionBuilder {
 impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<H3Connection>> {
+        let remote_ip = if let Some(remote_ip) = self.remote_ip {
+            remote_ip
+        } else {
+            try_lookup_server_name(&self.server_name)?
+        };
+
         let quic_conn = connect_quic(
-            self.bind_addr,
-            self.remote_addr,
+            "0.0.0.0:0".parse()?,
+            SocketAddr::new(remote_ip, self.port),
             self.insecure_skip_verify,
             self.server_name.clone(),
             DEFAULT_TIMEOUT,
@@ -188,9 +195,7 @@ impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
     }
 }
 
-async fn recv(
-    mut request_stream: RequestStream<BidiStream<Bytes>, Bytes>,
-) -> Result<Bytes> {
+async fn recv(mut request_stream: RequestStream<BidiStream<Bytes>, Bytes>) -> Result<Bytes> {
     let mut response = request_stream
         .recv_response()
         .await

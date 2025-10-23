@@ -15,8 +15,8 @@
 //! - Pre-parsed DNS queries to avoid repeated allocations
 
 use crate::core::app_clock::AppClock;
-use crate::core::error::DnsError;
-use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
+use crate::core::error::{DnsError, Result};
+use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RecordType};
 use std::net::IpAddr;
@@ -76,18 +76,6 @@ impl Bootstrap {
     /// # Panics
     /// Panics if the domain name is invalid (should be caught during init)
     pub fn new(bootstrap_server: &str, domain: &str) -> Self {
-        let config = UpstreamConfig {
-            addr: bootstrap_server.to_string(),
-            port: None,
-            socks5: None,
-            bootstrap: None,
-            dial_addr: None,
-            insecure_skip_verify: None,
-            timeout: None,
-            enable_pipeline: None,
-            enable_http3: None,
-        };
-
         // Pre-parse domain name (fail fast during initialization)
         let parsed_name = Name::from_str(domain)
             .unwrap_or_else(|e| panic!("Invalid domain name '{}': {}", domain, e));
@@ -101,7 +89,9 @@ impl Bootstrap {
         message.add_query(Query::query(parsed_name.clone(), RecordType::A));
 
         Bootstrap {
-            upstream: UpstreamBuilder::with_upstream_config(&config),
+            upstream: UpstreamBuilder::with_connection_info(ConnectionInfo::with_addr(
+                bootstrap_server,
+            )),
             state: AtomicU8::new(STATE_NONE),
             cache: RwLock::new(None),
             query_done: Notify::new(),
@@ -115,7 +105,7 @@ impl Bootstrap {
     /// This is the hot path - optimized for minimal overhead when cache is valid.
     /// Uses a lock-free state machine for coordination.
     #[inline]
-    pub async fn get(&self) -> std::result::Result<IpAddr, DnsError> {
+    pub async fn get(&self) -> Result<IpAddr> {
         let mut failed_count = 0;
 
         loop {
@@ -126,11 +116,11 @@ impl Bootstrap {
                 STATE_CACHED => {
                     // Hot path: check cache validity
                     let cache = self.cache.read().await;
-                    if let Some(ref data) = *cache {
-                        if AppClock::elapsed_millis() < data.expires_at {
-                            // Cache hit - most common case
-                            return Ok(data.ip);
-                        }
+                    if let Some(ref data) = *cache
+                        && AppClock::elapsed_millis() < data.expires_at
+                    {
+                        // Cache hit - most common case
+                        return Ok(data.ip);
                     }
                     drop(cache);
 
