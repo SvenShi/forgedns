@@ -112,7 +112,11 @@ pub struct UpstreamConfig {
     pub bootstrap_version: Option<u8>,
     /// Optional SOCKS5 proxy to connect through
     pub socks5: Option<String>,
+    /// Connection idle timeout in seconds (reserved for future connection pool optimization)
+    #[allow(dead_code)]
     pub idle_timeout: Option<u16>,
+    /// Maximum number of connections in the pool (reserved for future connection pool scaling)
+    #[allow(dead_code)]
     pub max_conns: Option<usize>,
     /// Skip TLS certificate verification (not recommended)
     pub insecure_skip_verify: Option<bool>,
@@ -217,7 +221,11 @@ impl From<UpstreamConfig> for ConnectionInfo {
         let bootstrap = if let Some(bootstrap_server) = upstream_config.bootstrap
             && remote_ip.is_none()
         {
-            Some(Arc::new(Bootstrap::new(&bootstrap_server, &host)))
+            Some(Arc::new(Bootstrap::new(
+                &bootstrap_server,
+                &host,
+                upstream_config.bootstrap_version,
+            )))
         } else {
             None
         };

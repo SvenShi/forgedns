@@ -10,6 +10,8 @@
 //! to maintain.
 
 use crate::config::types::ConfigError;
+use quinn::ConnectError;
+use quinn::crypto::rustls::NoInitialCipherSuite;
 use thiserror::Error;
 
 /// Main error type for RustDNS
@@ -53,6 +55,14 @@ pub enum DnsError {
     /// DNS protocol error
     #[error("DNS Hickory protocol error: {0}")]
     HickoryProtocol(#[from] hickory_proto::ProtoError),
+
+    /// Quic connect error
+    #[error("quic connect error: {0}")]
+    QuicConnectError(#[from] ConnectError),
+
+    /// No initial cipher error
+    #[error("No initial cipher error: {0}")]
+    NoInitialCipherSuiteError(#[from] NoInitialCipherSuite),
 
     /// Generic error with custom message
     #[error("{0}")]

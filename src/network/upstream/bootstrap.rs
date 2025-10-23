@@ -22,6 +22,7 @@ use hickory_proto::rr::{Name, RecordType};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU8, Ordering};
+use rand::random;
 use tokio::sync::{Notify, RwLock};
 use tracing::{debug, error, info, warn};
 
@@ -70,23 +71,34 @@ impl Bootstrap {
     /// Create a new bootstrap resolver
     ///
     /// # Arguments
-    /// * `bootstrap_server` - DNS server address for resolution (e.g., "8.8.8.8")
-    /// * `domain` - Domain name to resolve
+    /// * `bootstrap_server` - DNS server address for resolution (e.g., "8.8.8.8:53")
+    /// * `domain` - Domain name to resolve (FQDN format)
+    /// * `ip_version` - IP version preference: Some(6) for IPv6, None or Some(4) for IPv4
     ///
     /// # Panics
-    /// Panics if the domain name is invalid (should be caught during init)
-    pub fn new(bootstrap_server: &str, domain: &str) -> Self {
-        // Pre-parse domain name (fail fast during initialization)
+    /// Panics if the domain name is invalid (validation happens at initialization time)
+    ///
+    /// # Performance
+    /// Pre-builds the DNS query message to avoid repeated allocations on each query
+    pub fn new(bootstrap_server: &str, domain: &str, ip_version: Option<u8>) -> Self {
+        // Pre-parse domain name (fail-fast strategy during initialization)
         let parsed_name = Name::from_str(domain)
             .unwrap_or_else(|e| panic!("Invalid domain name '{}': {}", domain, e));
 
-        // Pre-build DNS query message (optimization: avoid repeated allocations)
+        // Pre-build DNS query message to optimize hot path performance
+        // This message template will be cloned for each actual query
         let mut message = Message::new();
-        message.set_id(rand::random());
         message.set_message_type(MessageType::Query);
         message.set_op_code(OpCode::Query);
         message.set_recursion_desired(true);
-        message.add_query(Query::query(parsed_name.clone(), RecordType::A));
+        // Set query type based on IP version: AAAA for IPv6, A for IPv4
+        message.add_query(Query::query(
+            parsed_name.clone(),
+            match ip_version {
+                Some(6) => RecordType::AAAA,
+                _ => RecordType::A,
+            },
+        ));
 
         Bootstrap {
             upstream: UpstreamBuilder::with_connection_info(ConnectionInfo::with_addr(
@@ -103,13 +115,22 @@ impl Bootstrap {
     /// Get the resolved IP address, using cache or triggering a new query
     ///
     /// This is the hot path - optimized for minimal overhead when cache is valid.
-    /// Uses a lock-free state machine for coordination.
+    /// Uses a lock-free state machine for coordination among multiple concurrent callers.
+    ///
+    /// # Returns
+    /// - `Ok(IpAddr)` if resolution succeeds (from cache or fresh query)
+    /// - `Err(DnsError)` if all resolution attempts fail after retries
+    ///
+    /// # Performance
+    /// - Fast path: single atomic load when cache is valid
+    /// - Only one concurrent query at a time (others wait for result)
+    /// - Automatic retry on transient failures
     #[inline]
     pub async fn get(&self) -> Result<IpAddr> {
         let mut failed_count = 0;
 
         loop {
-            // Fast path: atomic load without locking
+            // Fast path: atomic load without locking (most common case)
             let state = self.state.load(Ordering::Acquire);
 
             match state {
@@ -124,8 +145,11 @@ impl Bootstrap {
                     }
                     drop(cache);
 
-                    // Cache expired, try to trigger refresh
-                    debug!("Bootstrap cache expired for {}, refreshing", self.domain);
+                    // Cache expired, trigger refresh
+                    debug!(
+                        domain = %self.domain,
+                        "Bootstrap cache expired, triggering refresh"
+                    );
                     if self
                         .state
                         .compare_exchange(
@@ -166,15 +190,16 @@ impl Bootstrap {
                     self.query_done.notified().await;
                 }
                 STATE_FAILED => {
+                    // Limit retry attempts to prevent infinite loops
                     if failed_count > 3 {
                         return Err(DnsError::protocol(format!(
-                            "Bootstrap query failed for {}",
-                            self.domain
+                            "Bootstrap DNS resolution failed for '{}' after {} attempts",
+                            self.domain, failed_count
                         )));
                     }
                     failed_count += 1;
 
-                    // Retry by transitioning back to NONE
+                    // Retry by transitioning back to NONE state
                     if self
                         .state
                         .compare_exchange(
@@ -198,31 +223,43 @@ impl Bootstrap {
     ///
     /// Uses pre-built query message for efficiency.
     /// Updates cache and notifies waiting tasks on completion.
+    ///
+    /// # State Transitions
+    /// - Success: STATE_QUERYING -> STATE_CACHED
+    /// - Failure: STATE_QUERYING -> STATE_FAILED
+    ///
+    /// # Concurrency
+    /// This method is called by only one task at a time (enforced by state machine).
+    /// Other tasks wait via `query_done` notification.
     async fn query(&self) {
-        // Execute DNS query using pre-built message
-        match self.upstream.query(self.message.clone()).await {
+        // Execute DNS query using pre-built message template
+        // Randomize query ID to prevent response spoofing
+        let mut message = self.message.clone();
+        message.set_id(random());
+        match self.upstream.query(message).await {
             Ok(response) => {
                 let answers = response.answers();
 
-                // Find first A or AAAA record
+                // Find the first matching A (IPv4) or AAAA (IPv6) record
                 for answer in answers {
                     if answer.record_type() == RecordType::A
                         || answer.record_type() == RecordType::AAAA
                     {
                         if let Some(ip) = answer.data().ip_addr() {
-                            let ttl = answer.ttl() as u64 * 1000; // Convert to milliseconds
+                            let ttl = answer.ttl() as u64 * 1000; // Convert seconds to milliseconds
                             info!(
-                                "Bootstrap resolved {} to {} (TTL: {}s)",
-                                self.domain,
-                                ip,
-                                ttl / 1000
+                                domain = %self.domain,
+                                ip = %ip,
+                                ttl_seconds = ttl / 1000,
+                                record_type = ?answer.record_type(),
+                                "Bootstrap DNS resolution successful"
                             );
 
-                            // Update cache
+                            // Update cache with new IP and expiration time
                             let expires_at = AppClock::elapsed_millis() + ttl;
                             *self.cache.write().await = Some(CacheData { ip, expires_at });
 
-                            // Transition to CACHED and wake waiting tasks
+                            // Transition to CACHED state and wake all waiting tasks
                             self.state.store(STATE_CACHED, Ordering::Release);
                             self.query_done.notify_waiters();
                             return;
@@ -230,14 +267,22 @@ impl Bootstrap {
                     }
                 }
 
-                // No A/AAAA records found
-                warn!("No A/AAAA records found for {}", self.domain);
+                // No matching A/AAAA records found in response
+                warn!(
+                    domain = %self.domain,
+                    answer_count = answers.len(),
+                    "No A/AAAA records found in bootstrap DNS response"
+                );
                 self.state.store(STATE_FAILED, Ordering::Release);
                 self.query_done.notify_waiters();
             }
             Err(e) => {
-                // DNS query failed
-                error!("Failed to query DNS for {}: {}", self.domain, e);
+                // DNS query failed (network error, timeout, etc.)
+                error!(
+                    domain = %self.domain,
+                    error = %e,
+                    "Bootstrap DNS query failed"
+                );
                 self.state.store(STATE_FAILED, Ordering::Release);
                 self.query_done.notify_waiters();
             }
