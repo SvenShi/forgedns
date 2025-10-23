@@ -8,15 +8,15 @@ use crate::core::error::{DnsError, Result};
 use crate::network::upstream::ConnectionInfo;
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
-use crate::network::upstream::utils::try_lookup_server_name;
+use crate::network::upstream::utils::connect_socket;
 use async_trait::async_trait;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
@@ -41,6 +41,8 @@ pub struct UdpConnection {
     timeout: Duration,
     /// Timestamp of last activity (milliseconds)
     last_used: AtomicU64,
+    /// Connection closed flag (prevents use after closure and ensures idempotent close)
+    closed: AtomicBool,
 }
 
 /// Retry delay for initial DNS query attempts
@@ -48,14 +50,37 @@ const RETRY_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[async_trait]
 impl Connection for UdpConnection {
-    /// Close this UDP connection and notify all waiting tasks.
+    /// Close this UDP connection and notify all waiting tasks
+    ///
+    /// UDP connections are stateless, so close mainly signals the listener task to exit.
+    /// This method is idempotent - multiple calls are safe and will only execute once.
     fn close(&self) {
-        debug!(conn_id = self.id, "Closing UDP connection");
+        // Atomically set closed flag and check previous value
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return; // Already closed, no-op
+        }
+        debug!(
+            conn_id = self.id,
+            "Closing UDP connection and signaling listener task"
+        );
         self.close_notify.notify_waiters();
     }
 
-    /// Send a DNS query and wait asynchronously for its response.
-    /// Retries once with a shorter timeout, then uses the normal timeout.
+    /// Send a DNS query and wait asynchronously for its response
+    ///
+    /// # Arguments
+    /// * `request` - DNS query message to send
+    ///
+    /// # Returns
+    /// - `Ok(DnsResponse)` if response received
+    /// - `Err(DnsError)` if both attempts timeout or network error occurs
+    ///
+    /// # Retry Strategy
+    /// - First attempt: 1 second timeout (quick retry on packet loss)
+    /// - Second attempt: configured timeout (allows for slower network)
+    ///
+    /// This two-stage approach improves resilience against UDP packet loss
+    /// while maintaining low latency for successful queries.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn query(&self, mut request: Message) -> Result<DnsResponse> {
         let raw_id = request.id();
@@ -67,39 +92,62 @@ impl Connection for UdpConnection {
             request.set_id(query_id);
 
             let msg = request.to_bytes()?;
-            debug!(conn_id = self.id, attempt, query_id, "Sending DNS query");
+            debug!(
+                conn_id = self.id,
+                attempt,
+                query_id,
+                timeout_ms = current_timeout.as_millis(),
+                "Sending DNS query over UDP"
+            );
 
-            // Send request
+            // Send UDP datagram (no length prefix needed for UDP)
             match self.socket.send(msg.as_slice()).await {
                 Ok(_sent) => {}
                 Err(e) => {
                     self.request_map.take(query_id);
-                    return Err(DnsError::protocol(e.to_string()));
+                    // Close connection on send failure (socket likely unusable)
+                    self.close();
+                    return Err(DnsError::protocol(format!("UDP send failed: {}", e)));
                 }
             };
 
             // Wait for response or timeout
             match timeout(current_timeout, rx).await {
                 Ok(Ok(mut response)) => {
-                    response.set_id(raw_id);
-                    debug!(conn_id = self.id, query_id, "Received DNS response");
+                    response.set_id(raw_id); // Restore original query ID
+                    debug!(
+                        conn_id = self.id,
+                        query_id, attempt, "Successfully received DNS response over UDP"
+                    );
                     self.last_used
                         .store(AppClock::elapsed_millis(), Ordering::Relaxed);
                     return Ok(response);
                 }
                 Ok(Err(_)) => {
                     self.request_map.take(query_id);
-                    return Err(DnsError::protocol("request canceled"));
+                    return Err(DnsError::protocol("request canceled (channel dropped)"));
                 }
                 Err(_) => {
+                    // Timeout on this attempt, will retry if attempts remain
                     self.request_map.take(query_id);
+                    debug!(
+                        conn_id = self.id,
+                        query_id,
+                        attempt,
+                        timeout_ms = current_timeout.as_millis(),
+                        "DNS query attempt timed out"
+                    );
                 }
             }
 
+            // Use full timeout for second attempt
             current_timeout = self.timeout;
         }
 
-        Err(DnsError::protocol("dns query timeout"))
+        Err(DnsError::protocol(format!(
+            "DNS query timeout after 2 attempts (total {}ms)",
+            (RETRY_TIMEOUT + self.timeout).as_millis()
+        )))
     }
 
     /// Return the number of active queries currently tracked by this connection.
@@ -107,9 +155,11 @@ impl Connection for UdpConnection {
         self.request_map.size()
     }
 
-    /// UDP connections are always considered available (no persistent state).
+    /// Check if the UDP connection is available for new queries
+    ///
+    /// Returns false if the connection has been closed (e.g., due to send failure)
     fn available(&self) -> bool {
-        true
+        !self.closed.load(Ordering::Relaxed)
     }
 
     /// Return the timestamp (in ms) of last successful activity.
@@ -119,7 +169,12 @@ impl Connection for UdpConnection {
 }
 
 impl UdpConnection {
-    /// Construct a new UDP connection with the given parameters.
+    /// Construct a new UDP connection with the given parameters
+    ///
+    /// # Arguments
+    /// * `conn_id` - Unique connection identifier for logging
+    /// * `socket` - Pre-configured UDP socket connected to remote server
+    /// * `timeout` - Query timeout duration
     fn new(conn_id: u16, socket: UdpSocket, timeout: Duration) -> UdpConnection {
         Self {
             id: conn_id,
@@ -128,16 +183,26 @@ impl UdpConnection {
             request_map: RequestMap::new(),
             timeout,
             last_used: AtomicU64::new(AppClock::elapsed_millis()),
+            closed: AtomicBool::new(false), // Initially open
         }
     }
 
-    /// Asynchronously listen for DNS responses and deliver them to matching queries.
+    /// Asynchronously listen for DNS responses and deliver them to matching queries
+    ///
+    /// Continuously receives UDP datagrams and matches them to pending queries by ID.
     /// This task runs per connection until all requests complete or the connection closes.
+    ///
+    /// # Buffer Size
+    /// Uses 4KB buffer which is sufficient for most DNS responses.
+    /// Larger responses would typically use TCP (with TC bit set).
     async fn listen_dns_response(self: Arc<Self>) {
-        let mut buf = [0u8; 4096];
+        let mut buf = [0u8; 4096]; // Standard DNS UDP buffer size
         let mut closing = false;
 
-        debug!(conn_id = self.id, "UDP connection listener started");
+        debug!(
+            conn_id = self.id,
+            "UDP listener task started, waiting for DNS responses"
+        );
 
         loop {
             if closing && self.request_map.is_empty() {
@@ -149,30 +214,53 @@ impl UdpConnection {
                 recv = self.socket.recv_from(&mut buf) => {
                     match recv {
                         Ok((len, _addr)) => {
+                            // Parse received UDP datagram as DNS message
                             match DnsResponse::from_buffer(Vec::from(&buf[..len])) {
                                 Ok(msg) => {
                                     let id = msg.header().id();
                                     if let Some(sender) = self.request_map.take(id) {
                                         let _ = sender.send(msg);
                                         self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
-                                        debug!(conn_id = self.id, id, "Delivered DNS response to waiting query");
+                                        debug!(
+                                            conn_id = self.id,
+                                            query_id = id,
+                                            response_bytes = len,
+                                            "Matched and delivered DNS response to waiting query"
+                                        );
                                     } else {
-                                        debug!(conn_id = self.id, id, "Discarded unmatched DNS response");
+                                        debug!(
+                                            conn_id = self.id,
+                                            query_id = id,
+                                            "Discarded DNS response (no matching query or already timed out)"
+                                        );
                                     }
                                 }
-                                Err(_) => {
-                                    warn!(conn_id = self.id, "Failed to parse DNS response buffer");
+                                Err(e) => {
+                                    warn!(
+                                        conn_id = self.id,
+                                        error = ?e,
+                                        packet_len = len,
+                                        "Failed to parse DNS response from UDP datagram"
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
-                            error!(conn_id = self.id, ?e, "recv_from failed");
+                            error!(
+                                conn_id = self.id,
+                                error = ?e,
+                                "UDP recv_from failed"
+                            );
                         }
                     }
                 }
                 _ = self.close_notify.notified() => {
                     closing = true;
-                    debug!(conn_id = self.id, "Received close notification");
+                    debug!(
+                        conn_id = self.id,
+                        pending_queries = self.request_map.size(),
+                        "UDP listener received close notification, will drain remaining responses"
+                    );
                     continue;
                 }
             }
@@ -183,11 +271,13 @@ impl UdpConnection {
 /// Builder for creating new `UdpConnection` instances.
 #[derive(Debug)]
 pub struct UdpConnectionBuilder {
-    pub remote_ip: Option<IpAddr>,
-    pub port: u16,
-    pub server_name: String,
+    remote_ip: Option<IpAddr>,
+    port: u16,
+    server_name: String,
     /// Query timeout duration.
     timeout: Duration,
+    so_mark: Option<u32>,
+    bind_to_device: Option<String>,
 }
 
 impl UdpConnectionBuilder {
@@ -198,6 +288,8 @@ impl UdpConnectionBuilder {
             port: connection_info.port,
             server_name: connection_info.server_name.clone(),
             timeout: connection_info.timeout,
+            so_mark: connection_info.so_mark,
+            bind_to_device: connection_info.bind_to_device.clone(),
         }
     }
 }
@@ -205,27 +297,33 @@ impl UdpConnectionBuilder {
 #[async_trait]
 impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
     /// Create a new UDP connection, bind it locally, connect to remote server,
-    /// and spawn a background listener task to handle responses.
+    /// and spawn a background listener task to handle responses
+    ///
+    /// # Returns
+    /// Arc-wrapped UdpConnection with background listener task spawned
+    ///
+    /// # Performance
+    /// - Non-blocking socket I/O
+    /// - Single listener task handles all responses for this connection
+    /// - Zero-copy where possible (direct socket buffer to DNS parser)
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<UdpConnection>> {
-        let remote_ip = if let Some(remote_ip) = self.remote_ip {
-            remote_ip
-        } else {
-            try_lookup_server_name(&self.server_name)?
-        };
-
-        let addr: SocketAddr = "0.0.0.0:0".parse()?;
-        let socket = UdpSocket::bind(addr).await?;
-        let remote_addr = SocketAddr::new(remote_ip, self.port);
-
-        socket.connect(remote_addr).await?;
+        let socket = connect_socket(
+            self.remote_ip,
+            self.server_name.clone(),
+            self.port,
+            self.so_mark,
+            self.bind_to_device.clone(),
+        )?;
 
         info!(
-            "Established UDP connection (id={}, remote={})",
-            conn_id, remote_addr
+            conn_id,
+            local_addr = ?socket.local_addr(),
+            remote_addr = ?socket.peer_addr(),
+            "Established UDP connection to DNS server"
         );
 
-        let connection = UdpConnection::new(conn_id, socket, self.timeout);
+        let connection = UdpConnection::new(conn_id, UdpSocket::from_std(socket)?, self.timeout);
         let arc = Arc::new(connection);
 
         // Spawn background task for listening responses

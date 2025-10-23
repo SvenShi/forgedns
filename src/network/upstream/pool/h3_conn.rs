@@ -6,8 +6,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
-    build_dns_get_request, build_doh_request_uri, connect_quic, get_buf_from_res,
-    try_lookup_server_name,
+    build_dns_get_request, build_doh_request_uri, connect_quic, connect_socket, get_buf_from_res,
 };
 use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
 use bytes::{BufMut, Bytes};
@@ -19,9 +18,9 @@ use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use http::Version;
 use std::fmt::{Debug, Formatter};
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -120,12 +119,14 @@ impl Connection for H3Connection {
 /// Builder
 #[derive(Debug)]
 pub struct H3ConnectionBuilder {
-    pub remote_ip: Option<IpAddr>,
-    pub port: u16,
-    pub timeout: std::time::Duration,
-    pub server_name: String,
-    pub request_uri: String,
-    pub insecure_skip_verify: bool,
+    remote_ip: Option<IpAddr>,
+    port: u16,
+    timeout: std::time::Duration,
+    server_name: String,
+    request_uri: String,
+    insecure_skip_verify: bool,
+    so_mark: Option<u32>,
+    bind_to_device: Option<String>,
 }
 
 impl H3ConnectionBuilder {
@@ -137,6 +138,8 @@ impl H3ConnectionBuilder {
             server_name: connection_info.server_name.clone(),
             request_uri: build_doh_request_uri(connection_info),
             insecure_skip_verify: connection_info.insecure_skip_verify,
+            so_mark: connection_info.so_mark,
+            bind_to_device: connection_info.bind_to_device.clone(),
         }
     }
 }
@@ -145,15 +148,16 @@ impl H3ConnectionBuilder {
 impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<H3Connection>> {
-        let remote_ip = if let Some(remote_ip) = self.remote_ip {
-            remote_ip
-        } else {
-            try_lookup_server_name(&self.server_name)?
-        };
+        let socket = connect_socket(
+            self.remote_ip,
+            self.server_name.clone(),
+            self.port,
+            self.so_mark,
+            self.bind_to_device.clone(),
+        )?;
 
         let quic_conn = connect_quic(
-            "0.0.0.0:0".parse()?,
-            SocketAddr::new(remote_ip, self.port),
+            socket,
             self.insecure_skip_verify,
             self.server_name.clone(),
             DEFAULT_TIMEOUT,

@@ -23,10 +23,11 @@ use http::{HeaderValue, Method, Request, Response, Version, header};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TokioRuntime};
 use rustls::pki_types::ServerName;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use socket2::{Domain, Protocol, Socket, Type};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
@@ -34,13 +35,21 @@ use tracing::info;
 
 /// Establish TLS connection over an existing TCP stream
 ///
-/// Performs TLS handshake with optional certificate verification.
+/// Performs TLS 1.2/1.3 handshake with configurable certificate verification.
 ///
 /// # Arguments
-/// * `tcp_stream` - Established TCP connection
-/// * `skip_cert` - If true, skip certificate validation (INSECURE - testing only!)
-/// * `server_name` - SNI hostname for TLS
-/// * `conn_timeout` - Handshake timeout
+/// * `tcp_stream` - Established TCP connection to upgrade to TLS
+/// * `skip_cert` - If true, skip certificate validation (**INSECURE** - testing/debug only!)
+/// * `server_name` - SNI (Server Name Indication) hostname for TLS handshake
+/// * `conn_timeout` - Maximum time to wait for TLS handshake to complete
+///
+/// # Returns
+/// - `Ok(TlsStream)` if TLS handshake succeeds
+/// - `Err(DnsError)` if handshake fails or times out
+///
+/// # Security Warning
+/// Setting `skip_cert` to true disables certificate validation and makes the connection
+/// vulnerable to man-in-the-middle attacks. Only use this for testing!
 #[inline]
 pub(crate) async fn connect_tls(
     tcp_stream: TcpStream,
@@ -65,50 +74,55 @@ pub(crate) async fn connect_tls(
     }
 }
 
-/// Establish QUIC connection for DoQ
+/// Establish QUIC connection for DoQ (DNS over QUIC, RFC 9250)
 ///
-/// Creates a QUIC endpoint and connects to the remote server.
+/// Creates a QUIC endpoint from the provided UDP socket and performs the
+/// QUIC+TLS 1.3 handshake with the remote DNS server.
 ///
 /// # Arguments
-/// * `bind_addr` - Local address to bind to
-/// * `remote_addr` - Remote server address
-/// * `skip_cert` - If true, skip certificate validation (INSECURE!)
-/// * `server_name` - SNI hostname
-/// * `conn_timeout` - Connection timeout
+/// * `udp_socket` - Pre-configured UDP socket (already connected to remote)
+/// * `skip_cert` - If true, skip certificate validation (**INSECURE** - testing only!)
+/// * `server_name` - SNI (Server Name Indication) hostname for TLS 1.3 handshake
+/// * `conn_timeout` - Maximum time to wait for QUIC handshake to complete
+///
+/// # Returns
+/// - `Ok(quinn::Connection)` if QUIC handshake succeeds
+/// - `Err(DnsError)` if handshake fails, times out, or configuration is invalid
+///
+/// # Protocol
+/// - Uses QUIC with mandatory TLS 1.3 (per RFC 9250)
+/// - Supports 0-RTT for resumed connections
+/// - Includes ALPN negotiation for "doq" protocol
+///
+/// # Security Warning
+/// Setting `skip_cert` to true disables certificate validation. Only use for testing!
 pub(crate) async fn connect_quic(
-    bind_addr: SocketAddr,
-    remote_addr: SocketAddr,
+    udp_socket: UdpSocket,
     skip_cert: bool,
     server_name: String,
     conn_timeout: Duration,
 ) -> Result<quinn::Connection> {
-    let udp_socket = UdpSocket::bind(bind_addr).await?;
-
+    let remote_addr = udp_socket.peer_addr()?;
     let mut endpoint = Endpoint::new(
         EndpointConfig::default(),
         None,
-        udp_socket.into_std()?,
+        udp_socket,
         Arc::new(TokioRuntime),
     )?;
 
     let client_config = if skip_cert {
-        ClientConfig::new(Arc::new(
-            QuicClientConfig::try_from(insecure_client_config()).unwrap(),
-        ))
+        ClientConfig::new(Arc::new(QuicClientConfig::try_from(
+            insecure_client_config(),
+        )?))
     } else {
         ClientConfig::new(Arc::new(
-            QuicClientConfig::try_from(secure_client_config()).unwrap(),
+            QuicClientConfig::try_from(secure_client_config())?,
         ))
     };
 
     endpoint.set_default_client_config(client_config);
 
-    match timeout(
-        conn_timeout,
-        endpoint.connect(remote_addr, server_name.as_ref()).unwrap(),
-    )
-    .await
-    {
+    match timeout(conn_timeout, endpoint.connect(remote_addr, &server_name)?).await {
         Ok(Ok(s)) => Ok(s),
         Ok(Err(e)) => Err(DnsError::protocol(format!("QUIC connection error: {}", e))),
         Err(_) => Err(DnsError::protocol("QUIC handshake timeout")),
@@ -117,8 +131,16 @@ pub(crate) async fn connect_quic(
 
 /// Close multiple connections synchronously
 ///
-/// Calls the `close()` method on each connection.
-/// Since close() is synchronous, this doesn't require async.
+/// Iterates through the connection vector and calls `close()` on each.
+/// This is a convenience function for bulk connection cleanup.
+///
+/// # Arguments
+/// * `conns` - Vector of Arc-wrapped connections to close
+///
+/// # Notes
+/// - close() is idempotent, so calling this multiple times is safe
+/// - close() is synchronous, so this function doesn't need to be async
+/// - Connections are not removed from the vector, just marked as closed
 #[inline]
 pub fn close_conns<C: Connection>(conns: &Vec<Arc<C>>) {
     for conn in conns {
@@ -126,19 +148,27 @@ pub fn close_conns<C: Connection>(conns: &Vec<Arc<C>>) {
     }
 }
 
-/// Content type header for DNS-over-HTTPS
+/// Content type header for DNS-over-HTTPS (RFC 8484 Section 6)
 const DNS_HEADER_VALUE: HeaderValue = HeaderValue::from_static("application/dns-message");
 
-/// Build a DoH GET request with base64-encoded DNS query
+/// Build a DoH GET request with base64url-encoded DNS query
 ///
-/// Constructs an HTTP GET request with the DNS message in the query string.
+/// Constructs an HTTP GET request following RFC 8484 Section 4.1 (GET method).
+/// The DNS message is base64url-encoded (without padding) and appended to the URI.
 ///
 /// # Arguments
-/// * `uri` - Base URI (will append "?dns=<base64>")
-/// * `buf` - Raw DNS message bytes
-/// * `version` - HTTP version (HTTP/2 or HTTP/3)
+/// * `uri` - Base URI with "?dns=" already appended (will add base64 query)
+/// * `buf` - Raw DNS message bytes (wire format)
+/// * `version` - HTTP version (HTTP/2 for h2, HTTP/3 for h3)
+///
+/// # Returns
+/// HTTP Request with empty body (query is in URI parameter)
+///
+/// # Example URI
+/// `https://dns.example.com/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB`
 #[inline]
 pub fn build_dns_get_request(mut uri: String, buf: Vec<u8>, version: Version) -> Request<()> {
+    // Encode DNS message using base64url without padding (RFC 4648 Section 5)
     uri.push_str(&BASE64_URL_SAFE_NO_PAD.encode(buf));
 
     http::Request::builder()
@@ -147,65 +177,258 @@ pub fn build_dns_get_request(mut uri: String, buf: Vec<u8>, version: Version) ->
         .method(Method::GET)
         .uri(uri)
         .body(())
-        .unwrap()
+        .expect("Failed to build HTTP request (should never fail with static headers)")
 }
 
-/// Extract response buffer from HTTP response
+/// Extract and pre-allocate response buffer from HTTP response
 ///
-/// Pre-allocates buffer based on Content-Length header if present.
+/// Reads the Content-Length header to optimize buffer allocation.
+/// This avoids repeated reallocations when receiving the response body.
+///
+/// # Arguments
+/// * `response` - HTTP response with headers
+///
+/// # Returns
+/// BytesMut buffer pre-allocated to Content-Length size (or 4KB default)
+///
+/// # Performance
+/// Pre-allocating based on Content-Length avoids:
+/// - Multiple buffer reallocations during body reception
+/// - Memory copies when buffer grows
+/// - Potential performance hiccups from allocator
 #[inline]
 pub fn get_buf_from_res<T>(response: &mut Response<T>) -> BytesMut {
-    let response_bytes = BytesMut::with_capacity(
-        response
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(4096), // Default 4KB
-    );
-    response_bytes
+    let capacity = response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(4096); // Default 4KB for typical DNS responses
+
+    BytesMut::with_capacity(capacity)
 }
 
-/// Build DoH request URI from connection info
+/// Build DoH request URI template from connection info
 ///
 /// Constructs the full HTTPS URI for DoH requests, handling non-standard ports.
+/// The returned URI ends with "?dns=" ready for base64url-encoded query to be appended.
+///
+/// # Arguments
+/// * `connection_info` - Connection configuration with server name, port, and path
+///
+/// # Returns
+/// String containing "https://server:port/path?dns=" (port omitted if 443)
+///
+/// # Examples
+/// - Standard port: `https://dns.example.com/dns-query?dns=`
+/// - Custom port: `https://dns.example.com:8443/dns-query?dns=`
+///
+/// # Performance
+/// Pre-reserves 512 bytes to accommodate the base64-encoded DNS query without reallocation
 pub fn build_doh_request_uri(connection_info: &ConnectionInfo) -> String {
-    if connection_info.port != ConnectionType::DoH.default_port() {
-        let mut uri = format!(
+    let mut uri = if connection_info.port != ConnectionType::DoH.default_port() {
+        // Include port in URI for non-standard ports
+        format!(
             "https://{}:{}{}?dns=",
             connection_info.server_name, connection_info.port, connection_info.path
-        );
-        uri.reserve(512); // Pre-allocate for base64 query
-        uri
+        )
     } else {
-        let mut uri = format!(
+        // Omit port 443 (standard HTTPS port) from URI
+        format!(
             "https://{}{}?dns=",
             connection_info.server_name, connection_info.path
-        );
-        uri.reserve(512);
-        uri
-    }
+        )
+    };
+
+    // Pre-allocate space for base64url-encoded DNS query (~600 bytes for typical query)
+    uri.reserve(512);
+    uri
 }
 
+/// Resolve hostname to IP address using system DNS
+///
+/// Uses the operating system's DNS resolver (e.g., getaddrinfo on Unix/Linux).
+/// This is a blocking operation that uses the system's configured DNS servers.
+///
+/// # Arguments
+/// * `server_name` - Hostname to resolve (e.g., "dns.example.com")
+///
+/// # Returns
+/// - `Ok(IpAddr)` with the first resolved IP address
+/// - `Err(DnsError)` if resolution fails or returns no results
+///
+/// # Notes
+/// - This is typically used once during initialization for static upstream servers
+/// - For dynamic resolution with TTL support, use Bootstrap instead
+/// - Blocks the current task - consider using bootstrap for async resolution
+/// - Returns the first address from the system resolver (may be IPv4 or IPv6)
+///
+/// # Platform Behavior
+/// - Unix/Linux: Uses getaddrinfo() respecting /etc/resolv.conf and /etc/hosts
+/// - macOS: May use mDNSResponder
+/// - Windows: Uses the Windows DNS Client service
 pub fn try_lookup_server_name(server_name: &str) -> Result<IpAddr> {
     match format!("{}:0", server_name).to_socket_addrs() {
         Ok(mut addrs) => match addrs.next() {
             Some(addr) => {
                 let ip = addr.ip();
                 info!(
-                    "Resolved {} to {} using system DNS (one-time, permanent cache)",
-                    server_name, ip
+                    server_name = %server_name,
+                    resolved_ip = %ip,
+                    ip_version = if ip.is_ipv4() { "IPv4" } else { "IPv6" },
+                    "Resolved hostname using system DNS (one-time, permanent cache)"
                 );
                 Ok(ip)
             }
             None => Err(DnsError::protocol(format!(
-                "System DNS returned no addresses for {}",
+                "System DNS returned no addresses for '{}'",
                 server_name
             ))),
         },
         Err(e) => Err(DnsError::protocol(format!(
-            "System DNS resolution failed for {}: {}",
+            "System DNS resolution failed for '{}': {}",
             server_name, e
         ))),
     }
+}
+
+/// Create and configure a UDP socket for DNS communication
+///
+/// Creates a non-blocking UDP socket with optional Linux-specific socket options
+/// (SO_MARK, SO_BINDTODEVICE) and connects it to the remote DNS server.
+///
+/// # Arguments
+/// * `remote_ip` - Remote server IP address (if None, resolves server_name)
+/// * `server_name` - Hostname to resolve if remote_ip is None
+/// * `port` - Remote server port
+/// * `so_mark` - Linux SO_MARK socket option (for policy routing)
+/// * `bind_to_device` - Linux SO_BINDTODEVICE option (bind to specific interface)
+///
+/// # Returns
+/// - `Ok(UdpSocket)` connected UDP socket in non-blocking mode
+/// - `Err(DnsError)` if socket creation, configuration, or connection fails
+///
+/// # Platform-Specific Features
+/// - **Linux**: Supports SO_MARK (for netfilter/policy routing) and SO_BINDTODEVICE
+/// - **Other platforms**: SO_MARK and bind_to_device options are ignored
+///
+/// # Notes
+/// - Socket is set to non-blocking mode for async I/O
+/// - SO_REUSEADDR is enabled to allow rapid reconnection
+/// - connect() is called to set the default destination (allows using send vs send_to)
+#[allow(unused)]
+pub fn connect_socket(
+    remote_ip: Option<IpAddr>,
+    server_name: String,
+    port: u16,
+    so_mark: Option<u32>,
+    bind_to_device: Option<String>,
+) -> Result<UdpSocket> {
+    // Resolve remote address if not provided
+    let socket_addr = if let Some(remote_ip) = remote_ip {
+        SocketAddr::new(remote_ip, port)
+    } else {
+        let addr = try_lookup_server_name(&server_name)?;
+        SocketAddr::new(addr, port)
+    };
+
+    // Create UDP socket with appropriate address family
+    let socket = Socket::new(
+        Domain::for_address(socket_addr),
+        Type::DGRAM,
+        Some(Protocol::UDP),
+    )?;
+
+    // Configure socket for async I/O
+    let _ = socket.set_nonblocking(true);
+    let _ = socket.set_reuse_address(true);
+
+    // Linux-specific socket options for advanced routing
+    #[cfg(target_os = "linux")]
+    if let Some(so_mark) = so_mark {
+        socket.set_mark(so_mark)?;
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(device) = bind_to_device {
+        socket.bind_device(Some(device.as_bytes()))?;
+    }
+
+    // Connect socket to set default destination (allows using send() instead of send_to())
+    socket.connect(&socket_addr.into())?;
+
+    Ok(socket.into())
+}
+
+/// Create and configure a TCP stream for DNS communication
+///
+/// Creates a non-blocking TCP socket with TCP_NODELAY enabled and optional
+/// Linux-specific socket options, then connects to the remote DNS server.
+///
+/// # Arguments
+/// * `remote_ip` - Remote server IP address (if None, resolves server_name)
+/// * `server_name` - Hostname to resolve if remote_ip is None
+/// * `port` - Remote server port
+/// * `so_mark` - Linux SO_MARK socket option (for policy routing)
+/// * `bind_to_device` - Linux SO_BINDTODEVICE option (bind to specific interface)
+///
+/// # Returns
+/// - `Ok(TcpStream)` connected TCP stream in non-blocking mode
+/// - `Err(DnsError)` if socket creation, configuration, or connection fails
+///
+/// # Socket Configuration
+/// - **TCP_NODELAY**: Enabled to disable Nagle's algorithm for low-latency DNS queries
+/// - **SO_REUSEADDR**: Enabled to allow rapid reconnection
+/// - **Non-blocking**: Set for async I/O compatibility
+///
+/// # Platform-Specific Features
+/// - **Linux**: Supports SO_MARK and SO_BINDTODEVICE for advanced routing
+/// - **Other platforms**: These options are silently ignored
+///
+/// # Performance
+/// TCP_NODELAY is critical for DNS-over-TCP performance, as it ensures
+/// small DNS queries are sent immediately without waiting for more data
+#[allow(unused)]
+pub fn connect_stream(
+    remote_ip: Option<IpAddr>,
+    server_name: String,
+    port: u16,
+    so_mark: Option<u32>,
+    bind_to_device: Option<String>,
+) -> Result<std::net::TcpStream> {
+    // Resolve remote address if not provided
+    let socket_addr = if let Some(remote_ip) = remote_ip {
+        SocketAddr::new(remote_ip, port)
+    } else {
+        let addr = try_lookup_server_name(&server_name)?;
+        SocketAddr::new(addr, port)
+    };
+
+    // Create TCP socket with appropriate address family
+    let socket = Socket::new(
+        Domain::for_address(socket_addr),
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+
+    // Configure socket for low-latency async I/O
+    let _ = socket.set_nonblocking(true);
+    let _ = socket.set_tcp_nodelay(true); // Disable Nagle's algorithm for immediate sends
+    let _ = socket.set_reuse_address(true);
+
+    // Linux-specific socket options for advanced routing
+    #[cfg(target_os = "linux")]
+    if let Some(so_mark) = so_mark {
+        socket.set_mark(so_mark)?;
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(device) = bind_to_device {
+        socket.bind_device(Some(device.as_bytes()))?;
+    }
+
+    // Initiate TCP connection (non-blocking, will complete asynchronously)
+    socket.connect(&socket_addr.into())?;
+
+    Ok(socket.into())
 }
