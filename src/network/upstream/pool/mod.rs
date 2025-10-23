@@ -36,7 +36,6 @@
 //! - Connection reuse to amortize handshake costs
 
 mod request_map;
-mod utils;
 
 pub(crate) mod h2_conn;
 pub(crate) mod h3_conn;
@@ -46,8 +45,8 @@ pub(crate) mod reuse;
 pub(crate) mod tcp_conn;
 pub(crate) mod udp_conn;
 
-use async_trait::async_trait;
 use crate::core::error::Result;
+use async_trait::async_trait;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;

@@ -4,16 +4,17 @@
  */
 
 use crate::core::app_clock::AppClock;
+use crate::core::error::{DnsError, Result};
 use crate::network::upstream::ConnectionInfo;
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
+use crate::network::upstream::utils::try_lookup_server_name;
 use async_trait::async_trait;
-use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -182,10 +183,9 @@ impl UdpConnection {
 /// Builder for creating new `UdpConnection` instances.
 #[derive(Debug)]
 pub struct UdpConnectionBuilder {
-    /// Local address to bind UDP sockets to.
-    bind_addr: SocketAddr,
-    /// Upstream DNS server address.
-    remote_addr: SocketAddr,
+    pub remote_ip: Option<IpAddr>,
+    pub port: u16,
+    pub server_name: String,
     /// Query timeout duration.
     timeout: Duration,
 }
@@ -194,8 +194,9 @@ impl UdpConnectionBuilder {
     /// Initialize a new builder using upstream connection info.
     pub fn new(connection_info: &ConnectionInfo) -> Self {
         Self {
-            bind_addr: connection_info.bind_socket_addr(),
-            remote_addr: connection_info.remote_socket_addr(),
+            remote_ip: connection_info.remote_ip,
+            port: connection_info.port,
+            server_name: connection_info.server_name.clone(),
             timeout: connection_info.timeout,
         }
     }
@@ -207,12 +208,21 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
     /// and spawn a background listener task to handle responses.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<UdpConnection>> {
-        let socket = UdpSocket::bind(self.bind_addr).await?;
-        socket.connect(self.remote_addr).await?;
+        let remote_ip = if let Some(remote_ip) = self.remote_ip {
+            remote_ip
+        } else {
+            try_lookup_server_name(&self.server_name)?
+        };
+
+        let addr: SocketAddr = "0.0.0.0:0".parse()?;
+        let socket = UdpSocket::bind(addr).await?;
+        let remote_addr = SocketAddr::new(remote_ip, self.port);
+
+        socket.connect(remote_addr).await?;
 
         info!(
             "Established UDP connection (id={}, remote={})",
-            conn_id, self.remote_addr
+            conn_id, remote_addr
         );
 
         let connection = UdpConnection::new(conn_id, socket, self.timeout);

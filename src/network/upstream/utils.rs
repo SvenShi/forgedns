@@ -11,25 +11,26 @@
 //! - DoH request construction
 //! - Connection cleanup
 
+use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::Connection;
 use crate::network::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use crate::network::upstream::{ConnectionInfo, ConnectionType};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use bytes::BytesMut;
-use crate::core::error::{DnsError, Result};
 use http::header::CONTENT_LENGTH;
 use http::{HeaderValue, Method, Request, Response, Version, header};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TokioRuntime};
 use rustls::pki_types::ServerName;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
+use tracing::info;
 
 /// Establish TLS connection over an existing TCP stream
 ///
@@ -172,16 +173,39 @@ pub fn build_doh_request_uri(connection_info: &ConnectionInfo) -> String {
     if connection_info.port != ConnectionType::DoH.default_port() {
         let mut uri = format!(
             "https://{}:{}{}?dns=",
-            connection_info.host, connection_info.port, connection_info.path
+            connection_info.server_name, connection_info.port, connection_info.path
         );
         uri.reserve(512); // Pre-allocate for base64 query
         uri
     } else {
         let mut uri = format!(
             "https://{}{}?dns=",
-            connection_info.host, connection_info.path
+            connection_info.server_name, connection_info.path
         );
         uri.reserve(512);
         uri
+    }
+}
+
+pub fn try_lookup_server_name(server_name: &str) -> Result<IpAddr> {
+    match format!("{}:0", server_name).to_socket_addrs() {
+        Ok(mut addrs) => match addrs.next() {
+            Some(addr) => {
+                let ip = addr.ip();
+                info!(
+                    "Resolved {} to {} using system DNS (one-time, permanent cache)",
+                    server_name, ip
+                );
+                Ok(ip)
+            }
+            None => Err(DnsError::protocol(format!(
+                "System DNS returned no addresses for {}",
+                server_name
+            ))),
+        },
+        Err(e) => Err(DnsError::protocol(format!(
+            "System DNS resolution failed for {}: {}",
+            server_name, e
+        ))),
     }
 }

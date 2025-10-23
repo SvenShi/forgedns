@@ -4,17 +4,17 @@
  */
 
 use crate::core::app_clock::AppClock;
+use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::request_map::RequestMap;
-use crate::network::upstream::pool::utils::connect_tls;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
+use crate::network::upstream::utils::{connect_tls, try_lookup_server_name};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, DEFAULT_TIMEOUT};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
-use crate::core::error::{DnsError, Result};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -267,7 +267,8 @@ impl TcpConnection {
 /// Builder that establishes new TCP or TLS (DoT) DNS connections.
 #[derive(Debug)]
 pub struct TcpConnectionBuilder {
-    pub remote_addr: SocketAddr,
+    pub remote_ip: Option<IpAddr>,
+    pub port: u16,
     pub timeout: Duration,
     pub tls_enabled: bool,
     pub server_name: String,
@@ -278,10 +279,11 @@ pub struct TcpConnectionBuilder {
 impl TcpConnectionBuilder {
     pub fn new(connection_info: &ConnectionInfo) -> Self {
         Self {
-            remote_addr: connection_info.remote_socket_addr(),
+            remote_ip: connection_info.remote_ip,
+            port: connection_info.port,
             timeout: connection_info.timeout,
             tls_enabled: matches!(connection_info.connection_type, ConnectionType::DoT),
-            server_name: connection_info.host.clone(),
+            server_name: connection_info.server_name.clone(),
             insecure_skip_verify: connection_info.insecure_skip_verify,
             connection_type: connection_info.connection_type,
         }
@@ -293,9 +295,14 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
     /// Establish a new TCP or TLS connection to the DNS server.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<TcpConnection>> {
-        let remote = self.remote_addr;
+        let remote_ip = if let Some(ip) = self.remote_ip {
+            ip
+        } else {
+            try_lookup_server_name(&self.server_name)?
+        };
 
-        match TcpStream::connect(remote).await {
+        let socket_addr = SocketAddr::new(remote_ip, self.port);
+        match TcpStream::connect(socket_addr).await {
             Ok(stream) => {
                 if let Err(e) = stream.set_nodelay(true) {
                     warn!(conn_id, ?e, "Failed to enable TCP_NODELAY");
@@ -343,7 +350,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
             Err(e) => {
                 error!(
                     conn_id,
-                    ?remote,
+                    ?socket_addr,
                     ?e,
                     "Failed to connect to {:?} DNS server",
                     self.connection_type
