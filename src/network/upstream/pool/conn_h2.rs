@@ -8,7 +8,7 @@ use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
     build_dns_get_request, build_doh_request_uri, connect_stream, connect_tls, get_buf_from_res,
 };
-use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
+use crate::network::upstream::{Connection, ConnectionInfo};
 use bytes::{BufMut, Bytes};
 use h2::client::{ResponseFuture, SendRequest};
 use hickory_proto::op::Message;
@@ -148,7 +148,7 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
             TcpStream::from_std(stream)?,
             self.insecure_skip_verify,
             self.server_name.clone(),
-            DEFAULT_TIMEOUT,
+            self.timeout,
         )
         .await?;
 

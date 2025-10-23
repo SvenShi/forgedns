@@ -140,6 +140,7 @@ impl<C: Connection> ReusePool<C> {
     pub fn new(
         min_size: usize,
         max_size: usize,
+        idle_time: u64,
         connection_builder: Box<dyn ConnectionBuilder<C>>,
     ) -> Arc<ReusePool<C>> {
         info!(
@@ -152,7 +153,7 @@ impl<C: Connection> ReusePool<C> {
             min_size,
             max_size,
             connection_builder,
-            max_idle: Duration::from_secs(10),
+            max_idle: Duration::from_secs(idle_time),
             active_count: AtomicUsize::new(0),
             next_id: AtomicU16::new(1),
             release_notified: Notify::new(),

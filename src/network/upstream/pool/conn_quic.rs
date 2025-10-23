@@ -6,7 +6,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
-use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
+use crate::network::upstream::{Connection, ConnectionInfo};
 use bytes::{Bytes, BytesMut};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
@@ -14,8 +14,8 @@ use hickory_proto::xfer::DnsResponse;
 use quinn::{SendStream, VarInt};
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -78,7 +78,7 @@ impl Connection for QuicConnection {
             return Err(DnsError::protocol("Cannot query on closed QUIC connection"));
         }
         self.using_count.fetch_add(1, Ordering::Relaxed);
-        
+
         // Open a new bidirectional stream for this DNS query
         let (mut send, mut recv) = match timeout(self.timeout, self.conn.open_bi()).await {
             Ok(Ok(bi)) => bi,
@@ -93,7 +93,7 @@ impl Connection for QuicConnection {
             Err(_) => {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
                 return Err(DnsError::protocol(
-                    "Timeout opening QUIC bidirectional stream"
+                    "Timeout opening QUIC bidirectional stream",
                 ));
             }
         };
@@ -101,7 +101,7 @@ impl Connection for QuicConnection {
         let raw_id = request.id();
         request.set_id(0); // RFC 9250: query ID SHOULD be set to 0
         let body_bytes = Bytes::from(request.to_bytes()?); // DNS wire format
-        
+
         // Validate message size (RFC 9250: max 65535 bytes)
         let bytes_len = u16::try_from(body_bytes.len()).map_err(|_e| {
             DnsError::protocol(format!(
@@ -109,7 +109,7 @@ impl Connection for QuicConnection {
                 body_bytes.len()
             ))
         })?;
-        
+
         // Prepare 2-byte big-endian length prefix
         let len = bytes_len.to_be_bytes().to_vec();
         let len = Bytes::from(len);
@@ -168,7 +168,7 @@ impl Connection for QuicConnection {
                 Err(DnsError::protocol("dns query timeout"))
             }
         };
-        
+
         self.last_used
             .store(AppClock::elapsed_millis(), Ordering::Relaxed);
         self.using_count.fetch_sub(1, Ordering::Relaxed);
@@ -245,7 +245,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
             socket,
             self.insecure_skip_verify,
             self.server_name.clone(),
-            DEFAULT_TIMEOUT,
+            self.timeout,
         )
         .await?;
 
@@ -310,17 +310,14 @@ async fn recv_dns_response(recv: &mut quinn::RecvStream, send: SendStream) -> Re
     let mut len = [0u8; 2];
     recv.read_exact(&mut len)
         .await
-        .map_err(|e| DnsError::protocol(format!(
-            "Failed to read DoQ length prefix: {}",
-            e
-        )))?;
+        .map_err(|e| DnsError::protocol(format!("Failed to read DoQ length prefix: {}", e)))?;
     let len = u16::from_be_bytes(len) as usize;
 
     // RFC 9250: DNS messages are restricted to a maximum size of 65535 bytes
     // This restriction is consistent with DNS over TCP (RFC 1035) and DoT (RFC 7858)
     let mut bytes = BytesMut::with_capacity(len);
     bytes.resize(len, 0);
-    
+
     if let Err(e) = recv.read_exact(&mut bytes[..len]).await {
         debug!(
             expected_len = len,
@@ -354,10 +351,9 @@ async fn recv_dns_response(recv: &mut quinn::RecvStream, send: SendStream) -> Re
 /// * `send` - QUIC send stream to reset
 /// * `code` - DoQ-specific error code (RFC 9250 Section 7.3)
 fn reset(mut send: SendStream, code: DoqErrorCode) -> Result<()> {
-    send.reset(code.into())
-        .map_err(|_| DnsError::protocol(
-            "Failed to reset QUIC stream (stream may already be closed)"
-        ))
+    send.reset(code.into()).map_err(|_| {
+        DnsError::protocol("Failed to reset QUIC stream (stream may already be closed)")
+    })
 }
 
 /// DoQ (DNS over QUIC) error codes as defined in RFC 9250 Section 7.3

@@ -8,7 +8,7 @@ use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
     build_dns_get_request, build_doh_request_uri, connect_quic, connect_socket, get_buf_from_res,
 };
-use crate::network::upstream::{Connection, ConnectionInfo, DEFAULT_TIMEOUT};
+use crate::network::upstream::{Connection, ConnectionInfo};
 use bytes::{BufMut, Bytes};
 use futures::future::poll_fn;
 use h3::client::{RequestStream, SendRequest};
@@ -160,7 +160,7 @@ impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
             socket,
             self.insecure_skip_verify,
             self.server_name.clone(),
-            DEFAULT_TIMEOUT,
+            self.timeout,
         )
         .await?;
 

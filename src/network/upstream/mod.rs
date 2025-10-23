@@ -30,13 +30,13 @@
 
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::bootstrap::Bootstrap;
-use crate::network::upstream::pool::h2_conn::{H2Connection, H2ConnectionBuilder};
-use crate::network::upstream::pool::h3_conn::{H3Connection, H3ConnectionBuilder};
-use crate::network::upstream::pool::pipeline::PipelinePool;
-use crate::network::upstream::pool::quic_conn::{QuicConnection, QuicConnectionBuilder};
-use crate::network::upstream::pool::reuse::ReusePool;
-use crate::network::upstream::pool::tcp_conn::{TcpConnection, TcpConnectionBuilder};
-use crate::network::upstream::pool::udp_conn::{UdpConnection, UdpConnectionBuilder};
+use crate::network::upstream::pool::conn_h2::{H2Connection, H2ConnectionBuilder};
+use crate::network::upstream::pool::conn_h3::{H3Connection, H3ConnectionBuilder};
+use crate::network::upstream::pool::pool_pipeline::PipelinePool;
+use crate::network::upstream::pool::conn_quic::{QuicConnection, QuicConnectionBuilder};
+use crate::network::upstream::pool::pool_reuse::ReusePool;
+use crate::network::upstream::pool::conn_tcp::{TcpConnection, TcpConnectionBuilder};
+use crate::network::upstream::pool::conn_udp::{UdpConnection, UdpConnectionBuilder};
 use crate::network::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use crate::network::upstream::utils::try_lookup_server_name;
 use arc_swap::ArcSwap;
@@ -48,7 +48,9 @@ use std::fmt::Debug;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
+use tokio::task::id;
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -56,10 +58,6 @@ mod bootstrap;
 mod pool;
 mod tls_client_config;
 mod utils;
-
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_MAX_CONNS_SIZE: usize = 64;
-const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
 
 /// Supported upstream connection types
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,35 +94,128 @@ impl ConnectionType {
     }
 }
 
-/// Configuration for building an upstream
+/// Configuration for building an upstream DNS server connection
+///
+/// This structure is typically deserialized from YAML/JSON configuration files
+/// and contains all parameters needed to establish a connection to an upstream DNS server.
+///
+/// # Examples
+///
+/// Basic UDP configuration:
+/// ```yaml
+/// addr: "8.8.8.8:53"
+/// ```
+///
+/// DoH with bootstrap:
+/// ```yaml
+/// addr: "https://dns.google.com/dns-query"
+/// bootstrap: "8.8.8.8:53"
+/// timeout: 5s
+/// ```
 #[derive(Deserialize, Debug, Clone)]
 pub struct UpstreamConfig {
+    /// Optional tag for identifying this upstream in logs
     pub tag: Option<String>,
-    /// DNS server address (hostname or IP)
+
+    /// DNS server address in URL format
+    ///
+    /// Supported formats:
+    /// - `udp://8.8.8.8:53` or `8.8.8.8` - DNS over UDP
+    /// - `tcp://8.8.8.8:53` - DNS over TCP
+    /// - `tls://dns.google.com:853` - DNS over TLS (DoT)
+    /// - `quic://dns.adguard.com:853` - DNS over QUIC (DoQ)
+    /// - `https://dns.google.com/dns-query` - DNS over HTTPS (DoH)
     pub addr: String,
-    /// Direct dial IP address, if provided
+
+    /// Direct IP address to use for connection (bypasses DNS resolution)
+    ///
+    /// Useful when you want to connect to a specific IP but use SNI for TLS.
+    /// If provided, this IP is used instead of resolving the hostname from `addr`.
     pub dial_addr: Option<IpAddr>,
-    /// Optional server port (falls back to type default if not specified)
+
+    /// Override the server port (if not specified in `addr`)
+    ///
+    /// Defaults to protocol-specific standard ports if not provided:
+    /// - UDP/TCP: 53
+    /// - DoT/DoQ: 853
+    /// - DoH: 443
     pub port: Option<u16>,
-    /// Optional bootstrap server for resolving hostname during runtime
+
+    /// Bootstrap DNS server for resolving the upstream hostname
+    ///
+    /// Required when `addr` contains a hostname instead of an IP address.
+    /// The bootstrap server must be specified as IP:port (e.g., "8.8.8.8:53").
+    /// This prevents circular dependencies in DNS resolution.
+    ///
+    /// # Example
+    /// ```yaml
+    /// addr: "https://dns.google.com/dns-query"
+    /// bootstrap: "8.8.8.8:53"  # Use Google's IP to resolve dns.google.com
+    /// ```
     pub bootstrap: Option<String>,
-    /// Specify the boot server resolution IP version, which defaults to IPv4
+
+    /// IP version preference for bootstrap DNS resolution
+    ///
+    /// - `Some(4)` or `None`: Resolve to IPv4 (A records)
+    /// - `Some(6)`: Resolve to IPv6 (AAAA records)
     pub bootstrap_version: Option<u8>,
-    /// Optional SOCKS5 proxy to connect through
+
+    /// SOCKS5 proxy server for connection (format: "host:port")
+    ///
+    /// When specified, all connections to the upstream server will be
+    /// routed through this SOCKS5 proxy.
     pub socks5: Option<String>,
-    /// Connection idle timeout in seconds (reserved for future connection pool optimization)
-    #[allow(dead_code)]
-    pub idle_timeout: Option<u16>,
-    /// Maximum number of connections in the pool (reserved for future connection pool scaling)
-    #[allow(dead_code)]
+
+    /// Connection idle timeout in seconds
+    ///
+    /// Currently not implemented. Reserved for future connection pool optimization
+    /// to automatically close idle connections.
+    pub idle_timeout: Option<u64>,
+
+    /// Maximum number of connections in the pool
+    ///
+    /// Currently not implemented. Reserved for future connection pool scaling
+    /// to limit resource usage per upstream.
     pub max_conns: Option<usize>,
-    /// Skip TLS certificate verification (not recommended)
+
+    /// Skip TLS certificate verification (**INSECURE**, testing only!)
+    ///
+    /// When `true`, disables certificate validation for TLS/QUIC/DoH connections.
+    /// **Security Warning**: This makes connections vulnerable to MITM attacks.
+    /// Only use for testing or with self-signed certificates you trust.
     pub insecure_skip_verify: Option<bool>,
-    /// DNS request timeout
+
+    /// DNS query timeout duration
+    ///
+    /// Maximum time to wait for a DNS response before considering the query failed.
+    /// Defaults to 5 seconds if not specified.
     pub timeout: Option<Duration>,
+
+    /// Enable request pipelining for TCP/DoT connections
+    ///
+    /// When `true`, allows multiple concurrent queries over a single TCP connection.
+    /// When `false`, uses connection pooling with one query per connection.
+    /// Only applicable to TCP and DoT protocols.
     pub enable_pipeline: Option<bool>,
+
+    /// Enable HTTP/3 for DoH connections
+    ///
+    /// When `true`, uses HTTP/3 (QUIC) instead of HTTP/2 for DoH.
+    /// Requires the upstream server to support HTTP/3.
     pub enable_http3: Option<bool>,
+
+    /// Linux SO_MARK socket option for policy routing
+    ///
+    /// Sets the mark on outgoing packets, which can be used with
+    /// iptables/nftables for advanced routing policies.
+    /// **Linux only** - ignored on other platforms.
     pub so_mark: Option<u32>,
+
+    /// Linux SO_BINDTODEVICE - bind socket to specific network interface
+    ///
+    /// Forces the socket to use a specific network interface (e.g., "eth0", "wlan0").
+    /// Useful for multi-homed systems or VPN scenarios.
+    /// **Linux only** - ignored on other platforms.
     pub bind_to_device: Option<String>,
 }
 
@@ -138,38 +229,72 @@ pub trait Upstream: Send + Sync + Debug {
     fn connection_type(&self) -> ConnectionType;
 }
 
-/// Connection metadata used by all upstreams
+/// Runtime connection information for upstream DNS servers
+///
+/// Parsed and processed configuration ready for connection establishment.
+/// Created from `UpstreamConfig` via `From` trait, passed to connection builders.
+///
+/// Thread-safe (`Clone`) for sharing across multiple connection instances.
 #[derive(Debug, Clone)]
 #[allow(unused)]
 pub struct ConnectionInfo {
+    /// Optional tag for identifying this upstream in logs
     tag: Option<String>,
-    /// Connection type (UDP, TCP, DoT, DoQ, DoH)
+
+    /// Protocol type (auto-detected from URL scheme: udp://, tcp://, tls://, quic://, https://)
     connection_type: ConnectionType,
 
+    /// Original address string from configuration (for logging)
     raw_addr: String,
-    /// Upstream DNS server address IP
+
+    /// Resolved or configured IP address (`None` if needs runtime resolution via bootstrap)
     remote_ip: Option<IpAddr>,
-    /// Upstream server port
+
+    /// Server port (protocol default or explicitly configured)
     port: u16,
-    /// Optional SOCKS5 proxy
+
+    /// SOCKS5 proxy configuration
     socks5: Option<String>,
-    /// Bootstrap server for hostname resolution
+
+    /// Bootstrap resolver for dynamic hostname resolution with TTL caching
     bootstrap: Option<Arc<Bootstrap>>,
-    /// For DoH: request path on the server
+
+    /// DoH request path (e.g., `/dns-query`), empty for non-HTTP protocols
     path: String,
-    /// Raw hostname from configuration
+
+    /// Server hostname for TLS SNI and certificate validation
     server_name: String,
-    /// Whether to skip TLS certificate verification
+
+    /// Skip TLS certificate verification (**INSECURE** - testing only)
     insecure_skip_verify: bool,
-    /// DNS request timeout
+
+    /// Connection idle timeout in seconds
+    idle_timeout: Option<u64>,
+
+    /// Maximum number of connections in the pool
+    max_conns: Option<usize>,
+
+    /// DNS query timeout (includes I/O, handshakes, and round-trip time)
     timeout: Duration,
+
+    /// Request pipelining for TCP/DoT (`None` = protocol default)
     enable_pipeline: Option<bool>,
+
+    /// Use HTTP/3 (true) instead of HTTP/2 (false) for DoH
     enable_http3: bool,
+
+    /// Linux SO_MARK for packet marking (policy routing)
     so_mark: Option<u32>,
+
+    /// Linux SO_BINDTODEVICE - bind to specific network interface
     bind_to_device: Option<String>,
 }
 
 impl ConnectionInfo {
+    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+    const DEFAULT_MAX_CONNS_SIZE: usize = 64;
+    const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
+    const DEFAULT_IDLE_TIME: u64 = 10;
     pub fn with_addr(addr: &str) -> Self {
         let (connection_type, host, port, path) = detect_connection_type(addr);
         let port = port.unwrap_or(connection_type.default_port());
@@ -189,14 +314,16 @@ impl ConnectionInfo {
             connection_type,
             bootstrap: None,
             path,
-            timeout: DEFAULT_TIMEOUT,
+            timeout: Self::DEFAULT_TIMEOUT,
             server_name: host,
             insecure_skip_verify: false,
+            idle_timeout: None,
             raw_addr: addr.to_string(),
             enable_pipeline: None,
             enable_http3: false,
             so_mark: None,
             bind_to_device: None,
+            max_conns: None,
         }
     }
 }
@@ -238,14 +365,16 @@ impl From<UpstreamConfig> for ConnectionInfo {
             connection_type,
             bootstrap,
             path,
-            timeout: upstream_config.timeout.unwrap_or(DEFAULT_TIMEOUT),
+            timeout: upstream_config.timeout.unwrap_or(Self::DEFAULT_TIMEOUT),
             server_name: host,
             insecure_skip_verify: upstream_config.insecure_skip_verify.unwrap_or(false),
+            idle_timeout: upstream_config.idle_timeout,
             raw_addr: upstream_config.addr,
             enable_pipeline: upstream_config.enable_pipeline,
             enable_http3: upstream_config.enable_http3.unwrap_or(false),
             so_mark: upstream_config.so_mark,
             bind_to_device: upstream_config.bind_to_device,
+            max_conns: upstream_config.max_conns,
         }
     }
 }
@@ -354,14 +483,27 @@ impl UpstreamBuilder {
                     let builder = UdpConnectionBuilder::new(&connection_info);
                     let main_pool = PipelinePool::new(
                         1,
-                        DEFAULT_MAX_CONNS_SIZE,
-                        DEFAULT_MAX_CONNS_LOAD,
+                        connection_info
+                            .max_conns
+                            .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
+                        ConnectionInfo::DEFAULT_MAX_CONNS_LOAD,
+                        connection_info
+                            .idle_timeout
+                            .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME),
                         Box::new(builder),
                     );
 
                     let tcp_builder = TcpConnectionBuilder::new(&connection_info);
-                    let fallback_pool =
-                        ReusePool::new(0, DEFAULT_MAX_CONNS_SIZE, Box::new(tcp_builder));
+                    let fallback_pool = ReusePool::new(
+                        0,
+                        connection_info
+                            .max_conns
+                            .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
+                        connection_info
+                            .idle_timeout
+                            .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME),
+                        Box::new(tcp_builder),
+                    );
 
                     Box::new(UdpTruncatedUpstream {
                         main_pool,
@@ -374,24 +516,12 @@ impl UpstreamBuilder {
                         connection_info.connection_type, connection_info.raw_addr
                     );
                     let builder = TcpConnectionBuilder::new(&connection_info);
-                    create_pipeline_or_reuse_pool(
-                        1,
-                        DEFAULT_MAX_CONNS_SIZE,
-                        DEFAULT_MAX_CONNS_LOAD,
-                        connection_info,
-                        Box::new(builder),
-                    )
+                    create_pipeline_or_reuse_pool(1, connection_info, Box::new(builder))
                 }
                 ConnectionType::DoQ => {
                     debug!("Creating QUIC upstream for {}", connection_info.raw_addr);
                     let builder = QuicConnectionBuilder::new(&connection_info);
-                    create_pipeline_pool(
-                        1,
-                        DEFAULT_MAX_CONNS_SIZE,
-                        DEFAULT_MAX_CONNS_LOAD,
-                        connection_info,
-                        Box::new(builder),
-                    )
+                    create_pipeline_pool(1, connection_info, Box::new(builder))
                 }
                 ConnectionType::DoH => {
                     debug!(
@@ -405,22 +535,10 @@ impl UpstreamBuilder {
                     );
                     if connection_info.enable_http3 {
                         let builder = H3ConnectionBuilder::new(&connection_info);
-                        create_pipeline_pool(
-                            0,
-                            DEFAULT_MAX_CONNS_SIZE,
-                            DEFAULT_MAX_CONNS_LOAD,
-                            connection_info,
-                            Box::new(builder),
-                        )
+                        create_pipeline_pool(0, connection_info, Box::new(builder))
                     } else {
                         let builder = H2ConnectionBuilder::new(&connection_info);
-                        create_pipeline_pool(
-                            0,
-                            DEFAULT_MAX_CONNS_SIZE,
-                            DEFAULT_MAX_CONNS_LOAD,
-                            connection_info,
-                            Box::new(builder),
-                        )
+                        create_pipeline_pool(0, connection_info, Box::new(builder))
                     }
                 }
             }
@@ -466,40 +584,53 @@ impl UpstreamBuilder {
 
 fn create_pipeline_pool<C: Connection>(
     min_size: usize,
-    max_size: usize,
-    max_load: u16,
     connection_info: ConnectionInfo,
     builder: Box<dyn ConnectionBuilder<C>>,
 ) -> Box<dyn Upstream> {
+    let max_size = connection_info
+        .max_conns
+        .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE);
+    let idle_time = connection_info
+        .idle_timeout
+        .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME);
     Box::new(PooledUpstream::<C> {
         connection_info,
-        pool: PipelinePool::new(min_size, max_size, max_load, builder),
+        pool: PipelinePool::new(
+            min_size,
+            max_size,
+            ConnectionInfo::DEFAULT_MAX_CONNS_LOAD,
+            idle_time,
+            builder,
+        ),
     })
 }
 
 fn create_reuse_pool<C: Connection>(
     min_size: usize,
-    max_size: usize,
     connection_info: ConnectionInfo,
     builder: Box<dyn ConnectionBuilder<C>>,
 ) -> Box<dyn Upstream> {
+    let max_size = connection_info
+        .max_conns
+        .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE);
+    let idle_time = connection_info
+        .idle_timeout
+        .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME);
     Box::new(PooledUpstream::<C> {
         connection_info,
-        pool: ReusePool::new(min_size, max_size, builder),
+        pool: ReusePool::new(min_size, max_size, idle_time, builder),
     })
 }
 
 fn create_pipeline_or_reuse_pool<C: Connection>(
     min_size: usize,
-    max_size: usize,
-    max_load: u16,
     connection_info: ConnectionInfo,
     builder: Box<dyn ConnectionBuilder<C>>,
 ) -> Box<dyn Upstream> {
     if connection_info.enable_pipeline.unwrap_or(false) {
-        create_pipeline_pool(min_size, max_size, max_load, connection_info, builder)
+        create_pipeline_pool(min_size, connection_info, builder)
     } else {
-        create_reuse_pool(min_size, max_size, connection_info, builder)
+        create_reuse_pool(min_size, connection_info, builder)
     }
 }
 
@@ -655,7 +786,7 @@ impl<C: Connection> BootstrapUpstream<C> {
     fn new(connection_info: ConnectionInfo) -> Self {
         // 创建一个空的连接池，将在第一次查询时初始�?
         let pool: Arc<dyn ConnectionPool<C>> =
-            ReusePool::<C>::new(0, 1, Box::new(DummyConnectionBuilder {}));
+            ReusePool::<C>::new(0, 1, 10, Box::new(DummyConnectionBuilder {}));
 
         let conn_info = connection_info.clone();
         let bootstrap = connection_info.bootstrap.clone().unwrap();
@@ -709,14 +840,12 @@ impl<C: Connection> BootstrapUpstream<C> {
         let new_pool: Arc<dyn ConnectionPool<C>> = match self.connection_info.connection_type {
             ConnectionType::UDP | ConnectionType::TCP | ConnectionType::DoT => {
                 if self.connection_info.enable_pipeline.unwrap_or(false) {
-                    PipelinePool::new(1, DEFAULT_MAX_CONNS_SIZE, DEFAULT_MAX_CONNS_LOAD, builder)
+                    PipelinePool::new(0, 1, 64, 10, builder)
                 } else {
-                    ReusePool::new(1, DEFAULT_MAX_CONNS_SIZE, builder)
+                    ReusePool::new(0, 1, 10, builder)
                 }
             }
-            ConnectionType::DoQ | ConnectionType::DoH => {
-                PipelinePool::new(1, DEFAULT_MAX_CONNS_SIZE, DEFAULT_MAX_CONNS_LOAD, builder)
-            }
+            ConnectionType::DoQ | ConnectionType::DoH => PipelinePool::new(0, 1, 64, 10, builder),
         };
 
         // Atomically update connection pool

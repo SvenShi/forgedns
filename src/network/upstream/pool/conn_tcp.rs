@@ -8,7 +8,7 @@ use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::{connect_stream, connect_tls};
-use crate::network::upstream::{ConnectionInfo, ConnectionType, DEFAULT_TIMEOUT};
+use crate::network::upstream::{ConnectionInfo, ConnectionType};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use hickory_proto::op::Message;
@@ -127,8 +127,7 @@ impl Connection for TcpConnection {
                 res.set_id(raw_id); // Restore original query ID
                 debug!(
                     conn_id = self.id,
-                    query_id,
-                    "Successfully received DNS response over TCP"
+                    query_id, "Successfully received DNS response over TCP"
                 );
                 Ok(res)
             }
@@ -136,8 +135,7 @@ impl Connection for TcpConnection {
                 self.request_map.take(query_id);
                 warn!(
                     conn_id = self.id,
-                    query_id,
-                    "DNS query canceled (response channel dropped)"
+                    query_id, "DNS query canceled (response channel dropped)"
                 );
                 Err(DnsError::protocol("request canceled"))
             }
@@ -360,10 +358,7 @@ impl TcpConnection {
             }
         }
 
-        warn!(
-            conn_id = self.id,
-            "TCP listener task terminated"
-        );
+        warn!(conn_id = self.id, "TCP listener task terminated");
     }
 }
 
@@ -435,7 +430,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                 TcpStream::from_std(stream)?,
                 self.insecure_skip_verify,
                 self.server_name.clone(),
-                DEFAULT_TIMEOUT,
+                self.timeout,
             )
             .await?;
 
