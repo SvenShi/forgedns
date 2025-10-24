@@ -205,16 +205,16 @@ impl<C: Connection> PipelinePool<C> {
         }
 
         // Create new connections concurrently
-        let mut futs = FuturesUnordered::new();
+        let mut futures = FuturesUnordered::new();
         for _ in 0..new_conns_count {
             let builder = &self.connection_builder;
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            futs.push(async move { builder.create_connection(id).await });
+            futures.push(async move { builder.create_connection(id).await });
         }
 
         // Collect results
         let mut created: Vec<Arc<C>> = Vec::with_capacity(new_conns_count);
-        while let Some(res) = futs.next().await {
+        while let Some(res) = futures.next().await {
             match res {
                 Ok(conn) => created.push(conn),
                 Err(e) => {

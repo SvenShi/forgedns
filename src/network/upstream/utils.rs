@@ -262,7 +262,7 @@ pub fn build_doh_request_uri(connection_info: &ConnectionInfo) -> String {
 /// - This is typically used once during initialization for static upstream servers
 /// - For dynamic resolution with TTL support, use Bootstrap instead
 /// - Blocks the current task - consider using bootstrap for async resolution
-/// - Returns the first address from the system resolver (may be IPv4 or IPv6)
+/// - Returns the first address from the system resolver (maybe IPv4 or IPv6)
 ///
 /// # Platform Behavior
 /// - Unix/Linux: Uses getaddrinfo() respecting /etc/resolv.conf and /etc/hosts

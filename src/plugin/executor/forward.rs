@@ -6,7 +6,7 @@
 //! DNS forwarding plugin
 //!
 //! Forwards DNS queries to configured upstream resolvers.
-//! Currently supports single-upstream forwarding with timeout handling.
+//! Currently, supports single-upstream forwarding with timeout handling.
 //! Multi-upstream load balancing is planned for future implementation.
 
 use crate::config::types::PluginConfig;
@@ -18,8 +18,8 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
-use std::time::Duration;
-use tracing::{error, info, warn};
+use tokio::task::JoinSet;
+use tracing::{debug, event_enabled, info, warn, Level};
 
 /// Single-upstream DNS forwarder
 ///
@@ -30,9 +30,6 @@ use tracing::{error, info, warn};
 pub struct SingleDnsForwarder {
     /// Plugin identifier
     pub tag: String,
-
-    /// Request timeout duration
-    pub timeout: Duration,
 
     /// Upstream DNS resolver
     pub upstream: Box<dyn Upstream>,
@@ -45,10 +42,7 @@ impl Plugin for SingleDnsForwarder {
     }
 
     async fn init(&mut self) {
-        info!(
-            "DNS forwarder initialized (tag: {}, timeout: {:?})",
-            self.tag, self.timeout
-        );
+        info!("DNS SingleDnsForwarder initialized tag: {}", self.tag);
     }
 
     async fn destroy(&mut self) {}
@@ -57,14 +51,13 @@ impl Plugin for SingleDnsForwarder {
 #[async_trait]
 impl Executor for SingleDnsForwarder {
     async fn execute(&self, context: &mut DnsContext) {
-        match tokio::time::timeout(self.timeout, self.upstream.query(context.request.clone())).await
-        {
-            Ok(Ok(res)) => {
+        match self.upstream.query(context.request.clone()).await {
+            Ok(res) => {
                 context.response = Some(res);
             }
-            Ok(Err(e)) => {
-                // Log error only on actual failures (not on timeouts)
-                error!(
+            Err(e) => {
+                // Log error (includes timeouts and other failures)
+                warn!(
                     "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
                     context.src_addr,
                     context.request.queries(),
@@ -72,15 +65,64 @@ impl Executor for SingleDnsForwarder {
                     e
                 );
             }
-            Err(_) => {
-                // Timeout - log as warning since this is less critical
-                warn!(
-                    "DNS query timeout ({:?}) - source: {}, queries: {:?}, id: {}",
-                    self.timeout,
-                    context.src_addr,
-                    context.request.queries(),
-                    context.request.id()
-                );
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConcurrentForwarder {
+    /// Plugin identifier
+    pub tag: String,
+
+    pub concurrent: usize,
+
+    pub upstreams: Vec<Arc<dyn Upstream>>,
+}
+
+#[async_trait]
+impl Plugin for ConcurrentForwarder {
+    fn tag(&self) -> &str {
+        self.tag.as_str()
+    }
+
+    async fn init(&mut self) {
+        info!("DNS ConcurrentForwarder initialized tag: {}", self.tag);
+    }
+
+    async fn destroy(&mut self) {}
+}
+
+#[async_trait]
+impl Executor for ConcurrentForwarder {
+    async fn execute(&self, context: &mut DnsContext) {
+        let mut join_set = JoinSet::new();
+
+        for i in 0..self.concurrent {
+            let upstream = self.upstreams[i].clone();
+            let message = context.request.clone();
+            join_set.spawn(async move {
+                let result = upstream.query(message).await;
+                if event_enabled!(Level::DEBUG) {
+                    debug!(
+                        "DNS ConcurrentForwarder received message {}, remote_addr: {}",
+                        i,
+                        upstream.connection_info().raw_addr
+                    );
+                }
+                result
+            });
+        }
+
+        while let Some(Ok(res)) = join_set.join_next().await {
+            match res {
+                Ok(response) => {
+                    join_set.abort_all();
+                    context.response = Some(response);
+                    break;
+                }
+                Err(e) => {
+                    warn!("DNS query failed: {}", e);
+                }
             }
         }
     }
@@ -91,8 +133,7 @@ impl Executor for SingleDnsForwarder {
 #[allow(unused)]
 pub struct ForwardConfig {
     /// Number of concurrent forwarding threads (not implemented yet)
-    #[allow(unused_variables)]
-    pub concurrent: Option<u32>,
+    pub concurrent: Option<usize>,
 
     /// List of upstream DNS servers
     pub upstreams: Vec<UpstreamConfig>,
@@ -128,15 +169,27 @@ impl PluginFactory for ForwardFactory {
             Ok(UninitializedPlugin::Executor(Box::new(
                 SingleDnsForwarder {
                     tag: plugin_info.tag.clone(),
-                    timeout: upstream_config.timeout.unwrap_or(Duration::from_secs(5)),
                     upstream: UpstreamBuilder::with_upstream_config(upstream_config.clone()),
                 },
             )))
         } else {
+            let concurrent = forward_config
+                .concurrent
+                .unwrap_or(forward_config.upstreams.len());
+
+            let mut upstreams = Vec::with_capacity(concurrent);
+
+            for upstream_config in forward_config.upstreams {
+                upstreams.push(UpstreamBuilder::with_upstream_config(upstream_config).into());
+            }
+
             // Multi-upstream configuration (not yet implemented)
-            Err(DnsError::plugin(format!(
-                "Multi-upstream forwarding not yet implemented, {} upstreams configured",
-                forward_config.upstreams.len()
+            Ok(UninitializedPlugin::Executor(Box::new(
+                ConcurrentForwarder {
+                    tag: plugin_info.tag.clone(),
+                    concurrent,
+                    upstreams,
+                },
             )))
         }
     }

@@ -238,11 +238,86 @@ pub struct UpstreamConfig {
 #[async_trait]
 #[allow(unused)]
 pub trait Upstream: Send + Sync + Debug {
-    /// Send a DNS query and wait for the response
-    async fn query(&self, request: Message) -> Result<DnsResponse>;
+    /// **Internal API - Do not call directly!**
+    ///
+    /// Send a DNS query without timeout protection.
+    /// This method is called internally by `query()` which adds timeout handling.
+    ///
+    /// # For Implementors
+    /// Implement this method to provide the actual DNS query logic.
+    ///
+    /// # For Callers
+    /// **Always use `query()` instead!** Calling this method directly bypasses
+    /// timeout protection and is considered a bug.
+    #[doc(hidden)]
+    async fn inner_query(&self, request: Message) -> Result<DnsResponse>;
+
+    /// Return the connection configuration information
+    ///
+    /// Provides access to all upstream connection parameters including
+    /// connection type, timeout, addresses, and protocol-specific settings.
+    fn connection_info(&self) -> &ConnectionInfo;
+
+    /// Return the timeout duration for this upstream
+    ///
+    /// Default implementation reads from connection_info.
+    /// Can be overridden if custom timeout logic is needed.
+    #[inline]
+    fn timeout(&self) -> Duration {
+        self.connection_info().timeout
+    }
 
     /// Return the connection type of this upstream
-    fn connection_type(&self) -> ConnectionType;
+    ///
+    /// Convenience method for accessing connection_info.connection_type.
+    #[inline]
+    fn connection_type(&self) -> ConnectionType {
+        self.connection_info().connection_type
+    }
+
+    /// Send a DNS query with unified timeout handling
+    ///
+    /// This is the **recommended API** for all DNS queries.
+    /// Automatically applies timeout based on `timeout()` configuration.
+    ///
+    /// # Performance Notes
+    /// - Message is moved (not cloned) to avoid allocation overhead
+    /// - Timeout error logging uses structured fields for zero-copy
+    /// - Only logs on timeout, not on successful queries (hot path optimization)
+    ///
+    /// # Errors
+    /// - Returns `DnsError::plugin` on timeout
+    /// - Returns upstream-specific errors on query failures
+    async fn query(&self, message: Message) -> Result<DnsResponse> {
+        let timeout_duration = self.timeout();
+
+        // Apply timeout wrapper to the inner query
+        // This ensures all upstream queries have consistent timeout behavior
+        match tokio::time::timeout(timeout_duration, self.inner_query(message)).await {
+            // Success: query completed within timeout
+            Ok(Ok(response)) => Ok(response),
+
+            // Error: query failed (network error, invalid response, etc.)
+            Ok(Err(e)) => Err(e),
+
+            // Timeout: query took too long
+            Err(_) => {
+                // Log timeout event for monitoring and debugging
+                // Uses structured logging (zero-copy) instead of format! for performance
+                warn!(
+                    timeout_secs = timeout_duration.as_secs_f64(),
+                    "Upstream DNS query timeout"
+                );
+
+                // Return timeout error
+                // Note: format! only happens on timeout (rare case), acceptable overhead
+                Err(DnsError::plugin(format!(
+                    "DNS query timeout after {:?}",
+                    timeout_duration
+                )))
+            }
+        }
+    }
 }
 
 /// SOCKS5 proxy configuration with resolved socket address
@@ -276,55 +351,55 @@ pub struct Socks5Opt {
 #[allow(unused)]
 pub struct ConnectionInfo {
     /// Optional tag for identifying this upstream in logs
-    tag: Option<String>,
+    pub tag: Option<String>,
 
     /// Protocol type (auto-detected from URL scheme: udp://, tcp://, tls://, quic://, https://)
-    connection_type: ConnectionType,
+    pub connection_type: ConnectionType,
 
     /// Original address string from configuration (for logging)
-    raw_addr: String,
+    pub raw_addr: String,
 
-    /// Resolved or configured IP address (`None` if needs runtime resolution via bootstrap)
-    remote_ip: Option<IpAddr>,
+    /// Resolved or configured IP address (`None` if it needs runtime resolution via bootstrap)
+    pub remote_ip: Option<IpAddr>,
 
     /// Server port (protocol default or explicitly configured)
-    port: u16,
+    pub port: u16,
 
     /// SOCKS5 proxy configuration
-    socks5: Option<Socks5Opt>,
+    pub socks5: Option<Socks5Opt>,
 
     /// Bootstrap resolver for dynamic hostname resolution with TTL caching
-    bootstrap: Option<Arc<Bootstrap>>,
+    pub bootstrap: Option<Arc<Bootstrap>>,
 
     /// DoH request path (e.g., `/dns-query`), empty for non-HTTP protocols
-    path: String,
+    pub path: String,
 
     /// Server hostname for TLS SNI and certificate validation
-    server_name: String,
+    pub server_name: String,
 
     /// Skip TLS certificate verification (**INSECURE** - testing only)
-    insecure_skip_verify: bool,
+    pub insecure_skip_verify: bool,
 
     /// Connection idle timeout in seconds
-    idle_timeout: Option<u64>,
+    pub idle_timeout: Option<u64>,
 
     /// Maximum number of connections in the pool
-    max_conns: Option<usize>,
+    pub max_conns: Option<usize>,
 
     /// DNS query timeout (includes I/O, handshakes, and round-trip time)
-    timeout: Duration,
+    pub timeout: Duration,
 
     /// Request pipelining for TCP/DoT (`None` = protocol default)
-    enable_pipeline: Option<bool>,
+    pub enable_pipeline: Option<bool>,
 
     /// Use HTTP/3 (true) instead of HTTP/2 (false) for DoH
-    enable_http3: bool,
+    pub enable_http3: bool,
 
     /// Linux SO_MARK for packet marking (policy routing)
-    so_mark: Option<u32>,
+    pub so_mark: Option<u32>,
 
     /// Linux SO_BINDTODEVICE - bind to specific network interface
-    bind_to_device: Option<String>,
+    pub bind_to_device: Option<String>,
 }
 
 impl ConnectionInfo {
@@ -563,6 +638,7 @@ impl UpstreamBuilder {
                     );
 
                     Box::new(UdpTruncatedUpstream {
+                        connection_info,
                         main_pool,
                         fallback_pool,
                     })
@@ -644,21 +720,19 @@ fn create_pipeline_pool<C: Connection>(
     connection_info: ConnectionInfo,
     builder: Box<dyn ConnectionBuilder<C>>,
 ) -> Box<dyn Upstream> {
-    let max_size = connection_info
-        .max_conns
-        .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE);
-    let idle_time = connection_info
-        .idle_timeout
-        .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME);
     Box::new(PooledUpstream::<C> {
-        connection_info,
         pool: PipelinePool::new(
             min_size,
-            max_size,
+            connection_info
+                .max_conns
+                .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
             ConnectionInfo::DEFAULT_MAX_CONNS_LOAD,
-            idle_time,
+            connection_info
+                .idle_timeout
+                .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME),
             builder,
         ),
+        connection_info,
     })
 }
 
@@ -667,15 +741,18 @@ fn create_reuse_pool<C: Connection>(
     connection_info: ConnectionInfo,
     builder: Box<dyn ConnectionBuilder<C>>,
 ) -> Box<dyn Upstream> {
-    let max_size = connection_info
-        .max_conns
-        .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE);
-    let idle_time = connection_info
-        .idle_timeout
-        .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME);
     Box::new(PooledUpstream::<C> {
+        pool: ReusePool::new(
+            min_size,
+            connection_info
+                .max_conns
+                .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
+            connection_info
+                .idle_timeout
+                .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME),
+            builder,
+        ),
         connection_info,
-        pool: ReusePool::new(min_size, max_size, idle_time, builder),
     })
 }
 
@@ -692,50 +769,77 @@ fn create_pipeline_or_reuse_pool<C: Connection>(
 }
 
 /// Pooled upstream resolver implementation
+///
+/// Uses connection pooling to efficiently reuse connections for multiple queries.
+/// The pool type (pipeline or reuse) is determined during creation based on
+/// protocol capabilities and configuration.
 #[allow(unused)]
 #[derive(Debug)]
-pub struct PooledUpstream<C: Connection> {
+struct PooledUpstream<C: Connection> {
     /// Connection metadata (remote address, port, etc.)
-    pub connection_info: ConnectionInfo,
-    /// Connection pool for load balancing
-    pub pool: Arc<dyn ConnectionPool<C>>,
+    connection_info: ConnectionInfo,
+    /// Connection pool for load balancing and connection reuse
+    pool: Arc<dyn ConnectionPool<C>>,
 }
 
 #[async_trait]
 impl<C: Connection> Upstream for PooledUpstream<C> {
-    async fn query(&self, request: Message) -> Result<DnsResponse> {
-        match self.pool.query(request).await {
-            Ok(res) => Ok(res),
-            Err(e) => Err(e),
-        }
+    /// Execute DNS query through the connection pool
+    ///
+    /// The pool handles connection selection, creation, and lifecycle management.
+    /// No additional logging here as the pool layer already logs connection events.
+    async fn inner_query(&self, request: Message) -> Result<DnsResponse> {
+        self.pool.query(request).await
     }
 
-    fn connection_type(&self) -> ConnectionType {
-        self.connection_info.connection_type
+    fn connection_info(&self) -> &ConnectionInfo {
+        &self.connection_info
     }
+    // Note: timeout() uses default implementation from trait
 }
 
+/// UDP upstream with automatic TCP fallback on truncation
+///
+/// DNS over UDP has a 512-byte size limit (or EDNS extended size).
+/// When responses exceed this limit, the TC (truncated) bit is set,
+/// indicating the client should retry over TCP to get the full response.
+///
+/// This upstream automatically handles this fallback:
+/// 1. Try UDP first (fast, low overhead)
+/// 2. If truncated, automatically retry over TCP
 #[derive(Debug)]
-pub struct UdpTruncatedUpstream {
-    pub main_pool: Arc<dyn ConnectionPool<UdpConnection>>,
-    pub fallback_pool: Arc<dyn ConnectionPool<TcpConnection>>,
+struct UdpTruncatedUpstream {
+    /// Connection configuration (includes timeout)
+    connection_info: ConnectionInfo,
+    /// Primary UDP connection pool (fast path)
+    main_pool: Arc<dyn ConnectionPool<UdpConnection>>,
+    /// Fallback TCP connection pool (used when UDP response is truncated)
+    fallback_pool: Arc<dyn ConnectionPool<TcpConnection>>,
 }
 
 #[async_trait]
 impl Upstream for UdpTruncatedUpstream {
-    async fn query(&self, request: Message) -> Result<DnsResponse> {
+    async fn inner_query(&self, request: Message) -> Result<DnsResponse> {
+        // Try UDP first (most DNS queries fit in UDP packets)
         let response = self.main_pool.query(request.clone()).await?;
 
+        // Check if response was truncated (TC bit set)
         if response.truncated() {
+            // Log fallback event (only happens occasionally, minimal performance impact)
+            debug!("UDP response truncated, falling back to TCP");
+
+            // Retry over TCP to get the full response
             self.fallback_pool.query(request).await
         } else {
+            // UDP response was complete, return it
             Ok(response)
         }
     }
 
-    fn connection_type(&self) -> ConnectionType {
-        ConnectionType::UDP
+    fn connection_info(&self) -> &ConnectionInfo {
+        &self.connection_info
     }
+    // Note: timeout() and connection_type() use default implementations from trait
 }
 
 #[derive(Debug)]
@@ -825,16 +929,33 @@ impl ConnectionBuilderFactory {
 }
 
 /// Domain-based upstream resolver that uses bootstrap to resolve domain names
+///
+/// When the upstream server is specified as a domain name (e.g., dns.google.com)
+/// instead of an IP address, we need to resolve it first. This creates a
+/// chicken-and-egg problem: we need DNS to resolve the DNS server's address!
+///
+/// This upstream solves it by using a bootstrap resolver:
+/// 1. Bootstrap resolver (configured with IP) resolves the domain name
+/// 2. Resolved IP is cached with TTL
+/// 3. Connection pool is created/updated when IP changes
+/// 4. DNS queries are forwarded through the pool
+///
+/// # Performance
+/// - Lock-free pool swapping using ArcSwap (no blocking on IP changes)
+/// - IP resolution is cached, not done on every query
+/// - Automatic pool refresh when TTL expires
 #[derive(Debug)]
-pub struct BootstrapUpstream<C: Connection> {
+struct BootstrapUpstream<C: Connection> {
+    /// Upstream server domain name (for logging)
     server_name: String,
-    /// Connection metadata
+    /// Connection metadata (includes bootstrap config)
     connection_info: ConnectionInfo,
-    /// Bootstrap resolver for domain name resolution (None = use system resolver once)
+    /// Bootstrap resolver for domain name resolution
     bootstrap: Arc<Bootstrap>,
-    /// Connection pool for DNS queries
+    /// Lock-free connection pool with current resolved IP
+    /// Tuple: (current_ip, connection_pool)
     pool: ArcSwap<(Option<IpAddr>, Arc<dyn ConnectionPool<C>>)>,
-    /// Builder for creating new connections
+    /// Factory for creating connection builders when IP changes
     builder_factory: ConnectionBuilderFactory,
 }
 
@@ -846,12 +967,11 @@ impl<C: Connection> BootstrapUpstream<C> {
             ReusePool::<C>::new(0, 1, 10, Box::new(DummyConnectionBuilder {}));
 
         let conn_info = connection_info.clone();
-        let bootstrap = connection_info.bootstrap.clone().unwrap();
         let builder_factory = ConnectionBuilderFactory::new(conn_info.clone());
         BootstrapUpstream {
             server_name: connection_info.server_name.clone(),
+            bootstrap: connection_info.bootstrap.clone().unwrap(),
             connection_info,
-            bootstrap,
             pool: ArcSwap::from_pointee((None, pool)),
             builder_factory,
         }
@@ -862,38 +982,50 @@ impl<C: Connection> BootstrapUpstream<C> {
     /// This method handles:
     /// - Initial pool creation on first query
     /// - IP change detection and pool refresh
-    /// - Caching for non-bootstrap upstreams (permanent cache)
+    /// - Lock-free pool updates using ArcSwap
+    ///
+    /// # Performance
+    /// - Fast path: single atomic load when IP hasn't changed
+    /// - Pool recreation only happens on IP change (rare)
+    /// - No locks or blocking operations
     async fn init_pool_if_needed(&self) -> Result<()> {
-        // Check current pool state
+        // Fast path: atomically load current pool state (lock-free)
         let guard = &(*self.pool.load());
         let pool_ip = guard.0;
 
+        // Resolve domain name via bootstrap (cached in Bootstrap with TTL)
         let ip = match self.bootstrap.get().await {
             Ok(value) => value,
             Err(value) => return Err(value),
         };
 
-        // Check if IP has changed
+        // Check if IP has changed since last resolution
         if let Some(current_ip) = pool_ip {
             if current_ip == ip {
-                // IP unchanged, continue using current pool
+                // IP unchanged, continue using current pool (hot path)
                 return Ok(());
             }
+
+            // IP changed - log the change (rare event, acceptable overhead)
             info!(
-                "IP address changed for {:?}: {} -> {}",
-                self.server_name, current_ip, ip
+                server = %self.server_name,
+                old_ip = %current_ip,
+                new_ip = %ip,
+                "Upstream IP address changed, refreshing connection pool"
+            );
+        } else {
+            // First initialization
+            info!(
+                server = %self.server_name,
+                ip = %ip,
+                "Initializing connection pool for domain-based upstream"
             );
         }
 
-        // IP changed or first initialization - create new connection pool
-        info!(
-            "Creating new connection pool for {:?} with IP {}",
-            self.server_name, ip
-        );
-
+        // Create new connection builder with the resolved IP
         let builder: Box<dyn ConnectionBuilder<C>> = self.builder_factory.build(ip);
-        debug!("Created new connection builder {:?}", builder);
 
+        // Create appropriate pool type based on protocol
         let new_pool: Arc<dyn ConnectionPool<C>> = match self.connection_info.connection_type {
             ConnectionType::UDP | ConnectionType::TCP | ConnectionType::DoT => {
                 if self.connection_info.enable_pipeline.unwrap_or(false) {
@@ -905,31 +1037,43 @@ impl<C: Connection> BootstrapUpstream<C> {
             ConnectionType::DoQ | ConnectionType::DoH => PipelinePool::new(0, 1, 64, 10, builder),
         };
 
-        // Atomically update connection pool
+        // Atomically swap to new pool (lock-free, readers see old or new pool consistently)
         self.pool.swap(Arc::from((Some(ip), new_pool)));
+
         Ok(())
     }
 }
 
 #[async_trait]
 impl<C: Connection> Upstream for BootstrapUpstream<C> {
-    async fn query(&self, request: Message) -> Result<DnsResponse> {
-        // Ensure connection pool is initialized (handles IP resolution and pool creation)
+    /// Execute DNS query through bootstrap-resolved upstream
+    ///
+    /// # Process
+    /// 1. Resolve domain name to IP (cached with TTL in bootstrap)
+    /// 2. Initialize/refresh pool if IP changed
+    /// 3. Forward query through the pool
+    ///
+    /// # Performance
+    /// - Hot path: pool already initialized, just forward query
+    /// - Cold path: bootstrap resolution + pool creation (first query only)
+    /// - IP change: new pool creation (rare, based on DNS TTL)
+    async fn inner_query(&self, request: Message) -> Result<DnsResponse> {
+        // Ensure connection pool is initialized with current IP
+        // Fast path: just checks atomic, no allocation
+        // Slow path: resolves DNS + creates pool (only on first query or IP change)
         self.init_pool_if_needed().await?;
 
-        // Get current connection pool
+        // Get current connection pool (lock-free atomic load)
         let pool = &*self.pool.load();
 
-        // Execute DNS query through the pool
-        match pool.1.query(request.clone()).await {
-            Ok(res) => Ok(res),
-            Err(e) => Err(e),
-        }
+        // Forward query through the pool
+        pool.1.query(request).await
     }
 
-    fn connection_type(&self) -> ConnectionType {
-        self.connection_info.connection_type
+    fn connection_info(&self) -> &ConnectionInfo {
+        &self.connection_info
     }
+    // Note: timeout() and connection_type() use default implementations from trait
 }
 
 /// Dummy connection builder for initial empty pool
