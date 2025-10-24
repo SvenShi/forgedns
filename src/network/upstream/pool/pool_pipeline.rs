@@ -9,6 +9,7 @@ use crate::network::upstream::pool::{
     Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
 };
 use crate::network::upstream::utils::close_conns;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -18,7 +19,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tokio::task::yield_now;
 use tracing::debug;
 
@@ -26,8 +26,8 @@ use tracing::debug;
 pub struct PipelinePool<C: Connection> {
     /// Round-robin index for load balancing across connections
     index: AtomicUsize,
-    /// List of active connections (protected by RwLock)
-    connections: RwLock<Vec<Arc<C>>>,
+    /// List of active connections (lock-free with ArcSwap)
+    connections: ArcSwap<Vec<Arc<C>>>,
     /// Maximum number of connections allowed
     max_size: usize,
     /// Minimum number of connections to maintain
@@ -55,20 +55,18 @@ impl<C: Connection> ConnectionPool<C> for PipelinePool<C> {
         let mut drop_vec = Vec::new();
         let mut invalid_vec = Vec::new();
 
-        // Read connections
-        {
-            let conns = self.connections.read().await;
-            for conn in conns.iter() {
-                if conn.available() {
-                    let idle = now - conn.last_used();
-                    if idle < self.max_idle.as_millis() as u64 {
-                        new_vec.push(conn.clone());
-                    } else {
-                        drop_vec.push(conn.clone());
-                    }
+        // Lock-free read of current connections
+        let conns = self.connections.load();
+        for conn in conns.iter() {
+            if conn.available() {
+                let idle = now - conn.last_used();
+                if idle < self.max_idle.as_millis() as u64 {
+                    new_vec.push(conn.clone());
                 } else {
-                    invalid_vec.push(conn.clone());
+                    drop_vec.push(conn.clone());
                 }
+            } else {
+                invalid_vec.push(conn.clone());
             }
         }
 
@@ -83,13 +81,17 @@ impl<C: Connection> ConnectionPool<C> for PipelinePool<C> {
 
         let new_len = new_vec.len();
 
-        // Update connections (short write lock)
-        {
-            let mut conns = self.connections.write().await;
-            *conns = new_vec;
+        // attempt atomic swap
+        if !Arc::ptr_eq(
+            &conns,
+            &self.connections.compare_and_swap(&conns, Arc::new(new_vec)),
+        ) {
+            close_conns(&drop_vec);
+            close_conns(&invalid_vec);
+            return;
         }
 
-        // Close removed connections (outside lock)
+        // Close removed connections
         close_conns(&drop_vec);
         close_conns(&invalid_vec);
 
@@ -119,7 +121,7 @@ impl<C: Connection> PipelinePool<C> {
     ) -> Arc<PipelinePool<C>> {
         let pool = Arc::new(Self {
             index: AtomicUsize::new(0),
-            connections: RwLock::new(Vec::new()),
+            connections: ArcSwap::from_pointee(Vec::new()),
             max_size,
             min_size,
             max_load,
@@ -141,37 +143,29 @@ impl<C: Connection> PipelinePool<C> {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn get(&self) -> Result<Arc<C>> {
         loop {
-            // Fast read path
-            {
-                let conns = self.connections.read().await;
-                if conns.is_empty() {
-                    drop(conns);
-                    self.expand().await?;
-                    yield_now().await;
-                    continue;
+            // Lock-free fast path with ArcSwap
+            let conns = self.connections.load();
+
+            if conns.is_empty() {
+                self.expand().await?;
+                yield_now().await;
+                continue;
+            }
+
+            let len = conns.len();
+
+            let start_idx = self.index.fetch_add(1, Ordering::Relaxed) % len;
+
+            for offset in 0..len {
+                let idx = (start_idx + offset) % len;
+                let conn = &conns[idx];
+                if conn.available() && conn.using_count() < self.max_load {
+                    return Ok(conn.clone());
                 }
-
-                let len = conns.len();
-                let mut idx = self.index.load(Ordering::Relaxed) % len;
-                let raw_idx = idx;
-
-                for _ in 0..len {
-                    let conn = &conns[idx];
-                    if conn.available() && conn.using_count() < self.max_load {
-                        if raw_idx != idx {
-                            self.index.store(idx, Ordering::Relaxed);
-                        }
-                        return Ok(conn.clone());
-                    }
-                    idx = (idx + 1) % len;
-                }
-
-                // All connections at max load
             }
 
             // Check if we can expand
-            let current_len = self.connections.read().await.len();
-            if current_len < self.max_size {
+            if self.connections.load().len() < self.max_size {
                 if let Err(_) = self.expand().await {
                     yield_now().await;
                 }
@@ -185,9 +179,9 @@ impl<C: Connection> PipelinePool<C> {
     /// Expand the pool by creating new connections
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn expand(&self) -> Result<()> {
-        // Determine how many connections to create (outside lock)
+        // Determine how many connections to create (lock-free read)
         let new_conns_count = {
-            let conns = self.connections.read().await;
+            let conns = self.connections.load();
             let conns_len = conns.len();
 
             if conns_len >= self.max_size {
@@ -210,7 +204,7 @@ impl<C: Connection> PipelinePool<C> {
             return Ok(());
         }
 
-        // Create new connections (outside lock)
+        // Create new connections concurrently
         let mut futs = FuturesUnordered::new();
         for _ in 0..new_conns_count {
             let builder = &self.connection_builder;
@@ -233,33 +227,37 @@ impl<C: Connection> PipelinePool<C> {
             return Ok(());
         }
 
-        // Add new connections (short write lock, no retry loop)
-        {
-            let mut conns = self.connections.write().await;
-            if conns.len() < self.max_size {
-                let space = self.max_size - conns.len();
-                let to_add = created.len().min(space);
-
-                for conn in created.drain(..to_add) {
-                    conns.push(conn);
+        // Lock-free atomic update with RCU pattern
+        let added_count = self
+            .connections
+            .rcu(|old_conns| {
+                let current_len = old_conns.len();
+                if current_len >= self.max_size {
+                    return old_conns.clone();
                 }
 
-                // Set index near the end for round robin fairness
-                self.index
-                    .store(conns.len().saturating_sub(1), Ordering::Relaxed);
+                let space = self.max_size - current_len;
+                let to_add = created.len().min(space);
+
+                let mut new_vec = Vec::with_capacity(current_len + to_add);
+                new_vec.extend_from_slice(&old_conns);
+                new_vec.extend(created.iter().take(to_add).cloned());
 
                 debug!(
                     "Pipeline pool expanded: +{} connections (total={}/{})",
                     to_add,
-                    conns.len(),
+                    new_vec.len(),
                     self.max_size
                 );
-            }
-        }
 
-        // Close any leftover connections (outside lock)
-        if !created.is_empty() {
-            close_conns(&created);
+                Arc::new(new_vec)
+            })
+            .len();
+
+        // Close any leftover connections
+        if created.len() > added_count {
+            let leftover: Vec<_> = created.into_iter().skip(added_count).collect();
+            close_conns(&leftover);
         }
 
         Ok(())

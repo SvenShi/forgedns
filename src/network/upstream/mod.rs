@@ -48,9 +48,7 @@ use std::fmt::Debug;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
-use tokio::task::id;
 use tracing::{debug, info, warn};
 use url::Url;
 

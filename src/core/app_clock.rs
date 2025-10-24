@@ -6,7 +6,7 @@
 //! High-performance application clock
 //!
 //! Provides efficient timestamp access without syscall overhead.
-//! A background task updates the time every millisecond, allowing
+//! A background task updates the time periodically (100ms), allowing
 //! hot-path code to read time with just an atomic load operation.
 //!
 //! This is crucial for performance-sensitive paths like connection
@@ -38,18 +38,19 @@ impl AppClock {
     /// Start the background clock updater task
     ///
     /// Safe to call multiple times (only runs once via `Once`)
-    pub(crate) fn start() {
+    pub fn start() {
         CLOCK_INIT.call_once(|| {
             START_INSTANT
                 .set(Instant::now())
                 .expect("Clock initialization should never fail");
 
-            // Spawn background task to update time every millisecond
+            // Spawn background task to update time periodically
+            // Uses 100ms interval to balance accuracy and CPU usage
             tokio::spawn(async move {
                 loop {
                     let base = START_INSTANT.get().unwrap();
                     GLOBAL_NOW.store(base.elapsed().as_millis() as u64, Ordering::Relaxed);
-                    tokio::time::sleep(Duration::from_millis(30)).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             });
         })
