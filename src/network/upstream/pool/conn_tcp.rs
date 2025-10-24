@@ -279,7 +279,7 @@ impl TcpConnection {
                             let total = start + n;
                             let mut offset = 0;
 
-                            // Parse length-prefixed DNS messages (may be multiple per read)
+                            // Parse length-prefixed DNS messages (maybe multiple per read)
                             while total - offset >= 2 {
                                 // Read 2-byte big-endian length prefix
                                 let msg_len = u16::from_be_bytes([buf[offset], buf[offset + 1]]) as usize;
