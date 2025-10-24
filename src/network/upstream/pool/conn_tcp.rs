@@ -413,7 +413,8 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
             self.so_mark,
             self.bind_to_device.clone(),
             self.socks5.clone(),
-        ).await?;
+        )
+        .await?;
 
         info!(
             conn_id,

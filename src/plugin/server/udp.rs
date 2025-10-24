@@ -10,48 +10,43 @@
 //! task spawning with automatic cleanup.
 
 use crate::config::types::PluginConfig;
-use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::plugin::executor::Executor;
-use crate::plugin::server::Server;
-use crate::plugin::{Plugin, PluginFactory, PluginInfo, PluginRegistry};
+use crate::plugin::server::{RequestHandle, Server};
+use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
 use futures::StreamExt;
-use hickory_proto::op::{Message, MessageType, OpCode};
+use hickory_proto::DnsStreamHandle;
+use hickory_proto::op::Message;
 use hickory_proto::runtime::TokioRuntimeProvider;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_proto::udp::UdpStream;
 use hickory_proto::xfer::SerialMessage;
-use hickory_proto::{BufDnsStreamHandle, DnsStreamHandle};
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, Type};
-use std::collections::HashMap;
 use std::io::Error;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::task::JoinSet;
-use tracing::{Level, debug, error, event_enabled, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// UDP server configuration
 #[derive(Deserialize)]
 pub struct UdpServerConfig {
     /// Entry executor plugin tag to process incoming requests
-    pub entry: String,
+    entry: String,
 
     /// UDP listen address (e.g., "0.0.0.0:53")
-    pub listen: String,
+    listen: String,
 }
 
 /// UDP DNS server plugin
 #[allow(unused)]
 #[derive(Debug)]
 pub struct UdpServer {
-    pub tag: String,
-    pub entry: Arc<PluginInfo>,
-    pub listen: String,
-    pub registry: Arc<PluginRegistry>,
+    tag: String,
+    listen: String,
+    request_handle: Arc<RequestHandle>,
 }
 
 #[async_trait]
@@ -71,14 +66,9 @@ impl Server for UdpServer {
     fn run(&self) {
         let listen = self.listen.clone();
         let addr = listen.clone();
-        let entry_executor = self.entry.clone();
-        let registry = self.registry.clone();
 
-        info!(
-            "Starting UDP server on {} (entry: {})",
-            listen, entry_executor.tag
-        );
-        tokio::spawn(run_server(addr, entry_executor.to_executor(), registry));
+        info!("Starting UDP server on {}", listen);
+        tokio::spawn(run_server(addr, self.request_handle.clone()));
         info!("UDP server listening on {}", listen);
     }
 }
@@ -87,11 +77,7 @@ impl Server for UdpServer {
 ///
 /// Creates a UDP stream, listens for incoming DNS queries, and spawns
 /// handler tasks for each request. Performs periodic cleanup of finished tasks.
-async fn run_server(
-    addr: String,
-    entry_executor: Arc<dyn Executor>,
-    registry: Arc<PluginRegistry>,
-) {
+async fn run_server(addr: String, handler: Arc<RequestHandle>) {
     let socket = match build_udp_socket(&addr) {
         Ok(s) => s,
         Err(e) => {
@@ -103,17 +89,14 @@ async fn run_server(
     let (mut stream, stream_handle) =
         UdpStream::<TokioRuntimeProvider>::with_bound(socket, ([127, 255, 255, 254], 0).into());
 
-    let mut inner_join_set = JoinSet::new();
     let stream_handle = Arc::new(stream_handle);
 
     debug!("UDP server event loop started on {}", addr);
 
     loop {
-        let message = tokio::select! {
-            message = stream.next() => match message {
-                None => break,
-                Some(message) => message,
-            },
+        let message = match stream.next().await {
+            None => break,
+            Some(message) => message,
         };
 
         let message = match message {
@@ -125,101 +108,25 @@ async fn run_server(
         };
 
         // Spawn handler task for this request (non-blocking)
-        inner_join_set.spawn(handle_message(
-            entry_executor.clone(),
-            stream_handle.clone(),
-            message,
-            registry.clone(),
-        ));
-
-        // Clean up completed tasks (non-blocking)
-        reap_tasks(&mut inner_join_set);
+        let handler = handler.clone();
+        let stream_handle = stream_handle.clone();
+        tokio::spawn(async move {
+            let (msg, src_addr) = message.into_parts();
+            if let Ok(msg) = Message::from_bytes(msg.as_slice()) {
+                let response = handler.handle_request(msg, src_addr).await;
+                if let Ok(bytes) = response.to_bytes() {
+                    if let Err(e) = stream_handle
+                        .with_remote_addr(src_addr)
+                        .send(SerialMessage::new(bytes, src_addr))
+                    {
+                        warn!("Failed to send response to {}: {}", src_addr, e);
+                    }
+                } else {
+                    warn!("Failed to serialize response for {}", src_addr);
+                }
+            }
+        });
     }
-}
-
-/// Handle a single DNS query message
-///
-/// Parses the incoming message, creates a context, executes the entry plugin,
-/// and sends the response back to the client.
-async fn handle_message(
-    entry_executor: Arc<dyn Executor>,
-    stream_handle: Arc<BufDnsStreamHandle>,
-    message: SerialMessage,
-    registry: Arc<PluginRegistry>,
-) {
-    let (message, src_addr) = message.into_parts();
-
-    // Parse DNS message
-    if let Ok(msg) = Message::from_bytes(message.as_slice()) {
-        let mut context = DnsContext {
-            src_addr,
-            request: msg,
-            response: None,
-            mark: Vec::new(),
-            attributes: HashMap::new(),
-            registry,
-        };
-
-        // Log request details only when debug logging is enabled
-        if event_enabled!(Level::DEBUG) {
-            debug!(
-                "DNS request from {}, queries: {:?}, edns: {:?}, nameservers: {:?}",
-                &src_addr,
-                context.request.queries(),
-                context.request.extensions(),
-                context.request.name_servers()
-            );
-        }
-
-        // Execute entry plugin to process the request
-        entry_executor.execute(&mut context).await;
-
-        // Construct response message
-        let mut response;
-        match context.response {
-            None => {
-                debug!("No response received from entry plugin");
-                response = Message::new();
-                response.set_id(context.request.id());
-                response.set_op_code(OpCode::Query);
-                response.set_message_type(MessageType::Query);
-            }
-            Some(res) => {
-                response = Message::from(res);
-            }
-        }
-
-        // Log response details only when debug logging is enabled
-        if event_enabled!(Level::DEBUG) {
-            debug!(
-                "Sending response to {}, queries: {:?}, id: {}, edns: {:?}, nameservers: {:?}",
-                &src_addr,
-                context.request.queries(),
-                context.request.id(),
-                response.extensions(),
-                response.name_servers()
-            );
-        }
-
-        // Send response back to client
-        if let Ok(bytes) = response.to_bytes() {
-            if let Err(e) = stream_handle
-                .with_remote_addr(src_addr)
-                .send(SerialMessage::new(bytes, src_addr))
-            {
-                warn!("Failed to send response to {}: {}", src_addr, e);
-            }
-        } else {
-            warn!("Failed to serialize response for {}", src_addr);
-        }
-    }
-}
-
-/// Reap completed tasks from the join set
-///
-/// Non-blocking cleanup of finished handler tasks
-fn reap_tasks(join_set: &mut JoinSet<()>) {
-    while join_set.try_join_next().is_some() {}
 }
 
 /// Build a UDP socket with reuse_address and reuse_port options
@@ -233,11 +140,7 @@ fn build_udp_socket(addr: &str) -> std::result::Result<UdpSocket, Error> {
         )
     })?;
 
-    let sock = if addr.is_ipv4() {
-        Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?
-    } else {
-        Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?
-    };
+    let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
 
     let _ = sock.set_nonblocking(true);
     let _ = sock.set_reuse_address(true);
@@ -279,9 +182,11 @@ impl PluginFactory for UdpServerFactory {
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             UdpServer {
                 tag: plugin_info.tag.clone(),
-                entry: entry.clone(),
                 listen: udp_config.listen,
-                registry,
+                request_handle: Arc::new(RequestHandle {
+                    entry_executor: entry.to_executor().clone(),
+                    registry,
+                }),
             },
         )))
     }

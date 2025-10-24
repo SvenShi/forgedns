@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::{debug, event_enabled, info, warn, Level};
+use tracing::{Level, debug, event_enabled, info, warn};
 
 /// Single-upstream DNS forwarder
 ///

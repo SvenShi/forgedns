@@ -31,6 +31,7 @@ pub mod server;
 pub use registry::PluginRegistry;
 
 use crate::plugin::server::Server;
+use crate::plugin::server::tcp::TcpServerFactory;
 
 /// Uninitialized plugin returned by factories
 #[allow(unused)]
@@ -90,6 +91,7 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     // Register all built-in plugin factories
     registry.register_factory("forward", Box::new(ForwardFactory {}));
     registry.register_factory("udp_server", Box::new(UdpServerFactory {}));
+    registry.register_factory("tcp_server", Box::new(TcpServerFactory {}));
 
     // Wrap in Arc for sharing
     let registry = Arc::new(registry);
