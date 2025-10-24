@@ -1,13 +1,14 @@
-#log:
-#  level: debug
+log:
+  level: debug
 
 plugins:
   - tag: forward
     type: forward
     args:
       upstreams:
-        - addr: "udp://dns.alidns.com"  # 阿里 DNS
+        - addr: "tcp://8.8.8.8"  # 阿里 DNS
 #          dial_addr: "223.5.5.5"  # 阿里 DNS
+          socks5: "127.0.0.1:7897"
           insecure_skip_verify: true
           bootstrap: 223.5.5.5
           enable_pipeline: true

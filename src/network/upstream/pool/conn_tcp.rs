@@ -8,25 +8,24 @@ use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::{connect_stream, connect_tls};
-use crate::network::upstream::{ConnectionInfo, ConnectionType};
+use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{
-    split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
+    AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf, split,
 };
-use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    oneshot,
     Notify,
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    oneshot,
 };
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -374,6 +373,7 @@ pub struct TcpConnectionBuilder {
     connection_type: ConnectionType,
     so_mark: Option<u32>,
     bind_to_device: Option<String>,
+    socks5: Option<Socks5Opt>,
 }
 
 impl TcpConnectionBuilder {
@@ -388,6 +388,7 @@ impl TcpConnectionBuilder {
             connection_type: connection_info.connection_type,
             so_mark: connection_info.so_mark,
             bind_to_device: connection_info.bind_to_device.clone(),
+            socks5: connection_info.socks5.clone(),
         }
     }
 }
@@ -411,7 +412,8 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
             self.port,
             self.so_mark,
             self.bind_to_device.clone(),
-        )?;
+            self.socks5.clone(),
+        ).await?;
 
         info!(
             conn_id,
@@ -427,7 +429,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
 
         if self.tls_enabled {
             let tls_stream = connect_tls(
-                TcpStream::from_std(stream)?,
+                stream,
                 self.insecure_skip_verify,
                 self.server_name.clone(),
                 self.timeout,
@@ -442,7 +444,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                 receiver,
             ));
         } else {
-            let (reader, writer) = split(TcpStream::from_std(stream)?);
+            let (reader, writer) = split(stream);
             tokio::spawn(TcpConnection::listen_dns_response(arc.clone(), reader));
             tokio::spawn(TcpConnection::send_dns_request(
                 arc.clone(),

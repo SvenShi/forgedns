@@ -14,10 +14,11 @@
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::Connection;
 use crate::network::upstream::tls_client_config::{insecure_client_config, secure_client_config};
-use crate::network::upstream::{ConnectionInfo, ConnectionType};
+use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use bytes::BytesMut;
+use fast_socks5::client::Socks5Stream;
 use http::header::CONTENT_LENGTH;
 use http::{HeaderValue, Method, Request, Response, Version, header};
 use quinn::crypto::rustls::QuicClientConfig;
@@ -364,6 +365,7 @@ pub fn connect_socket(
 ///
 /// Creates a non-blocking TCP socket with TCP_NODELAY enabled and optional
 /// Linux-specific socket options, then connects to the remote DNS server.
+/// Supports SOCKS5 proxy with bind_device applied to the proxy connection.
 ///
 /// # Arguments
 /// * `remote_ip` - Remote server IP address (if None, resolves server_name)
@@ -371,9 +373,10 @@ pub fn connect_socket(
 /// * `port` - Remote server port
 /// * `so_mark` - Linux SO_MARK socket option (for policy routing)
 /// * `bind_to_device` - Linux SO_BINDTODEVICE option (bind to specific interface)
+/// * `socks5_opt` - Optional SOCKS5 proxy configuration
 ///
 /// # Returns
-/// - `Ok(TcpStream)` connected TCP stream in non-blocking mode
+/// - `Ok(TcpStream)` connected TCP stream (async, non-blocking mode)
 /// - `Err(DnsError)` if socket creation, configuration, or connection fails
 ///
 /// # Socket Configuration
@@ -385,50 +388,140 @@ pub fn connect_socket(
 /// - **Linux**: Supports SO_MARK and SO_BINDTODEVICE for advanced routing
 /// - **Other platforms**: These options are silently ignored
 ///
+/// # SOCKS5 Support
+/// When `socks5_opt` is provided:
+/// - Creates connection to SOCKS5 proxy server
+/// - Applies bind_device to the proxy connection (Linux only)
+/// - Establishes SOCKS5 tunnel to the target server
+/// - Supports username/password authentication
+///
 /// # Performance
 /// TCP_NODELAY is critical for DNS-over-TCP performance, as it ensures
 /// small DNS queries are sent immediately without waiting for more data
 #[allow(unused)]
-pub fn connect_stream(
+pub async fn connect_stream(
     remote_ip: Option<IpAddr>,
     server_name: String,
     port: u16,
     so_mark: Option<u32>,
     bind_to_device: Option<String>,
-) -> Result<std::net::TcpStream> {
-    // Resolve remote address if not provided
-    let socket_addr = if let Some(remote_ip) = remote_ip {
-        SocketAddr::new(remote_ip, port)
+    socks5_opt: Option<Socks5Opt>,
+) -> Result<TcpStream> {
+    // If SOCKS5 proxy is configured, use it
+    if let Some(socks5) = socks5_opt {
+        // Create socket to SOCKS5 proxy server
+        let socket = Socket::new(
+            Domain::for_address(socks5.socket_addr),
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
+
+        // Configure socket for low-latency async I/O
+        let _ = socket.set_nonblocking(true);
+        let _ = socket.set_tcp_nodelay(true);
+        let _ = socket.set_reuse_address(true);
+
+        // Apply Linux-specific socket options to proxy connection
+        #[cfg(target_os = "linux")]
+        if let Some(so_mark) = so_mark {
+            socket.set_mark(so_mark)?;
+        }
+
+        #[cfg(target_os = "linux")]
+        if let Some(ref device) = bind_to_device {
+            socket.bind_device(Some(device.as_bytes()))?;
+        }
+
+        // Connect to SOCKS5 proxy (non-blocking)
+        socket.connect(&socks5.socket_addr.into());
+
+        // Convert to tokio TcpStream
+        let std_stream: std::net::TcpStream = socket.into();
+        let proxy_stream = TcpStream::from_std(std_stream)?;
+
+        // Establish SOCKS5 connection through proxy
+        use fast_socks5::util::target_addr::TargetAddr;
+        use fast_socks5::{AuthenticationMethod, Socks5Command};
+
+        // Create authentication method
+        let auth = if let (Some(username), Some(password)) =
+            (socks5.username.as_ref(), socks5.password.as_ref())
+        {
+            Some(AuthenticationMethod::Password {
+                username: username.clone(),
+                password: password.clone(),
+            })
+        } else {
+            None
+        };
+
+        let config = if auth.is_some() {
+            fast_socks5::client::Config::default()
+        } else {
+            let mut config = fast_socks5::client::Config::default();
+            config.set_skip_auth(true);
+            config
+        };
+
+        // Create SOCKS5 stream
+        let mut socks5_stream = Socks5Stream::use_stream(proxy_stream, auth, config).await?;
+
+        // Prepare target address
+        let target_addr = if let Some(remote_ip) = remote_ip {
+            TargetAddr::Ip(SocketAddr::new(remote_ip, port))
+        } else {
+            TargetAddr::Domain(server_name, port)
+        };
+
+        // Connect to target through SOCKS5
+        socks5_stream
+            .request(Socks5Command::TCPConnect, target_addr)
+            .await?;
+
+        // Get the underlying TcpStream
+        let stream = socks5_stream.get_socket();
+
+        // Enable TCP_NODELAY on the established SOCKS5 tunnel
+        let _ = stream.set_nodelay(true);
+
+        Ok(stream)
     } else {
-        let addr = try_lookup_server_name(&server_name)?;
-        SocketAddr::new(addr, port)
-    };
+        // Direct connection (no SOCKS5 proxy)
+        let socket_addr = if let Some(remote_ip) = remote_ip {
+            SocketAddr::new(remote_ip, port)
+        } else {
+            let addr = try_lookup_server_name(&server_name)?;
+            SocketAddr::new(addr, port)
+        };
 
-    // Create TCP socket with appropriate address family
-    let socket = Socket::new(
-        Domain::for_address(socket_addr),
-        Type::STREAM,
-        Some(Protocol::TCP),
-    )?;
+        // Create TCP socket with appropriate address family
+        let socket = Socket::new(
+            Domain::for_address(socket_addr),
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
 
-    // Configure socket for low-latency async I/O
-    let _ = socket.set_nonblocking(true);
-    let _ = socket.set_tcp_nodelay(true); // Disable Nagle's algorithm for immediate sends
-    let _ = socket.set_reuse_address(true);
+        // Configure socket for low-latency async I/O
+        let _ = socket.set_nonblocking(true);
+        let _ = socket.set_reuse_address(true);
 
-    // Linux-specific socket options for advanced routing
-    #[cfg(target_os = "linux")]
-    if let Some(so_mark) = so_mark {
-        socket.set_mark(so_mark)?;
+        // Linux-specific socket options for advanced routing
+        #[cfg(target_os = "linux")]
+        if let Some(so_mark) = so_mark {
+            socket.set_mark(so_mark)?;
+        }
+
+        #[cfg(target_os = "linux")]
+        if let Some(ref device) = bind_to_device {
+            socket.bind_device(Some(device.as_bytes()))?;
+        }
+
+        // Initiate TCP connection (non-blocking, will complete asynchronously)
+        socket.connect(&socket_addr.into());
+
+        let std_stream: std::net::TcpStream = socket.into();
+        let stream = TcpStream::from_std(std_stream)?;
+
+        Ok(stream)
     }
-
-    #[cfg(target_os = "linux")]
-    if let Some(device) = bind_to_device {
-        socket.bind_device(Some(device.as_bytes()))?;
-    }
-
-    // Initiate TCP connection (non-blocking, will complete asynchronously)
-    socket.connect(&socket_addr.into())?;
-
-    Ok(socket.into())
 }
