@@ -19,10 +19,10 @@ use crate::core::error::{DnsError, Result};
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RecordType};
+use rand::random;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU8, Ordering};
-use rand::random;
 use tokio::sync::{Notify, RwLock};
 use tracing::{debug, error, info, warn};
 

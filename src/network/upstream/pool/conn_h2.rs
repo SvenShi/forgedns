@@ -144,7 +144,8 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
             self.so_mark,
             self.bind_to_device.clone(),
             self.socks5.clone(),
-        ).await?;
+        )
+        .await?;
 
         let tls_stream = connect_tls(
             stream,
