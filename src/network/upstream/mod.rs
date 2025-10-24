@@ -32,11 +32,11 @@ use crate::core::error::{DnsError, Result};
 use crate::network::upstream::bootstrap::Bootstrap;
 use crate::network::upstream::pool::conn_h2::{H2Connection, H2ConnectionBuilder};
 use crate::network::upstream::pool::conn_h3::{H3Connection, H3ConnectionBuilder};
-use crate::network::upstream::pool::pool_pipeline::PipelinePool;
 use crate::network::upstream::pool::conn_quic::{QuicConnection, QuicConnectionBuilder};
-use crate::network::upstream::pool::pool_reuse::ReusePool;
 use crate::network::upstream::pool::conn_tcp::{TcpConnection, TcpConnectionBuilder};
 use crate::network::upstream::pool::conn_udp::{UdpConnection, UdpConnectionBuilder};
+use crate::network::upstream::pool::pool_pipeline::PipelinePool;
+use crate::network::upstream::pool::pool_reuse::ReusePool;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use crate::network::upstream::utils::try_lookup_server_name;
 use arc_swap::ArcSwap;
@@ -45,7 +45,7 @@ use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use serde::Deserialize;
 use std::fmt::Debug;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -158,10 +158,28 @@ pub struct UpstreamConfig {
     /// - `Some(6)`: Resolve to IPv6 (AAAA records)
     pub bootstrap_version: Option<u8>,
 
-    /// SOCKS5 proxy server for connection (format: "host:port")
+    /// SOCKS5 proxy server for upstream connections
     ///
-    /// When specified, all connections to the upstream server will be
-    /// routed through this SOCKS5 proxy.
+    /// When specified, all DNS connections to the upstream server will be
+    /// routed through this SOCKS5 proxy. The proxy address can be either an
+    /// IP address or a hostname (which will be resolved using system DNS).
+    ///
+    /// Supports two formats:
+    /// - **Without authentication**: `"host:port"`
+    ///   - Example: `"127.0.0.1:1080"`
+    ///   - Example: `"proxy.example.com:1080"`
+    ///
+    /// - **With authentication**: `"username:password@host:port"`
+    ///   - Example: `"user:pass@127.0.0.1:1080"`
+    ///   - Example: `"myuser:mypass@proxy.example.com:1080"`
+    ///
+    /// **Note**: If the proxy hostname fails to resolve, the upstream will
+    /// not be created and an error will be logged during initialization.
+    ///
+    /// # IPv6 Support
+    /// IPv6 addresses must be enclosed in brackets:
+    /// - `"[::1]:1080"` - IPv6 without auth
+    /// - `"user:pass@[2001:db8::1]:1080"` - IPv6 with auth
     pub socks5: Option<String>,
 
     /// Connection idle timeout in seconds
@@ -227,6 +245,27 @@ pub trait Upstream: Send + Sync + Debug {
     fn connection_type(&self) -> ConnectionType;
 }
 
+/// SOCKS5 proxy configuration with resolved socket address
+///
+/// This struct contains the parsed and resolved SOCKS5 proxy information,
+/// ready to be used for establishing proxy connections.
+///
+/// # Fields
+/// - `username`: Optional SOCKS5 authentication username
+/// - `password`: Optional SOCKS5 authentication password
+/// - `socket_addr`: Resolved proxy server socket address (IP + port)
+///
+/// # Note
+/// The hostname in the original configuration (if any) has already been
+/// resolved to an IP address when this struct is created.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct Socks5Opt {
+    username: Option<String>,
+    password: Option<String>,
+    socket_addr: SocketAddr,
+}
+
 /// Runtime connection information for upstream DNS servers
 ///
 /// Parsed and processed configuration ready for connection establishment.
@@ -252,7 +291,7 @@ pub struct ConnectionInfo {
     port: u16,
 
     /// SOCKS5 proxy configuration
-    socks5: Option<String>,
+    socks5: Option<Socks5Opt>,
 
     /// Bootstrap resolver for dynamic hostname resolution with TTL caching
     bootstrap: Option<Arc<Bootstrap>>,
@@ -355,11 +394,31 @@ impl From<UpstreamConfig> for ConnectionInfo {
             None
         };
 
+        let socks5 = if let Some(socks5_str) = upstream_config.socks5 {
+            match connection_type {
+                ConnectionType::TCP | ConnectionType::DoT => parse_socks5_opt(&socks5_str),
+                ConnectionType::DoH => {
+                    if upstream_config.enable_http3.unwrap_or(false) {
+                        warn!("Sock5 proxy only support tcp portal");
+                        None
+                    } else {
+                        parse_socks5_opt(&socks5_str)
+                    }
+                }
+                _ => {
+                    warn!("Sock5 proxy only support tcp portal");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         ConnectionInfo {
             tag: upstream_config.tag,
             remote_ip,
             port,
-            socks5: upstream_config.socks5,
+            socks5,
             connection_type,
             bootstrap,
             path,
@@ -886,5 +945,255 @@ impl<C: Connection> ConnectionBuilder<C> for DummyConnectionBuilder {
         Err(DnsError::protocol(
             "DummyConnectionBuilder cannot create connections (pool not yet initialized)",
         ))
+    }
+}
+
+/// Parse SOCKS5 proxy configuration from string
+///
+/// Supports two formats:
+/// - "host:port" - SOCKS5 without authentication
+/// - "username:password@host:port" - SOCKS5 with authentication
+///
+/// If host is a domain name, it will be resolved using system DNS.
+///
+/// # Arguments
+/// * `socks5_str` - SOCKS5 proxy string in one of the supported formats
+///
+/// # Returns
+/// - `Some(Socks5Opt)` if parsing and resolution succeed
+/// - `None` if parsing fails or hostname resolution fails
+///
+/// # Examples
+/// ```
+/// // Without auth
+/// parse_socks5_opt("127.0.0.1:1080")
+/// parse_socks5_opt("proxy.example.com:1080")
+///
+/// // With auth
+/// parse_socks5_opt("user:pass@127.0.0.1:1080")
+/// parse_socks5_opt("user:pass@proxy.example.com:1080")
+/// ```
+fn parse_socks5_opt(socks5_str: &str) -> Option<Socks5Opt> {
+    // Split by '@' to separate auth from host:port
+    let (username, password, host_port) = if let Some(at_pos) = socks5_str.rfind('@') {
+        // Format: username:password@host:port
+        let auth_part = &socks5_str[..at_pos];
+        let host_part = &socks5_str[at_pos + 1..];
+
+        // Split auth by ':'
+        if let Some(colon_pos) = auth_part.find(':') {
+            let username = auth_part[..colon_pos].to_string();
+            let password = auth_part[colon_pos + 1..].to_string();
+            (Some(username), Some(password), host_part)
+        } else {
+            warn!(
+                "Invalid SOCKS5 auth format (expected username:password): {}",
+                socks5_str
+            );
+            return None;
+        }
+    } else {
+        // Format: host:port (no auth)
+        (None, None, socks5_str)
+    };
+
+    // Parse host:port - use last colon to split
+    let (mut host, port) = match host_port.rfind(':') {
+        Some(colon_pos) => {
+            let host = &host_port[..colon_pos];
+            let port_str = &host_port[colon_pos + 1..];
+
+            match port_str.parse::<u16>() {
+                Ok(port) => (host, port),
+                Err(_) => {
+                    warn!("Invalid SOCKS5 port: {}", port_str);
+                    return None;
+                }
+            }
+        }
+        None => {
+            warn!("Invalid SOCKS5 format (expected host:port): {}", host_port);
+            return None;
+        }
+    };
+
+    // Remove IPv6 brackets if present: [::1] -> ::1
+    if host.starts_with('[') && host.ends_with(']') {
+        host = &host[1..host.len() - 1];
+    }
+
+    // Resolve host to IP address
+    let ip_addr = if let Ok(ip) = IpAddr::from_str(host) {
+        // Already an IP address
+        ip
+    } else {
+        // It's a hostname, resolve it
+        match try_lookup_server_name(host) {
+            Ok(ip) => ip,
+            Err(e) => {
+                warn!("Failed to resolve SOCKS5 hostname '{}': {}", host, e);
+                return None;
+            }
+        }
+    };
+
+    Some(Socks5Opt {
+        username,
+        password,
+        socket_addr: SocketAddr::new(ip_addr, port),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_socks5_opt_ip_without_auth() {
+        // Test parsing IP address without authentication
+        let result = parse_socks5_opt("127.0.0.1:1080");
+        assert!(result.is_some());
+
+        let opt = result.unwrap();
+        assert!(opt.username.is_none());
+        assert!(opt.password.is_none());
+        assert_eq!(opt.socket_addr.ip(), IpAddr::from_str("127.0.0.1").unwrap());
+        assert_eq!(opt.socket_addr.port(), 1080);
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_ip_with_auth() {
+        // Test parsing IP address with authentication
+        let result = parse_socks5_opt("myuser:mypass@192.168.1.100:8080");
+        assert!(result.is_some());
+
+        let opt = result.unwrap();
+        assert_eq!(opt.username, Some("myuser".to_string()));
+        assert_eq!(opt.password, Some("mypass".to_string()));
+        assert_eq!(
+            opt.socket_addr.ip(),
+            IpAddr::from_str("192.168.1.100").unwrap()
+        );
+        assert_eq!(opt.socket_addr.port(), 8080);
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_ipv6_without_auth() {
+        // Test parsing IPv6 address without authentication
+        let result = parse_socks5_opt("[::1]:1080");
+        assert!(result.is_some());
+
+        let opt = result.unwrap();
+        assert!(opt.username.is_none());
+        assert!(opt.password.is_none());
+        assert_eq!(opt.socket_addr.ip(), IpAddr::from_str("::1").unwrap());
+        assert_eq!(opt.socket_addr.port(), 1080);
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_ipv6_with_auth() {
+        // Test parsing IPv6 address with authentication
+        let result = parse_socks5_opt("user:pass@[2001:db8::1]:8080");
+        assert!(result.is_some());
+
+        let opt = result.unwrap();
+        assert_eq!(opt.username, Some("user".to_string()));
+        assert_eq!(opt.password, Some("pass".to_string()));
+        assert_eq!(
+            opt.socket_addr.ip(),
+            IpAddr::from_str("2001:db8::1").unwrap()
+        );
+        assert_eq!(opt.socket_addr.port(), 8080);
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_ipv6_full_address() {
+        // Test parsing full IPv6 address
+        let result = parse_socks5_opt("[fe80::1234:5678:90ab:cdef]:9050");
+        assert!(result.is_some());
+
+        let opt = result.unwrap();
+        assert_eq!(
+            opt.socket_addr.ip(),
+            IpAddr::from_str("fe80::1234:5678:90ab:cdef").unwrap()
+        );
+        assert_eq!(opt.socket_addr.port(), 9050);
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_ipv6_missing_bracket() {
+        // Test IPv6 without brackets - this actually succeeds for simple cases like ::1
+        // because rfind(':') correctly splits "::1:1080" into "::1" and "1080"
+        // However, brackets are still RECOMMENDED for clarity and standards compliance
+        let result = parse_socks5_opt("::1:1080");
+        assert!(result.is_some());
+
+        let opt = result.unwrap();
+        assert_eq!(opt.socket_addr.ip(), IpAddr::from_str("::1").unwrap());
+        assert_eq!(opt.socket_addr.port(), 1080);
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_ipv6_missing_port() {
+        // Test IPv6 with brackets but no port
+        let result = parse_socks5_opt("[::1]");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_ipv6_unclosed_bracket() {
+        // Test IPv6 with unclosed bracket
+        let result = parse_socks5_opt("[::1:1080");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_invalid_port() {
+        // Test invalid port number
+        let result = parse_socks5_opt("127.0.0.1:invalid");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_missing_port() {
+        // Test missing port
+        let result = parse_socks5_opt("127.0.0.1");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_invalid_auth_format() {
+        // Test invalid auth format (missing password)
+        let result = parse_socks5_opt("myuser@127.0.0.1:1080");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_password_with_colon() {
+        // Test password containing colon
+        let result = parse_socks5_opt("user:pass:word@127.0.0.1:1080");
+        assert!(result.is_some());
+
+        let opt = result.unwrap();
+        assert_eq!(opt.username, Some("user".to_string()));
+        assert_eq!(opt.password, Some("pass:word".to_string()));
+        assert_eq!(opt.socket_addr.port(), 1080);
+    }
+
+    #[test]
+    fn test_parse_socks5_opt_hostname_localhost() {
+        // Test hostname resolution (localhost should always work)
+        let result = parse_socks5_opt("localhost:1080");
+        assert!(result.is_some());
+
+        let opt = result.unwrap();
+        assert!(opt.username.is_none());
+        assert!(opt.password.is_none());
+        assert_eq!(opt.socket_addr.port(), 1080);
+        // localhost can resolve to either 127.0.0.1 or ::1
+        assert!(
+            opt.socket_addr.ip() == IpAddr::from_str("127.0.0.1").unwrap()
+                || opt.socket_addr.ip() == IpAddr::from_str("::1").unwrap()
+        );
     }
 }

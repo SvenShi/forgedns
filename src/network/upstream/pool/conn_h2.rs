@@ -8,7 +8,7 @@ use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
     build_dns_get_request, build_doh_request_uri, connect_stream, connect_tls, get_buf_from_res,
 };
-use crate::network::upstream::{Connection, ConnectionInfo};
+use crate::network::upstream::{Connection, ConnectionInfo, Socks5Opt};
 use bytes::{BufMut, Bytes};
 use h2::client::{ResponseFuture, SendRequest};
 use hickory_proto::op::Message;
@@ -19,7 +19,6 @@ use std::fmt::Debug;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
-use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -115,6 +114,7 @@ pub struct H2ConnectionBuilder {
     insecure_skip_verify: bool,
     so_mark: Option<u32>,
     bind_to_device: Option<String>,
+    socks5: Option<Socks5Opt>,
 }
 
 impl H2ConnectionBuilder {
@@ -128,6 +128,7 @@ impl H2ConnectionBuilder {
             insecure_skip_verify: connection_info.insecure_skip_verify,
             so_mark: connection_info.so_mark,
             bind_to_device: connection_info.bind_to_device.clone(),
+            socks5: connection_info.socks5.clone(),
         }
     }
 }
@@ -142,10 +143,11 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
             self.port,
             self.so_mark,
             self.bind_to_device.clone(),
-        )?;
+            self.socks5.clone(),
+        ).await?;
 
         let tls_stream = connect_tls(
-            TcpStream::from_std(stream)?,
+            stream,
             self.insecure_skip_verify,
             self.server_name.clone(),
             self.timeout,
