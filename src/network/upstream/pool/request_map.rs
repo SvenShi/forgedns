@@ -52,9 +52,8 @@ impl RequestMap {
 
     /// Store a response sender and get a unique query ID
     ///
-    /// Uses linear probing with a random starting point to find an empty slot.
-    /// This is much more efficient than pure random probing, especially at high
-    /// load factors.
+    /// Uses quadratic probing for better cache locality and faster collision resolution.
+    /// Falls back to linear probing if quadratic probing fails.
     ///
     /// # Returns
     /// A unique u16 query ID that can be used to retrieve the sender later
@@ -67,11 +66,39 @@ impl RequestMap {
         let ptr = Box::into_raw(Box::new(tx));
         let start = random::<u16>() as usize;
 
-        // Linear probing instead of pure random
-        for offset in 0..MAX_IDS {
+        // Phase 1: Quadratic probing for better cache locality
+        // h(i) = (start + i^2) mod MAX_IDS
+        for i in 0..256 {
+            let offset = (i * i) % MAX_IDS;
             let id = (start + offset) % MAX_IDS;
 
-            // Try to claim this slot with compare-and-swap
+            if self.slots[id]
+                .compare_exchange(ptr::null_mut(), ptr, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                self.size.fetch_add(1, Ordering::Relaxed);
+                return id as u16;
+            }
+        }
+
+        // Phase 2: Linear probing with limited range
+        // More cache-friendly than random probing
+        for offset in 256..2048 {
+            let id = (start + offset) % MAX_IDS;
+
+            if self.slots[id]
+                .compare_exchange(ptr::null_mut(), ptr, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                self.size.fetch_add(1, Ordering::Relaxed);
+                return id as u16;
+            }
+        }
+
+        // Phase 3: Full linear scan as last resort
+        for offset in 2048..MAX_IDS {
+            let id = (start + offset) % MAX_IDS;
+
             if self.slots[id]
                 .compare_exchange(ptr::null_mut(), ptr, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
