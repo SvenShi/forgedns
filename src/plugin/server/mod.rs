@@ -19,6 +19,7 @@ use tracing::{Level, debug, event_enabled};
 
 pub mod tcp;
 pub mod udp;
+pub mod http;
 
 pub trait Server: Plugin {
     fn run(&self);
