@@ -29,7 +29,7 @@ pub mod registry;
 pub mod server;
 
 pub use registry::PluginRegistry;
-
+use crate::plugin::server::http::HttpServerFactory;
 use crate::plugin::server::Server;
 use crate::plugin::server::tcp::TcpServerFactory;
 
@@ -92,6 +92,7 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     registry.register_factory("forward", Box::new(ForwardFactory {}));
     registry.register_factory("udp_server", Box::new(UdpServerFactory {}));
     registry.register_factory("tcp_server", Box::new(TcpServerFactory {}));
+    registry.register_factory("http_server", Box::new(HttpServerFactory {}));
 
     // Wrap in Arc for sharing
     let registry = Arc::new(registry);
