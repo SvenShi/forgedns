@@ -14,6 +14,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use crate::plugin::PluginRegistry;
 
 /// Context object for a DNS request/response lifecycle
 ///
@@ -45,7 +46,7 @@ pub struct DnsContext {
     ///
     /// Allows plugins to access other plugins during execution without
     /// relying on global state.
-    pub registry: Arc<crate::plugin::PluginRegistry>,
+    pub registry: Arc<PluginRegistry>,
 }
 
 #[allow(unused)]
