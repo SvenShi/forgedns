@@ -5,24 +5,24 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
-use crate::network::upstream::ConnectionInfo;
+use crate::network::transport::{recv_message_from_udp, send_message_udp};
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::connect_socket;
+use crate::network::upstream::ConnectionInfo;
 use async_trait::async_trait;
 use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{oneshot, Notify};
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Represents a single UDP connection used in DNS upstream queries.
 /// Each connection manages its own socket and maintains a mapping
@@ -91,7 +91,6 @@ impl Connection for UdpConnection {
             let query_id = self.request_map.store(tx);
             request.set_id(query_id);
 
-            let msg = request.to_bytes()?;
             debug!(
                 conn_id = self.id,
                 attempt,
@@ -101,7 +100,7 @@ impl Connection for UdpConnection {
             );
 
             // Send UDP datagram (no length prefix needed for UDP)
-            match self.socket.send(msg.as_slice()).await {
+            match send_message_udp(&self.socket, &request).await {
                 Ok(_sent) => {}
                 Err(e) => {
                     self.request_map.take(query_id);
@@ -211,38 +210,24 @@ impl UdpConnection {
             }
 
             select! {
-                recv = self.socket.recv_from(&mut buf) => {
+                recv = recv_message_from_udp(&self.socket,&mut buf) => {
                     match recv {
-                        Ok((len, _addr)) => {
-                            // Parse received UDP datagram as DNS message
-                            match DnsResponse::from_buffer(Vec::from(&buf[..len])) {
-                                Ok(msg) => {
-                                    let id = msg.header().id();
-                                    if let Some(sender) = self.request_map.take(id) {
-                                        let _ = sender.send(msg);
-                                        self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
-                                        debug!(
-                                            conn_id = self.id,
-                                            query_id = id,
-                                            response_bytes = len,
-                                            "Matched and delivered DNS response to waiting query"
-                                        );
-                                    } else {
-                                        debug!(
-                                            conn_id = self.id,
-                                            query_id = id,
-                                            "Discarded DNS response (no matching query or already timed out)"
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        conn_id = self.id,
-                                        error = ?e,
-                                        packet_len = len,
-                                        "Failed to parse DNS response from UDP datagram"
-                                    );
-                                }
+                        Ok((msg, _addr)) => {
+                            let id = msg.header().id();
+                            if let Some(sender) = self.request_map.take(id) {
+                                let _ = sender.send(DnsResponse::from_message(msg).unwrap());
+                                self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
+                                debug!(
+                                    conn_id = self.id,
+                                    query_id = id,
+                                    "Matched and delivered DNS response to waiting query"
+                                );
+                            } else {
+                                debug!(
+                                    conn_id = self.id,
+                                    query_id = id,
+                                    "Discarded DNS response (no matching query or already timed out)"
+                                );
                             }
                         }
                         Err(e) => {

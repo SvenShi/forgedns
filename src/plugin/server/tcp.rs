@@ -20,13 +20,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::server::{RequestHandle, Server, load_tls_config};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
-use futures::StreamExt;
-use hickory_proto::DnsStreamHandle;
-use hickory_proto::op::Message;
-use hickory_proto::runtime::iocompat::AsyncIoTokioAsStd;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
-use hickory_proto::tcp::TcpStream;
-use hickory_proto::xfer::SerialMessage;
+ 
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::io::Error;
@@ -38,6 +32,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
+use crate::network::transport::{read_from_async_io, write_to_async_io};
 
 const DEFAULT_IDLE_TIMEOUT: u64 = 10;
 
@@ -184,7 +179,7 @@ async fn run_server(
                                 match acceptor.accept(stream).await {
                                     Ok(tls_stream) => {
                                         debug!("TLS handshake completed for client {}", src);
-                                        handle_dns_stream(AsyncIoTokioAsStd(tls_stream), src, handler)
+                                        handle_dns_stream(tls_stream, src, handler)
                                             .await;
                                     }
                                     Err(e) => {
@@ -194,7 +189,7 @@ async fn run_server(
                             } else {
                                 // Plain TCP connection
                                 debug!("TCP server connected to client {}", src);
-                                handle_dns_stream(AsyncIoTokioAsStd(stream), src, handler).await;
+                                handle_dns_stream(stream, src, handler).await;
                             }
                         });
                     }
@@ -223,51 +218,26 @@ async fn run_server(
 
 /// Handle DNS messages over a TCP stream (works for both TLS and plain TCP)
 async fn handle_dns_stream<S>(
-    stream: AsyncIoTokioAsStd<S>,
+    mut stream: S,
     src: SocketAddr,
     handler: Arc<RequestHandle>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
-    let (mut stream, stream_handle) = TcpStream::from_stream(stream, src);
-    let stream_handle = Arc::new(stream_handle);
-
     loop {
-        let message = match stream.next().await {
-            None => {
-                debug!("Client {} disconnected", src);
-                break;
-            }
-            Some(message) => message,
-        };
-
-        let message = match message {
-            Err(error) => {
-                warn!(%error, "Error receiving message from {}", src);
-                continue;
-            }
-            Ok(message) => message,
-        };
-
-        // Spawn handler task for this request (non-blocking)
-        let handler = handler.clone();
-        let stream_handle = stream_handle.clone();
-        tokio::spawn(async move {
-            let (msg, src_addr) = message.into_parts();
-            if let Ok(msg) = Message::from_bytes(msg.as_slice()) {
-                let response = handler.handle_request(msg, src_addr).await;
-                if let Ok(bytes) = response.to_bytes() {
-                    if let Err(e) = stream_handle
-                        .with_remote_addr(src_addr)
-                        .send(SerialMessage::new(bytes, src_addr))
-                    {
-                        warn!("Failed to send response to {}: {}", src_addr, e);
-                    }
-                } else {
-                    warn!("Failed to serialize response for {}", src_addr);
+        match read_from_async_io(&mut stream).await {
+            Ok(req_msg) => {
+                let response = handler.handle_request(req_msg, src).await;
+                if let Err(e) = write_to_async_io(&mut stream, &response).await {
+                    warn!("Failed to write TCP response to {}: {}", src, e);
+                    break;
                 }
             }
-        });
+            Err(e) => {
+                debug!("TCP client {} disconnected or read error: {}", src, e);
+                break;
+            }
+        }
     }
 }
 

@@ -7,16 +7,17 @@ use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
 use crate::network::upstream::{Connection, ConnectionInfo};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
-use quinn::{SendStream, VarInt};
+ 
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::select;
+use crate::network::transport::read_from_async_io;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
@@ -137,14 +138,16 @@ impl Connection for QuicConnection {
         }
 
         // Receive length-prefixed DNS response
-        let result = match timeout(self.timeout, recv_dns_response(&mut recv, send)).await {
-            Ok(Ok(bytes)) => {
-                let mut resp = DnsResponse::from_buffer(bytes.to_vec())?;
+        let result = match timeout(self.timeout, read_from_async_io(&mut recv)).await {
+            Ok(Ok(message)) => {
+                let bytes = message
+                    .to_bytes()
+                    .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
+                let mut resp = DnsResponse::from_buffer(bytes)?;
                 resp.set_id(raw_id); // Restore original query ID
                 debug!(
                     conn_id = self.id,
                     query_id = raw_id,
-                    response_bytes = bytes.len(),
                     "Successfully received DNS response over QUIC"
                 );
                 Ok(resp)
@@ -288,143 +291,5 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
         });
 
         Ok(quic_conn)
-    }
-}
-
-/// Read a length-prefixed (2-byte BE) DNS response from a QUIC receive stream
-///
-/// # Arguments
-/// * `recv` - QUIC receive stream to read from
-/// * `send` - QUIC send stream (used for error signaling if needed)
-///
-/// # Returns
-/// - `Ok(Bytes)` containing the DNS response message
-/// - `Err(DnsError)` if read fails or protocol violation detected
-///
-/// # Protocol
-/// Per RFC 9250 Section 4.2:
-/// - First 2 bytes: message length in big-endian format
-/// - Following bytes: DNS message (max 65535 bytes)
-async fn recv_dns_response(recv: &mut quinn::RecvStream, send: SendStream) -> Result<Bytes> {
-    // Read 2-byte big-endian length prefix
-    let mut len = [0u8; 2];
-    recv.read_exact(&mut len)
-        .await
-        .map_err(|e| DnsError::protocol(format!("Failed to read DoQ length prefix: {}", e)))?;
-    let len = u16::from_be_bytes(len) as usize;
-
-    // RFC 9250: DNS messages are restricted to a maximum size of 65535 bytes
-    // This restriction is consistent with DNS over TCP (RFC 1035) and DoT (RFC 7858)
-    let mut bytes = BytesMut::with_capacity(len);
-    bytes.resize(len, 0);
-
-    if let Err(e) = recv.read_exact(&mut bytes[..len]).await {
-        debug!(
-            expected_len = len,
-            actual_bytes = ?bytes.len(),
-            "Failed to read complete DoQ DNS message"
-        );
-
-        // Signal protocol error to peer via stream reset
-        reset(send, DoqErrorCode::ProtocolError)
-            .map_err(|_| debug!("QUIC stream already closed, cannot reset"))
-            .ok();
-        return Err(DnsError::protocol(format!(
-            "Failed to read DoQ DNS message body: {}",
-            e
-        )));
-    }
-
-    debug!(
-        message_len = len,
-        message_hex = ?&bytes[..len.min(64)], // Log first 64 bytes for debugging
-        "Received complete DoQ DNS message"
-    );
-    Ok(bytes.freeze())
-}
-
-/// Reset a QUIC send stream with a DoQ error code
-///
-/// Signals to the peer that an error occurred using QUIC RESET_STREAM frame
-///
-/// # Arguments
-/// * `send` - QUIC send stream to reset
-/// * `code` - DoQ-specific error code (RFC 9250 Section 7.3)
-fn reset(mut send: SendStream, code: DoqErrorCode) -> Result<()> {
-    send.reset(code.into()).map_err(|_| {
-        DnsError::protocol("Failed to reset QUIC stream (stream may already be closed)")
-    })
-}
-
-/// DoQ (DNS over QUIC) error codes as defined in RFC 9250 Section 7.3
-///
-/// These error codes are used in QUIC RESET_STREAM and CONNECTION_CLOSE frames
-/// to signal protocol-level errors to the peer.
-#[derive(Clone, Copy)]
-pub enum DoqErrorCode {
-    /// No error (0x0)
-    /// Used when the connection or stream needs to be closed normally
-    NoError,
-    /// Internal error (0x1)
-    /// The DoQ implementation encountered an internal error and cannot continue
-    InternalError,
-    /// Protocol error (0x2)
-    /// The DoQ implementation detected a protocol violation and is aborting
-    ProtocolError,
-    /// Request cancelled (0x3)
-    /// A DoQ client is canceling an outstanding transaction
-    RequestCancelled,
-    /// Excessive load (0x4)
-    /// A DoQ server is closing the connection due to resource constraints
-    ExcessiveLoad,
-    /// Reserved error code (0xd098ea5e)
-    /// Alternative error code for testing purposes
-    ErrorReserved,
-    /// Unknown error code
-    /// Represents any error code not defined in RFC 9250
-    Unknown(u32),
-}
-
-// not using repr(u32) above because of the Unknown
-const NO_ERROR: u32 = 0x0;
-const INTERNAL_ERROR: u32 = 0x1;
-const PROTOCOL_ERROR: u32 = 0x2;
-const REQUEST_CANCELLED: u32 = 0x3;
-const EXCESSIVE_LOAD: u32 = 0x4;
-const ERROR_RESERVED: u32 = 0xd098ea5e;
-
-impl From<DoqErrorCode> for VarInt {
-    fn from(doq_error: DoqErrorCode) -> Self {
-        use DoqErrorCode::*;
-
-        match doq_error {
-            NoError => Self::from_u32(NO_ERROR),
-            InternalError => Self::from_u32(INTERNAL_ERROR),
-            ProtocolError => Self::from_u32(PROTOCOL_ERROR),
-            RequestCancelled => Self::from_u32(REQUEST_CANCELLED),
-            ExcessiveLoad => Self::from_u32(EXCESSIVE_LOAD),
-            ErrorReserved => Self::from_u32(ERROR_RESERVED),
-            Unknown(code) => Self::from_u32(code),
-        }
-    }
-}
-
-impl From<VarInt> for DoqErrorCode {
-    fn from(doq_error: VarInt) -> Self {
-        let code: u32 = if let Ok(code) = doq_error.into_inner().try_into() {
-            code
-        } else {
-            return Self::ProtocolError;
-        };
-
-        match code {
-            NO_ERROR => Self::NoError,
-            INTERNAL_ERROR => Self::InternalError,
-            PROTOCOL_ERROR => Self::ProtocolError,
-            REQUEST_CANCELLED => Self::RequestCancelled,
-            EXCESSIVE_LOAD => Self::ExcessiveLoad,
-            ERROR_RESERVED => Self::ErrorReserved,
-            _ => Self::Unknown(code),
-        }
     }
 }
