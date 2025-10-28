@@ -253,7 +253,7 @@ async fn handle_dns_stream<S>(
 /// Build a TCP socket with reuse_address and reuse_port options
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
-fn build_tcp_listener(addr: &str, idle_timeout: Duration) -> Result<TcpListener> {
+pub fn build_tcp_listener(addr: &str, idle_timeout: Duration) -> Result<TcpListener> {
     let addr = SocketAddr::from_str(addr).map_err(|e| {
         Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -311,7 +311,8 @@ impl PluginFactory for TcpServerFactory {
                     "Loading TLS configuration for TCP server [{}]: cert={}, key={}",
                     plugin_info.tag, cert, key
                 );
-                Some(Arc::new(load_tls_config(cert, key)?))
+                let config = load_tls_config(cert, key)?;
+                Some(Arc::new(TlsAcceptor::from(Arc::new(config))))
             }
             (Some(_), None) => {
                 return Err(DnsError::plugin(format!(

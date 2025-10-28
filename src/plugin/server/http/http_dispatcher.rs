@@ -42,12 +42,7 @@ impl HttpDispatcher {
     ///
     /// Associates a specific HTTP method and path with a handler that will
     /// process requests matching that route.
-    pub fn register_route(
-        &mut self,
-        method: Method,
-        path: String,
-        handler: Box<dyn HttpHandler>,
-    ) {
+    pub fn register_route(&mut self, method: Method, path: String, handler: Box<dyn HttpHandler>) {
         debug!("Registering route: {} {}", method, path);
         self.routes.insert((method, path), handler);
     }
@@ -130,7 +125,7 @@ impl DnsGetHandler {
     /// Returns None if the parameter is missing or cannot be decoded.
     fn parse_dns_query(&self, query: Option<&str>) -> Option<Message> {
         let query = query?;
-        
+
         // Parse query parameters: ?dns=<base64url>
         for param in query.split('&') {
             if let Some(value) = param.strip_prefix("dns=") {
@@ -156,7 +151,7 @@ impl DnsGetHandler {
                 }
             }
         }
-        
+
         warn!("DNS parameter not found in query string");
         None
     }
@@ -185,7 +180,10 @@ impl HttpHandler for DnsGetHandler {
         };
 
         // Process DNS query through the executor
-        let dns_response = self.request_handle.handle_request(dns_query, src_addr).await;
+        let dns_response = self
+            .request_handle
+            .handle_request(dns_query, src_addr)
+            .await;
 
         // Serialize DNS response to binary format
         match dns_response.to_bytes() {
@@ -238,7 +236,11 @@ impl HttpHandler for DnsPostHandler {
         // This prevents memory exhaustion attacks
         const MAX_DNS_MESSAGE_SIZE: usize = 65535;
         if body.len() > MAX_DNS_MESSAGE_SIZE {
-            warn!("DNS message too large: {} bytes from {}", body.len(), src_addr);
+            warn!(
+                "DNS message too large: {} bytes from {}",
+                body.len(),
+                src_addr
+            );
             return Response::builder()
                 .status(StatusCode::PAYLOAD_TOO_LARGE)
                 .header("Content-Type", "text/plain")
@@ -249,7 +251,11 @@ impl HttpHandler for DnsPostHandler {
         // Parse DNS query from binary body
         let dns_query = match Message::from_bytes(&body) {
             Ok(msg) => {
-                debug!("Successfully parsed POST DNS query, ID: {}, size: {} bytes", msg.id(), body.len());
+                debug!(
+                    "Successfully parsed POST DNS query, ID: {}, size: {} bytes",
+                    msg.id(),
+                    body.len()
+                );
                 msg
             }
             Err(e) => {
@@ -257,13 +263,18 @@ impl HttpHandler for DnsPostHandler {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .header("Content-Type", "text/plain")
-                    .body(Full::new(Bytes::from("400 Bad Request: Invalid DNS message")))
+                    .body(Full::new(Bytes::from(
+                        "400 Bad Request: Invalid DNS message",
+                    )))
                     .expect("Failed to build error response");
             }
         };
 
         // Process DNS query through the executor
-        let dns_response = self.request_handle.handle_request(dns_query, src_addr).await;
+        let dns_response = self
+            .request_handle
+            .handle_request(dns_query, src_addr)
+            .await;
 
         // Serialize DNS response to binary format
         match dns_response.to_bytes() {
