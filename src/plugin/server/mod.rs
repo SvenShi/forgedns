@@ -14,9 +14,10 @@ use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::{Level, debug, event_enabled};
+use tracing::{Level, debug, event_enabled, info};
 
 pub mod http;
+pub mod quic;
 pub mod tcp;
 pub mod udp;
 
@@ -98,7 +99,22 @@ impl RequestHandle {
 /// # Returns
 /// * `Ok(TlsAcceptor)` - Configured TLS acceptor
 /// * `Err(DnsError)` - Error if files cannot be read or parsed
-pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig> {
+pub fn load_tls_config(
+    cert: &Option<String>,
+    key: &Option<String>,
+) -> Option<Result<ServerConfig>> {
+    match (cert, key) {
+        (Some(cert), Some(key)) => {
+            info!("Loading TLS configuration: cert={}, key={}", cert, key);
+            Some(load_tls_config_from_path(&cert, &key))
+        }
+        (Some(_), None) => Some(Err(DnsError::plugin(" cert specified but key is missing"))),
+        (None, Some(_)) => Some(Err(DnsError::plugin("key specified but cert is missing"))),
+        (None, None) => None,
+    }
+}
+
+fn load_tls_config_from_path(cert_path: &str, key_path: &str) -> Result<ServerConfig> {
     // Load certificates
     let cert_file = File::open(cert_path).map_err(|e| {
         DnsError::plugin(format!(

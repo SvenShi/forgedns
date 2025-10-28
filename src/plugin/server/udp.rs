@@ -34,10 +34,16 @@ use tracing::{debug, error, info, warn};
 /// UDP server configuration
 #[derive(Deserialize)]
 pub struct UdpServerConfig {
-    /// Entry executor plugin tag to process incoming requests
+    /// Entry executor plugin tag to process incoming requests.
+    ///
+    /// - Must reference an existing executor plugin registered in `PluginRegistry`.
+    /// - All UDP-based DNS queries will be forwarded to this executor.
     entry: String,
 
-    /// UDP listen address (e.g., "0.0.0.0:53")
+    /// UDP listen address in `ip:port` format (e.g., "0.0.0.0:53").
+    ///
+    /// - Must be a valid `SocketAddr` string or validation will fail.
+    /// - Ensure the port is not occupied by other UDP listeners.
     listen: String,
 }
 

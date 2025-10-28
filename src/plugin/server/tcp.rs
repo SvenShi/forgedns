@@ -44,19 +44,33 @@ const DEFAULT_IDLE_TIMEOUT: u64 = 10;
 /// TCP server configuration
 #[derive(Deserialize)]
 pub struct TcpServerConfig {
-    /// Entry executor plugin tag to process incoming requests
+    /// Entry executor plugin tag to process incoming requests.
+    ///
+    /// - Must reference an existing executor plugin registered in `PluginRegistry`.
+    /// - All TCP/TLS DNS queries will be forwarded to this executor.
     entry: String,
 
-    /// TCP listen address (e.g., "0.0.0.0:853" for DNS-over-TLS)
+    /// TCP listen address in `ip:port` format.
+    ///
+    /// - Example: "0.0.0.0:53" (DNS over TCP), "0.0.0.0:853" (DNS over TLS/DoT)
+    /// - Must be a valid `SocketAddr` string or validation will fail.
     listen: String,
 
-    /// Path to TLS certificate file (PEM format, optional)
+    /// Path to TLS certificate file (PEM format, optional).
+    ///
+    /// - When both `cert` and `key` are provided, TLS will be enabled (DoT on port 853).
+    /// - When either is missing, server runs in plain TCP mode.
     cert: Option<String>,
 
-    /// Path to TLS private key file (PEM format, optional)
+    /// Path to TLS private key file (PEM format, optional).
+    ///
+    /// - Supports common key formats (PKCS#8/RSA/EC) via `rustls-pemfile`.
     key: Option<String>,
 
-    /// TCP connection idle timeout in seconds (default: 10)
+    /// TCP connection idle timeout in seconds.
+    ///
+    /// - Default: 10 seconds if omitted.
+    /// - Applied as TCP keepalive interval for long-lived connections.
     idle_timeout: Option<u64>,
 }
 
@@ -141,6 +155,13 @@ async fn run_server(
         }
     };
 
+    info!(
+        listen = %addr,
+        idle_timeout_secs = timeout.as_secs(),
+        tls = %tls_acceptor.is_some(),
+        "TCP server bound successfully"
+    );
+
     // JoinSet to track all active connection tasks
     let mut tasks: JoinSet<()> = JoinSet::new();
     let mut active_connections = 0u64;
@@ -178,7 +199,7 @@ async fn run_server(
                         });
                     }
                     Err(e) => {
-                        debug!(%e, "Error accepting TCP connection");
+                        debug!(%e, listen = %addr, "Error accepting TCP connection");
                     }
                 }
             }
@@ -305,28 +326,9 @@ impl PluginFactory for TcpServerFactory {
         })?;
 
         // Load TLS configuration if cert and key are provided
-        let tls_acceptor = match (&tcp_config.cert, &tcp_config.key) {
-            (Some(cert), Some(key)) => {
-                info!(
-                    "Loading TLS configuration for TCP server [{}]: cert={}, key={}",
-                    plugin_info.tag, cert, key
-                );
-                let config = load_tls_config(cert, key)?;
-                Some(Arc::new(TlsAcceptor::from(Arc::new(config))))
-            }
-            (Some(_), None) => {
-                return Err(DnsError::plugin(format!(
-                    "TCP Server [{}]: cert specified but key is missing",
-                    plugin_info.tag
-                )));
-            }
-            (None, Some(_)) => {
-                return Err(DnsError::plugin(format!(
-                    "TCP Server [{}]: key specified but cert is missing",
-                    plugin_info.tag
-                )));
-            }
-            (None, None) => None,
+        let tls_acceptor = match load_tls_config(&tcp_config.cert, &tcp_config.key) {
+            None => None,
+            Some(res) => Some(Arc::new(TlsAcceptor::from(Arc::new(res?)))),
         };
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(

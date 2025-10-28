@@ -10,8 +10,8 @@
 //! - POST method: DNS query passed in request body (binary format)
 
 use crate::plugin::server::RequestHandle;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};

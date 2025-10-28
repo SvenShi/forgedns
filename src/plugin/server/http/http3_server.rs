@@ -3,12 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
-use crate::plugin::server::http::extract_client_ip;
-use crate::plugin::server::udp;
+use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
+use crate::plugin::server::quic;
 use bytes::Buf;
 use bytes::Bytes;
-use quinn::crypto::rustls::QuicServerConfig;
-use quinn::{Endpoint, EndpointConfig};
 use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -37,47 +35,23 @@ use tracing::{debug, error, warn};
 pub async fn run_server(
     addr: String,
     dispatcher: Arc<HttpDispatcher>,
-    server_config: Option<Box<ServerConfig>>,
-    _idle_timeout: Option<u64>,
+    server_config: ServerConfig,
+    idle_timeout: Option<u64>,
     src_ip_header: Option<String>,
 ) {
-    let socket = match udp::build_udp_socket(&addr) {
-        Ok(s) => s,
+    let endpoint = match quic::build_quic_endpoint(&addr, server_config, idle_timeout) {
+        Ok(value) => value,
         Err(e) => {
-            error!("Failed to bind HTTP3 socket to {}: {}", addr, e);
+            error!("QUIC endpoint build faild: {}", e);
             return;
         }
     };
 
-    let tls_config = match server_config {
-        Some(cfg) => cfg,
-        None => {
-            error!("HTTP/3 requires TLS; server_config is missing");
-            return;
-        }
-    };
-
-    let quic_crypto = match QuicServerConfig::try_from(Arc::from(tls_config)) {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to convert TLS config for QUIC: {}", e);
-            return;
-        }
-    };
-    let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_crypto));
-
-    let endpoint = match Endpoint::new(
-        EndpointConfig::default(),
-        Some(server_config),
-        socket,
-        Arc::new(quinn::TokioRuntime),
-    ) {
-        Ok(e) => e,
-        Err(e) => {
-            error!("Failed to create QUIC endpoint: {}", e);
-            return;
-        }
-    };
+    debug!(
+        listen = %addr,
+        idle_timeout_secs = idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT),
+        "HTTP/3 QUIC endpoint bound successfully"
+    );
 
     // Wrap header name in Arc to avoid cloning Strings per request
     let src_ip_header = Arc::new(src_ip_header);
