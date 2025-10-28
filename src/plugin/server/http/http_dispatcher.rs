@@ -10,12 +10,12 @@
 //! - POST method: DNS query passed in request body (binary format)
 
 use crate::plugin::server::RequestHandle;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use bytes::Bytes;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use http::{Method, Response, StatusCode};
-use http_body_util::Full;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -58,7 +58,7 @@ impl HttpDispatcher {
         query: Option<String>,
         body: Bytes,
         src_addr: SocketAddr,
-    ) -> Response<Full<Bytes>> {
+    ) -> Response<Bytes> {
         debug!("Received request: {} {} from {}", method, path, src_addr);
 
         // Look up the matching route
@@ -70,7 +70,7 @@ impl HttpDispatcher {
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .header("Content-Type", "text/plain")
-                .body(Full::new(Bytes::from("404 Not Found")))
+                .body(Bytes::from("404 Not Found"))
                 .expect("Failed to build 404 response")
         }
     }
@@ -103,7 +103,7 @@ pub trait HttpHandler: Send + Sync + 'static {
         query: Option<String>,
         body: Bytes,
         src_addr: SocketAddr,
-    ) -> Response<Full<Bytes>>;
+    ) -> Response<Bytes>;
 }
 
 /// DNS over HTTPS GET request handler
@@ -166,7 +166,7 @@ impl HttpHandler for DnsGetHandler {
         query: Option<String>,
         _body: Bytes,
         src_addr: SocketAddr,
-    ) -> Response<Full<Bytes>> {
+    ) -> Response<Bytes> {
         // Parse DNS query from URL parameters
         let dns_query = match self.parse_dns_query(query.as_deref()) {
             Some(msg) => msg,
@@ -174,7 +174,7 @@ impl HttpHandler for DnsGetHandler {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .header("Content-Type", "text/plain")
-                    .body(Full::new(Bytes::from("400 Bad Request: Invalid DNS query")))
+                    .body(Bytes::from("400 Bad Request: Invalid DNS query"))
                     .expect("Failed to build error response");
             }
         };
@@ -193,7 +193,7 @@ impl HttpHandler for DnsGetHandler {
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/dns-message")
                     .header("Cache-Control", "max-age=300")
-                    .body(Full::new(Bytes::from(response_bytes)))
+                    .body(Bytes::from(response_bytes))
                     .expect("Failed to build DNS response")
             }
             Err(e) => {
@@ -201,7 +201,7 @@ impl HttpHandler for DnsGetHandler {
                 Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .header("Content-Type", "text/plain")
-                    .body(Full::new(Bytes::from("500 Internal Server Error")))
+                    .body(Bytes::from("500 Internal Server Error"))
                     .expect("Failed to build error response")
             }
         }
@@ -231,7 +231,7 @@ impl HttpHandler for DnsPostHandler {
         _query: Option<String>,
         body: Bytes,
         src_addr: SocketAddr,
-    ) -> Response<Full<Bytes>> {
+    ) -> Response<Bytes> {
         // Limit request size (RFC 8484 recommends maximum 65535 bytes)
         // This prevents memory exhaustion attacks
         const MAX_DNS_MESSAGE_SIZE: usize = 65535;
@@ -244,7 +244,7 @@ impl HttpHandler for DnsPostHandler {
             return Response::builder()
                 .status(StatusCode::PAYLOAD_TOO_LARGE)
                 .header("Content-Type", "text/plain")
-                .body(Full::new(Bytes::from("413 Payload Too Large")))
+                .body(Bytes::from("413 Payload Too Large"))
                 .expect("Failed to build error response");
         }
 
@@ -263,9 +263,7 @@ impl HttpHandler for DnsPostHandler {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .header("Content-Type", "text/plain")
-                    .body(Full::new(Bytes::from(
-                        "400 Bad Request: Invalid DNS message",
-                    )))
+                    .body(Bytes::from("400 Bad Request: Invalid DNS message"))
                     .expect("Failed to build error response");
             }
         };
@@ -284,7 +282,7 @@ impl HttpHandler for DnsPostHandler {
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/dns-message")
                     .header("Cache-Control", "max-age=300")
-                    .body(Full::new(Bytes::from(response_bytes)))
+                    .body(Bytes::from(response_bytes))
                     .expect("Failed to build DNS response")
             }
             Err(e) => {
@@ -292,7 +290,7 @@ impl HttpHandler for DnsPostHandler {
                 Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .header("Content-Type", "text/plain")
-                    .body(Full::new(Bytes::from("500 Internal Server Error")))
+                    .body(Bytes::from("500 Internal Server Error"))
                     .expect("Failed to build error response")
             }
         }
