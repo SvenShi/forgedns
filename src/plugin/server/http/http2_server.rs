@@ -7,7 +7,6 @@ use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
 use crate::plugin::server::http::{extract_client_ip, DEFAULT_IDLE_TIMEOUT};
 use crate::plugin::server::tcp;
 use bytes::Bytes;
-use http_body_util::BodyExt;
 use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -214,14 +213,7 @@ async fn handle_http_stream<S>(
                 .await;
 
             // Convert response to HTTP/2 format
-            let (parts, response_body) = response.into_parts();
-            let response_bytes = match response_body.collect().await {
-                Ok(collected) => collected.to_bytes(),
-                Err(e) => {
-                    warn!("Failed to collect response body from {}: {}", src, e);
-                    return;
-                }
-            };
+            let (parts, response_bytes) = response.into_parts();
 
             // Build HTTP/2 response with empty body (body sent separately)
             let h2_response = match http::Response::builder()

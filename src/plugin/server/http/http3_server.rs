@@ -7,7 +7,6 @@ use crate::plugin::server::http::extract_client_ip;
 use crate::plugin::server::udp;
 use bytes::Buf;
 use bytes::Bytes;
-use http_body_util::BodyExt;
 use quinn::crypto::rustls::QuicServerConfig;
 use quinn::{Endpoint, EndpointConfig};
 use rustls::ServerConfig;
@@ -210,14 +209,7 @@ async fn handle_h3_request(
         .handle_request(method, path, query, body, client_addr)
         .await;
 
-    let (parts, response_body) = response.into_parts();
-    let response_bytes = match response_body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(e) => {
-            warn!("Failed to collect response body from {}: {}", src, e);
-            return;
-        }
-    };
+    let (parts, response_bytes) = response.into_parts();
 
     let h3_response = match http::Response::builder()
         .status(parts.status)
