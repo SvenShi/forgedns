@@ -28,10 +28,10 @@ pub mod executor;
 pub mod registry;
 pub mod server;
 
-pub use registry::PluginRegistry;
-use crate::plugin::server::http::HttpServerFactory;
 use crate::plugin::server::Server;
+use crate::plugin::server::http::HttpServerFactory;
 use crate::plugin::server::tcp::TcpServerFactory;
+pub use registry::PluginRegistry;
 
 /// Uninitialized plugin returned by factories
 #[allow(unused)]

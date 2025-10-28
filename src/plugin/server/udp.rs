@@ -25,6 +25,7 @@ use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io::Error;
 use std::net::SocketAddr;
+use std::net::UdpSocket as StdUdpSocket;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -79,7 +80,7 @@ impl Server for UdpServer {
 /// handler tasks for each request. Performs periodic cleanup of finished tasks.
 async fn run_server(addr: String, handler: Arc<RequestHandle>) {
     let socket = match build_udp_socket(&addr) {
-        Ok(s) => s,
+        Ok(s) => UdpSocket::from_std(s).unwrap(),
         Err(e) => {
             error!("Failed to bind UDP socket to {}: {}", addr, e);
             return;
@@ -132,7 +133,7 @@ async fn run_server(addr: String, handler: Arc<RequestHandle>) {
 /// Build a UDP socket with reuse_address and reuse_port options
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
-fn build_udp_socket(addr: &str) -> std::result::Result<UdpSocket, Error> {
+pub fn build_udp_socket(addr: &str) -> Result<StdUdpSocket> {
     let addr = SocketAddr::from_str(addr).map_err(|e| {
         Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -149,7 +150,7 @@ fn build_udp_socket(addr: &str) -> std::result::Result<UdpSocket, Error> {
 
     sock.bind(&addr.into())?;
 
-    UdpSocket::from_std(sock.into())
+    Ok(sock.into())
 }
 
 /// Factory for creating UDP server plugin instances

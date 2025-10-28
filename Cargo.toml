@@ -41,6 +41,7 @@ fast-socks5 = "0.10.0"
 
 
 hotpath = { version = "0.5.2", optional = true }
+log = "0.4.27"
 
 [features]
 hotpath = ["dep:hotpath", "hotpath/hotpath"]

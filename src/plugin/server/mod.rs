@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::DnsContext;
-use crate::core::error::DnsError;
+use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
 use crate::plugin::{Plugin, PluginRegistry};
 use hickory_proto::op::{Message, MessageType, OpCode};
@@ -14,12 +14,11 @@ use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio_rustls::TlsAcceptor;
 use tracing::{Level, debug, event_enabled};
 
+pub mod http;
 pub mod tcp;
 pub mod udp;
-pub mod http;
 
 pub trait Server: Plugin {
     fn run(&self);
@@ -99,7 +98,7 @@ impl RequestHandle {
 /// # Returns
 /// * `Ok(TlsAcceptor)` - Configured TLS acceptor
 /// * `Err(DnsError)` - Error if files cannot be read or parsed
-pub fn load_tls_config(cert_path: &str, key_path: &str) -> crate::core::error::Result<TlsAcceptor> {
+pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig> {
     // Load certificates
     let cert_file = File::open(cert_path).map_err(|e| {
         DnsError::plugin(format!(
@@ -149,5 +148,5 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> crate::core::error::R
         .with_single_cert(certs, private_key)
         .map_err(|e| DnsError::plugin(format!("Failed to build TLS configuration: {}", e)))?;
 
-    Ok(TlsAcceptor::from(Arc::new(config)))
+    Ok(config)
 }
