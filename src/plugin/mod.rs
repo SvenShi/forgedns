@@ -13,26 +13,25 @@
 //!
 //! All plugins are registered via factories and instantiated from config.
 
-use crate::config::types::{Config, PluginConfig};
-use crate::core::error::Result;
-use crate::plugin::executor::Executor;
-use crate::plugin::executor::forward::ForwardFactory;
-use crate::plugin::server::udp::UdpServerFactory;
-use async_trait::async_trait;
-use serde_yml::Value;
-use std::fmt::Debug;
-use std::sync::Arc;
-
 mod dependency;
 pub mod executor;
 pub mod registry;
 pub mod server;
 
-use crate::plugin::server::Server;
+use crate::config::types::{Config, PluginConfig};
+use crate::core::error::Result;
+use crate::plugin::executor::forward::ForwardFactory;
+use crate::plugin::executor::Executor;
+use crate::plugin::server::udp::UdpServerFactory;
+use async_trait::async_trait;
+use serde_yml::Value;
+use std::fmt::Debug;
+use std::sync::Arc;
 use crate::plugin::server::http::HttpServerFactory;
 use crate::plugin::server::quic::QuicServerFactory;
 use crate::plugin::server::tcp::TcpServerFactory;
-use registry::PluginRegistry;
+use crate::plugin::server::Server;
+pub use registry::PluginRegistry;
 
 /// Uninitialized plugin returned by factories
 #[allow(unused)]
