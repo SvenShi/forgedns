@@ -14,13 +14,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
-use futures::StreamExt;
-use hickory_proto::DnsStreamHandle;
-use hickory_proto::op::Message;
-use hickory_proto::runtime::TokioRuntimeProvider;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
-use hickory_proto::udp::UdpStream;
-use hickory_proto::xfer::SerialMessage;
+ 
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io::Error;
@@ -30,6 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tracing::{debug, error, info, warn};
+use crate::network::transport::{recv_message_from_udp, send_message_to_udp};
 
 /// UDP server configuration
 #[derive(Deserialize)]
@@ -93,46 +88,27 @@ async fn run_server(addr: String, handler: Arc<RequestHandle>) {
         }
     };
 
-    let (mut stream, stream_handle) =
-        UdpStream::<TokioRuntimeProvider>::with_bound(socket, ([127, 255, 255, 254], 0).into());
-
-    let stream_handle = Arc::new(stream_handle);
-
     debug!("UDP server event loop started on {}", addr);
 
+    let socket = Arc::new(socket);
+    let mut buf = [0u8; 4096];
     loop {
-        let message = match stream.next().await {
-            None => break,
-            Some(message) => message,
-        };
-
-        let message = match message {
-            Err(error) => {
-                warn!(%error, "Error receiving message on UDP socket");
-                continue;
-            }
-            Ok(message) => message,
-        };
-
-        // Spawn handler task for this request (non-blocking)
-        let handler = handler.clone();
-        let stream_handle = stream_handle.clone();
-        tokio::spawn(async move {
-            let (msg, src_addr) = message.into_parts();
-            if let Ok(msg) = Message::from_bytes(msg.as_slice()) {
-                let response = handler.handle_request(msg, src_addr).await;
-                if let Ok(bytes) = response.to_bytes() {
-                    if let Err(e) = stream_handle
-                        .with_remote_addr(src_addr)
-                        .send(SerialMessage::new(bytes, src_addr))
-                    {
+        match recv_message_from_udp(&socket, &mut buf).await {
+            Ok((msg, src_addr)) => {
+                let handler = handler.clone();
+                let socket = socket.clone();
+                tokio::spawn(async move {
+                    let response = handler.handle_request(msg, src_addr).await;
+                    if let Err(e) = send_message_to_udp(&socket, &response, src_addr).await {
                         warn!("Failed to send response to {}: {}", src_addr, e);
                     }
-                } else {
-                    warn!("Failed to serialize response for {}", src_addr);
-                }
+                });
             }
-        });
+            Err(e) => {
+                warn!("Error receiving message on UDP socket: {}", e);
+                continue;
+            }
+        }
     }
 }
 

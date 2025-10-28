@@ -14,9 +14,6 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::server::{RequestHandle, Server, load_tls_config, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
-use bytes::BytesMut;
-use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
 use rustls::ServerConfig;
 use serde::Deserialize;
@@ -25,6 +22,7 @@ use std::time::Duration;
 // no extra io extension traits needed
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
+use crate::network::transport::{read_from_async_io, write_to_async_io};
 
 /// QUIC server configuration
 #[derive(Deserialize)]
@@ -201,53 +199,13 @@ async fn handle_doq_bi_stream(
     handler: Arc<RequestHandle>,
     remote_addr: std::net::SocketAddr,
 ) -> Result<()> {
-    // Read 2-byte big-endian length prefix
-    let mut len_prefix = [0u8; 2];
-    recv_stream
-        .read_exact(&mut len_prefix)
-        .await
-        .map_err(|e| DnsError::protocol(format!("Failed to read DoQ length prefix: {}", e)))?;
-    let msg_len = u16::from_be_bytes(len_prefix) as usize;
-
-    // RFC 9250: DNS message size is limited to 65535 bytes.
-    let mut buf = BytesMut::with_capacity(msg_len);
-    buf.resize(msg_len, 0);
-    recv_stream.read_exact(&mut buf[..]).await.map_err(|e| {
-        DnsError::protocol(format!(
-            "Failed to read DoQ message body ({}): {}",
-            msg_len, e
-        ))
-    })?;
-
-    let msg_bytes = buf.freeze();
-    if let Ok(request_msg) = Message::from_bytes(&msg_bytes) {
+    if let Ok(request_msg) = read_from_async_io(recv_stream).await {
         let response = handler.handle_request(request_msg, remote_addr).await;
-        if let Ok(resp_bytes) = response.to_bytes() {
-            if resp_bytes.len() > u16::MAX as usize {
-                warn!(
-                    "Response too large for DoQ ({} bytes) from {}",
-                    resp_bytes.len(),
-                    remote_addr
-                );
-                return Ok(());
-            }
-            let resp_len = resp_bytes.len() as u16;
-            let resp_len_prefix = resp_len.to_be_bytes();
-
-            debug!("received packet len: {} bytes", resp_len);
-
-            if let Err(e) = send_stream.write_all(&resp_len_prefix).await {
-                warn!("Failed to write response length to {}: {}", remote_addr, e);
-                return Ok(());
-            }
-            if let Err(e) = send_stream.write_all(&resp_bytes).await {
-                warn!("Failed to write response body to {}: {}", remote_addr, e);
-                return Ok(());
-            }
-            let _ = send_stream.finish();
-        } else {
-            warn!("Failed to serialize response for {}", remote_addr);
+        if let Err(e) = write_to_async_io(send_stream, &response).await {
+            warn!("Failed to send DoQ response to {}: {}", remote_addr, e);
+            return Ok(());
         }
+        let _ = send_stream.finish();
     }
 
     Ok(())
