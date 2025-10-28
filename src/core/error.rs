@@ -11,8 +11,8 @@
 
 use crate::config::types::ConfigError;
 use fast_socks5::SocksError;
-use quinn::ConnectError;
 use quinn::crypto::rustls::NoInitialCipherSuite;
+use quinn::{ConnectError, VarIntBoundsExceeded};
 use thiserror::Error;
 
 /// Main error type for RustDNS
@@ -64,6 +64,9 @@ pub enum DnsError {
     /// No initial cipher error
     #[error("No initial cipher error: {0}")]
     NoInitialCipherSuiteError(#[from] NoInitialCipherSuite),
+
+    #[error("integer bounds exceeded error: {0}")]
+    VarIntBoundsExceeded(#[from] VarIntBoundsExceeded),
 
     /// socks5 connect error
     #[error("Socks5 error: {0}")]

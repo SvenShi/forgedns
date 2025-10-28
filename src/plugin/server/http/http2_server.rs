@@ -4,7 +4,7 @@
  */
 
 use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
-use crate::plugin::server::http::{extract_client_ip, DEFAULT_IDLE_TIMEOUT};
+use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
 use crate::plugin::server::tcp;
 use bytes::Bytes;
 use rustls::ServerConfig;
@@ -37,7 +37,7 @@ use tracing::{debug, error, warn};
 pub async fn run_server(
     addr: String,
     dispatcher: Arc<HttpDispatcher>,
-    server_config: Option<Box<ServerConfig>>,
+    server_config: Option<ServerConfig>,
     idle_timeout: Option<u64>,
     src_ip_header: Option<String>,
 ) {
@@ -50,6 +50,13 @@ pub async fn run_server(
         }
     };
 
+    debug!(
+        listen = %addr,
+        idle_timeout_secs = timeout.as_secs(),
+        has_tls = %server_config.is_some(),
+        "HTTP/2 server bound successfully"
+    );
+
     // Wrap header name in Arc to avoid cloning Strings per request
     let src_ip_header = Arc::new(src_ip_header);
 
@@ -57,7 +64,7 @@ pub async fn run_server(
     let mut tasks: JoinSet<()> = JoinSet::new();
     let mut active_connections = 0u64;
     let tls_acceptor = if let Some(server_config) = server_config {
-        Some(Arc::new(TlsAcceptor::from(Arc::from(server_config))))
+        Some(Arc::new(TlsAcceptor::from(Arc::new(server_config))))
     } else {
         None
     };
@@ -95,7 +102,7 @@ pub async fn run_server(
                         });
                     }
                     Err(e) => {
-                        debug!(%e, "Error accepting HTTP connection");
+                        debug!(%e, listen = %addr, "Error accepting HTTP connection");
                     }
                 }
             }

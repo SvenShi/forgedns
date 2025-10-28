@@ -22,7 +22,7 @@ mod http_dispatcher;
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
-use crate::plugin::server::{load_tls_config, RequestHandle, Server};
+use crate::plugin::server::{RequestHandle, Server, load_tls_config};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
 use http::Method;
@@ -31,35 +31,52 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
-const DEFAULT_IDLE_TIMEOUT: u64 = 30;
+pub(crate) const DEFAULT_IDLE_TIMEOUT: u64 = 30;
 
 /// HTTP server configuration
 #[derive(Deserialize)]
 pub struct HttpServerConfig {
-    /// Entry executor plugin tag to process incoming requests
+    /// DoH route entries mapping HTTP paths to executor plugins.
+    ///
+    /// - Each route defines a `path` (e.g., "/dns-query") and an executor `exec` tag.
+    /// - Requests are routed by HTTP method and path via `HttpDispatcher`.
     entries: Vec<Entry>,
 
-    /// HTTP listen address (e.g., "0.0.0.0:443")
+    /// HTTP listen address in `ip:port` format (e.g., "0.0.0.0:443").
+    ///
+    /// - Must be a valid `SocketAddr` string or validation will fail.
+    /// - When TLS is configured, server runs HTTPS (HTTP/2) and optional HTTP/3.
     listen: String,
 
-    /// HTTP header name to extract real client IP (e.g., "X-Real-IP", "X-Forwarded-For")
-    /// Used when running behind a reverse proxy
+    /// HTTP header name to extract real client IP (optional).
+    ///
+    /// - Common values: "X-Real-IP", "X-Forwarded-For".
+    /// - Useful when running behind reverse proxies; falls back to TCP source IP if absent.
     src_ip_header: Option<String>,
 
-    /// Path to TLS certificate file (PEM format, optional)
+    /// Path to TLS certificate file (PEM format, optional).
+    ///
+    /// - When both `cert` and `key` are provided, HTTPS is enabled.
+    /// - Required for enabling HTTP/3.
     cert: Option<String>,
 
-    /// Path to TLS private key file (PEM format, optional)
+    /// Path to TLS private key file (PEM format, optional).
+    ///
+    /// - Supports common key formats (PKCS#8/RSA/EC) via `rustls-pemfile`.
     key: Option<String>,
 
-    /// HTTP connection idle timeout in seconds (default: 30)
+    /// HTTP connection idle timeout in seconds.
+    ///
+    /// - Default: 30 seconds if omitted.
+    /// - Applies to HTTP/2 connections; HTTP/3 uses QUIC transport idle timeout.
     idle_timeout: Option<u64>,
 
-    /// Enable HTTP/3 for DoH connections
+    /// Enable HTTP/3 (QUIC) for DoH connections.
     ///
-    /// When `true`, HTTP/3 (QUIC) will be enabled for DoH connections.
+    /// - Requires TLS to be configured (`cert` + `key`).
+    /// - Reuses the same `listen` address via QUIC endpoint.
     enable_http3: Option<bool>,
 }
 
@@ -68,9 +85,14 @@ pub struct HttpServerConfig {
 /// Maps an HTTP path to a DNS executor plugin
 #[derive(Deserialize, Debug)]
 pub struct Entry {
-    /// HTTP path (e.g., "/dns-query")
+    /// HTTP path (e.g., "/dns-query").
+    ///
+    /// - Must start with '/'.
+    /// - Combined with HTTP method for routing in `HttpDispatcher`.
     pub path: String,
-    /// Executor plugin tag to handle DNS queries for this path
+    /// Executor plugin tag to handle DNS queries for this path.
+    ///
+    /// - Must reference an existing executor plugin in `PluginRegistry`.
     pub exec: String,
 }
 
@@ -91,7 +113,7 @@ pub struct HttpServer {
     /// HTTP request dispatcher for routing
     dispatcher: Arc<HttpDispatcher>,
     /// TLS acceptor for HTTPS support (None for plain HTTP)
-    server_config: Option<Box<ServerConfig>>,
+    server_config: Option<ServerConfig>,
     /// Connection idle timeout in seconds
     idle_timeout: Option<u64>,
     /// Enable HTTP/3 for DoH connections
@@ -142,18 +164,25 @@ impl Server for HttpServer {
         if tls_mode {
             info!("HTTPS (HTTP/2) server listening on {}", listen);
         } else {
-            info!("HTTP server listening on {}", listen);
+            info!("HTTP (HTTP/2) server listening on {}", listen);
         }
 
         if self.enable_http3.unwrap_or(false) {
-            info!("HTTP/3 server listening on {}", listen);
-            tokio::spawn(http3_server::run_server(
-                listen.clone(),
-                self.dispatcher.clone(),
-                self.server_config.clone(),
-                self.idle_timeout,
-                self.src_ip_header.clone(),
-            ));
+            match self.server_config.clone() {
+                Some(cfg) => {
+                    info!("HTTP/3 server listening on {}", listen);
+                    tokio::spawn(http3_server::run_server(
+                        listen.clone(),
+                        self.dispatcher.clone(),
+                        cfg,
+                        self.idle_timeout,
+                        self.src_ip_header.clone(),
+                    ));
+                }
+                None => {
+                    error!("HTTP/3 requires TLS; server_config is missing");
+                }
+            };
         }
     }
 }
@@ -221,27 +250,9 @@ impl PluginFactory for HttpServerFactory {
         }
 
         // Load TLS configuration if cert and key are provided
-        let server_config = match (&http_config.cert, &http_config.key) {
-            (Some(cert), Some(key)) => {
-                info!(
-                    "Loading TLS configuration for HTTP server [{}]: cert={}, key={}",
-                    plugin_info.tag, cert, key
-                );
-                Some(Box::new(load_tls_config(cert, key)?))
-            }
-            (Some(_), None) => {
-                return Err(DnsError::plugin(format!(
-                    "HTTP Server [{}]: cert specified but key is missing",
-                    plugin_info.tag
-                )));
-            }
-            (None, Some(_)) => {
-                return Err(DnsError::plugin(format!(
-                    "HTTP Server [{}]: key specified but cert is missing",
-                    plugin_info.tag
-                )));
-            }
-            (None, None) => None,
+        let server_config = match load_tls_config(&http_config.cert, &http_config.key) {
+            None => None,
+            Some(res) => Some(res?),
         };
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
