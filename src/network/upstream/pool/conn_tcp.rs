@@ -16,15 +16,15 @@ use async_trait::async_trait;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    oneshot,
     Notify,
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    oneshot,
 };
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};

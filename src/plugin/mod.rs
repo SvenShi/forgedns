@@ -20,18 +20,18 @@ pub mod server;
 
 use crate::config::types::{Config, PluginConfig};
 use crate::core::error::Result;
-use crate::plugin::executor::forward::ForwardFactory;
 use crate::plugin::executor::Executor;
-use crate::plugin::server::udp::UdpServerFactory;
-use async_trait::async_trait;
-use serde_yml::Value;
-use std::fmt::Debug;
-use std::sync::Arc;
+use crate::plugin::executor::forward::ForwardFactory;
+use crate::plugin::server::Server;
 use crate::plugin::server::http::HttpServerFactory;
 use crate::plugin::server::quic::QuicServerFactory;
 use crate::plugin::server::tcp::TcpServerFactory;
-use crate::plugin::server::Server;
+use crate::plugin::server::udp::UdpServerFactory;
+use async_trait::async_trait;
 pub use registry::PluginRegistry;
+use serde_yml::Value;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 /// Uninitialized plugin returned by factories
 #[allow(unused)]

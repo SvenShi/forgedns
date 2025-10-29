@@ -11,11 +11,10 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
-
-use crate::network::transport::udp_transport::UdpTransport;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io::Error;

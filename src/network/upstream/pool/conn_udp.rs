@@ -6,22 +6,21 @@
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::network::transport::udp_transport::UdpTransport;
+use crate::network::upstream::ConnectionInfo;
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::connect_socket;
-use crate::network::upstream::ConnectionInfo;
 use async_trait::async_trait;
-// duplicate import removed
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
@@ -114,16 +113,14 @@ impl Connection for UdpConnection {
             match timeout(current_timeout, rx).await {
                 Ok(res) => match res {
                     Ok(response) => {
-                        debug!(
-                            conn_id = self.id,
-                            query_id,
-                            raw_id,
-                            "Received UDP response"
-                        );
+                        debug!(conn_id = self.id, query_id, raw_id, "Received UDP response");
                         return Ok(response);
                     }
                     Err(_canceled) => {
-                        debug!(conn_id = self.id, query_id, "Listener dropped channel, retrying");
+                        debug!(
+                            conn_id = self.id,
+                            query_id, "Listener dropped channel, retrying"
+                        );
                         current_timeout = self.timeout; // escalate timeout for second attempt
                         continue;
                     }
