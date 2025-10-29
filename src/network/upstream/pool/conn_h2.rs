@@ -6,14 +6,15 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
-    build_dns_get_request, build_doh_request_uri, connect_stream, connect_tls, get_buf_from_res,
+    build_dns_get_request, build_doh_request_uri, connect_stream, connect_tls,
+    get_cap_buf_with_context_len,
 };
 use crate::network::upstream::{Connection, ConnectionInfo, Socks5Opt};
+use async_trait::async_trait;
 use bytes::{BufMut, Bytes};
 use h2::client::{ResponseFuture, SendRequest};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
-use hickory_proto::xfer::DnsResponse;
 use http::Version;
 use std::fmt::Debug;
 use std::net::IpAddr;
@@ -36,7 +37,7 @@ pub struct H2Connection {
     close_notify: Notify,
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Connection for H2Connection {
     fn close(&self) {
         if self.closed.swap(true, Ordering::Relaxed) {
@@ -47,7 +48,7 @@ impl Connection for H2Connection {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
+    async fn query(&self, mut request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("DoH connection closed"));
         }
@@ -72,7 +73,7 @@ impl Connection for H2Connection {
 
         let result = match timeout(self.timeout, recv(response_future)).await {
             Ok(Ok(bytes)) => {
-                let mut resp = DnsResponse::from_buffer(bytes.to_vec())?;
+                let mut resp = Message::from_vec(&bytes)?;
                 resp.set_id(raw_id);
                 debug!(conn_id = self.id, raw_id, "Received H2 response");
                 Ok(resp)
@@ -196,7 +197,7 @@ async fn recv(response_future: ResponseFuture) -> Result<Bytes> {
         .map_err(|e| DnsError::protocol(format!("H2 response error: {}", e)))?;
 
     let status_code = response.status();
-    let mut response_bytes = get_buf_from_res(&mut response);
+    let mut response_bytes = get_cap_buf_with_context_len(&mut response);
     let mut body = response.into_body();
 
     while let Some(Ok(partial_bytes)) = body.data().await {

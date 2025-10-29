@@ -15,8 +15,6 @@ use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::Connection;
 use crate::network::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
-use base64::Engine;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use bytes::BytesMut;
 use fast_socks5::client::Socks5Stream;
 use http::header::CONTENT_LENGTH;
@@ -28,6 +26,8 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
+use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
@@ -198,7 +198,7 @@ pub fn build_dns_get_request(mut uri: String, buf: Vec<u8>, version: Version) ->
 /// - Memory copies when buffer grows
 /// - Potential performance hiccups from allocator
 #[inline]
-pub fn get_buf_from_res<T>(response: &mut Response<T>) -> BytesMut {
+pub fn get_cap_buf_with_context_len<T>(response: &mut Response<T>) -> BytesMut {
     let capacity = response
         .headers()
         .get(CONTENT_LENGTH)

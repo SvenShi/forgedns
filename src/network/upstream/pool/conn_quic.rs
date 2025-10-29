@@ -4,13 +4,13 @@
  */
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::network::transport::quic_transport::QuicTransport;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
 use crate::network::upstream::{Connection, ConnectionInfo};
-use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 
-use crate::network::transport::quic_transport::QuicTransport;
+use async_trait::async_trait;
+use hickory_proto::op::Message;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ impl Debug for QuicConnection {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Connection for QuicConnection {
     /// Gracefully close the QUIC connection
     ///
@@ -73,7 +73,7 @@ impl Connection for QuicConnection {
     ///
     /// This follows RFC 9250 (DNS over Dedicated QUIC Connections)
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
+    async fn query(&self, mut request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("Cannot query on closed QUIC connection"));
         }
@@ -117,7 +117,7 @@ impl Connection for QuicConnection {
         }
 
         let result = match timeout(self.timeout, reader.read_message()).await {
-            Ok(Ok(msg)) => match DnsResponse::from_message(msg) {
+            Ok(msg) => match msg {
                 Ok(mut resp) => {
                     resp.set_id(raw_id);
                     debug!(
@@ -140,15 +140,6 @@ impl Connection for QuicConnection {
                     )))
                 }
             },
-            Ok(Err(e)) => {
-                warn!(
-                    conn_id = self.id,
-                    query_id = raw_id,
-                    error = ?e,
-                    "QUIC DNS query failed"
-                );
-                Err(e)
-            }
             Err(_) => {
                 warn!(
                     conn_id = self.id,

@@ -14,7 +14,7 @@
 //! - No locks or async operations
 //! - Cache-friendly: slots are inline in the array
 
-use hickory_proto::xfer::DnsResponse;
+use hickory_proto::op::Message;
 use rand::random;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU16, Ordering};
@@ -31,7 +31,7 @@ const MAX_IDS: usize = u16::MAX as usize;
 pub struct RequestMap {
     /// Array of atomic pointers to response senders
     /// Index = DNS query ID
-    slots: Vec<AtomicPtr<Sender<DnsResponse>>>,
+    slots: Vec<AtomicPtr<Sender<Message>>>,
 
     /// Current number of active requests
     size: AtomicU16,
@@ -62,7 +62,7 @@ impl RequestMap {
     /// Panics if all slots are occupied (extremely rare in practice)
     #[inline(always)]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn store(&self, tx: Sender<DnsResponse>) -> u16 {
+    pub fn store(&self, tx: Sender<Message>) -> u16 {
         let ptr = Box::into_raw(Box::new(tx));
         let start = random::<u16>() as usize;
 
@@ -128,7 +128,7 @@ impl RequestMap {
     /// The response sender if it exists, None otherwise
     #[inline(always)]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn take(&self, id: u16) -> Option<Sender<DnsResponse>> {
+    pub fn take(&self, id: u16) -> Option<Sender<Message>> {
         let slot = &self.slots[id as usize];
         let ptr = slot.swap(ptr::null_mut(), Ordering::AcqRel);
         if ptr.is_null() {

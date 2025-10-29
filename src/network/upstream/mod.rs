@@ -42,7 +42,6 @@ use crate::network::upstream::utils::try_lookup_server_name;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
@@ -250,7 +249,7 @@ pub trait Upstream: Send + Sync + Debug {
     /// **Always use `query()` instead!** Calling this method directly bypasses
     /// timeout protection and is considered a bug.
     #[doc(hidden)]
-    async fn inner_query(&self, request: Message) -> Result<DnsResponse>;
+    async fn inner_query(&self, request: Message) -> Result<Message>;
 
     /// Return the connection configuration information
     ///
@@ -288,7 +287,7 @@ pub trait Upstream: Send + Sync + Debug {
     /// # Errors
     /// - Returns `DnsError::plugin` on timeout
     /// - Returns upstream-specific errors on query failures
-    async fn query(&self, message: Message) -> Result<DnsResponse> {
+    async fn query(&self, message: Message) -> Result<Message> {
         let timeout_duration = self.timeout();
 
         // Apply timeout wrapper to the inner query
@@ -788,7 +787,7 @@ impl<C: Connection> Upstream for PooledUpstream<C> {
     ///
     /// The pool handles connection selection, creation, and lifecycle management.
     /// No additional logging here as the pool layer already logs connection events.
-    async fn inner_query(&self, request: Message) -> Result<DnsResponse> {
+    async fn inner_query(&self, request: Message) -> Result<Message> {
         self.pool.query(request).await
     }
 
@@ -819,7 +818,7 @@ struct UdpTruncatedUpstream {
 
 #[async_trait]
 impl Upstream for UdpTruncatedUpstream {
-    async fn inner_query(&self, request: Message) -> Result<DnsResponse> {
+    async fn inner_query(&self, request: Message) -> Result<Message> {
         // Try UDP first (most DNS queries fit in UDP packets)
         let response = self.main_pool.query(request.clone()).await?;
 
@@ -1057,7 +1056,7 @@ impl<C: Connection> Upstream for BootstrapUpstream<C> {
     /// - Hot path: pool already initialized, just forward query
     /// - Cold path: bootstrap resolution + pool creation (first query only)
     /// - IP change: new pool creation (rare, based on DNS TTL)
-    async fn inner_query(&self, request: Message) -> Result<DnsResponse> {
+    async fn inner_query(&self, request: Message) -> Result<Message> {
         // Ensure connection pool is initialized with current IP
         // Fast path: just checks atomic, no allocation
         // Slow path: resolves DNS + creates pool (only on first query or IP change)
