@@ -48,7 +48,6 @@ pub(crate) mod pool_reuse;
 use crate::core::error::Result;
 use async_trait::async_trait;
 use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,7 +67,7 @@ pub trait Connection: Send + Sized + Debug + Sync + 'static {
     /// Send a DNS query and asynchronously wait for the response
     ///
     /// This is a hot path - implementations should minimize overhead
-    async fn query(&self, request: Message) -> Result<DnsResponse>;
+    async fn query(&self, request: Message) -> Result<Message>;
 
     /// Get the number of queries currently in flight on this connection
     ///
@@ -113,7 +112,7 @@ pub trait ConnectionPool<C: Connection>: Send + Sync + Debug + 'static {
     ///
     /// The pool automatically selects or creates an appropriate connection.
     /// This is the main hot path for DNS queries.
-    async fn query(&self, request: Message) -> Result<DnsResponse>;
+    async fn query(&self, request: Message) -> Result<Message>;
 
     /// Perform maintenance on the pool
     ///

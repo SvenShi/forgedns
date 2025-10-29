@@ -14,7 +14,6 @@ use crate::network::upstream::utils::{connect_stream, connect_tls};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
 use async_trait::async_trait;
 use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -80,7 +79,7 @@ impl Connection for TcpConnection {
     ///
     /// # Performance
     /// Uses TCP length-prefixed framing (2-byte BE length header) as per RFC 1035
-    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
+    async fn query(&self, mut request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol(format!(
                 "Cannot query on closed TCP connection (id={})",
@@ -263,24 +262,13 @@ impl TcpConnection {
                         Ok(msg) => {
                             let id = msg.id();
                             if let Some(sender) = self.request_map.take(id) {
-                                match DnsResponse::from_message(msg) {
-                                    Ok(res) => {
-                                        let _ = sender.send(res);
-                                        self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
-                                        debug!(
-                                            conn_id = self.id,
-                                            query_id = id,
-                                            "Matched and delivered DNS response to waiting query"
-                                        );
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            conn_id = self.id,
-                                            error = ?e,
-                                            "Failed to convert Message to DnsResponse"
-                                        );
-                                    }
-                                }
+                                let _ = sender.send(msg);
+                                self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
+                                debug!(
+                                    conn_id = self.id,
+                                    query_id = id,
+                                    "Matched and delivered DNS response to waiting query"
+                                );
                             } else {
                                 debug!(
                                     conn_id = self.id,

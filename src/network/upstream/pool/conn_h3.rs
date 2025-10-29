@@ -6,16 +6,17 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
-    build_dns_get_request, build_doh_request_uri, connect_quic, connect_socket, get_buf_from_res,
+    build_dns_get_request, build_doh_request_uri, connect_quic, connect_socket,
+    get_cap_buf_with_context_len,
 };
 use crate::network::upstream::{Connection, ConnectionInfo};
+use async_trait::async_trait;
 use bytes::{BufMut, Bytes};
 use futures::future::poll_fn;
 use h3::client::{RequestStream, SendRequest};
 use h3_quinn::{BidiStream, OpenStreams};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinEncodable;
-use hickory_proto::xfer::DnsResponse;
 use http::Version;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
@@ -42,7 +43,7 @@ impl Debug for H3Connection {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Connection for H3Connection {
     fn close(&self) {
         if self.closed.swap(true, Ordering::Relaxed) {
@@ -53,7 +54,7 @@ impl Connection for H3Connection {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
+    async fn query(&self, mut request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("H3 connection closed"));
         }
@@ -84,7 +85,7 @@ impl Connection for H3Connection {
 
         let result = match timeout(self.timeout, recv(request_stream)).await {
             Ok(Ok(bytes)) => {
-                let mut resp = DnsResponse::from_buffer(bytes.to_vec())?;
+                let mut resp = Message::from_vec(&bytes)?;
                 resp.set_id(raw_id);
                 debug!(conn_id = self.id, raw_id, "Received H3 response");
                 Ok(resp)
@@ -205,7 +206,7 @@ async fn recv(mut request_stream: RequestStream<BidiStream<Bytes>, Bytes>) -> Re
         .await
         .map_err(|e| DnsError::protocol(format!("H3 response error: {}", e)))?;
 
-    let mut response_bytes = get_buf_from_res(&mut response);
+    let mut response_bytes = get_cap_buf_with_context_len(&mut response);
 
     while let Some(partial_bytes) = request_stream
         .recv_data()

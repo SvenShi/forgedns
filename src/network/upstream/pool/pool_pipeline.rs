@@ -14,7 +14,6 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
@@ -45,7 +44,7 @@ pub struct PipelinePool<C: Connection> {
 #[async_trait]
 impl<C: Connection> ConnectionPool<C> for PipelinePool<C> {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, request: Message) -> Result<DnsResponse> {
+    async fn query(&self, request: Message) -> Result<Message> {
         self.get().await?.query(request).await
     }
 

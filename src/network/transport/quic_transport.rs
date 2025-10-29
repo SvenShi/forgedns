@@ -4,7 +4,7 @@
  */
 
 use crate::core::error::{DnsError, Result};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
@@ -114,13 +114,12 @@ impl QuicTransportReader {
         }
 
         // Read DNS message body exactly
-        let mut buf = vec![0u8; msg_len];
+        let mut bytes = BytesMut::with_capacity(msg_len);
         self.recv
-            .read_exact(&mut buf)
+            .read_exact(&mut bytes)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to read QUIC DNS body: {}", e)))?;
-
-        Message::from_bytes(&buf)
+        Message::from_bytes(&bytes)
             .map_err(|e| DnsError::protocol(format!("Invalid DNS message over QUIC: {}", e)))
     }
 }

@@ -12,7 +12,6 @@ use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::connect_socket;
 use async_trait::async_trait;
 use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -82,7 +81,7 @@ impl Connection for UdpConnection {
     /// This two-stage approach improves resilience against UDP packet loss
     /// while maintaining low latency for successful queries.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, mut request: Message) -> Result<DnsResponse> {
+    async fn query(&self, mut request: Message) -> Result<Message> {
         let raw_id = request.id();
         let mut current_timeout = RETRY_TIMEOUT;
 
@@ -207,7 +206,7 @@ impl UdpConnection {
                         Ok(msg) => {
                             let id = msg.header().id();
                             if let Some(sender) = self.request_map.take(id) {
-                                let _ = sender.send(DnsResponse::from_message(msg).unwrap());
+                                let _ = sender.send(msg);
                                 self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
                                 debug!(
                                     conn_id = self.id,

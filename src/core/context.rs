@@ -10,7 +10,6 @@
 
 use crate::plugin::PluginRegistry;
 use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 use std::any::Any;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -34,7 +33,7 @@ pub struct DnsContext {
     pub request: Message,
 
     /// DNS response message (populated by plugins)
-    pub response: Option<DnsResponse>,
+    pub response: Option<Message>,
 
     /// Marks/tags added by plugins for decision tracking
     pub mark: Vec<String>,

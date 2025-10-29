@@ -12,7 +12,6 @@ use crate::network::upstream::utils::close_conns;
 use async_trait::async_trait;
 use crossbeam_queue::ArrayQueue;
 use hickory_proto::op::Message;
-use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
@@ -49,7 +48,7 @@ pub struct ReusePool<C: Connection> {
 impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
     /// Obtain a connection, execute query, and release it back to the pool
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn query(&self, request: Message) -> Result<DnsResponse> {
+    async fn query(&self, request: Message) -> Result<Message> {
         let conn = self.get().await?;
         debug!(
             "Got connection from pool, using_count={}",
