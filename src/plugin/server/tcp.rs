@@ -17,10 +17,10 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
-use crate::plugin::server::{load_tls_config, RequestHandle, Server};
+use crate::network::transport::tcp_transport::TcpTransport;
+use crate::plugin::server::{RequestHandle, Server, load_tls_config};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
-use crate::network::transport::tcp_transport::TcpTransport;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::io::Error;

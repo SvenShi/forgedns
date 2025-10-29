@@ -13,8 +13,8 @@ use hickory_proto::xfer::DnsResponse;
 use crate::network::transport::quic_transport::QuicTransport;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::select;
 
 use tokio::sync::Notify;

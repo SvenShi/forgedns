@@ -8,13 +8,13 @@
 //! Provides a container for DNS queries as they flow through the plugin pipeline.
 //! Each context carries the request, response, metadata, and custom attributes.
 
+use crate::plugin::PluginRegistry;
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::any::Any;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use crate::plugin::PluginRegistry;
 
 /// Context object for a DNS request/response lifecycle
 ///
