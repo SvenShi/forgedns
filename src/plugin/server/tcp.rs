@@ -17,10 +17,10 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
-use crate::plugin::server::{RequestHandle, Server, load_tls_config};
+use crate::plugin::server::{load_tls_config, RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
- 
+use crate::network::transport::tcp_transport::TcpTransport;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::io::Error;
@@ -32,7 +32,6 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
-use crate::network::transport::{read_from_async_io, write_to_async_io};
 
 const DEFAULT_IDLE_TIMEOUT: u64 = 10;
 
@@ -172,7 +171,6 @@ async fn run_server(
 
                         active_connections += 1;
                         debug!("New connection from {} (active: {})", src, active_connections);
-
                         tasks.spawn(async move {
                             // Handle TLS handshake if TLS is enabled
                             if let Some(acceptor) = tls_acceptor {
@@ -217,28 +215,44 @@ async fn run_server(
 }
 
 /// Handle DNS messages over a TCP stream (works for both TLS and plain TCP)
-async fn handle_dns_stream<S>(
-    mut stream: S,
-    src: SocketAddr,
-    handler: Arc<RequestHandle>,
-) where
+async fn handle_dns_stream<S>(stream: S, src: SocketAddr, handler: Arc<RequestHandle>)
+where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
-    loop {
-        match read_from_async_io(&mut stream).await {
-            Ok(req_msg) => {
-                let response = handler.handle_request(req_msg, src).await;
-                if let Err(e) = write_to_async_io(&mut stream, &response).await {
+    let transport = TcpTransport::new(stream);
+    let (mut reader, mut writer) = transport.into_split();
+
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4096);
+
+    let handle = tokio::spawn(async move {
+        loop {
+            if let Some(msg) = receiver.recv().await {
+                if let Err(e) = writer.write_message(&msg).await {
                     warn!("Failed to write TCP response to {}: {}", src, e);
-                    break;
                 }
             }
+        }
+    });
+
+    let sender = Arc::new(sender);
+
+    loop {
+        let handler = handler.clone();
+        let sender = sender.clone();
+        match reader.read_message().await {
+            Ok(req_msg) => tokio::spawn(async move {
+                let response = handler.handle_request(req_msg, src).await;
+                if let Err(e) = sender.send(response).await {
+                    warn!("Failed to write TCP response to {}: {}", src, e);
+                }
+            }),
             Err(e) => {
                 debug!("TCP client {} disconnected or read error: {}", src, e);
                 break;
             }
-        }
+        };
     }
+    handle.abort();
 }
 
 /// Build a TCP socket with reuse_address and reuse_port options

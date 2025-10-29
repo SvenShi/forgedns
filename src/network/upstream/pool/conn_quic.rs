@@ -7,24 +7,23 @@ use crate::core::error::{DnsError, Result};
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
 use crate::network::upstream::{Connection, ConnectionInfo};
-use bytes::Bytes;
 use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
- 
+
+use crate::network::transport::quic_transport::QuicTransport;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::select;
-use crate::network::transport::read_from_async_io;
+
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 pub struct QuicConnection {
     id: u16,
-    conn: quinn::Connection,
+    transport: QuicTransport,
     using_count: AtomicU16,
     closed: AtomicBool,
     last_used: AtomicU64,
@@ -53,7 +52,7 @@ impl Connection for QuicConnection {
             "Closing QUIC connection, sending CONNECTION_CLOSE frame"
         );
         // Gracefully close the underlying QUIC connection with error code 0 (no error)
-        self.conn.close(0u32.into(), b"closing");
+        self.transport.close(b"closing");
         self.close_notify.notify_waiters();
     }
 
@@ -80,9 +79,9 @@ impl Connection for QuicConnection {
         }
         self.using_count.fetch_add(1, Ordering::Relaxed);
 
-        // Open a new bidirectional stream for this DNS query
-        let (mut send, mut recv) = match timeout(self.timeout, self.conn.open_bi()).await {
-            Ok(Ok(bi)) => bi,
+        // Open a new bidirectional stream (reader/writer) via connection wrapper
+        let (mut reader, mut writer) = match timeout(self.timeout, self.transport.open_bi()).await {
+            Ok(Ok((reader, writer))) => (reader, writer),
             Ok(Err(e)) => {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
                 self.close();
@@ -101,35 +100,15 @@ impl Connection for QuicConnection {
 
         let raw_id = request.id();
         request.set_id(0); // RFC 9250: query ID SHOULD be set to 0
-        let body_bytes = Bytes::from(request.to_bytes()?); // DNS wire format
 
-        // Validate message size (RFC 9250: max 65535 bytes)
-        let bytes_len = u16::try_from(body_bytes.len()).map_err(|_e| {
-            DnsError::protocol(format!(
-                "DNS message too large for DoQ: {} bytes (max: 65535)",
-                body_bytes.len()
-            ))
-        })?;
-
-        // Prepare 2-byte big-endian length prefix
-        let len = bytes_len.to_be_bytes().to_vec();
-        let len = Bytes::from(len);
-
-        // Send length-prefixed DNS message over QUIC stream
-        match send.write_all_chunks(&mut [len, body_bytes]).await {
-            Ok(_) => {}
-            Err(e) => {
-                self.using_count.fetch_sub(1, Ordering::Relaxed);
-                return Err(DnsError::protocol(format!(
-                    "Failed to write DNS query to QUIC stream: {}",
-                    e
-                )));
-            }
-        };
-
-        // Close send side of stream (half-close, can still receive)
-        if let Err(e) = send.finish() {
-            // Not fatal - we can still try to read the response, but log the issue
+        if let Err(e) = writer.write_message(&request).await {
+            self.using_count.fetch_sub(1, Ordering::Relaxed);
+            return Err(DnsError::protocol(format!(
+                "Failed to write DNS query to QUIC stream: {}",
+                e
+            )));
+        }
+        if let Err(e) = writer.finish() {
             warn!(
                 conn_id = self.id,
                 error = ?e,
@@ -137,21 +116,30 @@ impl Connection for QuicConnection {
             );
         }
 
-        // Receive length-prefixed DNS response
-        let result = match timeout(self.timeout, read_from_async_io(&mut recv)).await {
-            Ok(Ok(message)) => {
-                let bytes = message
-                    .to_bytes()
-                    .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
-                let mut resp = DnsResponse::from_buffer(bytes)?;
-                resp.set_id(raw_id); // Restore original query ID
-                debug!(
-                    conn_id = self.id,
-                    query_id = raw_id,
-                    "Successfully received DNS response over QUIC"
-                );
-                Ok(resp)
-            }
+        let result = match timeout(self.timeout, reader.read_message()).await {
+            Ok(Ok(msg)) => match DnsResponse::from_message(msg) {
+                Ok(mut resp) => {
+                    resp.set_id(raw_id);
+                    debug!(
+                        conn_id = self.id,
+                        query_id = raw_id,
+                        "Successfully received DNS response over QUIC"
+                    );
+                    Ok(resp)
+                }
+                Err(e) => {
+                    warn!(
+                        conn_id = self.id,
+                        query_id = raw_id,
+                        error = ?e,
+                        "Failed to convert Message to DnsResponse"
+                    );
+                    Err(DnsError::protocol(format!(
+                        "Failed to convert Message: {}",
+                        e
+                    )))
+                }
+            },
             Ok(Err(e)) => {
                 warn!(
                     conn_id = self.id,
@@ -261,7 +249,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
 
         let quic_conn = Arc::new(QuicConnection {
             id: conn_id,
-            conn: quic_conn,
+            transport: QuicTransport::new(quic_conn),
             closed: AtomicBool::new(false),
             last_used: AtomicU64::new(AppClock::elapsed_millis()),
             using_count: AtomicU16::new(0),
@@ -273,7 +261,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
         let _conn = quic_conn.clone();
         tokio::spawn(async move {
             select! {
-                _ = _conn.conn.closed() => {
+                _ = _conn.transport.closed() => {
                     debug!(
                         conn_id,
                         "QUIC connection closed by remote peer or network error"
@@ -287,7 +275,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
                 }
             }
             // Ensure the underlying QUIC connection is properly closed
-            let _ = _conn.conn.close(0u32.into(), b"driver task ending");
+            let _ = _conn.transport.close(b"driver task ending");
         });
 
         Ok(quic_conn)

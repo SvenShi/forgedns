@@ -5,12 +5,13 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
-use crate::network::transport::{recv_message_from_udp, send_message_udp};
+use crate::network::transport::udp_transport::UdpTransport;
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::connect_socket;
 use crate::network::upstream::ConnectionInfo;
 use async_trait::async_trait;
+// duplicate import removed
 use hickory_proto::op::Message;
 use hickory_proto::xfer::DnsResponse;
 use std::fmt::Debug;
@@ -22,7 +23,7 @@ use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::{oneshot, Notify};
 use tokio::time::timeout;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Represents a single UDP connection used in DNS upstream queries.
 /// Each connection manages its own socket and maintains a mapping
@@ -31,8 +32,8 @@ use tracing::{debug, error, info};
 pub struct UdpConnection {
     /// Unique connection ID (for debugging/tracing)
     id: u16,
-    /// The underlying UDP socket bound to a local address
-    socket: UdpSocket,
+    /// The underlying UDP transport bound to a local address
+    transport: UdpTransport,
     /// Notifier used to signal connection closure
     close_notify: Notify,
     /// Mapping between DNS query IDs and response channels
@@ -99,54 +100,48 @@ impl Connection for UdpConnection {
                 "Sending DNS query over UDP"
             );
 
-            // Send UDP datagram (no length prefix needed for UDP)
-            match send_message_udp(&self.socket, &request).await {
-                Ok(_sent) => {}
+            // Send UDP datagram via transport
+            match self.transport.write_message(&request).await {
+                Ok(()) => {}
                 Err(e) => {
                     self.request_map.take(query_id);
-                    // Close connection on send failure (socket likely unusable)
-                    self.close();
-                    return Err(DnsError::protocol(format!("UDP send failed: {}", e)));
-                }
-            };
-
-            // Wait for response or timeout
-            match timeout(current_timeout, rx).await {
-                Ok(Ok(mut response)) => {
-                    response.set_id(raw_id); // Restore original query ID
-                    debug!(
-                        conn_id = self.id,
-                        query_id, attempt, "Successfully received DNS response over UDP"
-                    );
-                    self.last_used
-                        .store(AppClock::elapsed_millis(), Ordering::Relaxed);
-                    return Ok(response);
-                }
-                Ok(Err(_)) => {
-                    self.request_map.take(query_id);
-                    return Err(DnsError::protocol("request canceled (channel dropped)"));
-                }
-                Err(_) => {
-                    // Timeout on this attempt, will retry if attempts remain
-                    self.request_map.take(query_id);
-                    debug!(
-                        conn_id = self.id,
-                        query_id,
-                        attempt,
-                        timeout_ms = current_timeout.as_millis(),
-                        "DNS query attempt timed out"
-                    );
+                    error!(conn_id = self.id, err = %e, "Failed to send UDP query");
+                    return Err(e);
                 }
             }
 
-            // Use full timeout for second attempt
-            current_timeout = self.timeout;
+            // Wait for response with timeout
+            match timeout(current_timeout, rx).await {
+                Ok(res) => match res {
+                    Ok(response) => {
+                        debug!(
+                            conn_id = self.id,
+                            query_id,
+                            raw_id,
+                            "Received UDP response"
+                        );
+                        return Ok(response);
+                    }
+                    Err(_canceled) => {
+                        debug!(conn_id = self.id, query_id, "Listener dropped channel, retrying");
+                        current_timeout = self.timeout; // escalate timeout for second attempt
+                        continue;
+                    }
+                },
+                Err(_elapsed) => {
+                    debug!(
+                        conn_id = self.id,
+                        query_id,
+                        timeout_ms = current_timeout.as_millis(),
+                        "UDP response timeout"
+                    );
+                    current_timeout = self.timeout; // escalate timeout for second attempt
+                    continue;
+                }
+            }
         }
 
-        Err(DnsError::protocol(format!(
-            "DNS query timeout after 2 attempts (total {}ms)",
-            (RETRY_TIMEOUT + self.timeout).as_millis()
-        )))
+        Err(DnsError::protocol("UDP query timed out after retries"))
     }
 
     /// Return the number of active queries currently tracked by this connection.
@@ -177,7 +172,7 @@ impl UdpConnection {
     fn new(conn_id: u16, socket: UdpSocket, timeout: Duration) -> UdpConnection {
         Self {
             id: conn_id,
-            socket,
+            transport: UdpTransport::new(socket),
             close_notify: Notify::new(),
             request_map: RequestMap::new(),
             timeout,
@@ -210,43 +205,34 @@ impl UdpConnection {
             }
 
             select! {
-                recv = recv_message_from_udp(&self.socket,&mut buf) => {
+                recv = self.transport.read_message(&mut buf) => {
                     match recv {
-                        Ok((msg, _addr)) => {
+                        Ok(msg) => {
                             let id = msg.header().id();
                             if let Some(sender) = self.request_map.take(id) {
                                 let _ = sender.send(DnsResponse::from_message(msg).unwrap());
                                 self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
                                 debug!(
                                     conn_id = self.id,
-                                    query_id = id,
-                                    "Matched and delivered DNS response to waiting query"
+                                    id,
+                                    "Delivered UDP response to waiting query"
                                 );
                             } else {
-                                debug!(
-                                    conn_id = self.id,
-                                    query_id = id,
-                                    "Discarded DNS response (no matching query or already timed out)"
-                                );
+                                debug!(conn_id = self.id, id, "No pending query for response");
                             }
                         }
                         Err(e) => {
-                            error!(
-                                conn_id = self.id,
-                                error = ?e,
-                                "UDP recv_from failed"
-                            );
+                            if self.closed.load(Ordering::Relaxed) {
+                                closing = true; // graceful shutdown path
+                                continue;
+                            }
+                            warn!(conn_id = self.id, err = %e, "UDP listener error");
+                            continue;
                         }
                     }
                 }
                 _ = self.close_notify.notified() => {
                     closing = true;
-                    debug!(
-                        conn_id = self.id,
-                        pending_queries = self.request_map.size(),
-                        "UDP listener received close notification, will drain remaining responses"
-                    );
-                    continue;
                 }
             }
         }
