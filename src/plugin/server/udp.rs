@@ -14,7 +14,8 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
- 
+
+use crate::network::transport::udp_transport::UdpTransport;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io::Error;
@@ -24,7 +25,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tracing::{debug, error, info, warn};
-use crate::network::transport::{recv_message_from_udp, send_message_to_udp};
 
 /// UDP server configuration
 #[derive(Deserialize)]
@@ -90,16 +90,16 @@ async fn run_server(addr: String, handler: Arc<RequestHandle>) {
 
     debug!("UDP server event loop started on {}", addr);
 
-    let socket = Arc::new(socket);
+    let transport = Arc::new(UdpTransport::new(socket));
     let mut buf = [0u8; 4096];
     loop {
-        match recv_message_from_udp(&socket, &mut buf).await {
+        match transport.read_message_from(&mut buf).await {
             Ok((msg, src_addr)) => {
                 let handler = handler.clone();
-                let socket = socket.clone();
+                let transport = transport.clone();
                 tokio::spawn(async move {
                     let response = handler.handle_request(msg, src_addr).await;
-                    if let Err(e) = send_message_to_udp(&socket, &response, src_addr).await {
+                    if let Err(e) = transport.write_message_to(&response, src_addr).await {
                         warn!("Failed to send response to {}: {}", src_addr, e);
                     }
                 });

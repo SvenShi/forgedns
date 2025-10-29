@@ -5,27 +5,26 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::network::transport::tcp_transport::{
+    TcpTransport, TcpTransportReader, TcpTransportWriter,
+};
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::{connect_stream, connect_tls};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
 use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::BinEncodable;
 use hickory_proto::xfer::DnsResponse;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{
-    AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf, split,
-};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::{
-    Notify,
-    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot,
+    Notify,
 };
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -38,7 +37,7 @@ pub struct TcpConnection {
     /// Unique connection ID for logging/tracing.
     id: u16,
     /// Sender for the unbounded outgoing TCP message channel.
-    sender: UnboundedSender<Bytes>,
+    sender: UnboundedSender<Message>,
     /// Notifier that signals connection closure to background tasks.
     close_notify: Notify,
     /// Map of active DNS queries (query_id → response channel sender).
@@ -103,19 +102,15 @@ impl Connection for TcpConnection {
         // Prepare query buffer with TCP 2-byte big-endian length prefix (RFC 1035 Section 4.2.2)
         let raw_id = request.id();
         request.set_id(query_id);
-        let buf = request.to_bytes()?;
-        let mut bytes_mut = BytesMut::with_capacity(2 + buf.len());
-        bytes_mut.put_u16(buf.len() as u16); // Length prefix in network byte order
-        bytes_mut.put_slice(&buf);
 
-        // Queue message for background sender task
-        if let Err(e) = self.sender.send(bytes_mut.freeze()) {
+        // Queue Message for background sender task (TcpTransportWriter will frame it)
+        if let Err(e) = self.sender.send(request) {
             self.request_map.take(query_id);
             error!(
                 conn_id = self.id,
                 query_id,
                 error = ?e,
-                "Failed to queue DNS query (sender channel closed)"
+                "Failed to queue DNS query Message (sender channel closed)"
             );
             return Err(DnsError::protocol(e.to_string()));
         }
@@ -171,7 +166,7 @@ impl TcpConnection {
     /// * `conn_id` - Unique connection identifier for logging and debugging
     /// * `sender` - Unbounded channel for queuing outbound DNS messages
     /// * `timeout` - Maximum time to wait for a DNS response
-    fn new(conn_id: u16, sender: UnboundedSender<Bytes>, timeout: Duration) -> Self {
+    fn new(conn_id: u16, sender: UnboundedSender<Message>, timeout: Duration) -> Self {
         debug!(
             conn_id,
             "Initialized TCP connection wrapper with async I/O tasks"
@@ -195,10 +190,10 @@ impl TcpConnection {
     ///
     /// # Error Handling
     /// Write errors trigger connection closure and notify waiting queries
-    async fn send_dns_request<T: AsyncWrite>(
+    async fn send_dns_request<S: AsyncWrite + Unpin>(
         self: Arc<Self>,
-        mut writer: WriteHalf<T>,
-        mut receiver: UnboundedReceiver<Bytes>,
+        mut writer: TcpTransportWriter<S>,
+        mut receiver: UnboundedReceiver<Message>,
     ) {
         let mut closing = false;
         debug!(
@@ -208,8 +203,8 @@ impl TcpConnection {
 
         while !closing {
             select! {
-                Some(packet) = receiver.recv() => {
-                    if let Err(e) = writer.write_all(&packet).await {
+                Some(msg) = receiver.recv() => {
+                    if let Err(e) = writer.write_message(&msg).await {
                         error!(
                             conn_id = self.id,
                             error = ?e,
@@ -224,7 +219,6 @@ impl TcpConnection {
                         conn_id = self.id,
                         "TCP sender received close notification, shutting down stream"
                     );
-                    let _ = writer.shutdown().await;
                     closing = true;
                 }
             }
@@ -243,12 +237,11 @@ impl TcpConnection {
     ///
     /// # Buffer Management
     /// Uses a rolling buffer to handle partial reads and multiple messages per read
-    async fn listen_dns_response<T: AsyncRead>(self: Arc<Self>, reader: ReadHalf<T>) {
-        let mut reader = BufReader::new(reader);
-        let mut buf = vec![0u8; 4096]; // 4KB buffer for incoming data
-        let mut start = 0; // Current offset in buffer for incomplete messages
+    async fn listen_dns_response<S: AsyncRead + Unpin>(
+        self: Arc<Self>,
+        mut reader: TcpTransportReader<S>,
+    ) {
         let mut closing = false;
-
         debug!(
             conn_id = self.id,
             "TCP listener task started, waiting for DNS responses"
@@ -265,80 +258,42 @@ impl TcpConnection {
             }
 
             select! {
-                res = reader.read(&mut buf[start..]) => {
+                res = reader.read_message() => {
                     match res {
-                        Ok(0) => {
-                            warn!(
-                                conn_id = self.id,
-                                "TCP connection closed by remote peer (EOF)"
-                            );
-                            self.close();
-                            break;
-                        }
-                        Ok(n) => {
-                            let total = start + n;
-                            let mut offset = 0;
-
-                            // Parse length-prefixed DNS messages (maybe multiple per read)
-                            while total - offset >= 2 {
-                                // Read 2-byte big-endian length prefix
-                                let msg_len = u16::from_be_bytes([buf[offset], buf[offset + 1]]) as usize;
-
-                                // Validate message length (protect against malformed data)
-                                if msg_len == 0 {
-                                    warn!(
-                                        conn_id = self.id,
-                                        "Received zero-length message, skipping"
-                                    );
-                                    offset += 2;
-                                    continue;
-                                }
-
-                                // Wait for complete message if we don't have all bytes yet
-                                if total - offset < 2 + msg_len { break; }
-
-                                // Extract and parse DNS message
-                                let msg_body = &buf[offset + 2..offset + 2 + msg_len];
-                                match DnsResponse::from_buffer(Vec::from(msg_body)) {
-                                    Ok(msg) => {
-                                        let id = msg.header().id();
-                                        if let Some(sender) = self.request_map.take(id) {
-                                            let _ = sender.send(msg);
-                                            self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
-                                            debug!(
-                                                conn_id = self.id,
-                                                query_id = id,
-                                                "Matched and delivered DNS response to waiting query"
-                                            );
-                                        } else {
-                                            debug!(
-                                                conn_id = self.id,
-                                                query_id = id,
-                                                "Discarded DNS response (no matching query or already timed out)"
-                                            );
-                                        }
+                        Ok(msg) => {
+                            let id = msg.id();
+                            if let Some(sender) = self.request_map.take(id) {
+                                match DnsResponse::from_message(msg) {
+                                    Ok(res) => {
+                                        let _ = sender.send(res);
+                                        self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
+                                        debug!(
+                                            conn_id = self.id,
+                                            query_id = id,
+                                            "Matched and delivered DNS response to waiting query"
+                                        );
                                     }
                                     Err(e) => {
                                         warn!(
                                             conn_id = self.id,
                                             error = ?e,
-                                            msg_len,
-                                            "Failed to parse DNS response from buffer"
+                                            "Failed to convert Message to DnsResponse"
                                         );
                                     }
                                 }
-                                offset += 2 + msg_len;
+                            } else {
+                                debug!(
+                                    conn_id = self.id,
+                                    query_id = id,
+                                    "Discarded DNS response (no matching query or already timed out)"
+                                );
                             }
-
-                            // Copy any partial message to start of buffer for next read
-                            start = total - offset;
-                            buf.copy_within(offset..total, 0);
                         }
                         Err(e) => {
-                            error!(
+                            warn!(
                                 conn_id = self.id,
                                 error = ?e,
-                                "TCP read error, closing connection"
+                                "TCP read error or EOF, closing connection"
                             );
                             self.close();
                             break;
@@ -437,7 +392,8 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
             )
             .await?;
 
-            let (reader, writer) = split(tls_stream);
+            let transport = TcpTransport::new(tls_stream);
+            let (reader, writer) = transport.into_split();
             tokio::spawn(TcpConnection::listen_dns_response(arc.clone(), reader));
             tokio::spawn(TcpConnection::send_dns_request(
                 arc.clone(),
@@ -445,7 +401,8 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                 receiver,
             ));
         } else {
-            let (reader, writer) = split(stream);
+            let transport = TcpTransport::new(stream);
+            let (reader, writer) = transport.into_split();
             tokio::spawn(TcpConnection::listen_dns_response(arc.clone(), reader));
             tokio::spawn(TcpConnection::send_dns_request(
                 arc.clone(),

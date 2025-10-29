@@ -22,7 +22,8 @@ use std::time::Duration;
 // no extra io extension traits needed
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
-use crate::network::transport::{read_from_async_io, write_to_async_io};
+// use crate::network::transport::{read_from_async_io, write_to_async_io}; // removed in favor of QuicTransport
+use crate::network::transport::quic_transport::{QuicTransport, QuicTransportReader, QuicTransportWriter};
 
 /// QUIC server configuration
 #[derive(Deserialize)]
@@ -165,15 +166,16 @@ async fn handle_quic_connection(connecting: quinn::Incoming, handler: Arc<Reques
 
     debug!("QUIC connection established with {}", remote_addr);
 
+    let transport = QuicTransport::new(connection);
     // Accept bi-directional streams on this QUIC connection until it is closed.
     loop {
-        match connection.accept_bi().await {
-            Ok((mut send_stream, mut recv_stream)) => {
+        match transport.accept_bi().await {
+            Ok((reader, writer)) => {
                 let handler = handler.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_doq_bi_stream(
-                        &mut send_stream,
-                        &mut recv_stream,
+                        reader,
+                        writer,
                         handler.clone(),
                         remote_addr,
                     )
@@ -182,32 +184,36 @@ async fn handle_quic_connection(connecting: quinn::Incoming, handler: Arc<Reques
                         warn!("DoQ stream error ({}): {}", remote_addr, e);
                     }
                 });
-            }
-            Err(e) => {
-                debug!("QUIC connection closed by {}: {}", remote_addr, e);
-                return;
-            }
-        }
-    }
-}
+             }
+             Err(e) => {
+                 debug!("QUIC connection closed by {}: {}", remote_addr, e);
+                 return;
+             }
+         }
+     }
+ }
 
-/// Handle a single DNS over QUIC (DoQ) bidirectional stream.
-/// Format: 2-byte big-endian length prefix followed by the DNS message payload.
+ /// Handle a single DNS over QUIC (DoQ) bidirectional stream.
+ /// Format: 2-byte big-endian length prefix followed by the DNS message payload.
 async fn handle_doq_bi_stream(
-    send_stream: &mut quinn::SendStream,
-    recv_stream: &mut quinn::RecvStream,
-    handler: Arc<RequestHandle>,
-    remote_addr: std::net::SocketAddr,
-) -> Result<()> {
-    if let Ok(request_msg) = read_from_async_io(recv_stream).await {
-        let response = handler.handle_request(request_msg, remote_addr).await;
-        if let Err(e) = write_to_async_io(send_stream, &response).await {
-            warn!("Failed to send DoQ response to {}: {}", remote_addr, e);
-            return Ok(());
+    mut reader: QuicTransportReader,
+    mut writer: QuicTransportWriter,
+     handler: Arc<RequestHandle>,
+     remote_addr: std::net::SocketAddr,
+ ) -> Result<()> {
+    match reader.read_message().await {
+        Ok(request_msg) => {
+            let response = handler.handle_request(request_msg, remote_addr).await;
+            if let Err(e) = writer.write_message(&response).await {
+                warn!("Failed to send DoQ response to {}: {}", remote_addr, e);
+                return Ok(());
+            }
+            let _ = writer.finish();
         }
-        let _ = send_stream.finish();
+        Err(e) => {
+            warn!("Failed to read DoQ request from {}: {}", remote_addr, e);
+        }
     }
-
     Ok(())
 }
 
