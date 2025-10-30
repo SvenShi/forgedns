@@ -228,6 +228,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
             self.insecure_skip_verify,
             self.server_name.clone(),
             self.timeout,
+            vec![b"doq".to_vec()],
         )
         .await?;
 

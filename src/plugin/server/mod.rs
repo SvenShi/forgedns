@@ -3,18 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::DnsContext;
-use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
 use crate::plugin::{Plugin, PluginRegistry};
 use hickory_proto::op::{Message, MessageType, OpCode};
-use rustls::ServerConfig;
-use rustls::pki_types::CertificateDer;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::{Level, debug, event_enabled, info};
+use tracing::{Level, debug, event_enabled};
 
 pub mod http;
 pub mod quic;
@@ -88,81 +83,3 @@ impl RequestHandle {
     }
 }
 
-/// Load TLS certificates and private key from files
-///
-/// Reads PEM-encoded certificate chain and private key from the specified files.
-///
-/// # Arguments
-/// * `cert_path` - Path to the certificate file (PEM format)
-/// * `key_path` - Path to the private key file (PEM format)
-///
-/// # Returns
-/// * `Ok(TlsAcceptor)` - Configured TLS acceptor
-/// * `Err(DnsError)` - Error if files cannot be read or parsed
-pub fn load_tls_config(
-    cert: &Option<String>,
-    key: &Option<String>,
-) -> Option<Result<ServerConfig>> {
-    match (cert, key) {
-        (Some(cert), Some(key)) => {
-            info!("Loading TLS configuration: cert={}, key={}", cert, key);
-            Some(load_tls_config_from_path(&cert, &key))
-        }
-        (Some(_), None) => Some(Err(DnsError::plugin(" cert specified but key is missing"))),
-        (None, Some(_)) => Some(Err(DnsError::plugin("key specified but cert is missing"))),
-        (None, None) => None,
-    }
-}
-
-fn load_tls_config_from_path(cert_path: &str, key_path: &str) -> Result<ServerConfig> {
-    // Load certificates
-    let cert_file = File::open(cert_path).map_err(|e| {
-        DnsError::plugin(format!(
-            "Failed to open certificate file {}: {}",
-            cert_path, e
-        ))
-    })?;
-    let mut cert_reader = BufReader::new(cert_file);
-    let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut cert_reader)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| {
-            DnsError::plugin(format!(
-                "Failed to parse certificate file {}: {}",
-                cert_path, e
-            ))
-        })?;
-
-    if certs.is_empty() {
-        return Err(DnsError::plugin(format!(
-            "No certificates found in {}",
-            cert_path
-        )));
-    }
-
-    // Load private key
-    let key_file = File::open(key_path).map_err(|e| {
-        DnsError::plugin(format!(
-            "Failed to open private key file {}: {}",
-            key_path, e
-        ))
-    })?;
-    let mut key_reader = BufReader::new(key_file);
-
-    // Try to read private key (supports PKCS8, RSA, EC formats)
-    let private_key = rustls_pemfile::private_key(&mut key_reader)
-        .map_err(|e| {
-            DnsError::plugin(format!(
-                "Failed to parse private key file {}: {}",
-                key_path, e
-            ))
-        })?
-        .ok_or_else(|| DnsError::plugin(format!("No private key found in {}", key_path)))?;
-
-    // Build TLS server configuration
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, private_key)
-        .map_err(|e| DnsError::plugin(format!("Failed to build TLS configuration: {}", e)))?;
-
-    Ok(config)
-}

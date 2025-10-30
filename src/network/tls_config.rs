@@ -11,13 +11,18 @@
 //!
 //! Configurations are lazily initialized and cached for reuse.
 
-use lazy_static::lazy_static;
+use crate::core::error::DnsError;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme};
+use rustls::{
+    ClientConfig, DigitallySignedStruct, Error, RootCertStore, ServerConfig, SignatureScheme,
+};
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::fs::File;
+use std::io::BufReader;
+use std::sync::{Arc, Once};
+use tracing::info;
 
 lazy_static::lazy_static! {
     /// Secure TLS configuration with certificate validation
@@ -25,6 +30,17 @@ lazy_static::lazy_static! {
 
     /// Insecure TLS configuration (no certificate validation)
     static ref INSECURE_CONFIG: ClientConfig = build_insecure_config();
+
+}
+
+static DEFAULT_PROVIDER: Once = Once::new();
+
+pub fn install_default_provider() {
+    DEFAULT_PROVIDER.call_once(|| {
+        ring::default_provider()
+            .install_default()
+            .expect("default provider already set elsewhere");
+    })
 }
 
 /// Build secure TLS client configuration
@@ -32,6 +48,7 @@ lazy_static::lazy_static! {
 /// Uses system root certificates for validation.
 /// Enables early data (0-RTT) for performance.
 fn build_secure_config() -> ClientConfig {
+    install_default_provider();
     let builder = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
         .with_safe_default_protocol_versions()
         .unwrap();
@@ -44,24 +61,21 @@ fn build_secure_config() -> ClientConfig {
 
     let mut config = builder.with_no_client_auth();
     config.enable_early_data = true;
-    set_alpn(config)
+    config
 }
 
 /// Build insecure TLS client configuration
 ///
 /// **WARNING**: Skips all certificate validation. Use only for testing!
 fn build_insecure_config() -> ClientConfig {
-    ring::default_provider()
-        .install_default()
-        .expect("Failed to install default crypto provider");
-
+    install_default_provider();
     let mut config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoCertVerification))
         .with_no_client_auth();
 
     config.enable_early_data = true;
-    set_alpn(config)
+    config
 }
 
 /// Get secure TLS configuration (with certificate validation)
@@ -76,18 +90,86 @@ pub(crate) fn insecure_client_config() -> ClientConfig {
     INSECURE_CONFIG.clone()
 }
 
-/// Supported ALPN protocols for DNS over TLS/QUIC/HTTPS
-static ALPN_PROTOCOLS: &[&[u8]] = &[b"h3", b"h2", b"dot", b"doq"];
-
-lazy_static! {
-    /// Pre-allocated ALPN protocol list
-    static ref alpn: Vec<Vec<u8>> = ALPN_PROTOCOLS.iter().map(|&p| p.to_vec()).collect();
+/// Load TLS certificates and private key from files
+///
+/// Reads PEM-encoded certificate chain and private key from the specified files.
+///
+/// # Arguments
+/// * `cert_path` - Path to the certificate file (PEM format)
+/// * `key_path` - Path to the private key file (PEM format)
+///
+/// # Returns
+/// * `Ok(TlsAcceptor)` - Configured TLS acceptor
+/// * `Err(DnsError)` - Error if files cannot be read or parsed
+pub fn load_tls_config(
+    cert: &Option<String>,
+    key: &Option<String>,
+) -> Option<crate::core::error::Result<ServerConfig>> {
+    match (cert, key) {
+        (Some(cert), Some(key)) => {
+            info!("Loading TLS configuration: cert={}, key={}", cert, key);
+            Some(load_tls_config_from_path(&cert, &key))
+        }
+        (Some(_), None) => Some(Err(DnsError::plugin(" cert specified but key is missing"))),
+        (None, Some(_)) => Some(Err(DnsError::plugin("key specified but cert is missing"))),
+        (None, None) => None,
+    }
 }
 
-/// Configure ALPN protocols for the TLS config
-fn set_alpn(mut config: ClientConfig) -> ClientConfig {
-    config.alpn_protocols = alpn.clone();
-    config
+fn load_tls_config_from_path(
+    cert_path: &str,
+    key_path: &str,
+) -> crate::core::error::Result<ServerConfig> {
+    install_default_provider();
+    // Load certificates
+    let cert_file = File::open(cert_path).map_err(|e| {
+        DnsError::plugin(format!(
+            "Failed to open certificate file {}: {}",
+            cert_path, e
+        ))
+    })?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            DnsError::plugin(format!(
+                "Failed to parse certificate file {}: {}",
+                cert_path, e
+            ))
+        })?;
+
+    if certs.is_empty() {
+        return Err(DnsError::plugin(format!(
+            "No certificates found in {}",
+            cert_path
+        )));
+    }
+
+    // Load private key
+    let key_file = File::open(key_path).map_err(|e| {
+        DnsError::plugin(format!(
+            "Failed to open private key file {}: {}",
+            key_path, e
+        ))
+    })?;
+    let mut key_reader = BufReader::new(key_file);
+
+    // Try to read private key (supports PKCS8, RSA, EC formats)
+    let private_key = rustls_pemfile::private_key(&mut key_reader)
+        .map_err(|e| {
+            DnsError::plugin(format!(
+                "Failed to parse private key file {}: {}",
+                key_path, e
+            ))
+        })?
+        .ok_or_else(|| DnsError::plugin(format!("No private key found in {}", key_path)))?;
+
+    // Build TLS server configuration
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, private_key)
+        .map_err(|e| DnsError::plugin(format!("Failed to build TLS configuration: {}", e)))?;
+    Ok(config)
 }
 
 /// Certificate verifier that accepts any certificate (INSECURE!)

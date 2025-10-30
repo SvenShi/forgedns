@@ -162,6 +162,7 @@ impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
             self.insecure_skip_verify,
             self.server_name.clone(),
             self.timeout,
+            vec![b"h3".to_vec()],
         )
         .await?;
 

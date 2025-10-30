@@ -377,6 +377,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                 self.insecure_skip_verify,
                 self.server_name.clone(),
                 self.timeout,
+                vec![b"dot".to_vec()],
             )
             .await?;
 

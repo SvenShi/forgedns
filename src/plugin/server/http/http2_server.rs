@@ -63,7 +63,8 @@ pub async fn run_server(
     // JoinSet to track all active connection tasks
     let mut tasks: JoinSet<()> = JoinSet::new();
     let mut active_connections = 0u64;
-    let tls_acceptor = if let Some(server_config) = server_config {
+    let tls_acceptor = if let Some(mut server_config) = server_config {
+        server_config.alpn_protocols = vec![b"h2".to_vec()];
         Some(Arc::new(TlsAcceptor::from(Arc::new(server_config))))
     } else {
         None
