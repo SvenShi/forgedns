@@ -5,7 +5,7 @@
 
 //! Configuration structure definitions
 //!
-//! Defines the schema for RustDNS configuration files (YAML format).
+//! Defines the schema for ForgeDNS configuration files (YAML format).
 
 use serde::Deserialize;
 use serde_yml::Value;

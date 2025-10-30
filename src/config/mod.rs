@@ -26,7 +26,7 @@ pub fn init(file: &PathBuf) -> Result<Config> {
     let string = fs::read_to_string(file)?;
     let config: Config = serde_yml::from_str(&string)?;
 
-    // Validate configuration - ConfigError is auto-converted to RustDnsError
+    // Validate configuration - ConfigError is auto-converted to DnsError
     config.validate()?;
 
     eprintln!(

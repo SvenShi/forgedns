@@ -1,4 +1,4 @@
-# RustDNS
+# ForgeDNS
 
 [中文文档](README_CN.md) | [English](README.md)
 
@@ -26,7 +26,7 @@ A high-performance DNS server written in Rust, reimagining mosdns with modern as
 ## Project Structure
 
 ```
-rustdns/
+forgedns/
 ├── src/
 │   ├── main.rs                 # Entry point and runtime setup
 │   ├── core/                   # Core infrastructure
@@ -72,13 +72,13 @@ cargo build --release
 
 ```bash
 # Use default config.yaml
-./target/release/rustdns
+./target/release/forgedns
 
 # Specify custom config
-./target/release/rustdns -c /path/to/config.yaml
+./target/release/forgedns -c /path/to/config.yaml
 
 # Override log level
-./target/release/rustdns -l debug
+./target/release/forgedns -l debug
 ```
 
 ## Configuration

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Plugin system for RustDNS
+//! Plugin system for ForgeDNS
 //!
 //! Provides a flexible plugin architecture supporting:
 //! - Server plugins (UDP/TCP listeners)

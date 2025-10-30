@@ -16,7 +16,7 @@ pub struct Runtime {
     pub log_guard: Option<WorkerGuard>,
 }
 
-/// Command-line options for RustDNS server
+/// Command-line options for ForgeDNS server
 ///
 /// Supports:
 /// - Configuration file path (default: config.yaml)
