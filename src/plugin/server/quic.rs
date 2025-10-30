@@ -11,10 +11,11 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::network::tls_config::load_tls_config;
 use crate::network::transport::quic_transport::{
     QuicTransport, QuicTransportReader, QuicTransportWriter,
 };
-use crate::plugin::server::{RequestHandle, Server, load_tls_config, udp};
+use crate::plugin::server::{RequestHandle, Server, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
 use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
@@ -267,7 +268,9 @@ impl PluginFactory for QuicServerFactory {
         // Load TLS configuration if cert and key are provided
         let server_config =
             if let Some(res) = load_tls_config(&Some(quic_config.cert), &Some(quic_config.key)) {
-                res?
+                let mut config = res?;
+                config.alpn_protocols = vec![b"doq".to_vec()];
+                config
             } else {
                 return Err("Failed to load TLS config".into());
             };

@@ -22,7 +22,7 @@ mod http_dispatcher;
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
-use crate::plugin::server::{RequestHandle, Server, load_tls_config};
+use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use async_trait::async_trait;
 use http::Method;
@@ -32,6 +32,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
+use crate::network::tls_config::load_tls_config;
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT: u64 = 30;
 
@@ -281,7 +282,7 @@ impl PluginFactory for HttpServerFactory {
             })?,
             None => {
                 return Err(DnsError::plugin(
-                    "HTTP Server must configure 'listen' and 'entry' in config file",
+                    "HTTP Server must configure 'listen' and 'entries' in config file",
                 ));
             }
         };
@@ -297,7 +298,7 @@ impl PluginFactory for HttpServerFactory {
         // Validate entry is not empty
         if http_config.entries.is_empty() {
             return Err(DnsError::plugin(
-                "HTTP Server 'entry' field cannot be empty",
+                "HTTP Server 'entries' field cannot be empty",
             ));
         }
 

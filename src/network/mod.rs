@@ -4,3 +4,4 @@
  */
 pub mod transport;
 pub mod upstream;
+pub mod tls_config;

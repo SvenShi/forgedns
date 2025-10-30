@@ -17,9 +17,11 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
-use crate::plugin::server::{RequestHandle, Server, load_tls_config};
+use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
@@ -312,7 +314,11 @@ impl PluginFactory for TcpServerFactory {
         // Load TLS configuration if cert and key are provided
         let tls_acceptor = match load_tls_config(&tcp_config.cert, &tcp_config.key) {
             None => None,
-            Some(res) => Some(Arc::new(TlsAcceptor::from(Arc::new(res?)))),
+            Some(res) => {
+                let mut config = res?;
+                config.alpn_protocols = vec![b"dot".to_vec()];
+                Some(Arc::new(TlsAcceptor::from(Arc::new(config))))
+            }
         };
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(

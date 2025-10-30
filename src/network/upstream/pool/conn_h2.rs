@@ -153,6 +153,7 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
             self.insecure_skip_verify,
             self.server_name.clone(),
             self.timeout,
+            vec![b"h2".to_vec()],
         )
         .await?;
 

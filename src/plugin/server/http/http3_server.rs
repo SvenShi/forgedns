@@ -35,14 +35,15 @@ use tracing::{debug, error, warn};
 pub async fn run_server(
     addr: String,
     dispatcher: Arc<HttpDispatcher>,
-    server_config: ServerConfig,
+    mut server_config: ServerConfig,
     idle_timeout: Option<u64>,
     src_ip_header: Option<String>,
 ) {
+    server_config.alpn_protocols = vec![b"h3".to_vec()];
     let endpoint = match quic::build_quic_endpoint(&addr, server_config, idle_timeout) {
         Ok(value) => value,
         Err(e) => {
-            error!("QUIC endpoint build faild: {}", e);
+            error!("QUIC endpoint build failed: {}", e);
             return;
         }
     };

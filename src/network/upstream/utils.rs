@@ -12,9 +12,11 @@
 //! - Connection cleanup
 
 use crate::core::error::{DnsError, Result};
+use crate::network::tls_config::{insecure_client_config, secure_client_config};
 use crate::network::upstream::pool::Connection;
-use crate::network::upstream::tls_client_config::{insecure_client_config, secure_client_config};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
+use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use bytes::BytesMut;
 use fast_socks5::client::Socks5Stream;
 use http::header::CONTENT_LENGTH;
@@ -26,8 +28,6 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
-use base64::Engine;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
@@ -57,12 +57,14 @@ pub(crate) async fn connect_tls(
     skip_cert: bool,
     server_name: String,
     conn_timeout: Duration,
+    alpn: Vec<Vec<u8>>,
 ) -> Result<TlsStream<TcpStream>> {
-    let config = if skip_cert {
+    let mut config = if skip_cert {
         insecure_client_config()
     } else {
         secure_client_config()
     };
+    config.alpn_protocols = alpn;
 
     let connector = TlsConnector::from(Arc::new(config));
     let dns_name = ServerName::try_from(server_name)
@@ -102,6 +104,7 @@ pub(crate) async fn connect_quic(
     skip_cert: bool,
     server_name: String,
     conn_timeout: Duration,
+    alpn: Vec<Vec<u8>>,
 ) -> Result<quinn::Connection> {
     let remote_addr = udp_socket.peer_addr()?;
     let mut endpoint = Endpoint::new(
@@ -111,15 +114,14 @@ pub(crate) async fn connect_quic(
         Arc::new(TokioRuntime),
     )?;
 
-    let client_config = if skip_cert {
-        ClientConfig::new(Arc::new(QuicClientConfig::try_from(
-            insecure_client_config(),
-        )?))
+    let mut client_config = if skip_cert {
+        insecure_client_config()
     } else {
-        ClientConfig::new(Arc::new(
-            QuicClientConfig::try_from(secure_client_config())?,
-        ))
+        secure_client_config()
     };
+    client_config.alpn_protocols = alpn;
+    
+    let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_config)?));
 
     endpoint.set_default_client_config(client_config);
 

@@ -53,7 +53,6 @@ use url::Url;
 
 mod bootstrap;
 mod pool;
-mod tls_client_config;
 mod utils;
 
 /// Supported upstream connection types
