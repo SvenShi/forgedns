@@ -22,6 +22,7 @@ impl QuicTransport {
 
     /// Accept a bidirectional stream from the peer (server-side).
     /// Returns reader and writer wrappers for framed DNS messages.
+    #[inline]
     pub async fn accept_bi(&self) -> Result<(QuicTransportReader, QuicTransportWriter)> {
         match self.conn.accept_bi().await {
             Ok((send, recv)) => Ok((QuicTransportReader { recv }, QuicTransportWriter { send })),
@@ -34,6 +35,7 @@ impl QuicTransport {
 
     /// Open a bidirectional stream to the peer (client-side).
     /// Returns reader and writer wrappers for framed DNS messages.
+    #[inline]
     pub async fn open_bi(&self) -> Result<(QuicTransportReader, QuicTransportWriter)> {
         match self.conn.open_bi().await {
             Ok((send, recv)) => Ok((QuicTransportReader { recv }, QuicTransportWriter { send })),
@@ -45,11 +47,13 @@ impl QuicTransport {
     }
 
     /// Close the underlying QUIC connection gracefully.
+    #[inline]
     pub fn close(&self, reason: &[u8]) {
         // Application code 0 (no error)
         self.conn.close(0u32.into(), reason);
     }
 
+    #[inline]
     pub async fn closed(&self) -> ConnectionError {
         self.conn.closed().await
     }
@@ -63,6 +67,7 @@ pub struct QuicTransportWriter {
 
 impl QuicTransportWriter {
     /// Write a single DNS message as a length-prefixed frame.
+    #[inline]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
         let body = msg
             .to_bytes()
@@ -85,6 +90,7 @@ impl QuicTransportWriter {
     }
 
     /// Half-close the send stream (finish) to signal end of request.
+    #[inline]
     pub fn finish(&mut self) -> Result<()> {
         self.send
             .finish()
@@ -99,6 +105,7 @@ pub struct QuicTransportReader {
 }
 
 impl QuicTransportReader {
+    #[inline]
     pub async fn read_message(&mut self) -> Result<Message> {
         // Read 2-byte length prefix
         let mut len_prefix = [0u8; 2];

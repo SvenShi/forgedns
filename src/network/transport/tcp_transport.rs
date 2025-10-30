@@ -41,6 +41,7 @@ impl<S> TcpTransportWriter<S>
 where
     S: AsyncWrite,
 {
+    #[inline]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
         let bytes = msg
             .to_bytes()
@@ -69,6 +70,7 @@ impl<S> TcpTransportReader<S>
 where
     S: AsyncRead,
 {
+    #[inline]
     pub async fn read_message(&mut self) -> Result<Message> {
         loop {
             // Try parse from accumulated buffer first (may contain multiple messages)

@@ -29,6 +29,7 @@ impl UdpTransport {
 
     /// Serialize and send a DNS message as a single UDP datagram.
     /// Ensures the entire datagram is sent; otherwise returns a protocol error.
+    #[inline]
     pub async fn write_message(&self, msg: &Message) -> Result<()> {
         let bytes = msg
             .to_bytes()
@@ -52,6 +53,7 @@ impl UdpTransport {
 
     /// Receive one UDP datagram and decode it as a DNS message.
     /// Blocks until a datagram arrives or the socket errors.
+    #[inline]
     pub async fn read_message(&self, buf: &mut [u8]) -> Result<Message> {
         let n = self
             .socket
@@ -64,6 +66,7 @@ impl UdpTransport {
     }
 
     // Add support for unconnected server-style operations
+    #[inline]
     pub async fn read_message_from(&self, buf: &mut [u8]) -> Result<(Message, SocketAddr)> {
         let (n, addr) = self
             .socket
@@ -77,6 +80,7 @@ impl UdpTransport {
         Ok((msg, addr))
     }
 
+    #[inline]
     pub async fn write_message_to(&self, msg: &Message, to: SocketAddr) -> Result<()> {
         let bytes = msg
             .to_bytes()
