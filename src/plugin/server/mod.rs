@@ -50,7 +50,7 @@ impl RequestHandle {
         }
 
         // Execute entry plugin to process the request
-        self.entry_executor.execute(&mut context).await;
+        self.entry_executor.execute(&mut context, None).await;
 
         // Construct response message
         let mut response;

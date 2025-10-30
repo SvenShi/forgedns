@@ -292,11 +292,11 @@ pub struct TcpServerFactory {}
 impl PluginFactory for TcpServerFactory {
     fn create(
         &self,
-        plugin_info: &PluginConfig,
+        plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let tcp_config = serde_yml::from_value::<TcpServerConfig>(
-            plugin_info
+            plugin_config
                 .args
                 .clone()
                 .ok_or_else(|| DnsError::plugin("TCP Server requires configuration arguments"))?,
@@ -307,7 +307,7 @@ impl PluginFactory for TcpServerFactory {
         let entry = registry.get_plugin(&tcp_config.entry).ok_or_else(|| {
             DnsError::plugin(format!(
                 "TCP Server [{}] entry plugin [{}] not found",
-                plugin_info.tag, tcp_config.entry
+                plugin_config.tag, tcp_config.entry
             ))
         })?;
 
@@ -323,7 +323,7 @@ impl PluginFactory for TcpServerFactory {
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             TcpServer {
-                tag: plugin_info.tag.clone(),
+                tag: plugin_config.tag.clone(),
                 listen: tcp_config.listen,
                 request_handle: Arc::new(RequestHandle {
                     entry_executor: entry.to_executor().clone(),
@@ -336,12 +336,12 @@ impl PluginFactory for TcpServerFactory {
     }
 
     /// Validate TCP server configuration
-    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<()> {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
         use std::net::SocketAddr;
         use std::str::FromStr;
 
         // Parse and validate TCP-specific configuration
-        let tcp_config = match plugin_info.args.clone() {
+        let tcp_config = match plugin_config.args.clone() {
             Some(args) => serde_yml::from_value::<TcpServerConfig>(args).map_err(|e| {
                 DnsError::plugin(format!("TCP Server config parsing failed: {}", e))
             })?,
@@ -369,8 +369,8 @@ impl PluginFactory for TcpServerFactory {
     }
 
     /// Get dependencies (the entry executor plugin)
-    fn get_dependencies(&self, plugin_info: &PluginConfig) -> Vec<String> {
-        if let Some(args) = &plugin_info.args {
+    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+        if let Some(args) = &plugin_config.args {
             if let Ok(config) = serde_yml::from_value::<TcpServerConfig>(args.clone()) {
                 return vec![config.entry];
             }

@@ -16,8 +16,14 @@ plugins:
         # - addr: "119.29.29.29"  # 腾讯 DNS
         # - addr: "114.114.114.114"  # 114 DNS
 
+  - tag: seq
+    type: sequence
+    args:
+      - exec: forward
+      - exec: forward
+
   - tag: "udp_server"
     type: "udp_server"
     args:
-      entry: "forward"
+      entry: "seq"
       listen: "0.0.0.0:5367"
