@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Custom log formatter for RustDNS
+//! Custom log formatter for ForgeDNS
 //!
 //! Provides a structured log format with timestamp, level, target, and span information.
 //! Format: `TIMESTAMP LEVEL TARGET:LINE:SPAN{fields}:message`
@@ -14,13 +14,13 @@ use tracing::{Event, Subscriber};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields, format};
 use tracing_subscriber::registry::LookupSpan;
 
-/// Custom log formatter for RustDNS
+/// Custom log formatter for ForgeDNS
 ///
 /// Produces logs in the format:
-/// `2025-01-15T10:30:45.123456 INFO rustdns::plugin::server::udp:54:message content`
-pub struct RustDnsLogFormatter;
+/// `2025-01-15T10:30:45.123456 INFO forgedns::plugin::server::udp:54:message content`
+pub struct ForgeDnsLogFormatter;
 
-impl<S, N> FormatEvent<S, N> for RustDnsLogFormatter
+impl<S, N> FormatEvent<S, N> for ForgeDnsLogFormatter
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,

@@ -13,7 +13,7 @@
 
 use crate::config::types::LogConfig;
 use crate::core::app_clock::AppClock;
-use crate::core::log::RustDnsLogFormatter;
+use crate::core::log::ForgeDnsLogFormatter;
 use crate::core::runtime::{Options, Runtime};
 use clap::Parser;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -52,7 +52,7 @@ pub fn init() -> Runtime {
 /// - Console output (always enabled)
 /// - File output (optional, based on config)
 ///
-/// Both use the custom RustDnsLogFormatter for consistent formatting.
+/// Both use the custom ForgeDnsLogFormatter for consistent formatting.
 /// Returns a WorkerGuard that must be kept alive to ensure log flushing.
 pub fn init_log(log: LogConfig) -> WorkerGuard {
     // Create file appender if a file path is configured
@@ -70,13 +70,13 @@ pub fn init_log(log: LogConfig) -> WorkerGuard {
 
     // Build console logging layer
     let console_layer = fmt::layer()
-        .event_format(RustDnsLogFormatter)
+        .event_format(ForgeDnsLogFormatter)
         .with_writer(std::io::stdout);
 
     // Build file logging layer (if configured)
     let file_layer = file_writer.map(|writer| {
         fmt::layer()
-            .event_format(RustDnsLogFormatter)
+            .event_format(ForgeDnsLogFormatter)
             .with_writer(writer)
     });
 

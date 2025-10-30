@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Unified error handling module for RustDNS
+//! Unified error handling module for ForgeDNS
 //!
 //! Provides a centralized error type that can represent various error conditions
 //! throughout the application, making error handling more consistent and easier
@@ -12,7 +12,7 @@
 use crate::config::types::ConfigError;
 use thiserror::Error;
 
-/// Main error type for RustDNS
+/// Main error type for ForgeDNS
 ///
 /// This enum represents all possible errors that can occur in the application.
 /// It can be constructed from various error types using the `From` trait implementations.

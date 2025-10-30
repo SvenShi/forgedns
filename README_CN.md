@@ -1,4 +1,4 @@
-# RustDNS
+# ForgeDNS
 
 [中文文档](README_CN.md) | [English](README.md)
 
@@ -26,7 +26,7 @@
 ## 项目结构
 
 ```
-rustdns/
+forgedns/
 ├── src/
 │   ├── main.rs                 # 入口点和运行时设置
 │   ├── core/                   # 核心基础设施
@@ -72,13 +72,13 @@ cargo build --release
 
 ```bash
 # 使用默认的 config.yaml
-./target/release/rustdns
+./target/release/forgedns
 
 # 指定自定义配置文件
-./target/release/rustdns -c /path/to/config.yaml
+./target/release/forgedns -c /path/to/config.yaml
 
 # 覆盖日志级别
-./target/release/rustdns -l debug
+./target/release/forgedns -l debug
 ```
 
 ## 配置

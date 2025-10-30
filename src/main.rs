@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! RustDNS - A high-performance DNS server written in Rust
+//! ForgeDNS - A high-performance DNS server written in Rust
 //!
-//! This is the main entry point for the RustDNS server, which provides:
+//! This is the main entry point for the ForgeDNS server, which provides:
 //! - Multi-threaded async DNS query handling
 //! - Support for various DNS protocols (UDP, TCP, DoT, DoQ, DoH)
 //! - Plugin-based architecture for extensibility
@@ -34,7 +34,7 @@ fn init_runtime() -> Result<()> {
     let mut tokio_runtime = runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
-        .thread_name("rustdns-worker")
+        .thread_name("forgedns-worker")
         .worker_threads(8);
     let tokio_runtime = tokio_runtime
         .build()
@@ -96,13 +96,13 @@ async fn run_app() {
 
     // Initialize logging and save the guard to ensure logs are flushed
     runtime.log_guard = Some(core::init_log(log_config));
-    info!("RustDNS server initializing...");
+    info!("ForgeDNS server initializing...");
 
     // Initialize plugins with dependency resolution
     // The registry is created and returned by init()
     match plugin::init(config).await {
         Ok(_registry) => {
-            info!("RustDNS server started successfully");
+            info!("ForgeDNS server started successfully");
             // Registry is now available for the application lifetime
         }
         Err(e) => {
