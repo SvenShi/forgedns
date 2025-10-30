@@ -6,20 +6,20 @@
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::network::transport::udp_transport::UdpTransport;
-use crate::network::upstream::ConnectionInfo;
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::connect_socket;
+use crate::network::upstream::ConnectionInfo;
 use async_trait::async_trait;
 use hickory_proto::op::Message;
 use std::fmt::Debug;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{oneshot, Notify};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
@@ -111,7 +111,8 @@ impl Connection for UdpConnection {
             // Wait for response with timeout
             match timeout(current_timeout, rx).await {
                 Ok(res) => match res {
-                    Ok(response) => {
+                    Ok(mut response) => {
+                        response.set_id(raw_id);
                         debug!(conn_id = self.id, query_id, raw_id, "Received UDP response");
                         return Ok(response);
                     }

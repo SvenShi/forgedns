@@ -196,7 +196,7 @@ impl QuicConnectionBuilder {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
     /// Establish a new QUIC connection for DNS over QUIC (DoQ)
     ///

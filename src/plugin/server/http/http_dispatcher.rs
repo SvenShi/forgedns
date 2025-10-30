@@ -87,7 +87,7 @@ impl Default for HttpDispatcher {
 ///
 /// Defines the interface for handling HTTP requests. Implementations should
 /// process the request and return an appropriate HTTP response.
-#[async_trait::async_trait]
+#[async_trait]
 pub trait HttpHandler: Send + Sync + 'static {
     /// Handle an HTTP request and return a response
     ///

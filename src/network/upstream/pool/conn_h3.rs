@@ -145,7 +145,7 @@ impl H3ConnectionBuilder {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<H3Connection>> {
