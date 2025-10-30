@@ -10,8 +10,9 @@
 //! - POST method: DNS query passed in request body (binary format)
 
 use crate::plugin::server::RequestHandle;
-use base64::Engine;
+use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use bytes::Bytes;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
@@ -95,7 +96,7 @@ pub trait HttpHandler: Send + Sync + 'static {
     /// - `path`: Request path
     /// - `query`: Optional query string
     /// - `body`: Request body as bytes
-    /// - `src_addr`: Source address of the client (may be real client IP from headers)
+    /// - `src_addr`: Source address of the client (maybe real client IP from headers)
     async fn handle(
         &self,
         method: Method,
@@ -130,25 +131,25 @@ impl DnsGetHandler {
         for param in query.split('&') {
             if let Some(value) = param.strip_prefix("dns=") {
                 // Decode base64url
-                match URL_SAFE_NO_PAD.decode(value) {
+                return match URL_SAFE_NO_PAD.decode(value) {
                     Ok(dns_bytes) => {
                         // Parse DNS message
                         match Message::from_bytes(&dns_bytes) {
                             Ok(msg) => {
                                 debug!("Successfully parsed GET DNS query, ID: {}", msg.id());
-                                return Some(msg);
+                                Some(msg)
                             }
                             Err(e) => {
                                 warn!("Failed to parse DNS message: {}", e);
-                                return None;
+                                None
                             }
                         }
                     }
                     Err(e) => {
                         warn!("Failed to decode base64: {}", e);
-                        return None;
+                        None
                     }
-                }
+                };
             }
         }
 
@@ -157,7 +158,7 @@ impl DnsGetHandler {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl HttpHandler for DnsGetHandler {
     async fn handle(
         &self,
@@ -185,26 +186,7 @@ impl HttpHandler for DnsGetHandler {
             .handle_request(dns_query, src_addr)
             .await;
 
-        // Serialize DNS response to binary format
-        match dns_response.to_bytes() {
-            Ok(response_bytes) => {
-                debug!("DNS response size: {} bytes", response_bytes.len());
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/dns-message")
-                    .header("Cache-Control", "max-age=300")
-                    .body(Bytes::from(response_bytes))
-                    .expect("Failed to build DNS response")
-            }
-            Err(e) => {
-                warn!("Failed to serialize DNS response: {}", e);
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .header("Content-Type", "text/plain")
-                    .body(Bytes::from("500 Internal Server Error"))
-                    .expect("Failed to build error response")
-            }
-        }
+        msg_to_response(dns_response)
     }
 }
 
@@ -222,7 +204,7 @@ impl DnsPostHandler {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl HttpHandler for DnsPostHandler {
     async fn handle(
         &self,
@@ -274,25 +256,30 @@ impl HttpHandler for DnsPostHandler {
             .handle_request(dns_query, src_addr)
             .await;
 
-        // Serialize DNS response to binary format
-        match dns_response.to_bytes() {
-            Ok(response_bytes) => {
-                debug!("DNS response size: {} bytes", response_bytes.len());
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/dns-message")
-                    .header("Cache-Control", "max-age=300")
-                    .body(Bytes::from(response_bytes))
-                    .expect("Failed to build DNS response")
-            }
-            Err(e) => {
-                warn!("Failed to serialize DNS response: {}", e);
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .header("Content-Type", "text/plain")
-                    .body(Bytes::from("500 Internal Server Error"))
-                    .expect("Failed to build error response")
-            }
+        msg_to_response(dns_response)
+    }
+}
+
+#[inline]
+fn msg_to_response(dns_response: Message) -> Response<Bytes> {
+    // Serialize DNS response to binary format
+    match dns_response.to_bytes() {
+        Ok(response_bytes) => {
+            debug!("DNS response size: {} bytes", response_bytes.len());
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/dns-message")
+                .header("Cache-Control", "max-age=300")
+                .body(Bytes::from(response_bytes))
+                .expect("Failed to build DNS response")
+        }
+        Err(e) => {
+            warn!("Failed to serialize DNS response: {}", e);
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header("Content-Type", "text/plain")
+                .body(Bytes::from("500 Internal Server Error"))
+                .expect("Failed to build error response")
         }
     }
 }
