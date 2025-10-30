@@ -32,6 +32,7 @@ pub use registry::PluginRegistry;
 use serde_yml::Value;
 use std::fmt::Debug;
 use std::sync::Arc;
+use crate::plugin::executor::sequence::SequenceFactory;
 
 /// Uninitialized plugin returned by factories
 #[allow(unused)]
@@ -97,6 +98,7 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
 
     // Executor
     registry.register_factory("forward", Box::new(ForwardFactory {}));
+    registry.register_factory("sequence", Box::new(SequenceFactory {}));
 
     // Wrap in Arc for sharing
     let registry = Arc::new(registry);
@@ -172,7 +174,7 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
     /// Returns an uninitialized plugin that will be initialized by the registry.
     fn create(
         &self,
-        plugin_info: &PluginConfig,
+        plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin>;
 
@@ -180,7 +182,7 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
     ///
     /// Each plugin factory can validate its own configuration format.
     /// Default implementation does nothing (assumes valid).
-    fn validate_config(&self, _plugin_info: &PluginConfig) -> Result<()> {
+    fn validate_config(&self, _plugin_config: &PluginConfig) -> Result<()> {
         Ok(())
     }
 
@@ -188,7 +190,7 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
     ///
     /// Returns a list of plugin tags that this plugin depends on.
     /// Default implementation returns empty (no dependencies).
-    fn get_dependencies(&self, _plugin_info: &PluginConfig) -> Vec<String> {
+    fn get_dependencies(&self, _plugin_config: &PluginConfig) -> Vec<String> {
         vec![]
     }
 }

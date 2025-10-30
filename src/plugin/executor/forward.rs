@@ -20,6 +20,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{Level, debug, event_enabled, info, warn};
+use crate::plugin::executor::sequence::chain::ChainNode;
 
 /// Single-upstream DNS forwarder
 ///
@@ -50,7 +51,7 @@ impl Plugin for SingleDnsForwarder {
 
 #[async_trait]
 impl Executor for SingleDnsForwarder {
-    async fn execute(&self, context: &mut DnsContext) {
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
                 context.response = Some(res);
@@ -94,7 +95,7 @@ impl Plugin for ConcurrentForwarder {
 
 #[async_trait]
 impl Executor for ConcurrentForwarder {
-    async fn execute(&self, context: &mut DnsContext) {
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
         let mut join_set = JoinSet::new();
 
         for i in 0..self.concurrent {
@@ -146,12 +147,12 @@ pub struct ForwardFactory;
 impl PluginFactory for ForwardFactory {
     fn create(
         &self,
-        plugin_info: &PluginConfig,
+        plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
         // valid config
         let forward_config =
-            serde_yml::from_value::<ForwardConfig>(plugin_info.args.clone().ok_or_else(|| {
+            serde_yml::from_value::<ForwardConfig>(plugin_config.args.clone().ok_or_else(|| {
                 DnsError::plugin("Forward plugin requires configuration arguments")
             })?)
             .map_err(|e| {
@@ -163,12 +164,12 @@ impl PluginFactory for ForwardFactory {
             let upstream_config = &forward_config.upstreams[0];
             info!(
                 "Creating single DNS forwarder (tag: {}) with upstream: {}",
-                plugin_info.tag, upstream_config.addr
+                plugin_config.tag, upstream_config.addr
             );
 
             Ok(UninitializedPlugin::Executor(Box::new(
                 SingleDnsForwarder {
-                    tag: plugin_info.tag.clone(),
+                    tag: plugin_config.tag.clone(),
                     upstream: UpstreamBuilder::with_upstream_config(upstream_config.clone()),
                 },
             )))
@@ -186,7 +187,7 @@ impl PluginFactory for ForwardFactory {
             // Multi-upstream configuration (not yet implemented)
             Ok(UninitializedPlugin::Executor(Box::new(
                 ConcurrentForwarder {
-                    tag: plugin_info.tag.clone(),
+                    tag: plugin_config.tag.clone(),
                     concurrent,
                     upstreams,
                 },
@@ -194,9 +195,9 @@ impl PluginFactory for ForwardFactory {
         }
     }
 
-    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<()> {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
         // Parse and validate forward-specific configuration
-        let _forward_config = match plugin_info.args.clone() {
+        let _forward_config = match plugin_config.args.clone() {
             Some(args) => serde_yml::from_value::<ForwardConfig>(args).map_err(|e| {
                 DnsError::plugin(format!("Failed to parse Forward plugin config: {}", e))
             })?,

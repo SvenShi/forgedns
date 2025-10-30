@@ -246,11 +246,11 @@ pub struct QuicServerFactory {}
 impl PluginFactory for QuicServerFactory {
     fn create(
         &self,
-        plugin_info: &PluginConfig,
+        plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let quic_config = serde_yml::from_value::<QuicServerConfig>(
-            plugin_info
+            plugin_config
                 .args
                 .clone()
                 .ok_or_else(|| DnsError::plugin("QUIC Server requires configuration arguments"))?,
@@ -261,7 +261,7 @@ impl PluginFactory for QuicServerFactory {
         let entry = registry.get_plugin(&quic_config.entry).ok_or_else(|| {
             DnsError::plugin(format!(
                 "QUIC Server [{}] entry plugin [{}] not found",
-                plugin_info.tag, quic_config.entry
+                plugin_config.tag, quic_config.entry
             ))
         })?;
 
@@ -277,7 +277,7 @@ impl PluginFactory for QuicServerFactory {
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             QuicServer {
-                tag: plugin_info.tag.clone(),
+                tag: plugin_config.tag.clone(),
                 listen: quic_config.listen,
                 server_config,
                 idle_timeout: quic_config.idle_timeout,
@@ -290,12 +290,12 @@ impl PluginFactory for QuicServerFactory {
     }
 
     /// Validate QUIC server configuration
-    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<()> {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
         use std::net::SocketAddr;
         use std::str::FromStr;
 
         // Parse and validate QUIC-specific configuration
-        let quic_config = match plugin_info.args.clone() {
+        let quic_config = match plugin_config.args.clone() {
             Some(args) => serde_yml::from_value::<QuicServerConfig>(args).map_err(|e| {
                 DnsError::plugin(format!("QUIC Server config parsing failed: {}", e))
             })?,
@@ -325,8 +325,8 @@ impl PluginFactory for QuicServerFactory {
     }
 
     /// Get dependencies (the entry executor plugin)
-    fn get_dependencies(&self, plugin_info: &PluginConfig) -> Vec<String> {
-        if let Some(args) = &plugin_info.args {
+    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+        if let Some(args) = &plugin_config.args {
             if let Ok(config) = serde_yml::from_value::<QuicServerConfig>(args.clone()) {
                 return vec![config.entry];
             }

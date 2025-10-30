@@ -196,11 +196,11 @@ pub struct HttpServerFactory {}
 impl PluginFactory for HttpServerFactory {
     fn create(
         &self,
-        plugin_info: &PluginConfig,
+        plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let http_config = serde_yml::from_value::<HttpServerConfig>(
-            plugin_info
+            plugin_config
                 .args
                 .clone()
                 .ok_or_else(|| DnsError::plugin("HTTP Server requires configuration arguments"))?,
@@ -217,7 +217,7 @@ impl PluginFactory for HttpServerFactory {
             let executor = registry.get_plugin(&entry.exec).ok_or_else(|| {
                 DnsError::plugin(format!(
                     "HTTP Server [{}] executor plugin [{}] not found",
-                    plugin_info.tag, entry.exec
+                    plugin_config.tag, entry.exec
                 ))
             })?;
 
@@ -258,7 +258,7 @@ impl PluginFactory for HttpServerFactory {
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             HttpServer {
-                tag: plugin_info.tag.clone(),
+                tag: plugin_config.tag.clone(),
                 entries: http_config.entries,
                 listen: http_config.listen,
                 src_ip_header: http_config.src_ip_header,
@@ -271,12 +271,12 @@ impl PluginFactory for HttpServerFactory {
     }
 
     /// Validate HTTP server configuration
-    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<()> {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
         use std::net::SocketAddr;
         use std::str::FromStr;
 
         // Parse and validate HTTP-specific configuration
-        let http_config = match plugin_info.args.clone() {
+        let http_config = match plugin_config.args.clone() {
             Some(args) => serde_yml::from_value::<HttpServerConfig>(args).map_err(|e| {
                 DnsError::plugin(format!("HTTP Server config parsing failed: {}", e))
             })?,
@@ -306,8 +306,8 @@ impl PluginFactory for HttpServerFactory {
     }
 
     /// Get dependencies (the entry executor plugins)
-    fn get_dependencies(&self, plugin_info: &PluginConfig) -> Vec<String> {
-        let http_config = match plugin_info.args.clone() {
+    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+        let http_config = match plugin_config.args.clone() {
             Some(args) => match serde_yml::from_value::<HttpServerConfig>(args) {
                 Ok(config) => config,
                 Err(_) => return vec![],

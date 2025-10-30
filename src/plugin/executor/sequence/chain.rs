@@ -1,0 +1,24 @@
+/*
+ * SPDX-FileCopyrightText: 2025 Sven Shi
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+use crate::core::context::DnsContext;
+use crate::plugin::executor::Executor;
+use std::sync::Arc;
+
+#[derive(Debug)]
+pub struct ChainNode {
+    executor: Arc<dyn Executor>,
+    next: Option<Arc<ChainNode>>,
+}
+
+impl ChainNode {
+    pub fn new(executor: Arc<dyn Executor>, next: Option<Arc<ChainNode>>) -> Self {
+        ChainNode { executor, next }
+    }
+
+    pub async fn next(&self, context: &mut DnsContext) {
+        let option = self.next.as_ref().and_then(|next| next.next.as_ref());
+        self.executor.execute(context, option).await;
+    }
+}

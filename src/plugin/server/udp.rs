@@ -142,11 +142,11 @@ pub struct UdpServerFactory {}
 impl PluginFactory for UdpServerFactory {
     fn create(
         &self,
-        plugin_info: &PluginConfig,
+        plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let udp_config = serde_yml::from_value::<UdpServerConfig>(
-            plugin_info
+            plugin_config
                 .args
                 .clone()
                 .ok_or_else(|| DnsError::plugin("UDP Server requires configuration arguments"))?,
@@ -157,13 +157,13 @@ impl PluginFactory for UdpServerFactory {
         let entry = registry.get_plugin(&udp_config.entry).ok_or_else(|| {
             DnsError::plugin(format!(
                 "UDP Server [{}] entry plugin [{}] not found",
-                plugin_info.tag, udp_config.entry
+                plugin_config.tag, udp_config.entry
             ))
         })?;
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             UdpServer {
-                tag: plugin_info.tag.clone(),
+                tag: plugin_config.tag.clone(),
                 listen: udp_config.listen,
                 request_handle: Arc::new(RequestHandle {
                     entry_executor: entry.to_executor().clone(),
@@ -174,12 +174,12 @@ impl PluginFactory for UdpServerFactory {
     }
 
     /// Validate UDP server configuration
-    fn validate_config(&self, plugin_info: &PluginConfig) -> Result<()> {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
         use std::net::SocketAddr;
         use std::str::FromStr;
 
         // Parse and validate UDP-specific configuration
-        let udp_config = match plugin_info.args.clone() {
+        let udp_config = match plugin_config.args.clone() {
             Some(args) => serde_yml::from_value::<UdpServerConfig>(args).map_err(|e| {
                 DnsError::plugin(format!("UDP Server config parsing failed: {}", e))
             })?,
@@ -207,8 +207,8 @@ impl PluginFactory for UdpServerFactory {
     }
 
     /// Get dependencies (the entry executor plugin)
-    fn get_dependencies(&self, plugin_info: &PluginConfig) -> Vec<String> {
-        if let Some(args) = &plugin_info.args {
+    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+        if let Some(args) = &plugin_config.args {
             if let Ok(config) = serde_yml::from_value::<UdpServerConfig>(args.clone()) {
                 return vec![config.entry];
             }
