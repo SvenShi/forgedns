@@ -244,51 +244,6 @@ pub struct QuicServerFactory {}
 
 #[async_trait]
 impl PluginFactory for QuicServerFactory {
-    fn create(
-        &self,
-        plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
-    ) -> Result<crate::plugin::UninitializedPlugin> {
-        let quic_config = serde_yml::from_value::<QuicServerConfig>(
-            plugin_config
-                .args
-                .clone()
-                .ok_or_else(|| DnsError::plugin("QUIC Server requires configuration arguments"))?,
-        )
-        .map_err(|e| DnsError::plugin(format!("Failed to parse QUIC Server config: {}", e)))?;
-
-        // Look up the entry plugin using the registry
-        let entry = registry.get_plugin(&quic_config.entry).ok_or_else(|| {
-            DnsError::plugin(format!(
-                "QUIC Server [{}] entry plugin [{}] not found",
-                plugin_config.tag, quic_config.entry
-            ))
-        })?;
-
-        // Load TLS configuration if cert and key are provided
-        let server_config =
-            if let Some(res) = load_tls_config(&Some(quic_config.cert), &Some(quic_config.key)) {
-                let mut config = res?;
-                config.alpn_protocols = vec![b"doq".to_vec()];
-                config
-            } else {
-                return Err("Failed to load TLS config".into());
-            };
-
-        Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
-            QuicServer {
-                tag: plugin_config.tag.clone(),
-                listen: quic_config.listen,
-                server_config,
-                idle_timeout: quic_config.idle_timeout,
-                request_handle: Arc::new(RequestHandle {
-                    entry_executor: entry.to_executor().clone(),
-                    registry,
-                }),
-            },
-        )))
-    }
-
     /// Validate QUIC server configuration
     fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
         use std::net::SocketAddr;
@@ -332,5 +287,50 @@ impl PluginFactory for QuicServerFactory {
             }
         }
         vec![]
+    }
+
+    fn create(
+        &self,
+        plugin_config: &PluginConfig,
+        registry: Arc<PluginRegistry>,
+    ) -> Result<crate::plugin::UninitializedPlugin> {
+        let quic_config = serde_yml::from_value::<QuicServerConfig>(
+            plugin_config
+                .args
+                .clone()
+                .ok_or_else(|| DnsError::plugin("QUIC Server requires configuration arguments"))?,
+        )
+        .map_err(|e| DnsError::plugin(format!("Failed to parse QUIC Server config: {}", e)))?;
+
+        // Look up the entry plugin using the registry
+        let entry = registry.get_plugin(&quic_config.entry).ok_or_else(|| {
+            DnsError::plugin(format!(
+                "QUIC Server [{}] entry plugin [{}] not found",
+                plugin_config.tag, quic_config.entry
+            ))
+        })?;
+
+        // Load TLS configuration if cert and key are provided
+        let server_config =
+            if let Some(res) = load_tls_config(&Some(quic_config.cert), &Some(quic_config.key)) {
+                let mut config = res?;
+                config.alpn_protocols = vec![b"doq".to_vec()];
+                config
+            } else {
+                return Err("Failed to load TLS config".into());
+            };
+
+        Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
+            QuicServer {
+                tag: plugin_config.tag.clone(),
+                listen: quic_config.listen,
+                server_config,
+                idle_timeout: quic_config.idle_timeout,
+                request_handle: Arc::new(RequestHandle {
+                    entry_executor: entry.to_executor().clone(),
+                    registry,
+                }),
+            },
+        )))
     }
 }

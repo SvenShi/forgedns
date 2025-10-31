@@ -64,7 +64,7 @@ impl PluginRegistry {
     /// # Returns
     /// * `Ok(())` - All plugins initialized successfully
     /// * `Err(DnsError)` - Error message if initialization fails
-    pub async fn init_plugins(self: Arc<Self>, configs: Vec<PluginConfig>) -> Result<()> {
+    pub(crate) async fn init_plugins(self: Arc<Self>, configs: Vec<PluginConfig>) -> Result<()> {
         use crate::plugin::dependency;
 
         // Step 1: Validate all plugin configurations
@@ -138,11 +138,13 @@ impl PluginRegistry {
         let uninitialized = factory.create(config, self.clone())?;
 
         // Initialize and wrap into PluginType (with Arc)
-        let plugin_type = uninitialized.init_and_wrap().await;
+        let plugin_holder = uninitialized.init_and_wrap().await;
 
+        // Initialize and wrap into PluginHolder (with Arc)
         Ok(PluginInfo {
             tag: config.tag.clone(),
-            plugin_type,
+            plugin_type: plugin_holder.plugin_type(),
+            plugin_holder,
             args: config.args.clone(),
         })
     }

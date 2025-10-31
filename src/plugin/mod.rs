@@ -20,19 +20,20 @@ pub mod server;
 
 use crate::config::types::{Config, PluginConfig};
 use crate::core::error::Result;
-use crate::plugin::executor::Executor;
 use crate::plugin::executor::forward::ForwardFactory;
-use crate::plugin::server::Server;
+use crate::plugin::executor::print::PrintFactory;
+use crate::plugin::executor::sequence::SequenceFactory;
+use crate::plugin::executor::Executor;
 use crate::plugin::server::http::HttpServerFactory;
 use crate::plugin::server::quic::QuicServerFactory;
 use crate::plugin::server::tcp::TcpServerFactory;
 use crate::plugin::server::udp::UdpServerFactory;
+use crate::plugin::server::Server;
 use async_trait::async_trait;
 pub use registry::PluginRegistry;
 use serde_yml::Value;
 use std::fmt::Debug;
 use std::sync::Arc;
-use crate::plugin::executor::sequence::SequenceFactory;
 
 /// Uninitialized plugin returned by factories
 #[allow(unused)]
@@ -52,23 +53,23 @@ pub enum UninitializedPlugin {
 
 impl UninitializedPlugin {
     /// Initialize the plugin and convert to PluginType (Arc-wrapped)
-    pub async fn init_and_wrap(self) -> PluginType {
+    async fn init_and_wrap(self) -> PluginHolder {
         match self {
             UninitializedPlugin::Server(mut server) => {
                 server.as_mut().init().await;
-                PluginType::Server(server.into())
+                PluginHolder::Server(server.into())
             }
             UninitializedPlugin::Executor(mut executor) => {
                 executor.as_mut().init().await;
-                PluginType::Executor(executor.into())
+                PluginHolder::Executor(executor.into())
             }
             UninitializedPlugin::Matcher(mut matcher) => {
                 matcher.as_mut().init().await;
-                PluginType::Matcher(matcher.into())
+                PluginHolder::Matcher(matcher.into())
             }
             UninitializedPlugin::DataProvider(mut provider) => {
                 provider.as_mut().init().await;
-                PluginType::DataProvider(provider.into())
+                PluginHolder::DataProvider(provider.into())
             }
         }
     }
@@ -99,6 +100,7 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     // Executor
     registry.register_factory("forward", Box::new(ForwardFactory {}));
     registry.register_factory("sequence", Box::new(SequenceFactory {}));
+    registry.register_factory("print", Box::new(PrintFactory {}));
 
     // Wrap in Arc for sharing
     let registry = Arc::new(registry);
@@ -109,10 +111,19 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     Ok(registry)
 }
 
+#[derive(Debug)]
+pub enum PluginType {
+    Server,
+    Executor,
+    Matcher,
+    DataProvider,
+}
+
 /// Initialized plugin categorized by type
+/// Initialize the plugin and wrap into PluginHolder (Arc-wrapped)
 #[derive(Debug)]
 #[allow(unused)]
-pub enum PluginType {
+enum PluginHolder {
     /// Server plugins run continuously (e.g., UDP/TCP listeners)
     Server(Arc<dyn Server>),
 
@@ -127,24 +138,34 @@ pub enum PluginType {
 }
 
 #[allow(unused)]
-impl PluginType {
+impl PluginHolder {
     /// Get the plugin category kind
     pub fn kind(&self) -> &'static str {
         match self {
-            PluginType::Server(..) => "Server",
-            PluginType::Executor(..) => "Executor",
-            PluginType::Matcher(..) => "Matcher",
-            PluginType::DataProvider(..) => "DataProvider",
+            PluginHolder::Server(..) => "Server",
+            PluginHolder::Executor(..) => "Executor",
+            PluginHolder::Matcher(..) => "Matcher",
+            PluginHolder::DataProvider(..) => "DataProvider",
+        }
+    }
+
+    /// Get the plugin category enum
+    pub fn plugin_type(&self) -> PluginType {
+        match self {
+            PluginHolder::Server(..) => PluginType::Server,
+            PluginHolder::Executor(..) => PluginType::Executor,
+            PluginHolder::Matcher(..) => PluginType::Matcher,
+            PluginHolder::DataProvider(..) => PluginType::DataProvider,
         }
     }
 
     /// Get a reference to the underlying Plugin trait object
     pub fn as_plugin(&self) -> &dyn Plugin {
         match self {
-            PluginType::Server(s) => s.as_ref(),
-            PluginType::Executor(e) => e.as_ref(),
-            PluginType::Matcher(m) => m.as_ref(),
-            PluginType::DataProvider(d) => d.as_ref(),
+            PluginHolder::Server(s) => s.as_ref(),
+            PluginHolder::Executor(e) => e.as_ref(),
+            PluginHolder::Matcher(m) => m.as_ref(),
+            PluginHolder::DataProvider(d) => d.as_ref(),
         }
     }
 }
@@ -165,6 +186,25 @@ pub trait Plugin: Debug + Send + Sync + 'static {
 
 /// Plugin factory trait for creating plugin instances from configuration
 pub trait PluginFactory: Debug + Send + Sync + 'static {
+    /// # Step 1
+    /// Validate plugin-specific configuration
+    ///
+    /// Each plugin factory can validate its own configuration format.
+    /// Default implementation does nothing (assumes valid).
+    fn validate_config(&self, _plugin_config: &PluginConfig) -> Result<()> {
+        Ok(())
+    }
+
+    /// # Step 2
+    /// Get plugin dependencies from configuration
+    ///
+    /// Returns a list of plugin tags that this plugin depends on.
+    /// Default implementation returns empty (no dependencies).
+    fn get_dependencies(&self, _plugin_config: &PluginConfig) -> Vec<String> {
+        vec![]
+    }
+
+    /// # Step 3
     /// Create a new uninitialized plugin instance from configuration
     ///
     /// # Arguments
@@ -177,22 +217,6 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin>;
-
-    /// Validate plugin-specific configuration
-    ///
-    /// Each plugin factory can validate its own configuration format.
-    /// Default implementation does nothing (assumes valid).
-    fn validate_config(&self, _plugin_config: &PluginConfig) -> Result<()> {
-        Ok(())
-    }
-
-    /// Get plugin dependencies from configuration
-    ///
-    /// Returns a list of plugin tags that this plugin depends on.
-    /// Default implementation returns empty (no dependencies).
-    fn get_dependencies(&self, _plugin_config: &PluginConfig) -> Vec<String> {
-        vec![]
-    }
 }
 
 /// Plugin metadata and instance container
@@ -202,8 +226,10 @@ pub struct PluginInfo {
     /// Plugin instance tag (unique identifier)
     pub tag: String,
 
-    /// Plugin type information
     pub plugin_type: PluginType,
+
+    /// Plugin type information
+    plugin_holder: PluginHolder,
 
     /// Plugin-specific configuration arguments
     pub args: Option<Value>,
@@ -213,38 +239,38 @@ pub struct PluginInfo {
 impl PluginInfo {
     /// Get Arc clone of the executor (panics if not an Executor plugin)
     pub fn to_executor(&self) -> Arc<dyn Executor> {
-        match &self.plugin_type {
-            PluginType::Executor(executor) => executor.clone(),
+        match &self.plugin_holder {
+            PluginHolder::Executor(executor) => executor.clone(),
             _ => panic!("Plugin '{}' is not an Executor", self.tag),
         }
     }
 
     /// Get reference to the executor (panics if not an Executor plugin)
     pub fn executor(&self) -> &dyn Executor {
-        match &self.plugin_type {
-            PluginType::Executor(executor) => executor.as_ref(),
+        match &self.plugin_holder {
+            PluginHolder::Executor(executor) => executor.as_ref(),
             _ => panic!("Plugin '{}' is not an Executor", self.tag),
         }
     }
 
     /// Get Arc clone of the server (panics if not a Server plugin)
     pub fn to_server(&self) -> Arc<dyn Server> {
-        match &self.plugin_type {
-            PluginType::Server(server) => server.clone(),
+        match &self.plugin_holder {
+            PluginHolder::Server(server) => server.clone(),
             _ => panic!("Plugin '{}' is not a Server", self.tag),
         }
     }
 
     /// Get reference to the server (panics if not a Server plugin)
     pub fn server(&self) -> &dyn Server {
-        match &self.plugin_type {
-            PluginType::Server(server) => server.as_ref(),
+        match &self.plugin_holder {
+            PluginHolder::Server(server) => server.as_ref(),
             _ => panic!("Plugin '{}' is not a Server", self.tag),
         }
     }
 
     /// Get reference to underlying Plugin trait object
     pub fn as_plugin(&self) -> &dyn Plugin {
-        self.plugin_type.as_plugin()
+        self.plugin_holder.as_plugin()
     }
 }

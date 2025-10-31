@@ -7,16 +7,15 @@ pub mod chain;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::DnsError;
-use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::plugin::executor::Executor;
+use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing_subscriber::util::SubscriberInitExt;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Rule {
     #[serde(default)]
     matches: Option<Vec<String>>,
@@ -24,36 +23,63 @@ struct Rule {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct Sequence {
+    tag: String,
     head: Arc<ChainNode>,
+    rules: Vec<Rule>,
 }
 
 #[async_trait]
 impl Plugin for Sequence {
     fn tag(&self) -> &str {
-        todo!()
+        &self.tag
     }
 
-    async fn init(&mut self) {
-        todo!()
-    }
+    async fn init(&mut self) {}
 
-    async fn destroy(&mut self) {
-        todo!()
-    }
+    async fn destroy(&mut self) {}
 }
 
 #[async_trait]
 impl Executor for Sequence {
-    async fn execute(&self, context: &mut DnsContext, _next: Option<&Arc<ChainNode>>) {
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
         self.head.next(context).await;
+        continue_next!(next, context);
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SequenceFactory {}
 
 impl PluginFactory for SequenceFactory {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> crate::core::error::Result<()> {
+        match plugin_config.args.clone() {
+            Some(args) => {
+                serde_yml::from_value::<Vec<Rule>>(args).map_err(|e| {
+                    DnsError::plugin(format!("sequence config parsing failed: {}", e))
+                })?;
+                Ok(())
+            }
+            None => Err(DnsError::plugin(
+                "sequence must configure 'listen' and 'entry' in config file",
+            )),
+        }
+    }
+
+    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+        let mut result = Vec::new();
+
+        let rules =
+            serde_yml::from_value::<Vec<Rule>>(plugin_config.args.clone().unwrap()).unwrap();
+        for rule in rules {
+            if let Some(exec) = rule.exec {
+                result.push(exec);
+            }
+        }
+        result
+    }
+
     fn create(
         &self,
         plugin_config: &PluginConfig,
@@ -84,18 +110,10 @@ impl PluginFactory for SequenceFactory {
             }
         }
 
-        Ok(UninitializedPlugin::Executor(Box::new(
-            Sequence {
-                head: next_node.unwrap().clone(),
-            },
-        )))
-    }
-
-    fn validate_config(&self, _plugin_config: &PluginConfig) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-
-    fn get_dependencies(&self, _plugin_config: &PluginConfig) -> Vec<String> {
-        vec![]
+        Ok(UninitializedPlugin::Executor(Box::new(Sequence {
+            tag: plugin_config.tag.clone(),
+            head: next_node.unwrap().clone(),
+            rules,
+        })))
     }
 }

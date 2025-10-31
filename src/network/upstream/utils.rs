@@ -120,7 +120,7 @@ pub(crate) async fn connect_quic(
         secure_client_config()
     };
     client_config.alpn_protocols = alpn;
-    
+
     let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_config)?));
 
     endpoint.set_default_client_config(client_config);

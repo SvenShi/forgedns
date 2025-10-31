@@ -290,6 +290,49 @@ pub struct TcpServerFactory {}
 
 #[async_trait]
 impl PluginFactory for TcpServerFactory {
+    /// Validate TCP server configuration
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
+        use std::net::SocketAddr;
+        use std::str::FromStr;
+
+        // Parse and validate TCP-specific configuration
+        let tcp_config = match plugin_config.args.clone() {
+            Some(args) => serde_yml::from_value::<TcpServerConfig>(args).map_err(|e| {
+                DnsError::plugin(format!("TCP Server config parsing failed: {}", e))
+            })?,
+            None => {
+                return Err(DnsError::plugin(
+                    "TCP Server must configure 'listen' and 'entry' in config file",
+                ));
+            }
+        };
+
+        // Validate listen address format
+        if SocketAddr::from_str(&tcp_config.listen).is_err() {
+            return Err(DnsError::plugin(format!(
+                "Invalid listen address: {}",
+                tcp_config.listen
+            )));
+        }
+
+        // Validate entry is not empty
+        if tcp_config.entry.is_empty() {
+            return Err(DnsError::plugin("TCP Server 'entry' field cannot be empty"));
+        }
+
+        Ok(())
+    }
+
+    /// Get dependencies (the entry executor plugin)
+    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+        if let Some(args) = &plugin_config.args {
+            if let Ok(config) = serde_yml::from_value::<TcpServerConfig>(args.clone()) {
+                return vec![config.entry];
+            }
+        }
+        vec![]
+    }
+
     fn create(
         &self,
         plugin_config: &PluginConfig,
@@ -333,48 +376,5 @@ impl PluginFactory for TcpServerFactory {
                 idle_timeout: tcp_config.idle_timeout,
             },
         )))
-    }
-
-    /// Validate TCP server configuration
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        use std::net::SocketAddr;
-        use std::str::FromStr;
-
-        // Parse and validate TCP-specific configuration
-        let tcp_config = match plugin_config.args.clone() {
-            Some(args) => serde_yml::from_value::<TcpServerConfig>(args).map_err(|e| {
-                DnsError::plugin(format!("TCP Server config parsing failed: {}", e))
-            })?,
-            None => {
-                return Err(DnsError::plugin(
-                    "TCP Server must configure 'listen' and 'entry' in config file",
-                ));
-            }
-        };
-
-        // Validate listen address format
-        if SocketAddr::from_str(&tcp_config.listen).is_err() {
-            return Err(DnsError::plugin(format!(
-                "Invalid listen address: {}",
-                tcp_config.listen
-            )));
-        }
-
-        // Validate entry is not empty
-        if tcp_config.entry.is_empty() {
-            return Err(DnsError::plugin("TCP Server 'entry' field cannot be empty"));
-        }
-
-        Ok(())
-    }
-
-    /// Get dependencies (the entry executor plugin)
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
-        if let Some(args) = &plugin_config.args {
-            if let Ok(config) = serde_yml::from_value::<TcpServerConfig>(args.clone()) {
-                return vec![config.entry];
-            }
-        }
-        vec![]
     }
 }

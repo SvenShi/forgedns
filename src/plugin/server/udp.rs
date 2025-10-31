@@ -140,39 +140,6 @@ pub struct UdpServerFactory {}
 
 #[async_trait]
 impl PluginFactory for UdpServerFactory {
-    fn create(
-        &self,
-        plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
-    ) -> Result<crate::plugin::UninitializedPlugin> {
-        let udp_config = serde_yml::from_value::<UdpServerConfig>(
-            plugin_config
-                .args
-                .clone()
-                .ok_or_else(|| DnsError::plugin("UDP Server requires configuration arguments"))?,
-        )
-        .map_err(|e| DnsError::plugin(format!("Failed to parse UDP Server config: {}", e)))?;
-
-        // Look up the entry plugin using the registry
-        let entry = registry.get_plugin(&udp_config.entry).ok_or_else(|| {
-            DnsError::plugin(format!(
-                "UDP Server [{}] entry plugin [{}] not found",
-                plugin_config.tag, udp_config.entry
-            ))
-        })?;
-
-        Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
-            UdpServer {
-                tag: plugin_config.tag.clone(),
-                listen: udp_config.listen,
-                request_handle: Arc::new(RequestHandle {
-                    entry_executor: entry.to_executor().clone(),
-                    registry,
-                }),
-            },
-        )))
-    }
-
     /// Validate UDP server configuration
     fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
         use std::net::SocketAddr;
@@ -214,5 +181,38 @@ impl PluginFactory for UdpServerFactory {
             }
         }
         vec![]
+    }
+
+    fn create(
+        &self,
+        plugin_config: &PluginConfig,
+        registry: Arc<PluginRegistry>,
+    ) -> Result<crate::plugin::UninitializedPlugin> {
+        let udp_config = serde_yml::from_value::<UdpServerConfig>(
+            plugin_config
+                .args
+                .clone()
+                .ok_or_else(|| DnsError::plugin("UDP Server requires configuration arguments"))?,
+        )
+        .map_err(|e| DnsError::plugin(format!("Failed to parse UDP Server config: {}", e)))?;
+
+        // Look up the entry plugin using the registry
+        let entry = registry.get_plugin(&udp_config.entry).ok_or_else(|| {
+            DnsError::plugin(format!(
+                "UDP Server [{}] entry plugin [{}] not found",
+                plugin_config.tag, udp_config.entry
+            ))
+        })?;
+
+        Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
+            UdpServer {
+                tag: plugin_config.tag.clone(),
+                listen: udp_config.listen,
+                request_handle: Arc::new(RequestHandle {
+                    entry_executor: entry.to_executor().clone(),
+                    registry,
+                }),
+            },
+        )))
     }
 }
