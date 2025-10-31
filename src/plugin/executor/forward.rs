@@ -67,6 +67,7 @@ impl Executor for SingleDnsForwarder {
                 );
             }
         }
+        continue_next!(next, context);
     }
 }
 
@@ -126,6 +127,8 @@ impl Executor for ConcurrentForwarder {
                 }
             }
         }
+
+        continue_next!(next, context);
     }
 }
 
@@ -145,6 +148,22 @@ pub struct ForwardConfig {
 pub struct ForwardFactory;
 
 impl PluginFactory for ForwardFactory {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
+        // Parse and validate forward-specific configuration
+        let _forward_config = match plugin_config.args.clone() {
+            Some(args) => serde_yml::from_value::<ForwardConfig>(args).map_err(|e| {
+                DnsError::plugin(format!("Failed to parse Forward plugin config: {}", e))
+            })?,
+            None => {
+                return Err(DnsError::plugin(
+                    "Forward plugin requires 'concurrent' and 'upstreams' configuration",
+                ));
+            }
+        };
+
+        Ok(())
+    }
+
     fn create(
         &self,
         plugin_config: &PluginConfig,
@@ -152,12 +171,7 @@ impl PluginFactory for ForwardFactory {
     ) -> Result<UninitializedPlugin> {
         // valid config
         let forward_config =
-            serde_yml::from_value::<ForwardConfig>(plugin_config.args.clone().ok_or_else(|| {
-                DnsError::plugin("Forward plugin requires configuration arguments")
-            })?)
-            .map_err(|e| {
-                DnsError::plugin(format!("Failed to parse Forward plugin config: {}", e))
-            })?;
+            serde_yml::from_value::<ForwardConfig>(plugin_config.args.clone().unwrap())?;
 
         if forward_config.upstreams.len() == 1 {
             // Single upstream configuration
@@ -193,21 +207,5 @@ impl PluginFactory for ForwardFactory {
                 },
             )))
         }
-    }
-
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        // Parse and validate forward-specific configuration
-        let _forward_config = match plugin_config.args.clone() {
-            Some(args) => serde_yml::from_value::<ForwardConfig>(args).map_err(|e| {
-                DnsError::plugin(format!("Failed to parse Forward plugin config: {}", e))
-            })?,
-            None => {
-                return Err(DnsError::plugin(
-                    "Forward plugin requires 'concurrent' and 'upstreams' configuration",
-                ));
-            }
-        };
-
-        Ok(())
     }
 }

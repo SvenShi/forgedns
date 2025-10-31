@@ -18,7 +18,7 @@ impl ChainNode {
     }
 
     pub async fn next(&self, context: &mut DnsContext) {
-        let option = self.next.as_ref().and_then(|next| next.next.as_ref());
-        self.executor.execute(context, option).await;
+        // Pass immediate next (if any) to current executor
+        self.executor.execute(context, self.next.as_ref()).await;
     }
 }

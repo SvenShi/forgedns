@@ -1,5 +1,5 @@
-log:
-  level: debug
+#log:
+#  level: debug
 
 plugins:
   - tag: forward
@@ -7,20 +7,28 @@ plugins:
     args:
       upstreams:
         - addr: "223.5.5.5"  # 阿里 DNS
-#          dial_addr: "223.5.5.5"  # 阿里 DNS
-#          socks5: "127.0.0.1:7897"
+          # dial_addr: "223.5.5.5"  # 阿里 DNS
+          # socks5: "127.0.0.1:7897"
           # insecure_skip_verify: true
           # bootstrap: 223.5.5.5
           # enable_pipeline: true
         # 当配置多个上游服务器时，会自动启用并发模式
         # - addr: "119.29.29.29"  # 腾讯 DNS
         # - addr: "114.114.114.114"  # 114 DNS
+  - tag: print
+    type: print
+    args:
+      before:
+        - from {src_addr}
+      after:
+        - response success
 
   - tag: seq
     type: sequence
     args:
+      - exec: print
       - exec: forward
-      - exec: forward
+
 
   - tag: "udp_server"
     type: "udp_server"

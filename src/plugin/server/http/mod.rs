@@ -21,6 +21,7 @@ mod http_dispatcher;
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::network::tls_config::load_tls_config;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
@@ -32,7 +33,6 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
-use crate::network::tls_config::load_tls_config;
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT: u64 = 30;
 

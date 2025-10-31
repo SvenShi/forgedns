@@ -8,7 +8,18 @@ use std::sync::Arc;
 use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::{core::context::DnsContext, plugin::Plugin};
 
+// Helper macro to continue to next chain node if present
+#[macro_export]
+macro_rules! continue_next {
+    ($next:expr, $ctx:expr) => {
+        if let Some(next) = $next {
+            next.next($ctx).await;
+        }
+    };
+}
+
 pub mod forward;
+pub mod print;
 pub mod sequence;
 
 #[async_trait]
