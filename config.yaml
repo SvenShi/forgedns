@@ -23,10 +23,14 @@ plugins:
       after:
         - response success
 
+  - tag: cache
+    type: cache
+
   - tag: seq
     type: sequence
     args:
       - exec: print
+      - exec: cache
       - exec: forward
 
 

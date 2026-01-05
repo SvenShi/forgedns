@@ -20,15 +20,16 @@ pub mod server;
 
 use crate::config::types::{Config, PluginConfig};
 use crate::core::error::Result;
+use crate::plugin::executor::Executor;
+use crate::plugin::executor::cache::CacheFactory;
 use crate::plugin::executor::forward::ForwardFactory;
 use crate::plugin::executor::print::PrintFactory;
 use crate::plugin::executor::sequence::SequenceFactory;
-use crate::plugin::executor::Executor;
+use crate::plugin::server::Server;
 use crate::plugin::server::http::HttpServerFactory;
 use crate::plugin::server::quic::QuicServerFactory;
 use crate::plugin::server::tcp::TcpServerFactory;
 use crate::plugin::server::udp::UdpServerFactory;
-use crate::plugin::server::Server;
 use async_trait::async_trait;
 pub use registry::PluginRegistry;
 use serde_yml::Value;
@@ -101,6 +102,7 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     registry.register_factory("forward", Box::new(ForwardFactory {}));
     registry.register_factory("sequence", Box::new(SequenceFactory {}));
     registry.register_factory("print", Box::new(PrintFactory {}));
+    registry.register_factory("cache", Box::new(CacheFactory {}));
 
     // Wrap in Arc for sharing
     let registry = Arc::new(registry);
