@@ -21,7 +21,7 @@ use tokio::time::Instant;
 /// Application start time (set once during initialization)
 static START_INSTANT: OnceLock<Instant> = OnceLock::new();
 
-/// Cached milliseconds since start (updated every 1ms by background task)
+/// Cached milliseconds since start (updated every 100ms by background task)
 static GLOBAL_NOW: AtomicU64 = AtomicU64::new(0);
 
 /// Ensures clock is initialized only once
