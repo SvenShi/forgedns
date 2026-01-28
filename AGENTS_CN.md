@@ -30,7 +30,7 @@
 - 无硬性覆盖率目标，但需覆盖协议处理与插件行为。
 
 ## 提交与 PR 规范
-- 提交信息遵循约定风格，带 emoji 与 scope，例如  `:bug: (scope): Fix ...` 使用英文。
+- 提交信息遵循Conventional Commits，带scope，例如  `fix(scope): Fix ...` 使用英文。
 - 描述简洁、动词驱动，涉及子系统请标注 scope。
 - PR 需说明行为变化与配置调整，并附测试命令。
 - 修改默认配置需说明对 `config.yaml` 的影响。
