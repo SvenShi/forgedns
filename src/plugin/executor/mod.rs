@@ -18,10 +18,10 @@ macro_rules! continue_next {
     };
 }
 
+pub mod cache;
 pub mod forward;
 pub mod print;
 pub mod sequence;
-pub mod cache;
 
 #[async_trait]
 pub trait Executor: Plugin {
