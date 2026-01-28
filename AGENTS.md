@@ -30,7 +30,7 @@
 - No explicit coverage target; add tests for protocol handling and plugin behavior.
 
 ## Commit & Pull Request Guidelines
-- Commits follow a conventional style with emoji and scope, e.g. `:bug: (scope): Fix ...`, and use English.
+- Commits follow a Conventional Commits, e.g. `fix(scope): Fix ...`, and use English.
 - Keep messages short and action-focused; include a scope when touching a subsystem.
 - PRs should describe behavior changes, configuration updates, and include a test plan (commands run).
 - If modifying config defaults, explain the impact on `config.yaml`.
