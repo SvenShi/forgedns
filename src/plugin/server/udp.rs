@@ -14,6 +14,7 @@ use crate::core::error::{DnsError, Result};
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -137,6 +138,8 @@ pub fn build_udp_socket(addr: &str) -> Result<StdUdpSocket> {
 /// Factory for creating UDP server plugin instances
 #[derive(Debug)]
 pub struct UdpServerFactory {}
+
+register_plugin_factory!("udp_server", UdpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for UdpServerFactory {

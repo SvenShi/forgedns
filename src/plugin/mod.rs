@@ -15,24 +15,21 @@
 
 mod dependency;
 pub mod executor;
+pub mod matcher;
+pub mod provider;
 pub mod registry;
 pub mod server;
 
 use crate::config::types::{Config, PluginConfig};
-use crate::core::error::Result;
+use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
-use crate::plugin::executor::cache::CacheFactory;
-use crate::plugin::executor::forward::ForwardFactory;
-use crate::plugin::executor::print::PrintFactory;
-use crate::plugin::executor::sequence::SequenceFactory;
+use crate::plugin::matcher::Matcher;
+use crate::plugin::provider::Provider;
 use crate::plugin::server::Server;
-use crate::plugin::server::http::HttpServerFactory;
-use crate::plugin::server::quic::QuicServerFactory;
-use crate::plugin::server::tcp::TcpServerFactory;
-use crate::plugin::server::udp::UdpServerFactory;
 use async_trait::async_trait;
 pub use registry::PluginRegistry;
 use serde_yml::Value;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -46,10 +43,10 @@ pub enum UninitializedPlugin {
     Executor(Box<dyn Executor>),
 
     /// Matcher plugin (not yet initialized)
-    Matcher(Box<dyn Plugin>),
+    Matcher(Box<dyn Matcher>),
 
     /// DataProvider plugin (not yet initialized)
-    DataProvider(Box<dyn Plugin>),
+    Provider(Box<dyn Provider>),
 }
 
 impl UninitializedPlugin {
@@ -68,9 +65,9 @@ impl UninitializedPlugin {
                 matcher.as_mut().init().await;
                 PluginHolder::Matcher(matcher.into())
             }
-            UninitializedPlugin::DataProvider(mut provider) => {
+            UninitializedPlugin::Provider(mut provider) => {
                 provider.as_mut().init().await;
-                PluginHolder::DataProvider(provider.into())
+                PluginHolder::Provider(provider.into())
             }
         }
     }
@@ -91,18 +88,8 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     // Create and configure the registry
     let mut registry = PluginRegistry::new();
 
-    // Register all built-in plugin factories
-    // Sever
-    registry.register_factory("udp_server", Box::new(UdpServerFactory {}));
-    registry.register_factory("tcp_server", Box::new(TcpServerFactory {}));
-    registry.register_factory("http_server", Box::new(HttpServerFactory {}));
-    registry.register_factory("quic_server", Box::new(QuicServerFactory {}));
-
-    // Executor
-    registry.register_factory("forward", Box::new(ForwardFactory {}));
-    registry.register_factory("sequence", Box::new(SequenceFactory {}));
-    registry.register_factory("print", Box::new(PrintFactory {}));
-    registry.register_factory("cache", Box::new(CacheFactory {}));
+    // Register all built-in plugin factories from inventory
+    register_factories_from_inventory(&mut registry)?;
 
     // Wrap in Arc for sharing
     let registry = Arc::new(registry);
@@ -113,12 +100,50 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     Ok(registry)
 }
 
+pub struct FactoryRegistration {
+    pub plugin_type: &'static str,
+    pub constructor: fn() -> Box<dyn PluginFactory>,
+}
+
+inventory::collect!(FactoryRegistration);
+
+#[macro_export]
+macro_rules! register_plugin_factory {
+    ($plugin_type:expr, $factory_ctor:expr) => {
+        inventory::submit! {
+            $crate::plugin::FactoryRegistration {
+                plugin_type: $plugin_type,
+                constructor: || -> Box<dyn $crate::plugin::PluginFactory> {
+                    Box::new($factory_ctor)
+                },
+            }
+        }
+    };
+}
+
+fn register_factories_from_inventory(registry: &mut PluginRegistry) -> Result<()> {
+    let mut seen_plugin_types = HashSet::new();
+
+    for registration in inventory::iter::<FactoryRegistration> {
+        if !seen_plugin_types.insert(registration.plugin_type) {
+            return Err(DnsError::plugin(format!(
+                "Duplicate plugin type '{}' registered in inventory",
+                registration.plugin_type
+            )));
+        }
+
+        registry.register_factory(registration.plugin_type, (registration.constructor)());
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum PluginType {
     Server,
     Executor,
     Matcher,
-    DataProvider,
+    Provider,
 }
 
 /// Initialized plugin categorized by type
@@ -133,10 +158,10 @@ enum PluginHolder {
     Executor(Arc<dyn Executor>),
 
     /// Matcher plugins test queries against rules (e.g., domain lists)
-    Matcher(Arc<dyn Plugin>),
+    Matcher(Arc<dyn Matcher>),
 
     /// DataProvider plugins provide data sources (e.g., IP sets, GeoIP)
-    DataProvider(Arc<dyn Plugin>),
+    Provider(Arc<dyn Provider>),
 }
 
 #[allow(unused)]
@@ -147,7 +172,7 @@ impl PluginHolder {
             PluginHolder::Server(..) => "Server",
             PluginHolder::Executor(..) => "Executor",
             PluginHolder::Matcher(..) => "Matcher",
-            PluginHolder::DataProvider(..) => "DataProvider",
+            PluginHolder::Provider(..) => "Provider",
         }
     }
 
@@ -157,7 +182,7 @@ impl PluginHolder {
             PluginHolder::Server(..) => PluginType::Server,
             PluginHolder::Executor(..) => PluginType::Executor,
             PluginHolder::Matcher(..) => PluginType::Matcher,
-            PluginHolder::DataProvider(..) => PluginType::DataProvider,
+            PluginHolder::Provider(..) => PluginType::Provider,
         }
     }
 
@@ -167,7 +192,7 @@ impl PluginHolder {
             PluginHolder::Server(s) => s.as_ref(),
             PluginHolder::Executor(e) => e.as_ref(),
             PluginHolder::Matcher(m) => m.as_ref(),
-            PluginHolder::DataProvider(d) => d.as_ref(),
+            PluginHolder::Provider(d) => d.as_ref(),
         }
     }
 }

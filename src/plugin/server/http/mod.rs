@@ -25,6 +25,7 @@ use crate::network::tls_config::load_tls_config;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::register_plugin_factory;
 use async_trait::async_trait;
 use http::Method;
 use rustls::ServerConfig;
@@ -191,6 +192,8 @@ impl Server for HttpServer {
 /// Factory for creating HTTP server plugin instances
 #[derive(Debug)]
 pub struct HttpServerFactory {}
+
+register_plugin_factory!("http_server", HttpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for HttpServerFactory {

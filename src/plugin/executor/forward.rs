@@ -16,6 +16,7 @@ use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -146,6 +147,8 @@ pub struct ForwardConfig {
 /// Factory for creating DNS forwarder plugins
 #[derive(Debug)]
 pub struct ForwardFactory;
+
+register_plugin_factory!("forward", ForwardFactory {});
 
 impl PluginFactory for ForwardFactory {
     fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {

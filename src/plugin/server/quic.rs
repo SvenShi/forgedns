@@ -17,6 +17,7 @@ use crate::network::transport::quic_transport::{
 };
 use crate::plugin::server::{RequestHandle, Server, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::register_plugin_factory;
 use async_trait::async_trait;
 use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
 use rustls::ServerConfig;
@@ -241,6 +242,8 @@ pub fn build_quic_endpoint(
 /// Factory for creating QUIC server plugin instances
 #[derive(Debug)]
 pub struct QuicServerFactory {}
+
+register_plugin_factory!("quic_server", QuicServerFactory {});
 
 #[async_trait]
 impl PluginFactory for QuicServerFactory {

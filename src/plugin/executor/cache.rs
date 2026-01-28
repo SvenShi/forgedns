@@ -17,6 +17,7 @@ use crate::core::error::Result;
 use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::register_plugin_factory;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hickory_proto::op::Message;
@@ -521,6 +522,9 @@ async fn load_cache_from_file(
 /// Factory for creating cache executor plugins.
 #[derive(Debug)]
 pub struct CacheFactory;
+
+register_plugin_factory!("cache", CacheFactory {});
+
 impl PluginFactory for CacheFactory {
     fn create(
         &self,
