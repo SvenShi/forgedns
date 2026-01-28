@@ -4,6 +4,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::register_plugin_factory;
 use async_trait::async_trait;
 use chrono::Utc;
 use lazy_static::lazy_static;
@@ -157,6 +158,8 @@ impl Executor for Print {
 
 #[derive(Debug, Clone)]
 pub struct PrintFactory {}
+
+register_plugin_factory!("print", PrintFactory {});
 
 impl PluginFactory for PrintFactory {
     fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {

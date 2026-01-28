@@ -21,6 +21,7 @@ use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::register_plugin_factory;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -287,6 +288,8 @@ pub fn build_tcp_listener(addr: &str, idle_timeout: Duration) -> Result<TcpListe
 /// Factory for creating TCP server plugin instances
 #[derive(Debug)]
 pub struct TcpServerFactory {}
+
+register_plugin_factory!("tcp_server", TcpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for TcpServerFactory {

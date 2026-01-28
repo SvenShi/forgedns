@@ -6,7 +6,7 @@ plugins:
     type: forward
     args:
       upstreams:
-        - addr: "8.8.8.8"  # 阿里 DNS
+        - addr: "1.1.1.1"  # 阿里 DNS
           # dial_addr: "223.5.5.5"  # 阿里 DNS
           # socks5: "127.0.0.1:7897"
           # insecure_skip_verify: true
@@ -25,6 +25,10 @@ plugins:
 
   - tag: cache
     type: cache
+    args:
+      short_circuit: true
+      dump_file: "./dns_cache.dump"
+      dump_interval: 10
 
   - tag: seq
     type: sequence

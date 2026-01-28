@@ -10,6 +10,7 @@ use crate::core::error::DnsError;
 use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::fmt::Debug;
@@ -51,6 +52,8 @@ impl Executor for Sequence {
 
 #[derive(Debug, Clone)]
 pub struct SequenceFactory {}
+
+register_plugin_factory!("sequence", SequenceFactory {});
 
 impl PluginFactory for SequenceFactory {
     fn validate_config(&self, plugin_config: &PluginConfig) -> crate::core::error::Result<()> {
