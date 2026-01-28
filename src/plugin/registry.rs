@@ -14,7 +14,7 @@ use crate::plugin::{PluginFactory, PluginInfo};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Plugin registry that manages plugin factories and instances
 ///
@@ -101,6 +101,7 @@ impl PluginRegistry {
                 plugin_config.tag,
                 plugin_config.plugin_type
             );
+            debug!("Plugin config: {:?}", plugin_config);
 
             let factory = self
                 .factories

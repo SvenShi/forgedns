@@ -34,7 +34,7 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::OnceCell;
 use tokio::time::sleep;
-use tracing::{debug, warn};
+use tracing::{Level, debug, event_enabled, info, warn};
 
 // Default cache size
 const DEFAULT_CACHE_SIZE: usize = 1024;
@@ -242,7 +242,22 @@ impl Executor for Cache {
                 if now < item.expire_time {
                     // Cache hit
                     item.last_access_time = now;
-                    context.response = Some(item.resp.clone());
+                    let mut resp = item.resp.clone();
+                    let remaining_ttl = item
+                        .expire_time
+                        .saturating_sub(now)
+                        .saturating_div(1000) as u32;
+                    resp.set_id(context.request.id());
+                    for record in resp.answers_mut() {
+                        record.set_ttl(remaining_ttl);
+                    }
+                    for record in resp.name_servers_mut() {
+                        record.set_ttl(remaining_ttl);
+                    }
+                    for record in resp.additionals_mut() {
+                        record.set_ttl(remaining_ttl);
+                    }
+                    context.response = Some(resp);
                     cache_hit = true;
                     debug!(
                         "cache hit: domain={}, type={:?}, class={:?}",
@@ -265,6 +280,15 @@ impl Executor for Cache {
         }
 
         if cache_hit && self.short_circuit {
+            // Short-circuit the chain on cache hit if enabled.
+            if event_enabled!(Level::DEBUG) {
+                if let Some((domain, record_type, dns_class)) = cache_key.as_ref() {
+                    debug!(
+                        "cache short-circuit hit: domain={}, type={:?}, class={:?}",
+                        domain, record_type, dns_class
+                    );
+                }
+            }
             return;
         }
 
@@ -430,7 +454,7 @@ async fn load_cache_from_file(
     }
 
     if loaded > 0 {
-        debug!("Loaded {} cache entries from {}", loaded, dump_path);
+        info!("Loaded {} cache entries from {}", loaded, dump_path);
     }
 
     Ok(())
