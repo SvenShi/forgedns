@@ -120,83 +120,81 @@ pub struct Cache {
     short_circuit: bool,
 }
 
-#[async_trait]
-impl Plugin for Cache {
-    fn tag(&self) -> &str {
-        &self.tag
+impl Cache {
+    #[inline]
+    fn cache_size(&self) -> usize {
+        self.config.size.unwrap_or(DEFAULT_CACHE_SIZE)
     }
 
-    async fn init(&mut self) {
-        let cache_size = self.config.size.unwrap_or(DEFAULT_CACHE_SIZE);
-        let domain_map = Arc::new(DashMap::with_capacity(cache_size));
-
-        let _ = self.domain_map.set(domain_map.clone());
-
-        if let Some(dump_file) = &self.config.dump_file {
-            let dump_path = dump_file.clone();
-            let domain_map_load = domain_map.clone();
-            tokio::spawn(async move {
-                if let Err(e) = load_cache_from_file(&domain_map_load, &dump_path).await {
-                    warn!("Failed to load cache from {}: {}", dump_path, e);
-                }
-            });
-
-            let dump_interval = self.config.dump_interval.unwrap_or(DEFAULT_DUMP_INTERVAL);
-            let domain_map_dump = domain_map.clone();
-            let dump_path = dump_file.clone();
-            tokio::spawn(async move {
-                let interval = Duration::from_secs(dump_interval);
-                loop {
-                    sleep(interval).await;
-                    if let Err(e) = dump_cache_to_file(&domain_map_dump, &dump_path).await {
-                        warn!("Failed to dump cache to {}: {}", dump_path, e);
-                    }
-                }
-            });
-        }
-
-        // Background cleanup task
-        let cleanup_interval = Duration::from_secs(DEFAULT_CLEANUP_INTERVAL);
-        let domain_map_cleanup = domain_map.clone();
-
+    fn spawn_load_task(
+        &self,
+        domain_map: Arc<DashMap<(String, RecordType, DNSClass), CacheItem>>,
+        dump_path: String,
+    ) {
         tokio::spawn(async move {
+            if let Err(e) = load_cache_from_file(&domain_map, &dump_path).await {
+                warn!("Failed to load cache from {}: {}", dump_path, e);
+            }
+        });
+    }
+
+    fn spawn_dump_task(
+        &self,
+        domain_map: Arc<DashMap<(String, RecordType, DNSClass), CacheItem>>,
+        dump_path: String,
+        dump_interval: u64,
+    ) {
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(dump_interval);
+            loop {
+                sleep(interval).await;
+                if let Err(e) = dump_cache_to_file(&domain_map, &dump_path).await {
+                    warn!("Failed to dump cache to {}: {}", dump_path, e);
+                }
+            }
+        });
+    }
+
+    fn spawn_cleanup_task(
+        &self,
+        domain_map: Arc<DashMap<(String, RecordType, DNSClass), CacheItem>>,
+        cache_size: usize,
+    ) {
+        tokio::spawn(async move {
+            let cleanup_interval = Duration::from_secs(DEFAULT_CLEANUP_INTERVAL);
             loop {
                 sleep(cleanup_interval).await;
 
-                // Remove expired entries
                 let now = AppClock::elapsed_millis();
-                let expired_keys: Vec<_> = domain_map_cleanup
+                let expired_keys: Vec<_> = domain_map
                     .iter()
                     .filter(|item| item.value().expire_time <= now)
                     .map(|item| item.key().clone())
                     .collect();
 
                 for key in &expired_keys {
-                    domain_map_cleanup.remove(key);
+                    domain_map.remove(key);
                 }
 
                 if !expired_keys.is_empty() {
                     debug!("Cleaned {} expired cache entries", expired_keys.len());
                 }
 
-                // Lock-free LRU eviction based on last_access_time
-                let current_size = domain_map_cleanup.len();
+                let current_size = domain_map.len();
                 let threshold_size = (cache_size as f32 * LRU_EVICTION_THRESHOLD) as usize;
 
                 if current_size > threshold_size {
-                    // Collect keys with last access times and evict the oldest entries
-                    let mut entries: Vec<((String, RecordType, DNSClass), u64)> =
-                        domain_map_cleanup
-                            .iter()
-                            .map(|item| (item.key().clone(), item.value().last_access_time))
-                            .collect();
+                    let mut entries: Vec<((String, RecordType, DNSClass), u64)> = domain_map
+                        .iter()
+                        .map(|item| (item.key().clone(), item.value().last_access_time))
+                        .collect();
 
                     entries.sort_by_key(|(_, last)| *last);
 
                     let evict_count = current_size - (threshold_size - threshold_size / 10);
                     let mut evicted = 0;
                     for (key, _) in entries.into_iter().take(evict_count) {
-                        if domain_map_cleanup.remove(&key).is_some() {
+                        if domain_map.remove(&key).is_some() {
                             evicted += 1;
                         }
                     }
@@ -206,12 +204,176 @@ impl Plugin for Cache {
                             "LRU eviction: removed {} items, cache size {} -> {}",
                             evicted,
                             current_size,
-                            domain_map_cleanup.len()
+                            domain_map.len()
                         );
                     }
                 }
             }
         });
+    }
+
+    #[inline]
+    fn update_response_ttl(resp: &mut Message, remaining_ttl: u32) {
+        for record in resp.answers_mut() {
+            record.set_ttl(remaining_ttl);
+        }
+        for record in resp.name_servers_mut() {
+            record.set_ttl(remaining_ttl);
+        }
+        for record in resp.additionals_mut() {
+            record.set_ttl(remaining_ttl);
+        }
+    }
+
+    #[inline]
+    fn try_cache_hit(
+        &self,
+        context: &mut DnsContext,
+        domain_map: &DashMap<(String, RecordType, DNSClass), CacheItem>,
+    ) -> (Option<(String, RecordType, DNSClass)>, bool) {
+        let mut cache_key = None;
+        let mut cache_hit = false;
+
+        if let Some(query) = context.request.query() {
+            let domain = query.name().to_string();
+            let key = (domain.clone(), query.query_type, query.query_class);
+            cache_key = Some(key.clone());
+
+            if let Some(mut item) = domain_map.get_mut(&key) {
+                let now = AppClock::elapsed_millis();
+                if now < item.expire_time {
+                    item.last_access_time = now;
+                    let mut resp = item.resp.clone();
+                    let remaining_ttl =
+                        item.expire_time.saturating_sub(now).saturating_div(1000) as u32;
+                    resp.set_id(context.request.id());
+                    Self::update_response_ttl(&mut resp, remaining_ttl);
+                    context.response = Some(resp);
+                    cache_hit = true;
+                    debug!(
+                        "cache hit: domain={}, type={:?}, class={:?}",
+                        domain, query.query_type, query.query_class
+                    );
+                } else {
+                    domain_map.remove(&key);
+                    debug!(
+                        "cache expired: domain={}, type={:?}, class={:?}",
+                        domain, query.query_type, query.query_class
+                    );
+                }
+            } else {
+                debug!(
+                    "cache miss: domain={}, type={:?}, class={:?}",
+                    domain, query.query_type, query.query_class
+                );
+            }
+        }
+
+        (cache_key, cache_hit)
+    }
+
+    #[inline]
+    fn should_short_circuit(
+        &self,
+        cache_hit: bool,
+        cache_key: Option<&(String, RecordType, DNSClass)>,
+    ) -> bool {
+        if !cache_hit || !self.short_circuit {
+            return false;
+        }
+
+        if event_enabled!(Level::DEBUG) {
+            if let Some((domain, record_type, dns_class)) = cache_key {
+                debug!(
+                    "cache short-circuit hit: domain={}, type={:?}, class={:?}",
+                    domain, record_type, dns_class
+                );
+            }
+        }
+
+        true
+    }
+
+    #[inline]
+    fn compute_response_ttl(response: &Message) -> u32 {
+        if !response.answers().is_empty() {
+            response
+                .answers()
+                .iter()
+                .map(|answer| answer.ttl())
+                .min()
+                .unwrap_or(DEFAULT_TTL)
+        } else {
+            60
+        }
+    }
+
+    #[inline]
+    fn compute_expire_time(&self, now: u64, ttl: u32) -> u64 {
+        if let Some(lazy_ttl) = self.config.lazy_cache_ttl {
+            now + (lazy_ttl as u64 * 1000)
+        } else {
+            now + (ttl as u64 * 1000)
+        }
+    }
+
+    #[inline]
+    fn update_cache_entry(
+        &self,
+        domain_map: &DashMap<(String, RecordType, DNSClass), CacheItem>,
+        key: (String, RecordType, DNSClass),
+        response: Message,
+    ) {
+        let ttl = Self::compute_response_ttl(&response);
+        let now = AppClock::elapsed_millis();
+        let expire_time = self.compute_expire_time(now, ttl);
+
+        let cache = domain_map.get_mut(&key);
+        match cache {
+            Some(mut existing) => {
+                let entry = existing.value_mut();
+                entry.resp = response;
+                entry.cache_time = now;
+                entry.ttl = ttl;
+                entry.expire_time = expire_time;
+                entry.last_access_time = now;
+            }
+            None => {
+                debug!("cached: domain={}, ttl={}", &key.0, ttl);
+                domain_map.insert(
+                    key,
+                    CacheItem {
+                        resp: response,
+                        cache_time: now,
+                        ttl,
+                        expire_time,
+                        last_access_time: now,
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Plugin for Cache {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    async fn init(&mut self) {
+        let cache_size = self.cache_size();
+        let domain_map = Arc::new(DashMap::with_capacity(cache_size));
+
+        let _ = self.domain_map.set(domain_map.clone());
+
+        if let Some(dump_file) = &self.config.dump_file {
+            self.spawn_load_task(domain_map.clone(), dump_file.clone());
+            let dump_interval = self.config.dump_interval.unwrap_or(DEFAULT_DUMP_INTERVAL);
+            self.spawn_dump_task(domain_map.clone(), dump_file.clone(), dump_interval);
+        }
+
+        self.spawn_cleanup_task(domain_map, cache_size);
     }
 
     async fn destroy(&mut self) {
@@ -228,121 +390,17 @@ impl Plugin for Cache {
 #[async_trait]
 impl Executor for Cache {
     async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
-        // 1. Try to find a cached result
-        let mut cache_key = None;
-        let mut cache_hit = false;
         let domain_map = self.domain_map.get().unwrap();
-        if let Some(query) = context.request.query() {
-            let domain = query.name().to_string();
-            let key = (domain.clone(), query.query_type, query.query_class);
-            cache_key = Some(key.clone());
+        let (cache_key, cache_hit) = self.try_cache_hit(context, domain_map);
 
-            if let Some(mut item) = domain_map.get_mut(&key) {
-                let now = AppClock::elapsed_millis();
-                if now < item.expire_time {
-                    // Cache hit
-                    item.last_access_time = now;
-                    let mut resp = item.resp.clone();
-                    let remaining_ttl = item
-                        .expire_time
-                        .saturating_sub(now)
-                        .saturating_div(1000) as u32;
-                    resp.set_id(context.request.id());
-                    for record in resp.answers_mut() {
-                        record.set_ttl(remaining_ttl);
-                    }
-                    for record in resp.name_servers_mut() {
-                        record.set_ttl(remaining_ttl);
-                    }
-                    for record in resp.additionals_mut() {
-                        record.set_ttl(remaining_ttl);
-                    }
-                    context.response = Some(resp);
-                    cache_hit = true;
-                    debug!(
-                        "cache hit: domain={}, type={:?}, class={:?}",
-                        domain, query.query_type, query.query_class
-                    );
-                } else {
-                    // Cache entry expired
-                    domain_map.remove(&key);
-                    debug!(
-                        "cache expired: domain={}, type={:?}, class={:?}",
-                        domain, query.query_type, query.query_class
-                    );
-                }
-            } else {
-                debug!(
-                    "cache miss: domain={}, type={:?}, class={:?}",
-                    domain, query.query_type, query.query_class
-                );
-            }
-        }
-
-        if cache_hit && self.short_circuit {
-            // Short-circuit the chain on cache hit if enabled.
-            if event_enabled!(Level::DEBUG) {
-                if let Some((domain, record_type, dns_class)) = cache_key.as_ref() {
-                    debug!(
-                        "cache short-circuit hit: domain={}, type={:?}, class={:?}",
-                        domain, record_type, dns_class
-                    );
-                }
-            }
+        if self.should_short_circuit(cache_hit, cache_key.as_ref()) {
             return;
         }
 
-        // 2. Execute the next plugin
         continue_next!(next, context);
 
-        // 3. Cache the response if present
-        if let (Some(response), Some(key)) = (context.response.clone(), cache_key) {
-            // Compute TTL
-            let ttl = if !response.answers().is_empty() {
-                response
-                    .answers()
-                    .iter()
-                    .map(|answer| answer.ttl())
-                    .min()
-                    .unwrap_or(DEFAULT_TTL)
-            } else {
-                // Negative cache: use a shorter TTL
-                60
-            };
-
-            let now = AppClock::elapsed_millis();
-            let expire_time = if let Some(lazy_ttl) = self.config.lazy_cache_ttl {
-                now + (lazy_ttl as u64 * 1000)
-            } else {
-                now + (ttl as u64 * 1000)
-            };
-
-            let cache = domain_map.get_mut(&key);
-            match cache {
-                Some(mut existing) => {
-                    // Existing cache entry, refresh it with latest response
-                    let entry = existing.value_mut();
-                    entry.resp = response;
-                    entry.cache_time = now;
-                    entry.ttl = ttl;
-                    entry.expire_time = expire_time;
-                    entry.last_access_time = now;
-                }
-                None => {
-                    debug!("cached: domain={}, ttl={}", &key.0, ttl);
-                    // New cache entry
-                    domain_map.insert(
-                        key,
-                        CacheItem {
-                            resp: response,
-                            cache_time: now,
-                            ttl,
-                            expire_time,
-                            last_access_time: now,
-                        },
-                    );
-                }
-            }
+        if let (Some(response), Some(key)) = (&context.response, cache_key) {
+            self.update_cache_entry(domain_map, key, response.clone());
         }
     }
 }

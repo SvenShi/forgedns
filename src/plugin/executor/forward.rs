@@ -14,13 +14,13 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::Executor;
+use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{Level, debug, event_enabled, info, warn};
-use crate::plugin::executor::sequence::chain::ChainNode;
 
 /// Single-upstream DNS forwarder
 ///
