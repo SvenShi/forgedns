@@ -102,7 +102,7 @@ impl Plugin for TcpServer {
         self.run();
     }
 
-    async fn destroy(&mut self) {}
+    async fn destroy(&self) {}
 }
 
 impl Server for TcpServer {

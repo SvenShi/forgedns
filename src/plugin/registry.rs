@@ -13,7 +13,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::{PluginFactory, PluginInfo};
 use dashmap::DashMap;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
 /// Plugin registry that manages plugin factories and instances
@@ -32,6 +32,9 @@ pub struct PluginRegistry {
     /// Uses DashMap for interior mutability, allowing plugins to be registered
     /// even when the registry is behind an Arc.
     plugins: DashMap<String, Arc<PluginInfo>>,
+
+    /// Initialization order of plugins (for deterministic shutdown)
+    init_order: Mutex<Vec<String>>,
 }
 
 #[allow(unused)]
@@ -41,6 +44,7 @@ impl PluginRegistry {
         Self {
             factories: HashMap::new(),
             plugins: DashMap::new(),
+            init_order: Mutex::new(Vec::new()),
         }
     }
 
@@ -121,6 +125,9 @@ impl PluginRegistry {
             // DashMap allows insertion even with Arc<Self>
             self.plugins
                 .insert(plugin_config.tag.clone(), Arc::new(plugin_info));
+            if let Ok(mut order) = self.init_order.lock() {
+                order.push(plugin_config.tag.clone());
+            }
         }
 
         info!("All plugins initialized successfully");
@@ -166,6 +173,30 @@ impl PluginRegistry {
     /// Get the number of registered plugins
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
+    }
+
+    /// Destroy all initialized plugins in reverse init order
+    pub async fn destroy_plugins(&self) {
+        let order = self
+            .init_order
+            .lock()
+            .map(|order| order.clone())
+            .unwrap_or_default();
+
+        if order.is_empty() {
+            return;
+        }
+
+        info!("Destroying {} plugins in reverse order", order.len());
+
+        for tag in order.into_iter().rev() {
+            if let Some(entry) = self.plugins.remove(&tag) {
+                entry.1.as_plugin().destroy().await;
+                drop(entry);
+            }
+        }
+
+        info!("All plugins destroyed");
     }
 }
 

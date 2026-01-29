@@ -377,7 +377,7 @@ impl Plugin for Cache {
         self.spawn_cleanup_task(domain_map, cache_size);
     }
 
-    async fn destroy(&mut self) {
+    async fn destroy(&self) {
         if let Some(dump_file) = &self.config.dump_file {
             if let Some(domain_map) = self.domain_map.get() {
                 if let Err(e) = dump_cache_to_file(domain_map, dump_file).await {

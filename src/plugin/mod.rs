@@ -195,6 +195,7 @@ impl PluginHolder {
             PluginHolder::Provider(d) => d.as_ref(),
         }
     }
+
 }
 
 /// Core plugin trait that all plugins must implement
@@ -208,7 +209,7 @@ pub trait Plugin: Debug + Send + Sync + 'static {
     async fn init(&mut self);
 
     /// Clean up plugin resources (called during shutdown)
-    async fn destroy(&mut self);
+    async fn destroy(&self);
 }
 
 /// Plugin factory trait for creating plugin instances from configuration
@@ -300,4 +301,5 @@ impl PluginInfo {
     pub fn as_plugin(&self) -> &dyn Plugin {
         self.plugin_holder.as_plugin()
     }
+
 }

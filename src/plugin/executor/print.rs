@@ -134,7 +134,7 @@ impl Plugin for Print {
         info!("print plugin initialized: {}", self.tag);
     }
 
-    async fn destroy(&mut self) {}
+    async fn destroy(&self) {}
 }
 
 #[async_trait]
