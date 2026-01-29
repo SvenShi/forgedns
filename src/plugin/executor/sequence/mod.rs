@@ -39,7 +39,7 @@ impl Plugin for Sequence {
 
     async fn init(&mut self) {}
 
-    async fn destroy(&mut self) {}
+    async fn destroy(&self) {}
 }
 
 #[async_trait]

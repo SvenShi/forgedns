@@ -146,7 +146,7 @@ impl Plugin for HttpServer {
         self.run();
     }
 
-    async fn destroy(&mut self) {}
+    async fn destroy(&self) {}
 }
 
 impl Server for HttpServer {

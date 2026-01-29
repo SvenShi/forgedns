@@ -47,7 +47,7 @@ impl Plugin for SingleDnsForwarder {
         info!("DNS SingleDnsForwarder initialized tag: {}", self.tag);
     }
 
-    async fn destroy(&mut self) {}
+    async fn destroy(&self) {}
 }
 
 #[async_trait]
@@ -92,7 +92,7 @@ impl Plugin for ConcurrentForwarder {
         info!("DNS ConcurrentForwarder initialized tag: {}", self.tag);
     }
 
-    async fn destroy(&mut self) {}
+    async fn destroy(&self) {}
 }
 
 #[async_trait]

@@ -51,9 +51,6 @@ async fn run_async_main() -> Result<()> {
     // Create shutdown channel for graceful termination
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-    // Spawn main application task
-    tokio::spawn(run_app());
-
     // Spawn signal handler task for Ctrl+C
     tokio::spawn(async move {
         signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
@@ -61,20 +58,7 @@ async fn run_async_main() -> Result<()> {
         let _ = shutdown_tx.send(());
     });
 
-    // Wait for shutdown signal
-    shutdown_rx.await.ok();
-    info!("Graceful shutdown complete");
-    Ok(())
-}
-
-/// Initialize and run the DNS server application
-///
-/// This function:
-/// 1. Initializes the core runtime (command-line args, app clock)
-/// 2. Loads configuration from file
-/// 3. Sets up logging system
-/// 4. Initializes all configured plugins
-async fn run_app() {
+    // Initialize and run the DNS server application
     let mut runtime = core::init();
     let options = runtime.options.clone();
 
@@ -100,16 +84,22 @@ async fn run_app() {
 
     // Initialize plugins with dependency resolution
     // The registry is created and returned by init()
-    match plugin::init(config).await {
-        Ok(_registry) => {
+    let registry = match plugin::init(config).await {
+        Ok(registry) => {
             info!("ForgeDNS server started successfully");
             // Registry is now available for the application lifetime
+            registry
         }
         Err(e) => {
             error!("Plugin initialization failed: {}", e);
             std::process::exit(1);
         }
-    }
+    };
 
-    // Runtime (and log_guard) will be dropped here, ensuring logs are flushed
+    // Wait for shutdown signal
+    shutdown_rx.await.ok();
+    info!("Destroying plugins for shutdown");
+    registry.destroy_plugins().await;
+    info!("Graceful shutdown complete");
+    Ok(())
 }
