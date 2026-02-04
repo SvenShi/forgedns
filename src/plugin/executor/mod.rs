@@ -26,5 +26,5 @@ pub mod sequence;
 #[async_trait]
 pub trait Executor: Plugin {
     /// Execute the plugin's logic on a DNS request context
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>);
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>);
 }

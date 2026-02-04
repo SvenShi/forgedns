@@ -289,11 +289,27 @@ impl PluginInfo {
         }
     }
 
+    /// Get Arc clone of the matcher (panics if not a Matcher plugin)
+    pub fn to_matcher(&self) -> Arc<dyn Matcher> {
+        match &self.plugin_holder {
+            PluginHolder::Matcher(matcher) => matcher.clone(),
+            _ => panic!("Plugin '{}' is not a Matcher", self.tag),
+        }
+    }
+
     /// Get reference to the server (panics if not a Server plugin)
     pub fn server(&self) -> &dyn Server {
         match &self.plugin_holder {
             PluginHolder::Server(server) => server.as_ref(),
             _ => panic!("Plugin '{}' is not a Server", self.tag),
+        }
+    }
+
+    /// Get reference to the matcher (panics if not a Matcher plugin)
+    pub fn matcher(&self) -> &dyn Matcher {
+        match &self.plugin_holder {
+            PluginHolder::Matcher(matcher) => matcher.as_ref(),
+            _ => panic!("Plugin '{}' is not a Matcher", self.tag),
         }
     }
 
