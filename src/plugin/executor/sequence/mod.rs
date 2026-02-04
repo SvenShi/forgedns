@@ -8,7 +8,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::DnsError;
 use crate::plugin::executor::Executor;
-use crate::plugin::executor::sequence::chain::ChainNode;
+use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainNode};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize, Clone)]
-struct Rule {
+pub struct Rule {
     #[serde(default)]
     matches: Option<Vec<String>>,
     exec: Option<String>,
@@ -27,7 +27,7 @@ struct Rule {
 #[allow(unused)]
 pub struct Sequence {
     tag: String,
-    head: Arc<ChainNode>,
+    head: Arc<dyn ChainNode>,
     rules: Vec<Rule>,
 }
 
@@ -44,7 +44,7 @@ impl Plugin for Sequence {
 
 #[async_trait]
 impl Executor for Sequence {
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
         self.head.next(context).await;
         continue_next!(next, context);
     }
@@ -76,6 +76,11 @@ impl PluginFactory for SequenceFactory {
         let rules =
             serde_yml::from_value::<Vec<Rule>>(plugin_config.args.clone().unwrap()).unwrap();
         for rule in rules {
+            if let Some(matches) = rule.matches {
+                for matcher in matches {
+                    result.push(matcher);
+                }
+            }
             if let Some(exec) = rule.exec {
                 result.push(exec);
             }
@@ -96,26 +101,22 @@ impl PluginFactory for SequenceFactory {
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse sequence config: {}", e)))?;
 
-        let mut next_node: Option<Arc<ChainNode>> = None;
+        let mut builder = ChainBuilder::new(registry);
 
-        for rule in rules.iter().rev() {
+        for rule in rules.iter() {
             if rule.exec.is_none() && rule.matches.is_none() {
                 panic!("sequence rule cannot be empty");
             }
-            if let Some(exec) = &rule.exec {
-                if let Some(plugin) = registry.get_plugin(&exec) {
-                    let executor = plugin.to_executor();
-                    let node = ChainNode::new(executor, next_node.clone());
-                    next_node = Some(Arc::new(node));
-                } else {
-                    panic!("plugin does not exist for {}", exec);
-                }
-            }
+            builder
+                .append_node(rule)
+                .unwrap_or_else(|e| panic!("failed to create chain node: {}", e));
         }
 
         Ok(UninitializedPlugin::Executor(Box::new(Sequence {
             tag: plugin_config.tag.clone(),
-            head: next_node.unwrap().clone(),
+            head: builder
+                .build()
+                .unwrap_or_else(|| panic!("sequence requires at least one rule")),
             rules,
         })))
     }

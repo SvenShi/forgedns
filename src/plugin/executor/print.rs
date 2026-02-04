@@ -139,7 +139,7 @@ impl Plugin for Print {
 
 #[async_trait]
 impl Executor for Print {
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
         if let Some(before) = self.before_tel.as_ref() {
             for tmpl in before {
                 let msg = tmpl.render(context);

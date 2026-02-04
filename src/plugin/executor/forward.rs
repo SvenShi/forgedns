@@ -52,7 +52,7 @@ impl Plugin for SingleDnsForwarder {
 
 #[async_trait]
 impl Executor for SingleDnsForwarder {
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
                 context.response = Some(res);
@@ -97,7 +97,7 @@ impl Plugin for ConcurrentForwarder {
 
 #[async_trait]
 impl Executor for ConcurrentForwarder {
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
         let mut join_set = JoinSet::new();
 
         for i in 0..self.concurrent {

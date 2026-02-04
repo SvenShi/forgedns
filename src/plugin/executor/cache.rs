@@ -390,7 +390,7 @@ impl Plugin for Cache {
 
 #[async_trait]
 impl Executor for Cache {
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<ChainNode>>) {
+    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
         let domain_map = self.domain_map.get().unwrap();
         let (cache_key, cache_hit) = self.try_cache_hit(context, domain_map);
 
