@@ -19,14 +19,13 @@ use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
+use bincode::{Decode, Encode, config};
 use dashmap::DashMap;
 use hickory_proto::op::Message;
 use hickory_proto::rr::{DNSClass, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use serde::Deserialize;
-use serde::Serialize;
 use std::fmt::Debug;
-use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,7 +91,7 @@ pub struct CacheItem {
     last_access_time: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Decode, Encode)]
 struct PersistedCacheEntry {
     domain: String,
     record_type: u16,
@@ -409,7 +408,7 @@ impl Executor for Cache {
 async fn dump_cache_to_file(
     domain_map: &DashMap<(String, RecordType, DNSClass), CacheItem>,
     dump_path: &str,
-) -> io::Result<()> {
+) -> Result<()> {
     let now = AppClock::elapsed_millis();
     let mut entries: Vec<PersistedCacheEntry> = Vec::with_capacity(domain_map.len());
 
@@ -448,8 +447,7 @@ async fn dump_cache_to_file(
         });
     }
 
-    let encoded =
-        bincode::serialize(&entries).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let encoded = bincode::encode_to_vec(&entries, config::standard())?;
 
     let tmp_path = format!("{}.tmp", dump_path);
     let mut file = File::create(&tmp_path).await?;
@@ -462,18 +460,18 @@ async fn dump_cache_to_file(
 async fn load_cache_from_file(
     domain_map: &DashMap<(String, RecordType, DNSClass), CacheItem>,
     dump_path: &str,
-) -> io::Result<()> {
+) -> Result<()> {
     if !Path::new(dump_path).exists() {
         return Ok(());
     }
 
     let data = fs::read(dump_path).await?;
-    let entries: Vec<PersistedCacheEntry> =
-        bincode::deserialize(&data).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let entries: (Vec<PersistedCacheEntry>, usize) =
+        bincode::decode_from_slice(&data, config::standard())?;
 
     let now = AppClock::elapsed_millis();
     let mut loaded = 0usize;
-    for entry in entries {
+    for entry in entries.0 {
         if entry.remaining_ttl_ms == 0 {
             continue;
         }
