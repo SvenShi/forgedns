@@ -9,9 +9,9 @@ use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::matcher::Matcher;
 use async_trait::async_trait;
-use tracing::debug;
 use std::fmt::Debug;
 use std::sync::Arc;
+use tracing::debug;
 
 #[async_trait]
 pub trait ChainNode: Debug + Send + Sync + 'static {
@@ -32,7 +32,7 @@ impl ChainNode for DirectChainNode {
         // Pass immediate next (if any) to current executor
         self.executor.execute(context, self.next.as_ref()).await;
     }
-    
+
     fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
         self.next = next;
     }
@@ -50,7 +50,10 @@ impl ChainNode for MatcherChainNode {
     async fn next(&self, context: &mut DnsContext) {
         for matcher in &self.matchers {
             if !matcher.is_match(context).await {
-                debug!("MatcherChainNode: context did not match, skipping executor, matcher: {}", matcher.tag());
+                debug!(
+                    "MatcherChainNode: context did not match, skipping executor, matcher: {}",
+                    matcher.tag()
+                );
                 return;
             }
         }
@@ -96,12 +99,13 @@ impl ChainBuilder {
                 if let Some(matches) = &rule.matches {
                     let mut matchers = Vec::with_capacity(matches.len());
                     for matcher_tag in matches {
-                        let matcher_plugin = self.registry.get_plugin(matcher_tag).ok_or_else(|| {
-                            DnsError::plugin(format!(
-                                "matcher plugin does not exist for {}",
-                                matcher_tag
-                            ))
-                        })?;
+                        let matcher_plugin =
+                            self.registry.get_plugin(matcher_tag).ok_or_else(|| {
+                                DnsError::plugin(format!(
+                                    "matcher plugin does not exist for {}",
+                                    matcher_tag
+                                ))
+                            })?;
                         matchers.push(matcher_plugin.to_matcher());
                     }
                     let node = MatcherChainNode {

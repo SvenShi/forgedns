@@ -39,10 +39,8 @@ thiserror = "2.0"
 fast-socks5 = "1.0.0"
 inventory = "0.3"
 
-hotpath = { version = "0.5.2", optional = true }
+hotpath =  "0.10.0"
 
 [features]
-hotpath = ["dep:hotpath", "hotpath/hotpath"]
-hotpath-alloc-bytes-total = ["hotpath/hotpath-alloc-bytes-total"]
-hotpath-alloc-count-total = ["hotpath/hotpath-alloc-count-total"]
-hotpath-off = ["hotpath/hotpath-off"]
+hotpath = ["hotpath/hotpath"]
+hotpath-alloc = ["hotpath/hotpath-alloc"]

@@ -43,7 +43,7 @@ pub struct PipelinePool<C: Connection> {
 
 #[async_trait]
 impl<C: Connection> ConnectionPool<C> for PipelinePool<C> {
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[hotpath::measure]
     async fn query(&self, request: Message) -> Result<Message> {
         self.get().await?.query(request).await
     }
@@ -139,7 +139,7 @@ impl<C: Connection> PipelinePool<C> {
         pool
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[hotpath::measure]
     async fn get(&self) -> Result<Arc<C>> {
         loop {
             // Lock-free fast path with ArcSwap
@@ -176,7 +176,7 @@ impl<C: Connection> PipelinePool<C> {
     }
 
     /// Expand the pool by creating new connections
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[hotpath::measure]
     async fn expand(&self) -> Result<()> {
         // Determine how many connections to create (lock-free read)
         let new_conns_count = {

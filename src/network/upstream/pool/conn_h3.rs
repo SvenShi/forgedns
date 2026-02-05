@@ -53,7 +53,7 @@ impl Connection for H3Connection {
         self.close_notify.notify_waiters();
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[hotpath::measure]
     async fn query(&self, mut request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("H3 connection closed"));
@@ -147,7 +147,7 @@ impl H3ConnectionBuilder {
 
 #[async_trait]
 impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[hotpath::measure]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<H3Connection>> {
         let socket = connect_socket(
             self.remote_ip,
