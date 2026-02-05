@@ -46,7 +46,7 @@ fn init_runtime() -> Result<()> {
 ///
 /// Sets up signal handlers and spawns the application task.
 /// Waits for Ctrl+C signal for graceful shutdown.
-#[cfg_attr(feature = "hotpath", hotpath::main(percentiles =[50,70,90]))]
+#[hotpath::main(percentiles =[50,70,90])]
 async fn run_async_main() -> Result<()> {
     // Create shutdown channel for graceful termination
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

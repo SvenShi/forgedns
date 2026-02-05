@@ -226,6 +226,7 @@ impl Cache {
     }
 
     #[inline]
+    #[hotpath::measure]
     fn try_cache_hit(
         &self,
         context: &mut DnsContext,
@@ -233,6 +234,7 @@ impl Cache {
     ) -> (Option<(String, RecordType, DNSClass)>, bool) {
         let mut cache_key = None;
         let mut cache_hit = false;
+        let mut expired_key = None;
 
         if let Some(query) = context.request.query() {
             let domain = query.name().to_string();
@@ -255,7 +257,7 @@ impl Cache {
                         domain, query.query_type, query.query_class
                     );
                 } else {
-                    domain_map.remove(&key);
+                    expired_key = Some(key.clone());
                     debug!(
                         "cache expired: domain={}, type={:?}, class={:?}",
                         domain, query.query_type, query.query_class
@@ -267,6 +269,10 @@ impl Cache {
                     domain, query.query_type, query.query_class
                 );
             }
+        }
+
+        if let Some(key) = expired_key {
+            domain_map.remove(&key);
         }
 
         (cache_key, cache_hit)
@@ -318,6 +324,7 @@ impl Cache {
     }
 
     #[inline]
+    #[hotpath::measure]
     fn update_cache_entry(
         &self,
         domain_map: &DashMap<(String, RecordType, DNSClass), CacheItem>,
@@ -389,6 +396,7 @@ impl Plugin for Cache {
 
 #[async_trait]
 impl Executor for Cache {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
         let domain_map = self.domain_map.get().unwrap();
         let (cache_key, cache_hit) = self.try_cache_hit(context, domain_map);

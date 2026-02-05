@@ -195,7 +195,6 @@ impl PluginHolder {
             PluginHolder::Provider(d) => d.as_ref(),
         }
     }
-
 }
 
 /// Core plugin trait that all plugins must implement
@@ -317,5 +316,4 @@ impl PluginInfo {
     pub fn as_plugin(&self) -> &dyn Plugin {
         self.plugin_holder.as_plugin()
     }
-
 }

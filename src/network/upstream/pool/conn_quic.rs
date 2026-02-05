@@ -72,7 +72,7 @@ impl Connection for QuicConnection {
     /// - Stream is closed after message sent/received
     ///
     /// This follows RFC 9250 (DNS over Dedicated QUIC Connections)
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[hotpath::measure]
     async fn query(&self, mut request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("Cannot query on closed QUIC connection"));
@@ -212,7 +212,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
     /// - 0-RTT support for resumed connections
     /// - Multiplexed streams avoid head-of-line blocking
     /// - Native congestion control and loss recovery
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[hotpath::measure]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<QuicConnection>> {
         let socket = connect_socket(
             self.remote_ip,
