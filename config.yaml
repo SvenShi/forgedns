@@ -1,12 +1,12 @@
 log:
- level: debug
+ level: info
 
 plugins:
   - tag: forward
     type: forward
     args:
       upstreams:
-        - addr: "1.1.1.1"  # 阿里 DNS
+        - addr: "223.5.5.5"  # 阿里 DNS
           # dial_addr: "223.5.5.5"  # 阿里 DNS
           # socks5: "127.0.0.1:7897"
           # insecure_skip_verify: true
@@ -33,9 +33,8 @@ plugins:
   - tag: seq
     type: sequence
     args:
-      - exec: print
-      - exec: cache
-      - exec: forward
+      - exec: $cache
+      - exec: $forward
 
 
   - tag: "udp_server"

@@ -16,6 +16,27 @@ use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+pub(super) fn parse_plugin_ref(raw: &str) -> crate::core::error::Result<Option<String>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(DnsError::plugin(format!(
+            "invalid plugin reference: '{}'",
+            raw
+        )));
+    }
+    if let Some(tag) = raw.strip_prefix('$') {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            return Err(DnsError::plugin(format!(
+                "invalid plugin reference: '{}'",
+                raw
+            )));
+        }
+        return Ok(Some(tag.to_string()));
+    }
+    Ok(None)
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Rule {
     #[serde(default)]
@@ -78,11 +99,15 @@ impl PluginFactory for SequenceFactory {
         for rule in rules {
             if let Some(matches) = rule.matches {
                 for matcher in matches {
-                    result.push(matcher);
+                    if let Ok(Some(tag)) = parse_plugin_ref(&matcher) {
+                        result.push(tag);
+                    }
                 }
             }
             if let Some(exec) = rule.exec {
-                result.push(exec);
+                if let Ok(Some(tag)) = parse_plugin_ref(&exec) {
+                    result.push(tag);
+                }
             }
         }
         result
@@ -119,5 +144,29 @@ impl PluginFactory for SequenceFactory {
                 .unwrap_or_else(|| panic!("sequence requires at least one rule")),
             rules,
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_plugin_ref;
+
+    #[test]
+    fn parse_plain_as_builtin_syntax() {
+        assert_eq!(parse_plugin_ref("forward").unwrap(), None);
+    }
+
+    #[test]
+    fn parse_dollar_plugin_ref() {
+        assert_eq!(
+            parse_plugin_ref("$forward").unwrap(),
+            Some("forward".into())
+        );
+    }
+
+    #[test]
+    fn parse_invalid_plugin_ref() {
+        assert!(parse_plugin_ref("$").is_err());
+        assert!(parse_plugin_ref("   ").is_err());
     }
 }

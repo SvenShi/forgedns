@@ -7,6 +7,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::PluginRegistry;
 use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::Rule;
+use crate::plugin::executor::sequence::parse_plugin_ref;
 use crate::plugin::matcher::Matcher;
 use async_trait::async_trait;
 use std::fmt::Debug;
@@ -94,13 +95,25 @@ impl ChainBuilder {
 
     fn create_chain_node(&self, rule: &Rule) -> Result<Box<dyn ChainNode>> {
         if let Some(exec) = &rule.exec {
-            if let Some(plugin) = self.registry.get_plugin(&exec) {
+            let exec_tag = parse_plugin_ref(exec)?.ok_or_else(|| {
+                DnsError::plugin(format!(
+                    "sequence exec only supports plugin ref syntax '$tag' for now, got '{}'",
+                    exec
+                ))
+            })?;
+            if let Some(plugin) = self.registry.get_plugin(&exec_tag) {
                 let executor = plugin.to_executor();
                 if let Some(matches) = &rule.matches {
                     let mut matchers = Vec::with_capacity(matches.len());
                     for matcher_tag in matches {
+                        let matcher_tag = parse_plugin_ref(matcher_tag)?.ok_or_else(|| {
+                            DnsError::plugin(format!(
+                                "sequence matches only supports plugin ref syntax '$tag' for now, got '{}'",
+                                matcher_tag
+                            ))
+                        })?;
                         let matcher_plugin =
-                            self.registry.get_plugin(matcher_tag).ok_or_else(|| {
+                            self.registry.get_plugin(&matcher_tag).ok_or_else(|| {
                                 DnsError::plugin(format!(
                                     "matcher plugin does not exist for {}",
                                     matcher_tag
@@ -124,7 +137,7 @@ impl ChainBuilder {
             } else {
                 Err(DnsError::plugin(format!(
                     "plugin does not exist for {}",
-                    exec
+                    exec_tag
                 )))
             }
         } else {
