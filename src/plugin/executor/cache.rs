@@ -19,7 +19,6 @@ use crate::plugin::executor::{ExecResult, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use bincode::{Decode, Encode, config};
 use dashmap::DashMap;
 use hickory_proto::op::Message;
 use hickory_proto::rr::{DNSClass, RecordType};
@@ -35,6 +34,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::OnceCell;
 use tokio::time::sleep;
 use tracing::{Level, debug, event_enabled, info, warn};
+use wincode::{SchemaRead, SchemaWrite};
 
 // Default cache size
 const DEFAULT_CACHE_SIZE: usize = 1024;
@@ -91,7 +91,7 @@ pub struct CacheItem {
     last_access_time: u64,
 }
 
-#[derive(Debug, Decode, Encode)]
+#[derive(Debug, SchemaRead, SchemaWrite)]
 struct PersistedCacheEntry {
     domain: String,
     record_type: u16,
@@ -460,7 +460,7 @@ async fn dump_cache_to_file(
         });
     }
 
-    let encoded = bincode::encode_to_vec(&entries, config::standard())?;
+    let encoded = wincode::serialize(&entries)?;
 
     let tmp_path = format!("{}.tmp", dump_path);
     let mut file = File::create(&tmp_path).await?;
@@ -479,12 +479,11 @@ async fn load_cache_from_file(
     }
 
     let data = fs::read(dump_path).await?;
-    let entries: (Vec<PersistedCacheEntry>, usize) =
-        bincode::decode_from_slice(&data, config::standard())?;
+    let entries: Vec<PersistedCacheEntry> = wincode::deserialize(&data)?;
 
     let now = AppClock::elapsed_millis();
     let mut loaded = 0usize;
-    for entry in entries.0 {
+    for entry in entries {
         if entry.remaining_ttl_ms == 0 {
             continue;
         }
