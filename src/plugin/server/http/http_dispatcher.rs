@@ -181,12 +181,11 @@ impl HttpHandler for DnsGetHandler {
         };
 
         // Process DNS query through the executor
-        let dns_response = self
+        let dns_result = self
             .request_handle
             .handle_request(dns_query, src_addr)
             .await;
-
-        msg_to_response(dns_response)
+        msg_to_response(dns_result.response)
     }
 }
 
@@ -251,12 +250,11 @@ impl HttpHandler for DnsPostHandler {
         };
 
         // Process DNS query through the executor
-        let dns_response = self
+        let dns_result = self
             .request_handle
             .handle_request(dns_query, src_addr)
             .await;
-
-        msg_to_response(dns_response)
+        msg_to_response(dns_result.response)
     }
 }
 

@@ -245,7 +245,7 @@ where
         match reader.read_message().await {
             Ok(req_msg) => tokio::spawn(async move {
                 let response = handler.handle_request(req_msg, src).await;
-                if let Err(e) = sender.send(response).await {
+                if let Err(e) = sender.send(response.response).await {
                     warn!("Failed to write TCP response to {}: {}", src, e);
                 }
             }),

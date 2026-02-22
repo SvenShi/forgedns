@@ -99,7 +99,10 @@ async fn run_server(addr: String, handler: Arc<RequestHandle>) {
                 let transport = transport.clone();
                 tokio::spawn(async move {
                     let response = handler.handle_request(msg, src_addr).await;
-                    if let Err(e) = transport.write_message_to(&response, src_addr).await {
+                    if let Err(e) = transport
+                        .write_message_to(&response.response, src_addr)
+                        .await
+                    {
                         warn!("Failed to send response to {}: {}", src_addr, e);
                     }
                 });

@@ -5,17 +5,23 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
+use crate::core::error::Result;
 use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::{core::context::DnsContext, plugin::Plugin};
+
+pub type ExecResult = Result<()>;
 
 // Helper macro to continue to next chain node if present
 #[macro_export]
 macro_rules! continue_next {
-    ($next:expr, $ctx:expr) => {
+    ($next:expr, $ctx:expr) => {{
         if let Some(next) = $next {
-            next.next($ctx).await;
+            next.next($ctx).await
+        } else {
+            $ctx.exec_reached_tail = true;
+            Ok(())
         }
-    };
+    }};
 }
 
 pub mod cache;
@@ -26,5 +32,9 @@ pub mod sequence;
 #[async_trait]
 pub trait Executor: Plugin {
     /// Execute the plugin's logic on a DNS request context
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>);
+    async fn execute(
+        &self,
+        context: &mut DnsContext,
+        next: Option<&Arc<dyn ChainNode>>,
+    ) -> ExecResult;
 }

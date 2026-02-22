@@ -35,6 +35,12 @@ pub struct DnsContext {
     /// DNS response message (populated by plugins)
     pub response: Option<Message>,
 
+    /// Whether executor chain traversal reached the tail node.
+    ///
+    /// This is set by the chain walker when `next` is absent and the
+    /// execution path explicitly continues to chain end.
+    pub exec_reached_tail: bool,
+
     /// Marks/tags added by plugins for decision tracking
     pub mark: Vec<String>,
 

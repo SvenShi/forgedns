@@ -5,9 +5,9 @@
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::PluginRegistry;
-use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::parse_plugin_ref;
+use crate::plugin::executor::{ExecResult, Executor};
 use crate::plugin::matcher::Matcher;
 use async_trait::async_trait;
 use std::fmt::Debug;
@@ -16,7 +16,7 @@ use tracing::debug;
 
 #[async_trait]
 pub trait ChainNode: Debug + Send + Sync + 'static {
-    async fn next(&self, context: &mut DnsContext);
+    async fn next(&self, context: &mut DnsContext) -> ExecResult;
 
     fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>);
 }
@@ -29,9 +29,9 @@ pub struct DirectChainNode {
 
 #[async_trait]
 impl ChainNode for DirectChainNode {
-    async fn next(&self, context: &mut DnsContext) {
+    async fn next(&self, context: &mut DnsContext) -> ExecResult {
         // Pass immediate next (if any) to current executor
-        self.executor.execute(context, self.next.as_ref()).await;
+        self.executor.execute(context, self.next.as_ref()).await
     }
 
     fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
@@ -48,24 +48,25 @@ pub struct MatcherChainNode {
 
 #[async_trait]
 impl ChainNode for MatcherChainNode {
-    async fn next(&self, context: &mut DnsContext) {
+    async fn next(&self, context: &mut DnsContext) -> ExecResult {
         for matcher in &self.matchers {
             if !matcher.is_match(context).await {
                 debug!(
                     "MatcherChainNode: context did not match, skipping executor, matcher: {}",
                     matcher.tag()
                 );
-                return;
+                return continue_next!(self.next.as_ref(), context);
             }
         }
 
         // Pass immediate next (if any) to current executor
-        self.executor.execute(context, self.next.as_ref()).await;
+        self.executor.execute(context, self.next.as_ref()).await
     }
     fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
         self.next = next;
     }
 }
+
 pub struct ChainBuilder {
     nodes: Vec<Box<dyn ChainNode>>,
     registry: Arc<PluginRegistry>,

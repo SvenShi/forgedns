@@ -13,8 +13,8 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
-use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::chain::ChainNode;
+use crate::plugin::executor::{ExecResult, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -52,13 +52,16 @@ impl Plugin for SingleDnsForwarder {
 
 #[async_trait]
 impl Executor for SingleDnsForwarder {
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
+    async fn execute(
+        &self,
+        context: &mut DnsContext,
+        next: Option<&Arc<dyn ChainNode>>,
+    ) -> ExecResult {
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
                 context.response = Some(res);
             }
             Err(e) => {
-                // Log error (includes timeouts and other failures)
                 warn!(
                     "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
                     context.src_addr,
@@ -66,9 +69,13 @@ impl Executor for SingleDnsForwarder {
                     context.request.id(),
                     e
                 );
+                return Err(DnsError::plugin(format!(
+                    "forward plugin '{}' query failed: {}",
+                    self.tag, e
+                )));
             }
         }
-        continue_next!(next, context);
+        continue_next!(next, context)
     }
 }
 
@@ -97,8 +104,13 @@ impl Plugin for ConcurrentForwarder {
 
 #[async_trait]
 impl Executor for ConcurrentForwarder {
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
+    async fn execute(
+        &self,
+        context: &mut DnsContext,
+        next: Option<&Arc<dyn ChainNode>>,
+    ) -> ExecResult {
         let mut join_set = JoinSet::new();
+        let mut last_error: Option<String> = None;
 
         for i in 0..self.concurrent {
             let upstream = self.upstreams[i].clone();
@@ -125,11 +137,20 @@ impl Executor for ConcurrentForwarder {
                 }
                 Err(e) => {
                     warn!("DNS query failed: {}", e);
+                    last_error = Some(e.to_string());
                 }
             }
         }
 
-        continue_next!(next, context);
+        if context.response.is_none() {
+            warn!(
+                "forward plugin '{}' failed across all concurrent upstreams: {}",
+                self.tag,
+                last_error.unwrap_or_else(|| "no upstream response".to_string())
+            );
+        }
+
+        continue_next!(next, context)
     }
 }
 

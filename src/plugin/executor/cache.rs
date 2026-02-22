@@ -14,8 +14,8 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
-use crate::plugin::executor::Executor;
 use crate::plugin::executor::sequence::chain::ChainNode;
+use crate::plugin::executor::{ExecResult, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -397,19 +397,24 @@ impl Plugin for Cache {
 #[async_trait]
 impl Executor for Cache {
     #[hotpath::measure]
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
+    async fn execute(
+        &self,
+        context: &mut DnsContext,
+        next: Option<&Arc<dyn ChainNode>>,
+    ) -> ExecResult {
         let domain_map = self.domain_map.get().unwrap();
         let (cache_key, cache_hit) = self.try_cache_hit(context, domain_map);
 
         if self.should_short_circuit(cache_hit, cache_key.as_ref()) {
-            return;
+            return Ok(());
         }
 
-        continue_next!(next, context);
+        continue_next!(next, context)?;
 
         if let (Some(response), Some(key)) = (&context.response, cache_key) {
             self.update_cache_entry(domain_map, key, response.clone());
         }
+        Ok(())
     }
 }
 
