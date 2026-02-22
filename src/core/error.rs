@@ -69,13 +69,13 @@ pub enum DnsError {
     #[error("Socks5 error: {0}")]
     SocksError(#[from] fast_socks5::SocksError),
 
-    /// bincode encode error
-    #[error("bincode encode error: {0}")]
-    BinCodeEncodeError(#[from] bincode::error::EncodeError),
+    /// wincode write error
+    #[error("wincode write error: {0}")]
+    WinCodeWriteError(#[from] wincode::WriteError),
 
-    /// bincode decode error
-    #[error("bincode decode error: {0}")]
-    BinCodeDecodeError(#[from] bincode::error::DecodeError),
+    /// wincode read error
+    #[error("wincode read error: {0}")]
+    WinCodeReadError(#[from] wincode::ReadError),
 
     /// Generic error with custom message
     #[error("{0}")]

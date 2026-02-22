@@ -17,7 +17,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_yml = "0.0.12"
-bincode = "2.0.1"
+wincode = { version = "0.4", features = ["derive"] }
 clap = { version = "4.5", features = ["derive"] }
 tracing-appender = "0.2"
 lazy_static = "1.5"
@@ -40,6 +40,14 @@ fast-socks5 = "1.0.0"
 inventory = "0.3"
 hotpath =  "0.11.0"
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+postcard = { version = "1.1", features = ["use-std"] }
+
 [features]
 hotpath = ["hotpath/hotpath"]
 hotpath-alloc = ["hotpath/hotpath-alloc"]
+
+[[bench]]
+name = "serialization"
+harness = false
