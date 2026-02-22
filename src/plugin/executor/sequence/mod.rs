@@ -6,9 +6,9 @@ pub mod chain;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::error::DnsError;
-use crate::plugin::executor::Executor;
+use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainNode};
+use crate::plugin::executor::{ExecResult, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -16,7 +16,7 @@ use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-pub(super) fn parse_plugin_ref(raw: &str) -> crate::core::error::Result<Option<String>> {
+pub(super) fn parse_plugin_ref(raw: &str) -> Result<Option<String>> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(DnsError::plugin(format!(
@@ -65,9 +65,13 @@ impl Plugin for Sequence {
 
 #[async_trait]
 impl Executor for Sequence {
-    async fn execute(&self, context: &mut DnsContext, next: Option<&Arc<dyn ChainNode>>) {
-        self.head.next(context).await;
-        continue_next!(next, context);
+    async fn execute(
+        &self,
+        context: &mut DnsContext,
+        next: Option<&Arc<dyn ChainNode>>,
+    ) -> ExecResult {
+        self.head.next(context).await?;
+        continue_next!(next, context)
     }
 }
 
@@ -117,7 +121,7 @@ impl PluginFactory for SequenceFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
-    ) -> crate::core::error::Result<UninitializedPlugin> {
+    ) -> Result<UninitializedPlugin> {
         let rules = serde_yml::from_value::<Vec<Rule>>(
             plugin_config
                 .args
@@ -130,18 +134,23 @@ impl PluginFactory for SequenceFactory {
 
         for rule in rules.iter() {
             if rule.exec.is_none() && rule.matches.is_none() {
-                panic!("sequence rule cannot be empty");
+                return Err(DnsError::plugin("sequence rule cannot be empty"));
             }
-            builder
-                .append_node(rule)
-                .unwrap_or_else(|e| panic!("failed to create chain node: {}", e));
+            builder.append_node(rule).map_err(|e| {
+                DnsError::plugin(format!(
+                    "failed to create sequence chain node for plugin '{}': {}",
+                    plugin_config.tag, e
+                ))
+            })?;
         }
+
+        let head = builder
+            .build()
+            .ok_or_else(|| DnsError::plugin("sequence requires at least one rule"))?;
 
         Ok(UninitializedPlugin::Executor(Box::new(Sequence {
             tag: plugin_config.tag.clone(),
-            head: builder
-                .build()
-                .unwrap_or_else(|| panic!("sequence requires at least one rule")),
+            head,
             rules,
         })))
     }

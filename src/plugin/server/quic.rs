@@ -201,7 +201,7 @@ async fn handle_doq_bi_stream(
     match reader.read_message().await {
         Ok(request_msg) => {
             let response = handler.handle_request(request_msg, remote_addr).await;
-            if let Err(e) = writer.write_message(&response).await {
+            if let Err(e) = writer.write_message(&response.response).await {
                 warn!("Failed to send DoQ response to {}: {}", remote_addr, e);
                 return Ok(());
             }
