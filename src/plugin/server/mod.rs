@@ -5,7 +5,7 @@
 use crate::core::context::DnsContext;
 use crate::plugin::executor::Executor;
 use crate::plugin::{Plugin, PluginRegistry};
-use hickory_proto::op::{Message, MessageType, OpCode, ResponseCode};
+use hickory_proto::op::{Message, MessageType, ResponseCode};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,6 +34,7 @@ pub enum RequestExit {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct RequestResult {
     pub response: Message,
     pub exit: RequestExit,
@@ -111,41 +112,22 @@ impl RequestHandle {
 
     #[inline]
     fn build_empty_response(&self, request: &Message) -> Message {
-        let mut response = Message::new();
-        response.set_id(request.id());
-        response.set_op_code(OpCode::Query);
-        response.set_message_type(MessageType::Response);
-        response.set_response_code(ResponseCode::NoError);
-        response.set_recursion_desired(request.recursion_desired());
-        if request.checking_disabled() {
-            response.set_checking_disabled(true);
-        }
-        if request.authentic_data() {
-            response.set_authentic_data(true);
-        }
-        if let Some(query) = request.query() {
-            response.add_query(query.clone());
-        }
-        response
+        self.build_base_response(request, ResponseCode::NoError)
     }
 
     #[inline]
     fn build_servfail_response(&self, request: &Message) -> Message {
+        self.build_base_response(request, ResponseCode::ServFail)
+    }
+
+    #[inline]
+    fn build_base_response(&self, request: &Message, rcode: ResponseCode) -> Message {
         let mut response = Message::new();
         response.set_id(request.id());
-        response.set_op_code(OpCode::Query);
+        response.set_op_code(request.op_code());
         response.set_message_type(MessageType::Response);
-        response.set_response_code(ResponseCode::ServFail);
-        response.set_recursion_desired(request.recursion_desired());
-        if request.checking_disabled() {
-            response.set_checking_disabled(true);
-        }
-        if request.authentic_data() {
-            response.set_authentic_data(true);
-        }
-        if let Some(query) = request.query() {
-            response.add_query(query.clone());
-        }
+        response.set_response_code(rcode);
+        *response.queries_mut() = request.queries().to_vec();
         response
     }
 }
