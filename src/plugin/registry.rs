@@ -57,6 +57,26 @@ impl PluginRegistry {
         self.factories.insert(plugin_type.to_string(), factory);
     }
 
+    /// Build an uninitialized plugin from quick setup `type [param...]`.
+    pub fn quick_setup(
+        &self,
+        plugin_type: &str,
+        tag: &str,
+        param: Option<String>,
+        registry: Arc<Self>,
+    ) -> Result<crate::plugin::UninitializedPlugin> {
+        let factory = self.factories.get(plugin_type).ok_or_else(|| {
+            DnsError::plugin(format!("quick setup type '{}' not found", plugin_type))
+        })?;
+        info!(
+            "plugin: {}, quick setup tag {}, param {}",
+            plugin_type,
+            tag,
+            param.as_deref().unwrap_or("none")
+        );
+        factory.quick_setup(tag, param, registry)
+    }
+
     /// Initialize all plugins from configuration
     ///
     /// Automatically resolves dependencies and initializes plugins in the correct order.

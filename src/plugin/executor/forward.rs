@@ -232,4 +232,42 @@ impl PluginFactory for ForwardFactory {
             )))
         }
     }
+
+    fn quick_setup(
+        &self,
+        tag: &str,
+        param: Option<String>,
+        _registry: Arc<PluginRegistry>,
+    ) -> Result<UninitializedPlugin> {
+        if param.is_none() {
+            return Err(DnsError::plugin(
+                "forward quick setup requires non-empty upstream address parameter",
+            ));
+        }
+
+        let upstream_config = UpstreamConfig {
+            tag: None,
+            addr: param.unwrap(),
+            dial_addr: None,
+            port: None,
+            bootstrap: None,
+            bootstrap_version: None,
+            socks5: None,
+            idle_timeout: None,
+            max_conns: None,
+            insecure_skip_verify: None,
+            timeout: None,
+            enable_pipeline: None,
+            enable_http3: None,
+            so_mark: None,
+            bind_to_device: None,
+        };
+
+        Ok(UninitializedPlugin::Executor(Box::new(
+            SingleDnsForwarder {
+                tag: tag.to_string(),
+                upstream: UpstreamBuilder::with_upstream_config(upstream_config),
+            },
+        )))
+    }
 }

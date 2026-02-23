@@ -34,7 +34,7 @@ plugins:
     type: sequence
     args:
       - exec: $cache
-      - exec: $forward
+      - exec: forward 223.5.5.5
 
 
   - tag: "udp_server"
