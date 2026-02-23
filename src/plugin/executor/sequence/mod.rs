@@ -16,8 +16,17 @@ use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-pub(super) fn parse_plugin_ref(raw: &str) -> Result<Option<String>> {
-    let raw = raw.trim();
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SequenceRef {
+    PluginTag(String),
+    QuickSetup {
+        plugin_type: String,
+        param: Option<String>,
+    },
+}
+
+pub(super) fn parse_sequence_ref(raw: &str) -> Result<SequenceRef> {
+    let raw = raw.trim_start();
     if raw.is_empty() {
         return Err(DnsError::plugin(format!(
             "invalid plugin reference: '{}'",
@@ -32,9 +41,18 @@ pub(super) fn parse_plugin_ref(raw: &str) -> Result<Option<String>> {
                 raw
             )));
         }
-        return Ok(Some(tag.to_string()));
+        return Ok(SequenceRef::PluginTag(tag.to_string()));
     }
-    Ok(None)
+
+    let mut split = raw.splitn(2, char::is_whitespace);
+    let plugin_type = split
+        .next()
+        .ok_or_else(|| DnsError::plugin(format!("invalid quick setup syntax: '{}'", raw)))?;
+    let param = split.next().map(String::from);
+    Ok(SequenceRef::QuickSetup {
+        plugin_type: plugin_type.to_string(),
+        param,
+    })
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -48,8 +66,11 @@ pub struct Rule {
 #[allow(unused)]
 pub struct Sequence {
     tag: String,
-    head: Arc<dyn ChainNode>,
+    head: Option<Arc<dyn ChainNode>>,
     rules: Vec<Rule>,
+    registry: Arc<PluginRegistry>,
+    quick_setup_executors: Vec<Arc<dyn Executor>>,
+    quick_setup_matchers: Vec<Arc<dyn crate::plugin::matcher::Matcher>>,
 }
 
 #[async_trait]
@@ -58,9 +79,30 @@ impl Plugin for Sequence {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) {
+        let mut builder = ChainBuilder::new(self.registry.clone(), self.tag.clone());
+        for rule in &self.rules {
+            if let Err(e) = builder.append_node(rule).await {
+                panic!(
+                    "failed to build sequence quick setup chain, plugin '{}': {}",
+                    self.tag, e
+                );
+            }
+        }
+        let (head, quick_setup_executors, quick_setup_matchers) = builder.build();
+        self.head = head;
+        self.quick_setup_executors = quick_setup_executors;
+        self.quick_setup_matchers = quick_setup_matchers;
+    }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) {
+        for executor in &self.quick_setup_executors {
+            executor.destroy().await;
+        }
+        for matcher in &self.quick_setup_matchers {
+            matcher.destroy().await;
+        }
+    }
 }
 
 #[async_trait]
@@ -70,7 +112,11 @@ impl Executor for Sequence {
         context: &mut DnsContext,
         next: Option<&Arc<dyn ChainNode>>,
     ) -> ExecResult {
-        self.head.next(context).await?;
+        let head = self
+            .head
+            .as_ref()
+            .ok_or_else(|| DnsError::plugin("sequence chain is not initialized"))?;
+        head.next(context).await?;
         continue_next!(next, context)
     }
 }
@@ -81,7 +127,7 @@ pub struct SequenceFactory {}
 register_plugin_factory!("sequence", SequenceFactory {});
 
 impl PluginFactory for SequenceFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> crate::core::error::Result<()> {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
         match plugin_config.args.clone() {
             Some(args) => {
                 serde_yml::from_value::<Vec<Rule>>(args).map_err(|e| {
@@ -90,7 +136,7 @@ impl PluginFactory for SequenceFactory {
                 Ok(())
             }
             None => Err(DnsError::plugin(
-                "sequence must configure 'listen' and 'entry' in config file",
+                "sequence must configure 'exec' in config file",
             )),
         }
     }
@@ -103,13 +149,13 @@ impl PluginFactory for SequenceFactory {
         for rule in rules {
             if let Some(matches) = rule.matches {
                 for matcher in matches {
-                    if let Ok(Some(tag)) = parse_plugin_ref(&matcher) {
+                    if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&matcher) {
                         result.push(tag);
                     }
                 }
             }
             if let Some(exec) = rule.exec {
-                if let Ok(Some(tag)) = parse_plugin_ref(&exec) {
+                if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&exec) {
                     result.push(tag);
                 }
             }
@@ -130,52 +176,23 @@ impl PluginFactory for SequenceFactory {
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse sequence config: {}", e)))?;
 
-        let mut builder = ChainBuilder::new(registry);
+        if rules.is_empty() {
+            return Err(DnsError::plugin("sequence requires at least one rule"));
+        }
 
         for rule in rules.iter() {
             if rule.exec.is_none() && rule.matches.is_none() {
                 return Err(DnsError::plugin("sequence rule cannot be empty"));
             }
-            builder.append_node(rule).map_err(|e| {
-                DnsError::plugin(format!(
-                    "failed to create sequence chain node for plugin '{}': {}",
-                    plugin_config.tag, e
-                ))
-            })?;
         }
-
-        let head = builder
-            .build()
-            .ok_or_else(|| DnsError::plugin("sequence requires at least one rule"))?;
 
         Ok(UninitializedPlugin::Executor(Box::new(Sequence {
             tag: plugin_config.tag.clone(),
-            head,
+            head: None,
             rules,
+            registry,
+            quick_setup_executors: Vec::new(),
+            quick_setup_matchers: Vec::new(),
         })))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_plugin_ref;
-
-    #[test]
-    fn parse_plain_as_builtin_syntax() {
-        assert_eq!(parse_plugin_ref("forward").unwrap(), None);
-    }
-
-    #[test]
-    fn parse_dollar_plugin_ref() {
-        assert_eq!(
-            parse_plugin_ref("$forward").unwrap(),
-            Some("forward".into())
-        );
-    }
-
-    #[test]
-    fn parse_invalid_plugin_ref() {
-        assert!(parse_plugin_ref("$").is_err());
-        assert!(parse_plugin_ref("   ").is_err());
     }
 }
