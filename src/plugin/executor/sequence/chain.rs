@@ -42,19 +42,31 @@ impl ChainNode for DirectChainNode {
 
 #[derive(Debug)]
 pub struct MatcherChainNode {
-    matchers: Vec<Arc<dyn Matcher>>,
+    matchers: Vec<MatcherRef>,
     executor: Arc<dyn Executor>,
     next: Option<Arc<dyn ChainNode>>,
+}
+
+#[derive(Debug)]
+struct MatcherRef {
+    matcher: Arc<dyn Matcher>,
+    reverse: bool,
 }
 
 #[async_trait]
 impl ChainNode for MatcherChainNode {
     async fn next(&self, context: &mut DnsContext) -> ExecResult {
-        for matcher in &self.matchers {
-            if !matcher.is_match(context).await {
+        for matcher_ref in &self.matchers {
+            let matched = matcher_ref.matcher.is_match(context).await;
+            let matched = if matcher_ref.reverse {
+                !matched
+            } else {
+                matched
+            };
+            if !matched {
                 debug!(
                     "MatcherChainNode: context did not match, skipping executor, matcher: {}",
-                    matcher.tag()
+                    matcher_ref.matcher.tag()
                 );
                 return continue_next!(self.next.as_ref(), context);
             }
@@ -125,10 +137,13 @@ impl ChainBuilder {
             if let Some(matches) = &rule.matches {
                 let mut matchers = Vec::with_capacity(matches.len());
                 for (match_index, matcher_expr) in matches.iter().enumerate() {
-                    matchers.push(
-                        self.resolve_matcher_ref(matcher_expr, node_index, match_index)
+                    let (reverse, matcher_expr) = parse_matcher_expr(matcher_expr)?;
+                    matchers.push(MatcherRef {
+                        matcher: self
+                            .resolve_matcher_ref(&matcher_expr, node_index, match_index)
                             .await?,
-                    );
+                        reverse,
+                    });
                 }
                 let node = MatcherChainNode {
                     matchers,
@@ -212,5 +227,52 @@ impl ChainBuilder {
                 Ok(matcher)
             }
         }
+    }
+}
+
+fn parse_matcher_expr(raw: &str) -> Result<(bool, &str)> {
+    let matcher_expr = raw.trim_start();
+    if let Some(matcher_expr) = matcher_expr.strip_prefix('!') {
+        let matcher_expr = matcher_expr.trim_start();
+        if matcher_expr.is_empty() {
+            return Err(DnsError::plugin(format!(
+                "invalid matcher reference: '{}'",
+                raw
+            )));
+        }
+        Ok((true, matcher_expr))
+    } else {
+        Ok((false, matcher_expr))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_matcher_expr;
+
+    #[test]
+    fn test_parse_matcher_expr_normal() {
+        let (reverse, matcher) = parse_matcher_expr("$qname").unwrap();
+        assert!(!reverse);
+        assert_eq!(matcher, "$qname");
+    }
+
+    #[test]
+    fn test_parse_matcher_expr_reverse() {
+        let (reverse, matcher) = parse_matcher_expr("!$qname").unwrap();
+        assert!(reverse);
+        assert_eq!(matcher, "$qname");
+    }
+
+    #[test]
+    fn test_parse_matcher_expr_reverse_with_whitespace() {
+        let (reverse, matcher) = parse_matcher_expr(" !   $qname").unwrap();
+        assert!(reverse);
+        assert_eq!(matcher, "$qname");
+    }
+
+    #[test]
+    fn test_parse_matcher_expr_invalid_reverse() {
+        assert!(parse_matcher_expr("!").is_err());
     }
 }
