@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-use crate::core::context::DnsContext;
+use crate::core::context::{DnsContext, ExecFlowState};
 use crate::plugin::executor::Executor;
 use crate::plugin::{Plugin, PluginRegistry};
 use hickory_proto::op::{Message, MessageType, ResponseCode};
@@ -47,7 +47,7 @@ impl RequestHandle {
             src_addr,
             request: msg,
             response: None,
-            exec_reached_tail: false,
+            exec_flow_state: ExecFlowState::Running,
             mark: Vec::new(),
             attributes: HashMap::new(),
             registry: self.registry.clone(),
@@ -68,7 +68,7 @@ impl RequestHandle {
         let exec_outcome = self.entry_executor.execute(&mut context, None).await;
         let (response, exit) = match exec_outcome {
             Ok(()) => {
-                let exit = if context.exec_reached_tail {
+                let exit = if context.exec_flow_state == ExecFlowState::ReachedTail {
                     RequestExit::Completed
                 } else {
                     RequestExit::Controlled

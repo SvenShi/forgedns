@@ -15,6 +15,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ExecFlowState {
+    Running,
+    ReachedTail,
+    Broken,
+}
+
 /// Context object for a DNS request/response lifecycle
 ///
 /// This object is passed through the plugin pipeline, carrying:
@@ -35,12 +42,13 @@ pub struct DnsContext {
     /// DNS response message (populated by plugins)
     pub response: Option<Message>,
 
-    /// Whether executor chain traversal reached the tail node.
+    /// Current chain execution flow state for request exit classification.
     ///
-    /// This is set by the chain walker when `next` is absent and the
-    /// execution path explicitly continues to chain end.
-    pub exec_reached_tail: bool,
-
+    /// - `Running`: normal traversal
+    /// - `ReachedTail`: execution naturally reached the chain tail
+    /// - `Broken`: control flow requested early stop (e.g. `accept`/`reject`)
+    pub exec_flow_state: ExecFlowState,
+    
     /// Marks/tags added by plugins for decision tracking
     pub mark: Vec<String>,
 

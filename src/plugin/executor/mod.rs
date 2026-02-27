@@ -18,7 +18,9 @@ macro_rules! continue_next {
         if let Some(next) = $next {
             next.next($ctx).await
         } else {
-            $ctx.exec_reached_tail = true;
+            if $ctx.exec_flow_state == $crate::core::context::ExecFlowState::Running {
+                $ctx.exec_flow_state = $crate::core::context::ExecFlowState::ReachedTail;
+            }
             Ok(())
         }
     }};
