@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 pub mod chain;
+mod control_flow;
 
 use crate::config::types::PluginConfig;
-use crate::core::context::DnsContext;
-use crate::core::error::{DnsError, Result};
+use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainNode};
 use crate::plugin::executor::{ExecResult, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -25,7 +26,7 @@ pub(super) enum SequenceRef {
     },
 }
 
-pub(super) fn parse_sequence_ref(raw: &str) -> Result<SequenceRef> {
+pub(super) fn parse_sequence_ref(raw: &str) -> DnsResult<SequenceRef> {
     let raw = raw.trim_start();
     if raw.is_empty() {
         return Err(DnsError::plugin(format!(
@@ -117,8 +118,31 @@ impl Executor for Sequence {
             .as_ref()
             .ok_or_else(|| DnsError::plugin("sequence chain is not initialized"))?;
         head.next(context).await?;
-        continue_next!(next, context)
+        if context.exec_flow_state != ExecFlowState::Broken {
+            // Nested sequence execution may mark tail locally. If caller provides
+            // `next`, clear it so only the caller's actual tail sets ReachedTail.
+            if next.is_some() && context.exec_flow_state == ExecFlowState::ReachedTail {
+                context.exec_flow_state = ExecFlowState::Running;
+            }
+            return continue_next!(next, context);
+        }
+        Ok(())
     }
+}
+
+fn parse_control_flow_dependency(exec: &str) -> Option<String> {
+    let mut split = exec.trim().splitn(2, char::is_whitespace);
+    let op = split.next()?;
+    let arg = split.next()?.trim();
+    if arg.is_empty() {
+        return None;
+    }
+    if op == "jump" || op == "goto" {
+        if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(arg) {
+            return Some(tag);
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +151,7 @@ pub struct SequenceFactory {}
 register_plugin_factory!("sequence", SequenceFactory {});
 
 impl PluginFactory for SequenceFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
         match plugin_config.args.clone() {
             Some(args) => {
                 serde_yml::from_value::<Vec<Rule>>(args).map_err(|e| {
@@ -155,7 +179,9 @@ impl PluginFactory for SequenceFactory {
                 }
             }
             if let Some(exec) = rule.exec {
-                if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&exec) {
+                if let Some(tag) = parse_control_flow_dependency(&exec) {
+                    result.push(tag);
+                } else if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&exec) {
                     result.push(tag);
                 }
             }
@@ -167,7 +193,7 @@ impl PluginFactory for SequenceFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    ) -> DnsResult<UninitializedPlugin> {
         let rules = serde_yml::from_value::<Vec<Rule>>(
             plugin_config
                 .args

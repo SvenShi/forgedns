@@ -6,6 +6,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
+use crate::plugin::executor::sequence::control_flow::{ControlFlowBuiltin, parse_builtin};
 use crate::plugin::executor::sequence::{SequenceRef, parse_sequence_ref};
 use crate::plugin::executor::{ExecResult, Executor};
 use crate::plugin::matcher::Matcher;
@@ -80,6 +81,57 @@ impl ChainNode for MatcherChainNode {
     }
 }
 
+#[derive(Debug)]
+pub struct ControlFlowChainNode {
+    control_flow: Box<dyn ControlFlowBuiltin>,
+    next: Option<Arc<dyn ChainNode>>,
+}
+
+#[async_trait]
+impl ChainNode for ControlFlowChainNode {
+    async fn next(&self, context: &mut DnsContext) -> ExecResult {
+        self.control_flow.run(context, self.next.as_ref()).await
+    }
+
+    fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
+        self.next = next;
+    }
+}
+
+#[derive(Debug)]
+pub struct MatcherControlFlowChainNode {
+    matchers: Vec<MatcherRef>,
+    control_flow: Box<dyn ControlFlowBuiltin>,
+    next: Option<Arc<dyn ChainNode>>,
+}
+
+#[async_trait]
+impl ChainNode for MatcherControlFlowChainNode {
+    async fn next(&self, context: &mut DnsContext) -> ExecResult {
+        for matcher_ref in &self.matchers {
+            let matched = matcher_ref.matcher.is_match(context).await;
+            let matched = if matcher_ref.reverse {
+                !matched
+            } else {
+                matched
+            };
+            if !matched {
+                debug!(
+                    "MatcherControlFlowChainNode: context did not match, skipping control flow, matcher: {}",
+                    matcher_ref.matcher.tag()
+                );
+                return continue_next!(self.next.as_ref(), context);
+            }
+        }
+
+        self.control_flow.run(context, self.next.as_ref()).await
+    }
+
+    fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
+        self.next = next;
+    }
+}
+
 pub struct ChainBuilder {
     nodes: Vec<Box<dyn ChainNode>>,
     registry: Arc<PluginRegistry>,
@@ -133,6 +185,33 @@ impl ChainBuilder {
         node_index: usize,
     ) -> Result<Box<dyn ChainNode>> {
         if let Some(exec) = &rule.exec {
+            if let Some(control_flow) = parse_builtin(exec, &self.registry)? {
+                if let Some(matches) = &rule.matches {
+                    let mut matchers = Vec::with_capacity(matches.len());
+                    for (match_index, matcher_expr) in matches.iter().enumerate() {
+                        let (reverse, matcher_expr) = parse_matcher_expr(matcher_expr)?;
+                        matchers.push(MatcherRef {
+                            matcher: self
+                                .resolve_matcher_ref(&matcher_expr, node_index, match_index)
+                                .await?,
+                            reverse,
+                        });
+                    }
+                    let node = MatcherControlFlowChainNode {
+                        matchers,
+                        control_flow,
+                        next: None,
+                    };
+                    return Ok(Box::new(node));
+                } else {
+                    let node = ControlFlowChainNode {
+                        control_flow,
+                        next: None,
+                    };
+                    return Ok(Box::new(node));
+                }
+            }
+
             let executor = self.resolve_executor_ref(exec, node_index).await?;
             if let Some(matches) = &rule.matches {
                 let mut matchers = Vec::with_capacity(matches.len());
