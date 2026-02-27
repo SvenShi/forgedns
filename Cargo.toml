@@ -2,7 +2,6 @@
 name = "forgedns"
 version = "0.1.0"
 edition = "2024"
-build = "build.rs"
 
 [dependencies]
 futures = "0.3.31"
@@ -38,7 +37,7 @@ base64 = "0.22"
 thiserror = "2.0"
 fast-socks5 = "1.0.0"
 inventory = "0.3"
-hotpath =  "0.11.0"
+hotpath =  "0.13.0"
 
 [features]
 hotpath = ["hotpath/hotpath"]
