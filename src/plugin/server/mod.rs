@@ -6,8 +6,8 @@ use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::dns_utils::build_response_from_request;
 use crate::plugin::executor::Executor;
 use crate::plugin::{Plugin, PluginRegistry};
+use ahash::AHashMap;
 use hickory_proto::op::{Message, ResponseCode};
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{Level, debug, event_enabled, warn};
@@ -66,7 +66,7 @@ impl RequestHandle {
             response: None,
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
-            attributes: HashMap::new(),
+            attributes: AHashMap::new(),
             registry: self.registry.clone(),
         };
         self.apply_request_meta(&mut context, meta);

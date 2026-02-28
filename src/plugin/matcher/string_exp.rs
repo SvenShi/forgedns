@@ -348,7 +348,6 @@ mod tests {
     use crate::core::context::{DnsContext, ExecFlowState};
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::{Name, RecordType};
-    use std::collections::HashMap;
     use std::net::SocketAddr;
 
     fn make_context() -> DnsContext {
@@ -364,7 +363,7 @@ mod tests {
             response: None,
             exec_flow_state: ExecFlowState::Running,
             marks: ["1".to_string()].into_iter().collect(),
-            attributes: HashMap::new(),
+            attributes: Default::default(),
             registry: Arc::new(PluginRegistry::new()),
         }
     }
