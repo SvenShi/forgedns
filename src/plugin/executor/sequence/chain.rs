@@ -2,112 +2,133 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-use crate::core::context::DnsContext;
+use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
-use crate::plugin::executor::sequence::control_flow::{ControlFlowBuiltin, parse_builtin};
 use crate::plugin::executor::sequence::{SequenceRef, parse_sequence_ref};
-use crate::plugin::executor::{ExecResult, Executor};
+use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
-use async_trait::async_trait;
+use hickory_proto::op::{Message, MessageType, ResponseCode};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::debug;
 
-#[async_trait]
-pub trait ChainNode: Debug + Send + Sync + 'static {
-    async fn next(&self, context: &mut DnsContext) -> ExecResult;
-
-    fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>);
-}
-
-#[derive(Debug)]
-pub struct DirectChainNode {
-    executor: Arc<dyn Executor>,
-    next: Option<Arc<dyn ChainNode>>,
-}
-
-#[async_trait]
-impl ChainNode for DirectChainNode {
-    async fn next(&self, context: &mut DnsContext) -> ExecResult {
-        // Pass immediate next (if any) to current executor
-        self.executor.execute(context, self.next.as_ref()).await
-    }
-
-    fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
-        self.next = next;
-    }
-}
-
-#[derive(Debug)]
-pub struct MatcherChainNode {
-    matchers: Vec<MatcherRef>,
-    executor: Arc<dyn Executor>,
-    next: Option<Arc<dyn ChainNode>>,
-}
-
 #[derive(Debug)]
 struct MatcherRef {
+    /// Concrete matcher instance used by this instruction.
     matcher: Arc<dyn Matcher>,
+    /// Whether matcher result should be logically negated (`!matcher`).
     reverse: bool,
 }
 
-#[async_trait]
-impl ChainNode for MatcherChainNode {
-    async fn next(&self, context: &mut DnsContext) -> ExecResult {
-        for matcher_ref in &self.matchers {
-            let matched = matcher_ref.matcher.is_match(context).await;
-            let matched = if matcher_ref.reverse {
-                !matched
-            } else {
-                matched
-            };
-            if !matched {
-                debug!(
-                    "MatcherChainNode: context did not match, skipping executor, matcher: {}",
-                    matcher_ref.matcher.tag()
-                );
-                return continue_next!(self.next.as_ref(), context);
-            }
-        }
-
-        // Pass immediate next (if any) to current executor
-        self.executor.execute(context, self.next.as_ref()).await
-    }
-    fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
-        self.next = next;
-    }
+#[derive(Debug)]
+enum BuiltinOp {
+    /// Mark chain as accepted and stop current sequence execution.
+    Accept,
+    /// Stop current sequence execution and return to caller.
+    Return,
+    /// Build and set a DNS response with the specified rcode, then stop.
+    Reject(ResponseCode),
+    /// Execute another sequence executor, then continue current program.
+    Jump(Arc<dyn Executor>),
+    /// Execute another sequence executor and stop current program immediately.
+    Goto(Arc<dyn Executor>),
 }
 
 #[derive(Debug)]
-pub struct ControlFlowChainNode {
-    control_flow: Box<dyn ControlFlowBuiltin>,
-    next: Option<Arc<dyn ChainNode>>,
-}
-
-#[async_trait]
-impl ChainNode for ControlFlowChainNode {
-    async fn next(&self, context: &mut DnsContext) -> ExecResult {
-        self.control_flow.run(context, self.next.as_ref()).await
-    }
-
-    fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
-        self.next = next;
-    }
+enum OpCode {
+    /// Normal executor plugin dispatch.
+    Executor(Arc<dyn Executor>),
+    /// Builtin control-flow operation.
+    Builtin(BuiltinOp),
 }
 
 #[derive(Debug)]
-pub struct MatcherControlFlowChainNode {
+struct Instruction {
+    /// All matchers that must pass before the op is executed.
     matchers: Vec<MatcherRef>,
-    control_flow: Box<dyn ControlFlowBuiltin>,
-    next: Option<Arc<dyn ChainNode>>,
+    /// The operation to run once matchers pass.
+    op: OpCode,
 }
 
-#[async_trait]
-impl ChainNode for MatcherControlFlowChainNode {
-    async fn next(&self, context: &mut DnsContext) -> ExecResult {
+#[derive(Debug)]
+pub struct ChainProgram {
+    /// Flattened instruction stream executed by a program counter.
+    instructions: Vec<Instruction>,
+}
+
+impl ChainProgram {
+    /// Run sequence program with explicit program-counter control flow.
+    ///
+    /// Execution model:
+    /// - Evaluate matchers for current instruction.
+    /// - Execute either executor opcode or builtin opcode.
+    /// - Advance `pc` according to returned [`ExecStep`] / builtin semantics.
+    /// - Execute deferred `post_execute` callbacks in LIFO order.
+    pub async fn run(&self, context: &mut DnsContext) -> Result<()> {
+        let mut pc = 0usize;
+        // Deferred post callbacks for `ExecStep::NextWithPost`.
+        let mut post_stack: Vec<(Arc<dyn Executor>, Option<ExecState>)> = Vec::new();
+
+        while pc < self.instructions.len() {
+            let instruction = &self.instructions[pc];
+            if !instruction.matches(context).await {
+                pc += 1;
+                continue;
+            }
+
+            match &instruction.op {
+                OpCode::Executor(executor) => match executor.execute(context).await? {
+                    ExecStep::Next => pc += 1,
+                    ExecStep::NextWithPost(state) => {
+                        post_stack.push((executor.clone(), state));
+                        pc += 1;
+                    }
+                    ExecStep::Stop => break,
+                },
+                OpCode::Builtin(op) => match op {
+                    BuiltinOp::Accept => {
+                        context.exec_flow_state = ExecFlowState::Broken;
+                        break;
+                    }
+                    BuiltinOp::Return => break,
+                    BuiltinOp::Reject(rcode) => {
+                        context.response =
+                            Some(build_response_with_rcode(&context.request, *rcode));
+                        context.exec_flow_state = ExecFlowState::Broken;
+                        break;
+                    }
+                    BuiltinOp::Jump(executor) => {
+                        executor.execute(context).await?;
+                        if context.exec_flow_state == ExecFlowState::Broken {
+                            break;
+                        }
+                        if context.exec_flow_state == ExecFlowState::ReachedTail {
+                            context.exec_flow_state = ExecFlowState::Running;
+                        }
+                        pc += 1;
+                    }
+                    BuiltinOp::Goto(executor) => {
+                        executor.execute(context).await?;
+                        break;
+                    }
+                },
+            }
+        }
+
+        while let Some((executor, state)) = post_stack.pop() {
+            executor.post_execute(context, state).await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Instruction {
+    /// Return true only when all matchers pass after applying reverse flags.
+    async fn matches(&self, context: &mut DnsContext) -> bool {
         for matcher_ref in &self.matchers {
             let matched = matcher_ref.matcher.is_match(context).await;
             let matched = if matcher_ref.reverse {
@@ -117,33 +138,35 @@ impl ChainNode for MatcherControlFlowChainNode {
             };
             if !matched {
                 debug!(
-                    "MatcherControlFlowChainNode: context did not match, skipping control flow, matcher: {}",
+                    "instruction skipped, matcher: {}",
                     matcher_ref.matcher.tag()
                 );
-                return continue_next!(self.next.as_ref(), context);
+                return false;
             }
         }
-
-        self.control_flow.run(context, self.next.as_ref()).await
-    }
-
-    fn set_next(&mut self, next: Option<Arc<dyn ChainNode>>) {
-        self.next = next;
+        true
     }
 }
 
+/// Builder that converts sequence rules into an executable instruction program.
 pub struct ChainBuilder {
-    nodes: Vec<Box<dyn ChainNode>>,
+    /// Program being built in rule order.
+    instructions: Vec<Instruction>,
+    /// Shared plugin registry for resolving executor/matcher references.
     registry: Arc<PluginRegistry>,
+    /// Current sequence tag (used for generated quick-setup tags).
     sequence_tag: String,
+    /// Current rule index in this sequence.
     node_index: usize,
+    /// Runtime-created quick-setup executors that require lifecycle management.
     quick_setup_executors: Vec<Arc<dyn Executor>>,
+    /// Runtime-created quick-setup matchers that require lifecycle management.
     quick_setup_matchers: Vec<Arc<dyn Matcher>>,
 }
 impl ChainBuilder {
     pub fn new(registry: Arc<PluginRegistry>, sequence_tag: impl Into<String>) -> Self {
         ChainBuilder {
-            nodes: Vec::new(),
+            instructions: Vec::new(),
             registry,
             sequence_tag: sequence_tag.into(),
             node_index: 0,
@@ -154,92 +177,94 @@ impl ChainBuilder {
 
     pub async fn append_node(&mut self, rule: &Rule) -> Result<()> {
         let node_index = self.node_index;
-        let node = self.create_chain_node(rule, node_index).await?;
-        self.nodes.push(node);
+        let instruction = self.create_instruction(rule, node_index).await?;
+        self.instructions.push(instruction);
         self.node_index += 1;
         Ok(())
     }
 
-    pub fn build(
-        mut self,
-    ) -> (
-        Option<Arc<dyn ChainNode>>,
-        Vec<Arc<dyn Executor>>,
-        Vec<Arc<dyn Matcher>>,
-    ) {
-        let mut next: Option<Arc<dyn ChainNode>> = None;
-        for mut node in self.nodes.into_iter().rev() {
-            node.set_next(next.clone());
-            next = Some(Arc::from(node));
-        }
+    pub fn build(self) -> (ChainProgram, Vec<Arc<dyn Executor>>, Vec<Arc<dyn Matcher>>) {
         (
-            next,
-            std::mem::take(&mut self.quick_setup_executors),
-            std::mem::take(&mut self.quick_setup_matchers),
+            ChainProgram {
+                instructions: self.instructions,
+            },
+            self.quick_setup_executors,
+            self.quick_setup_matchers,
         )
     }
 
-    async fn create_chain_node(
-        &mut self,
-        rule: &Rule,
-        node_index: usize,
-    ) -> Result<Box<dyn ChainNode>> {
-        if let Some(exec) = &rule.exec {
-            if let Some(control_flow) = parse_builtin(exec, &self.registry)? {
-                if let Some(matches) = &rule.matches {
-                    let mut matchers = Vec::with_capacity(matches.len());
-                    for (match_index, matcher_expr) in matches.iter().enumerate() {
-                        let (reverse, matcher_expr) = parse_matcher_expr(matcher_expr)?;
-                        matchers.push(MatcherRef {
-                            matcher: self
-                                .resolve_matcher_ref(&matcher_expr, node_index, match_index)
-                                .await?,
-                            reverse,
-                        });
-                    }
-                    let node = MatcherControlFlowChainNode {
-                        matchers,
-                        control_flow,
-                        next: None,
-                    };
-                    return Ok(Box::new(node));
-                } else {
-                    let node = ControlFlowChainNode {
-                        control_flow,
-                        next: None,
-                    };
-                    return Ok(Box::new(node));
-                }
+    async fn create_instruction(&mut self, rule: &Rule, node_index: usize) -> Result<Instruction> {
+        let mut matchers = Vec::new();
+        if let Some(matcher_exprs) = &rule.matches {
+            for (match_index, matcher_raw) in matcher_exprs.iter().enumerate() {
+                let (reverse, matcher_expr) = parse_matcher_expr(matcher_raw)?;
+                matchers.push(MatcherRef {
+                    matcher: self
+                        .resolve_matcher_ref(matcher_expr, node_index, match_index)
+                        .await?,
+                    reverse,
+                });
             }
-
-            let executor = self.resolve_executor_ref(exec, node_index).await?;
-            if let Some(matches) = &rule.matches {
-                let mut matchers = Vec::with_capacity(matches.len());
-                for (match_index, matcher_expr) in matches.iter().enumerate() {
-                    let (reverse, matcher_expr) = parse_matcher_expr(matcher_expr)?;
-                    matchers.push(MatcherRef {
-                        matcher: self
-                            .resolve_matcher_ref(&matcher_expr, node_index, match_index)
-                            .await?,
-                        reverse,
-                    });
-                }
-                let node = MatcherChainNode {
-                    matchers,
-                    executor,
-                    next: None,
-                };
-                Ok(Box::new(node))
-            } else {
-                let node = DirectChainNode {
-                    executor,
-                    next: None,
-                };
-                Ok(Box::new(node))
-            }
-        } else {
-            Err(DnsError::plugin("rule must have 'exec' field"))
         }
+
+        let exec = rule
+            .exec
+            .as_ref()
+            .ok_or_else(|| DnsError::plugin("rule must have 'exec' field"))?;
+
+        // Builtin syntax has priority; otherwise resolve as normal executor reference.
+        let op = if let Some(op) = self.parse_builtin(exec).await? {
+            OpCode::Builtin(op)
+        } else {
+            OpCode::Executor(self.resolve_executor_ref(exec, node_index).await?)
+        };
+
+        Ok(Instruction { matchers, op })
+    }
+
+    async fn parse_builtin(&mut self, expr: &str) -> Result<Option<BuiltinOp>> {
+        let mut split = expr.trim().splitn(2, char::is_whitespace);
+        let op = split.next().unwrap_or_default();
+        let arg = split.next().map(str::trim).filter(|s| !s.is_empty());
+
+        match op {
+            "accept" => Ok(Some(BuiltinOp::Accept)),
+            "return" => Ok(Some(BuiltinOp::Return)),
+            "reject" => Ok(Some(BuiltinOp::Reject(parse_reject_rcode(arg)?))),
+            "jump" => Ok(Some(BuiltinOp::Jump(
+                self.resolve_jump_or_goto_executor("jump", arg).await?,
+            ))),
+            "goto" => Ok(Some(BuiltinOp::Goto(
+                self.resolve_jump_or_goto_executor("goto", arg).await?,
+            ))),
+            _ => Ok(None),
+        }
+    }
+
+    async fn resolve_jump_or_goto_executor(
+        &mut self,
+        op: &str,
+        arg: Option<&str>,
+    ) -> Result<Arc<dyn Executor>> {
+        // `jump/goto` only accept plugin tag references (`$tag`) to avoid
+        // nested quick-setup ambiguity and lifecycle complexity.
+        let raw =
+            arg.ok_or_else(|| DnsError::plugin(format!("{} requires sequence tag argument", op)))?;
+        let tag = match parse_sequence_ref(raw)? {
+            SequenceRef::PluginTag(tag) => tag,
+            SequenceRef::QuickSetup { .. } => {
+                return Err(DnsError::plugin(format!(
+                    "{} target must be plugin tag reference ($tag), quick setup syntax is not supported",
+                    op
+                )));
+            }
+        };
+
+        let plugin = self
+            .registry
+            .get_plugin(&tag)
+            .ok_or_else(|| DnsError::plugin(format!("plugin does not exist for {}", tag)))?;
+        Ok(plugin.to_executor())
     }
 
     async fn resolve_executor_ref(
@@ -255,6 +280,7 @@ impl ChainBuilder {
                 Ok(plugin.to_executor())
             }
             SequenceRef::QuickSetup { plugin_type, param } => {
+                // Generate deterministic synthetic runtime tag for quick-setup executor.
                 let quick_tag = format!("@qs:exec:{}:{}", self.sequence_tag, node_index);
                 let uninitialized = self.registry.quick_setup(
                     &plugin_type,
@@ -287,6 +313,7 @@ impl ChainBuilder {
                 Ok(plugin.to_matcher())
             }
             SequenceRef::QuickSetup { plugin_type, param } => {
+                // Generate deterministic synthetic runtime tag for quick-setup matcher.
                 let quick_tag = format!(
                     "@qs:match:{}:{}:{}",
                     self.sequence_tag, node_index, match_index
@@ -309,6 +336,65 @@ impl ChainBuilder {
     }
 }
 
+/// Parse optional `reject` argument into DNS rcode.
+///
+/// Supported inputs:
+/// - numeric code (e.g. `5`)
+/// - symbolic names (e.g. `REFUSED`, `SERVFAIL`)
+/// - omitted argument defaults to `REFUSED`
+fn parse_reject_rcode(arg: Option<&str>) -> Result<ResponseCode> {
+    let Some(rcode_raw) = arg else {
+        return Ok(ResponseCode::Refused);
+    };
+
+    if let Ok(code) = rcode_raw.parse::<u16>() {
+        return Ok(code.into());
+    }
+
+    match rcode_raw.to_ascii_uppercase().as_str() {
+        "NOERROR" => Ok(ResponseCode::NoError),
+        "FORMERR" => Ok(ResponseCode::FormErr),
+        "SERVFAIL" => Ok(ResponseCode::ServFail),
+        "NXDOMAIN" => Ok(ResponseCode::NXDomain),
+        "NOTIMP" => Ok(ResponseCode::NotImp),
+        "REFUSED" => Ok(ResponseCode::Refused),
+        "YXDOMAIN" => Ok(ResponseCode::YXDomain),
+        "YXRRSET" => Ok(ResponseCode::YXRRSet),
+        "NXRRSET" => Ok(ResponseCode::NXRRSet),
+        "NOTAUTH" => Ok(ResponseCode::NotAuth),
+        "NOTZONE" => Ok(ResponseCode::NotZone),
+        "BADVERS" => Ok(ResponseCode::BADVERS),
+        "BADSIG" => Ok(ResponseCode::BADSIG),
+        "BADKEY" => Ok(ResponseCode::BADKEY),
+        "BADTIME" => Ok(ResponseCode::BADTIME),
+        "BADMODE" => Ok(ResponseCode::BADMODE),
+        "BADNAME" => Ok(ResponseCode::BADNAME),
+        "BADALG" => Ok(ResponseCode::BADALG),
+        "BADTRUNC" => Ok(ResponseCode::BADTRUNC),
+        "BADCOOKIE" => Ok(ResponseCode::BADCOOKIE),
+        _ => Err(DnsError::plugin(format!(
+            "invalid reject rcode argument: {}",
+            rcode_raw
+        ))),
+    }
+}
+
+/// Build a minimal DNS response that preserves request id/opcode/query section.
+fn build_response_with_rcode(request: &Message, rcode: ResponseCode) -> Message {
+    let mut response = Message::new();
+    response.set_id(request.id());
+    response.set_op_code(request.op_code());
+    response.set_message_type(MessageType::Response);
+    response.set_response_code(rcode);
+    *response.queries_mut() = request.queries().to_vec();
+    response
+}
+
+/// Parse matcher expression and optional reverse prefix (`!`).
+///
+/// Examples:
+/// - `$qname` -> `(false, "$qname")`
+/// - `!$qname` -> `(true, "$qname")`
 fn parse_matcher_expr(raw: &str) -> Result<(bool, &str)> {
     let matcher_expr = raw.trim_start();
     if let Some(matcher_expr) = matcher_expr.strip_prefix('!') {
@@ -322,36 +408,5 @@ fn parse_matcher_expr(raw: &str) -> Result<(bool, &str)> {
         Ok((true, matcher_expr))
     } else {
         Ok((false, matcher_expr))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_matcher_expr;
-
-    #[test]
-    fn test_parse_matcher_expr_normal() {
-        let (reverse, matcher) = parse_matcher_expr("$qname").unwrap();
-        assert!(!reverse);
-        assert_eq!(matcher, "$qname");
-    }
-
-    #[test]
-    fn test_parse_matcher_expr_reverse() {
-        let (reverse, matcher) = parse_matcher_expr("!$qname").unwrap();
-        assert!(reverse);
-        assert_eq!(matcher, "$qname");
-    }
-
-    #[test]
-    fn test_parse_matcher_expr_reverse_with_whitespace() {
-        let (reverse, matcher) = parse_matcher_expr(" !   $qname").unwrap();
-        assert!(reverse);
-        assert_eq!(matcher, "$qname");
-    }
-
-    #[test]
-    fn test_parse_matcher_expr_invalid_reverse() {
-        assert!(parse_matcher_expr("!").is_err());
     }
 }

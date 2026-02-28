@@ -65,9 +65,9 @@ impl RequestHandle {
         }
 
         // Execute entry plugin to process the request
-        let exec_outcome = self.entry_executor.execute(&mut context, None).await;
+        let exec_outcome = self.entry_executor.execute(&mut context).await;
         let (response, exit) = match exec_outcome {
-            Ok(()) => {
+            Ok(_) => {
                 let exit = if context.exec_flow_state == ExecFlowState::ReachedTail {
                     RequestExit::Completed
                 } else {
