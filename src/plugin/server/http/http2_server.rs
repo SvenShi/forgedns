@@ -88,8 +88,20 @@ pub async fn run_server(
                             if let Some(acceptor) = tls_acceptor {
                                 match acceptor.accept(stream).await {
                                     Ok(tls_stream) => {
+                                        let server_name = tls_stream
+                                            .get_ref()
+                                            .1
+                                            .server_name()
+                                            .map(str::to_ascii_lowercase);
                                         debug!("TLS handshake completed for client {}", src);
-                                        handle_http_stream(tls_stream, src, dispatcher, src_ip_header).await;
+                                        handle_http_stream(
+                                            tls_stream,
+                                            src,
+                                            dispatcher,
+                                            src_ip_header,
+                                            server_name,
+                                        )
+                                        .await;
                                     }
                                     Err(e) => {
                                         warn!("TLS handshake failed for {}: {}", src, e);
@@ -98,7 +110,8 @@ pub async fn run_server(
                             } else {
                                 // Plain HTTP connection
                                 debug!("HTTP server connected to client {}", src);
-                                handle_http_stream(stream, src, dispatcher, src_ip_header).await;
+                                handle_http_stream(stream, src, dispatcher, src_ip_header, None)
+                                    .await;
                             }
                         });
                     }
@@ -143,6 +156,7 @@ async fn handle_http_stream<S>(
     src: SocketAddr,
     dispatcher: Arc<HttpDispatcher>,
     src_ip_header: Arc<Option<String>>,
+    tls_server_name: Option<String>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
@@ -173,6 +187,7 @@ async fn handle_http_stream<S>(
 
         let dispatcher = dispatcher.clone();
         let src_ip_header_clone = src_ip_header.clone();
+        let server_name = tls_server_name.clone();
 
         // Spawn a task to handle this request (non-blocking)
         // Each request is processed in its own task for maximum concurrency
@@ -217,7 +232,7 @@ async fn handle_http_stream<S>(
 
             // Dispatch request to appropriate handler (using real client IP for logging and filtering)
             let response = dispatcher
-                .handle_request(method, path, query, body, client_addr)
+                .handle_request(method, path, query, body, client_addr, server_name)
                 .await;
 
             // Convert response to HTTP/2 format

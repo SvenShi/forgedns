@@ -66,6 +66,12 @@ pub struct DnsContext {
 
 #[allow(unused)]
 impl DnsContext {
+    /// Context attribute key: TLS SNI server name (DoH/DoT/DoQ).
+    pub const ATTR_SERVER_NAME: &'static str = "server_name";
+
+    /// Context attribute key: HTTP URL path for DoH request.
+    pub const ATTR_URL_PATH: &'static str = "url_path";
+
     /// Set a custom attribute in the context
     ///
     /// Allows plugins to store typed data for later retrieval
