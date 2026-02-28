@@ -25,6 +25,7 @@ pub mod app_clock;
 pub mod context;
 pub mod dns_utils;
 pub mod error;
+pub mod rule_matcher;
 
 mod log;
 mod runtime;

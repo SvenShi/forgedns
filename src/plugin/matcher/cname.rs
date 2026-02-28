@@ -12,14 +12,16 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::{response_records, rr_to_cname};
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::rule_matcher::{DomainRuleMatcher, split_labels_rev};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    domain_match, load_rules_from_files, normalize_domain_rules, parse_quick_setup_rules,
-    parse_rules_from_value, resolve_provider_tags, split_rule_sources,
+    load_rules_from_files, parse_quick_setup_rules, parse_rules_from_value, resolve_provider_tags,
+    split_rule_sources,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
+use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -82,18 +84,26 @@ fn build_cname_matcher(
     })))
 }
 
-fn parse_cname_rules(rules: Vec<String>) -> DnsResult<(Vec<String>, Vec<String>)> {
+fn parse_cname_rules(rules: Vec<String>) -> DnsResult<(DomainRuleMatcher, Vec<String>)> {
     let (mut inline_rules, domain_set_tags, files) = split_rule_sources(rules);
     let file_rules = load_rules_from_files(&files, "cname")?;
     inline_rules.extend(file_rules);
-    Ok((normalize_domain_rules(inline_rules), domain_set_tags))
+    let mut cname_rules = DomainRuleMatcher::default();
+    for (idx, rule) in inline_rules.into_iter().enumerate() {
+        let source = format!("cname rule[{}]", idx);
+        cname_rules
+            .add_expression(&rule, &source)
+            .map_err(DnsError::plugin)?;
+    }
+    cname_rules.finalize().map_err(DnsError::plugin)?;
+    Ok((cname_rules, domain_set_tags))
 }
 
 fn validate_non_empty_cname_rules(
-    cname_rules: &[String],
+    cname_rules: &DomainRuleMatcher,
     domain_set_tags: &[String],
 ) -> DnsResult<()> {
-    if cname_rules.is_empty() && domain_set_tags.is_empty() {
+    if !cname_rules.has_rules() && domain_set_tags.is_empty() {
         return Err(DnsError::plugin(
             "cname matcher requires at least one domain rule or domain_set tag",
         ));
@@ -104,7 +114,7 @@ fn validate_non_empty_cname_rules(
 #[derive(Debug)]
 struct CnameMatcher {
     tag: String,
-    cname_rules: Vec<String>,
+    cname_rules: DomainRuleMatcher,
     domain_set_tags: Vec<String>,
     domain_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
     registry: Arc<PluginRegistry>,
@@ -124,22 +134,25 @@ impl Plugin for CnameMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for CnameMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         let Some(response) = context.response.as_ref() else {
             return false;
         };
 
         response_records(response).any(|record| {
             rr_to_cname(record).is_some_and(|cname| {
-                self.cname_rules
+                let mut labels = SmallVec::<[&str; 8]>::new();
+                if self.cname_rules.has_trie_rules() {
+                    split_labels_rev(&cname, &mut labels);
+                }
+                if self.cname_rules.is_match_normalized(&cname, &labels) {
+                    return true;
+                }
+
+                self.domain_sets
                     .iter()
-                    .any(|rule| domain_match(rule, &cname))
-                    || self
-                        .domain_sets
-                        .iter()
-                        .any(|set| set.contains_domain(&cname))
+                    .any(|set| set.contains_domain(&cname))
             })
         })
     }
@@ -177,7 +190,12 @@ mod tests {
     async fn test_cname_matcher_only_checks_cname_rr() {
         let matcher = CnameMatcher {
             tag: "cname".into(),
-            cname_rules: vec!["target.example.com".into()],
+            cname_rules: {
+                let mut rules = DomainRuleMatcher::default();
+                rules.add_expression("target.example.com", "test").unwrap();
+                rules.finalize().unwrap();
+                rules
+            },
             domain_set_tags: vec![],
             domain_sets: vec![],
             registry: Arc::new(PluginRegistry::new()),
@@ -192,6 +210,38 @@ mod tests {
         ));
         ctx.response = Some(response);
 
-        assert!(matcher.is_match(&mut ctx).await);
+        assert!(matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_cname_matcher_supports_full_keyword_regexp() {
+        let matcher = CnameMatcher {
+            tag: "cname".into(),
+            cname_rules: {
+                let mut rules = DomainRuleMatcher::default();
+                rules
+                    .add_expression("full:target.example.com", "test")
+                    .unwrap();
+                rules.add_expression("keyword:example", "test").unwrap();
+                rules
+                    .add_expression("regexp:^target\\.example\\.com$", "test")
+                    .unwrap();
+                rules.finalize().unwrap();
+                rules
+            },
+            domain_set_tags: vec![],
+            domain_sets: vec![],
+            registry: Arc::new(PluginRegistry::new()),
+        };
+
+        let mut ctx = make_context();
+        let mut response = Message::new();
+        response.add_name_server(Record::from_rdata(
+            Name::from_ascii("alias.example.com.").unwrap(),
+            60,
+            RData::CNAME(CNAME(Name::from_ascii("target.example.com.").unwrap())),
+        ));
+        ctx.response = Some(response);
+        assert!(matcher.is_match(&mut ctx));
     }
 }

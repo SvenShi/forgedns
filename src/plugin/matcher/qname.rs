@@ -11,15 +11,16 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::rule_matcher::{DomainRuleMatcher, split_labels_rev};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    domain_match, load_rules_from_files, normalize_domain_rules, normalize_name,
-    parse_quick_setup_rules, parse_rules_from_value, resolve_provider_tags, split_rule_sources,
-    validate_non_empty_rules,
+    load_rules_from_files, normalize_name, parse_quick_setup_rules, parse_rules_from_value,
+    resolve_provider_tags, split_rule_sources,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
+use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -82,21 +83,29 @@ fn build_qname_matcher(
     })))
 }
 
-fn parse_qname_rules(rules: Vec<String>) -> DnsResult<(Vec<String>, Vec<String>)> {
+fn parse_qname_rules(rules: Vec<String>) -> DnsResult<(DomainRuleMatcher, Vec<String>)> {
     let (mut inline_rules, domain_set_tags, files) = split_rule_sources(rules);
     let file_rules = load_rules_from_files(&files, "qname")?;
     inline_rules.extend(file_rules);
-    Ok((normalize_domain_rules(inline_rules), domain_set_tags))
+    let mut domain_rules = DomainRuleMatcher::default();
+    for (idx, rule) in inline_rules.into_iter().enumerate() {
+        let source = format!("qname rule[{}]", idx);
+        domain_rules
+            .add_expression(&rule, &source)
+            .map_err(DnsError::plugin)?;
+    }
+    domain_rules.finalize().map_err(DnsError::plugin)?;
+    Ok((domain_rules, domain_set_tags))
 }
 
-fn validate_non_empty_qname_rules(domains: &[String], domain_set_tags: &[String]) -> DnsResult<()> {
-    if domains.is_empty() && domain_set_tags.is_empty() {
+fn validate_non_empty_qname_rules(
+    domains: &DomainRuleMatcher,
+    domain_set_tags: &[String],
+) -> DnsResult<()> {
+    if !domains.has_rules() && domain_set_tags.is_empty() {
         return Err(DnsError::plugin(
             "qname matcher requires at least one domain rule or domain_set tag",
         ));
-    }
-    if !domains.is_empty() {
-        validate_non_empty_rules("qname", domains)?;
     }
     Ok(())
 }
@@ -104,7 +113,7 @@ fn validate_non_empty_qname_rules(domains: &[String], domain_set_tags: &[String]
 #[derive(Debug)]
 struct QnameMatcher {
     tag: String,
-    domains: Vec<String>,
+    domains: DomainRuleMatcher,
     domain_set_tags: Vec<String>,
     domain_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
     registry: Arc<PluginRegistry>,
@@ -124,18 +133,25 @@ impl Plugin for QnameMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for QnameMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         context.request.queries().iter().any(|query| {
             let query_name = normalize_name(query.name());
-            self.domains
+            if query_name.is_empty() {
+                return false;
+            }
+
+            let mut labels = SmallVec::<[&str; 8]>::new();
+            if self.domains.has_trie_rules() {
+                split_labels_rev(&query_name, &mut labels);
+            }
+            if self.domains.is_match_normalized(&query_name, &labels) {
+                return true;
+            }
+
+            self.domain_sets
                 .iter()
-                .any(|domain| domain_match(domain, &query_name))
-                || self
-                    .domain_sets
-                    .iter()
-                    .any(|set| set.contains_domain(&query_name))
+                .any(|set| set.contains_domain(&query_name))
         })
     }
 }
@@ -170,12 +186,41 @@ mod tests {
     async fn test_qname_matcher_only_checks_domain() {
         let matcher = QnameMatcher {
             tag: "qname".into(),
-            domains: vec!["example.com".into()],
+            domains: {
+                let mut rules = DomainRuleMatcher::default();
+                rules.add_expression("example.com", "test").unwrap();
+                rules.finalize().unwrap();
+                rules
+            },
             domain_set_tags: vec![],
             domain_sets: vec![],
             registry: Arc::new(PluginRegistry::new()),
         };
         let mut ctx = make_context();
-        assert!(matcher.is_match(&mut ctx).await);
+        assert!(matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_qname_matcher_supports_full_keyword_regexp() {
+        let matcher = QnameMatcher {
+            tag: "qname".into(),
+            domains: {
+                let mut rules = DomainRuleMatcher::default();
+                rules
+                    .add_expression("full:www.example.com", "test")
+                    .unwrap();
+                rules.add_expression("keyword:example", "test").unwrap();
+                rules
+                    .add_expression("regexp:^www\\.example\\.com$", "test")
+                    .unwrap();
+                rules.finalize().unwrap();
+                rules
+            },
+            domain_set_tags: vec![],
+            domain_sets: vec![],
+            registry: Arc::new(PluginRegistry::new()),
+        };
+        let mut ctx = make_context();
+        assert!(matcher.is_match(&mut ctx));
     }
 }
