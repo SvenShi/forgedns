@@ -10,10 +10,11 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    IpRule, load_rules_from_files, parse_ip_rules, parse_quick_setup_rules, parse_rules_from_value,
-    resolve_provider_tags, split_rule_sources,
+    load_rules_from_files, parse_ip_prefix_matcher, parse_quick_setup_rules,
+    parse_rules_from_value, resolve_provider_tags, split_rule_sources,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -82,16 +83,19 @@ fn build_ptr_ip_matcher(
     })))
 }
 
-fn parse_ptr_ip_rules(rules: Vec<String>) -> DnsResult<(Vec<IpRule>, Vec<String>)> {
+fn parse_ptr_ip_rules(rules: Vec<String>) -> DnsResult<(IpPrefixMatcher, Vec<String>)> {
     let (mut inline_rules, ip_set_tags, files) = split_rule_sources(rules);
     let file_rules = load_rules_from_files(&files, "ptr_ip")?;
     inline_rules.extend(file_rules);
-    let ip_rules = parse_ip_rules("ptr_ip", &inline_rules)?;
+    let ip_rules = parse_ip_prefix_matcher("ptr_ip", &inline_rules)?;
     Ok((ip_rules, ip_set_tags))
 }
 
-fn validate_non_empty_ptr_ip_rules(ip_rules: &[IpRule], ip_set_tags: &[String]) -> DnsResult<()> {
-    if ip_rules.is_empty() && ip_set_tags.is_empty() {
+fn validate_non_empty_ptr_ip_rules(
+    ip_rules: &IpPrefixMatcher,
+    ip_set_tags: &[String],
+) -> DnsResult<()> {
+    if !ip_rules.has_v4_rules() && !ip_rules.has_v6_rules() && ip_set_tags.is_empty() {
         return Err(DnsError::plugin(
             "ptr_ip matcher requires at least one IP rule or ip_set tag",
         ));
@@ -102,7 +106,7 @@ fn validate_non_empty_ptr_ip_rules(ip_rules: &[IpRule], ip_set_tags: &[String]) 
 #[derive(Debug)]
 struct PtrIpMatcher {
     tag: String,
-    ip_rules: Vec<IpRule>,
+    ip_rules: IpPrefixMatcher,
     ip_set_tags: Vec<String>,
     ip_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
     registry: Arc<PluginRegistry>,
@@ -122,23 +126,18 @@ impl Plugin for PtrIpMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for PtrIpMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         context.request.queries().iter().any(|query| {
             if query.query_type() != RecordType::PTR {
                 return false;
             }
-            let name = query
-                .name()
-                .to_utf8()
-                .trim_end_matches('.')
-                .to_ascii_lowercase();
+            let name = query.name().to_utf8();
+            let name = name.trim_end_matches('.');
             let Some(ip) = parse_ptr_name_ip(&name) else {
                 return false;
             };
-            self.ip_rules.iter().any(|rule| rule.contains(ip))
-                || self.ip_sets.iter().any(|set| set.contains_ip(ip))
+            self.ip_rules.contains_ip(ip) || self.ip_sets.iter().any(|set| set.contains_ip(ip))
         })
     }
 }
@@ -154,8 +153,7 @@ fn parse_ptr_name_ip(name: &str) -> Option<IpAddr> {
 }
 
 fn parse_in_addr_arpa(name: &str) -> Option<Ipv4Addr> {
-    let suffix = ".in-addr.arpa";
-    let body = name.strip_suffix(suffix)?;
+    let body = strip_ascii_case_suffix(name, ".in-addr.arpa")?;
     let mut octets = [0u8; 4];
     let mut count = 0usize;
     for part in body.split('.') {
@@ -172,19 +170,18 @@ fn parse_in_addr_arpa(name: &str) -> Option<Ipv4Addr> {
 }
 
 fn parse_ip6_arpa(name: &str) -> Option<Ipv6Addr> {
-    let suffix = ".ip6.arpa";
-    let body = name.strip_suffix(suffix)?;
-    let parts: Vec<&str> = body.split('.').collect();
-    if parts.len() != 32 {
-        return None;
-    }
-
+    let body = strip_ascii_case_suffix(name, ".ip6.arpa")?;
     let mut nibbles = [0u8; 32];
-    for (idx, part) in parts.iter().enumerate() {
-        if part.len() != 1 {
+    let mut count = 0usize;
+    for part in body.split('.') {
+        if part.len() != 1 || count >= 32 {
             return None;
         }
-        nibbles[31 - idx] = u8::from_str_radix(part, 16).ok()?;
+        nibbles[31 - count] = u8::from_str_radix(part, 16).ok()?;
+        count += 1;
+    }
+    if count != 32 {
+        return None;
     }
 
     let mut bytes = [0u8; 16];
@@ -193,6 +190,19 @@ fn parse_ip6_arpa(name: &str) -> Option<Ipv6Addr> {
     }
 
     Some(Ipv6Addr::from(bytes))
+}
+
+#[inline]
+fn strip_ascii_case_suffix<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
+    if name.len() < suffix.len() {
+        return None;
+    }
+    let split_at = name.len() - suffix.len();
+    let (prefix, tail) = name.split_at(split_at);
+    if !tail.eq_ignore_ascii_case(suffix) {
+        return None;
+    }
+    Some(prefix)
 }
 
 #[cfg(test)]
@@ -222,12 +232,12 @@ mod tests {
 
         let matcher = PtrIpMatcher {
             tag: "ptr_ip".into(),
-            ip_rules: parse_ip_rules("ptr_ip", &["192.168.0.0/16".into()]).unwrap(),
+            ip_rules: parse_ip_prefix_matcher("ptr_ip", &["192.168.0.0/16".into()]).unwrap(),
             ip_set_tags: vec![],
             ip_sets: vec![],
             registry: Arc::new(PluginRegistry::new()),
         };
 
-        assert!(matcher.is_match(&mut ctx).await);
+        assert!(matcher.is_match(&mut ctx));
     }
 }

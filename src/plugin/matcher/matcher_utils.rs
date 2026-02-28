@@ -7,6 +7,7 @@
 
 use crate::core::dns_utils::parse_named_response_code;
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::provider::Provider;
 use crate::plugin::{PluginRegistry, PluginType};
 use ahash::AHashSet;
@@ -14,20 +15,8 @@ use hickory_proto::rr::{DNSClass, Name, RecordType};
 use serde_yml::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-
-#[derive(Debug, Clone)]
-pub(crate) struct IpRule {
-    network: ipnet::IpNet,
-}
-
-impl IpRule {
-    pub(crate) fn contains(&self, ip: IpAddr) -> bool {
-        self.network.contains(&ip)
-    }
-}
 
 pub(crate) fn parse_rules_from_value(args: Option<Value>) -> DnsResult<Vec<String>> {
     let args = args.ok_or_else(|| DnsError::plugin("matcher requires args"))?;
@@ -76,24 +65,21 @@ pub(crate) fn parse_rcode(raw: &str) -> Option<u16> {
     parse_named_response_code(raw).map(u16::from)
 }
 
-pub(crate) fn parse_ip_rules(field: &str, raw_rules: &[String]) -> DnsResult<Vec<IpRule>> {
-    let mut rules = Vec::with_capacity(raw_rules.len());
+pub(crate) fn parse_ip_prefix_matcher(
+    field: &str,
+    raw_rules: &[String],
+) -> DnsResult<IpPrefixMatcher> {
+    let mut matcher = IpPrefixMatcher::default();
     for raw in raw_rules {
         let v = raw.trim();
         if v.is_empty() {
             continue;
         }
-        let network = if v.contains('/') {
-            ipnet::IpNet::from_str(v)
-        } else if let Ok(ip) = IpAddr::from_str(v) {
-            Ok(ipnet::IpNet::from(ip))
-        } else {
-            ipnet::IpNet::from_str(v)
-        }
-        .map_err(|e| DnsError::plugin(format!("invalid {} rule '{}': {}", field, v, e)))?;
-        rules.push(IpRule { network });
+        matcher
+            .add_rule(v)
+            .map_err(|e| DnsError::plugin(format!("invalid {} rule '{}': {}", field, v, e)))?;
     }
-    Ok(rules)
+    Ok(matcher)
 }
 
 pub(crate) fn parse_quick_setup_rules(param: Option<String>) -> DnsResult<Vec<String>> {
@@ -105,14 +91,6 @@ pub(crate) fn parse_quick_setup_rules(param: Option<String>) -> DnsResult<Vec<St
         ));
     }
     Ok(rules)
-}
-
-pub(crate) fn normalize_domain_rules(rules: Vec<String>) -> Vec<String> {
-    rules
-        .into_iter()
-        .map(|d| d.trim().trim_end_matches('.').to_ascii_lowercase())
-        .filter(|d| !d.is_empty())
-        .collect()
 }
 
 pub(crate) fn validate_non_empty_rules(field: &str, rules: &[String]) -> DnsResult<()> {
@@ -127,13 +105,6 @@ pub(crate) fn validate_non_empty_rules(field: &str, rules: &[String]) -> DnsResu
 
 pub(crate) fn normalize_name(name: &Name) -> String {
     name.to_utf8().trim_end_matches('.').to_ascii_lowercase()
-}
-
-pub(crate) fn domain_match(rule: &str, query_name: &str) -> bool {
-    query_name == rule
-        || query_name
-            .strip_suffix(rule)
-            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 pub(crate) fn split_rule_sources(

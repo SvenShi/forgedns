@@ -75,7 +75,7 @@ impl ChainProgram {
 
         while pc < self.instructions.len() {
             let instruction = &self.instructions[pc];
-            if !instruction.matches(context).await {
+            if !instruction.matches(context) {
                 pc += 1;
                 continue;
             }
@@ -129,9 +129,9 @@ impl ChainProgram {
 
 impl Instruction {
     /// Return true only when all matchers pass after applying reverse flags.
-    async fn matches(&self, context: &mut DnsContext) -> bool {
+    fn matches(&self, context: &mut DnsContext) -> bool {
         for matcher_ref in &self.matchers {
-            let matched = matcher_ref.matcher.is_match(context).await;
+            let matched = matcher_ref.matcher.is_match(context);
             let matched = if matcher_ref.reverse {
                 !matched
             } else {

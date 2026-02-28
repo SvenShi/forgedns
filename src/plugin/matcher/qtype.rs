@@ -82,9 +82,8 @@ impl Plugin for QtypeMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for QtypeMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         context
             .request
             .queries()
@@ -125,6 +124,6 @@ mod tests {
             qtypes: [u16::from(RecordType::AAAA)].into_iter().collect(),
         };
         let mut ctx = make_context(RecordType::A);
-        assert!(!matcher.is_match(&mut ctx).await);
+        assert!(!matcher.is_match(&mut ctx));
     }
 }
