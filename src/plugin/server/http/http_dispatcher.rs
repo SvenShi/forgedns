@@ -9,7 +9,7 @@
 //! - GET method: DNS query passed via URL parameter (base64url encoded)
 //! - POST method: DNS query passed in request body (binary format)
 
-use crate::plugin::server::RequestHandle;
+use crate::plugin::server::{RequestHandle, RequestMeta};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -59,12 +59,15 @@ impl HttpDispatcher {
         query: Option<String>,
         body: Bytes,
         src_addr: SocketAddr,
+        server_name: Option<String>,
     ) -> Response<Bytes> {
         debug!("Received request: {} {} from {}", method, path, src_addr);
 
         // Look up the matching route
         if let Some(handler) = self.routes.get(&(method.clone(), path.clone())) {
-            handler.handle(method, path, query, body, src_addr).await
+            handler
+                .handle(method, path, query, body, src_addr, server_name)
+                .await
         } else {
             // Return 404 Not Found for unmatched routes
             warn!("Route not found: {} {}", method, path);
@@ -104,6 +107,7 @@ pub trait HttpHandler: Send + Sync + 'static {
         query: Option<String>,
         body: Bytes,
         src_addr: SocketAddr,
+        server_name: Option<String>,
     ) -> Response<Bytes>;
 }
 
@@ -163,10 +167,11 @@ impl HttpHandler for DnsGetHandler {
     async fn handle(
         &self,
         _method: Method,
-        _path: String,
+        path: String,
         query: Option<String>,
         _body: Bytes,
         src_addr: SocketAddr,
+        server_name: Option<String>,
     ) -> Response<Bytes> {
         // Parse DNS query from URL parameters
         let dns_query = match self.parse_dns_query(query.as_deref()) {
@@ -183,7 +188,14 @@ impl HttpHandler for DnsGetHandler {
         // Process DNS query through the executor
         let dns_result = self
             .request_handle
-            .handle_request(dns_query, src_addr)
+            .handle_request_with_meta(
+                dns_query,
+                src_addr,
+                RequestMeta {
+                    server_name,
+                    url_path: Some(path),
+                },
+            )
             .await;
         msg_to_response(dns_result.response)
     }
@@ -208,10 +220,11 @@ impl HttpHandler for DnsPostHandler {
     async fn handle(
         &self,
         _method: Method,
-        _path: String,
+        path: String,
         _query: Option<String>,
         body: Bytes,
         src_addr: SocketAddr,
+        server_name: Option<String>,
     ) -> Response<Bytes> {
         // Limit request size (RFC 8484 recommends maximum 65535 bytes)
         // This prevents memory exhaustion attacks
@@ -252,7 +265,14 @@ impl HttpHandler for DnsPostHandler {
         // Process DNS query through the executor
         let dns_result = self
             .request_handle
-            .handle_request(dns_query, src_addr)
+            .handle_request_with_meta(
+                dns_query,
+                src_addr,
+                RequestMeta {
+                    server_name,
+                    url_path: Some(path),
+                },
+            )
             .await;
         msg_to_response(dns_result.response)
     }

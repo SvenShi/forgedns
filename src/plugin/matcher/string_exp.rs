@@ -111,7 +111,6 @@ enum StringSource {
     RespIp,
     Mark,
     ClientIp,
-    Listener,
     ServerName,
     UrlPath,
     Env(String),
@@ -189,16 +188,12 @@ impl StringSource {
             }
             StringSource::Mark => context.marks.iter().cloned().collect::<Vec<_>>().join(","),
             StringSource::ClientIp => context.src_addr.ip().to_string(),
-            StringSource::Listener => context
-                .get_attr::<String>("listener")
-                .cloned()
-                .unwrap_or_default(),
             StringSource::ServerName => context
-                .get_attr::<String>("server_name")
+                .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
                 .cloned()
                 .unwrap_or_default(),
             StringSource::UrlPath => context
-                .get_attr::<String>("url_path")
+                .get_attr::<String>(DnsContext::ATTR_URL_PATH)
                 .cloned()
                 .unwrap_or_default(),
             StringSource::Env(key) => std::env::var(key).unwrap_or_default(),
@@ -278,7 +273,6 @@ fn parse_source(raw: &str) -> DnsResult<StringSource> {
         "resp_ip" => Ok(StringSource::RespIp),
         "mark" => Ok(StringSource::Mark),
         "client_ip" => Ok(StringSource::ClientIp),
-        "listener" => Ok(StringSource::Listener),
         "server_name" => Ok(StringSource::ServerName),
         "url_path" => Ok(StringSource::UrlPath),
         _ => Err(DnsError::plugin(format!(
