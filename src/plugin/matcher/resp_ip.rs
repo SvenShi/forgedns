@@ -145,7 +145,6 @@ mod tests {
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::rdata::A;
     use hickory_proto::rr::{Name, RData, Record, RecordType};
-    use std::collections::HashMap;
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
@@ -161,7 +160,7 @@ mod tests {
             response: None,
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
-            attributes: HashMap::new(),
+            attributes: Default::default(),
             registry: Arc::new(PluginRegistry::new()),
         }
     }
