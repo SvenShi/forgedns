@@ -89,6 +89,8 @@ See `config.yaml` for configuration examples. The config supports:
 - **Plugins**: List of plugins with type-specific configurations
   - `udp_server`: UDP DNS server listener
   - `forward`: DNS forwarding to upstream resolvers
+- sequence built-in matcher plugins: `qname`, `qtype`, `qclass`, `ptr_ip`, `client_ip`, `has_resp`, `resp_ip`, `cname`, `rcode`, `has_wanted_ans`, `mark`, `string_exp`, `_true`, `_false`, `env`, `random`
+- `sequence.matches` quick setup supports direct matcher plugin syntax, e.g. `qname example.com`, `qtype A`, `has_resp`, `random 0.5`
 
 ## License
 

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::dns_utils::{build_response_from_request, parse_named_response_code};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
@@ -10,7 +11,7 @@ use crate::plugin::executor::sequence::{SequenceRef, parse_sequence_ref};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
-use hickory_proto::op::{Message, MessageType, ResponseCode};
+use hickory_proto::op::ResponseCode;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::debug;
@@ -96,7 +97,7 @@ impl ChainProgram {
                     BuiltinOp::Return => break,
                     BuiltinOp::Reject(rcode) => {
                         context.response =
-                            Some(build_response_with_rcode(&context.request, *rcode));
+                            Some(build_response_from_request(&context.request, *rcode));
                         context.exec_flow_state = ExecFlowState::Broken;
                         break;
                     }
@@ -351,43 +352,8 @@ fn parse_reject_rcode(arg: Option<&str>) -> Result<ResponseCode> {
         return Ok(code.into());
     }
 
-    match rcode_raw.to_ascii_uppercase().as_str() {
-        "NOERROR" => Ok(ResponseCode::NoError),
-        "FORMERR" => Ok(ResponseCode::FormErr),
-        "SERVFAIL" => Ok(ResponseCode::ServFail),
-        "NXDOMAIN" => Ok(ResponseCode::NXDomain),
-        "NOTIMP" => Ok(ResponseCode::NotImp),
-        "REFUSED" => Ok(ResponseCode::Refused),
-        "YXDOMAIN" => Ok(ResponseCode::YXDomain),
-        "YXRRSET" => Ok(ResponseCode::YXRRSet),
-        "NXRRSET" => Ok(ResponseCode::NXRRSet),
-        "NOTAUTH" => Ok(ResponseCode::NotAuth),
-        "NOTZONE" => Ok(ResponseCode::NotZone),
-        "BADVERS" => Ok(ResponseCode::BADVERS),
-        "BADSIG" => Ok(ResponseCode::BADSIG),
-        "BADKEY" => Ok(ResponseCode::BADKEY),
-        "BADTIME" => Ok(ResponseCode::BADTIME),
-        "BADMODE" => Ok(ResponseCode::BADMODE),
-        "BADNAME" => Ok(ResponseCode::BADNAME),
-        "BADALG" => Ok(ResponseCode::BADALG),
-        "BADTRUNC" => Ok(ResponseCode::BADTRUNC),
-        "BADCOOKIE" => Ok(ResponseCode::BADCOOKIE),
-        _ => Err(DnsError::plugin(format!(
-            "invalid reject rcode argument: {}",
-            rcode_raw
-        ))),
-    }
-}
-
-/// Build a minimal DNS response that preserves request id/opcode/query section.
-fn build_response_with_rcode(request: &Message, rcode: ResponseCode) -> Message {
-    let mut response = Message::new();
-    response.set_id(request.id());
-    response.set_op_code(request.op_code());
-    response.set_message_type(MessageType::Response);
-    response.set_response_code(rcode);
-    *response.queries_mut() = request.queries().to_vec();
-    response
+    parse_named_response_code(rcode_raw)
+        .ok_or_else(|| DnsError::plugin(format!("invalid reject rcode argument: {}", rcode_raw)))
 }
 
 /// Parse matcher expression and optional reverse prefix (`!`).
