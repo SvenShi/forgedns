@@ -37,6 +37,11 @@ base64 = "0.22"
 thiserror = "2.0"
 fast-socks5 = "1.0.0"
 inventory = "0.3"
+regex = "1.12.2"
+aho-corasick = "1.1.4"
+ahash = "0.8.12"
+smallvec = "1.15.1"
+
 hotpath =  "0.13.0"
 
 [features]

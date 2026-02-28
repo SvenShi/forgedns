@@ -18,6 +18,7 @@
 - Indentation is 4 spaces; keep modules cohesive and colocate helpers with their feature area.
 - Use `snake_case` for functions/fields, `CamelCase` for types, and `SCREAMING_SNAKE_CASE` for constants.
 - Prefer descriptive plugin tags in config (e.g., `forward`, `udp_server`, `seq`).
+- Each plugin code must have detailed comments that refer to the plugin comments of the server module
 
 ## Performance & Architecture Principles
 - This project targets extreme performance; DNS is foundational, so any overhead must be justified.
