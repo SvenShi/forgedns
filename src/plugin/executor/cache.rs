@@ -14,8 +14,7 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
-use crate::plugin::executor::sequence::chain::ChainNode;
-use crate::plugin::executor::{ExecResult, Executor};
+use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -397,23 +396,35 @@ impl Plugin for Cache {
 #[async_trait]
 impl Executor for Cache {
     #[hotpath::measure]
-    async fn execute(
-        &self,
-        context: &mut DnsContext,
-        next: Option<&Arc<dyn ChainNode>>,
-    ) -> ExecResult {
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         let domain_map = self.domain_map.get().unwrap();
         let (cache_key, cache_hit) = self.try_cache_hit(context, domain_map);
 
         if self.should_short_circuit(cache_hit, cache_key.as_ref()) {
-            return Ok(());
+            return Ok(ExecStep::Stop);
         }
 
-        continue_next!(next, context)?;
+        if let Some(key) = cache_key {
+            return Ok(ExecStep::NextWithPost(Some(Box::new(key) as ExecState)));
+        }
+
+        Ok(ExecStep::Next)
+    }
+
+    #[hotpath::measure]
+    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> ExecResult {
+        let Some(domain_map) = self.domain_map.get() else {
+            return Ok(());
+        };
+
+        let cache_key = state
+            .and_then(|boxed| boxed.downcast::<(String, RecordType, DNSClass)>().ok())
+            .map(|boxed| *boxed);
 
         if let (Some(response), Some(key)) = (&context.response, cache_key) {
             self.update_cache_entry(domain_map, key, response.clone());
         }
+
         Ok(())
     }
 }

@@ -3,27 +3,19 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::any::Any;
 
 use crate::core::error::Result;
-use crate::plugin::executor::sequence::chain::ChainNode;
 use crate::{core::context::DnsContext, plugin::Plugin};
 
 pub type ExecResult = Result<()>;
+pub type ExecState = Box<dyn Any + Send + Sync>;
 
-// Helper macro to continue to next chain node if present
-#[macro_export]
-macro_rules! continue_next {
-    ($next:expr, $ctx:expr) => {{
-        if let Some(next) = $next {
-            next.next($ctx).await
-        } else {
-            if $ctx.exec_flow_state == $crate::core::context::ExecFlowState::Running {
-                $ctx.exec_flow_state = $crate::core::context::ExecFlowState::ReachedTail;
-            }
-            Ok(())
-        }
-    }};
+#[derive(Debug)]
+pub enum ExecStep {
+    Next,
+    NextWithPost(Option<ExecState>),
+    Stop,
 }
 
 pub mod cache;
@@ -33,10 +25,17 @@ pub mod sequence;
 
 #[async_trait]
 pub trait Executor: Plugin {
-    /// Execute the plugin's logic on a DNS request context
-    async fn execute(
+    /// Execute the plugin's logic on a DNS request context.
+    ///
+    /// Return [`ExecStep`] to instruct the sequence engine how to advance.
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep>;
+
+    /// Optional post-stage callback executed when `execute` returns `NextWithPost`.
+    async fn post_execute(
         &self,
-        context: &mut DnsContext,
-        next: Option<&Arc<dyn ChainNode>>,
-    ) -> ExecResult;
+        _context: &mut DnsContext,
+        _state: Option<ExecState>,
+    ) -> ExecResult {
+        Ok(())
+    }
 }

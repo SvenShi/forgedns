@@ -3,19 +3,19 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 pub mod chain;
-mod control_flow;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::error::{DnsError, Result as DnsResult};
-use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainNode};
-use crate::plugin::executor::{ExecResult, Executor};
+use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainProgram};
+use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SequenceRef {
@@ -67,7 +67,7 @@ pub struct Rule {
 #[allow(unused)]
 pub struct Sequence {
     tag: String,
-    head: Option<Arc<dyn ChainNode>>,
+    program: OnceCell<ChainProgram>,
     rules: Vec<Rule>,
     registry: Arc<PluginRegistry>,
     quick_setup_executors: Vec<Arc<dyn Executor>>,
@@ -90,8 +90,8 @@ impl Plugin for Sequence {
                 );
             }
         }
-        let (head, quick_setup_executors, quick_setup_matchers) = builder.build();
-        self.head = head;
+        let (program, quick_setup_executors, quick_setup_matchers) = builder.build();
+        self.program.set(program).unwrap();
         self.quick_setup_executors = quick_setup_executors;
         self.quick_setup_matchers = quick_setup_matchers;
     }
@@ -108,25 +108,13 @@ impl Plugin for Sequence {
 
 #[async_trait]
 impl Executor for Sequence {
-    async fn execute(
-        &self,
-        context: &mut DnsContext,
-        next: Option<&Arc<dyn ChainNode>>,
-    ) -> ExecResult {
-        let head = self
-            .head
-            .as_ref()
-            .ok_or_else(|| DnsError::plugin("sequence chain is not initialized"))?;
-        head.next(context).await?;
-        if context.exec_flow_state != ExecFlowState::Broken {
-            // Nested sequence execution may mark tail locally. If caller provides
-            // `next`, clear it so only the caller's actual tail sets ReachedTail.
-            if next.is_some() && context.exec_flow_state == ExecFlowState::ReachedTail {
-                context.exec_flow_state = ExecFlowState::Running;
-            }
-            return continue_next!(next, context);
+    #[hotpath::measure]
+    async fn execute(&self, context: &mut DnsContext) -> DnsResult<ExecStep> {
+        self.program.get().unwrap().run(context).await?;
+        if context.exec_flow_state == ExecFlowState::Running {
+            context.exec_flow_state = ExecFlowState::ReachedTail;
         }
-        Ok(())
+        Ok(ExecStep::Next)
     }
 }
 
@@ -206,7 +194,7 @@ impl PluginFactory for SequenceFactory {
             return Err(DnsError::plugin("sequence requires at least one rule"));
         }
 
-        for rule in rules.iter() {
+        for rule in &rules {
             if rule.exec.is_none() && rule.matches.is_none() {
                 return Err(DnsError::plugin("sequence rule cannot be empty"));
             }
@@ -214,7 +202,7 @@ impl PluginFactory for SequenceFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(Sequence {
             tag: plugin_config.tag.clone(),
-            head: None,
+            program: OnceCell::new(),
             rules,
             registry,
             quick_setup_executors: Vec::new(),

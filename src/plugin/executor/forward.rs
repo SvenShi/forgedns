@@ -13,8 +13,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
-use crate::plugin::executor::sequence::chain::ChainNode;
-use crate::plugin::executor::{ExecResult, Executor};
+use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -52,11 +51,7 @@ impl Plugin for SingleDnsForwarder {
 
 #[async_trait]
 impl Executor for SingleDnsForwarder {
-    async fn execute(
-        &self,
-        context: &mut DnsContext,
-        next: Option<&Arc<dyn ChainNode>>,
-    ) -> ExecResult {
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
                 context.response = Some(res);
@@ -75,7 +70,7 @@ impl Executor for SingleDnsForwarder {
                 )));
             }
         }
-        continue_next!(next, context)
+        Ok(ExecStep::Next)
     }
 }
 
@@ -104,11 +99,7 @@ impl Plugin for ConcurrentForwarder {
 
 #[async_trait]
 impl Executor for ConcurrentForwarder {
-    async fn execute(
-        &self,
-        context: &mut DnsContext,
-        next: Option<&Arc<dyn ChainNode>>,
-    ) -> ExecResult {
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         let mut join_set = JoinSet::new();
         let mut last_error: Option<String> = None;
 
@@ -150,7 +141,7 @@ impl Executor for ConcurrentForwarder {
             );
         }
 
-        continue_next!(next, context)
+        Ok(ExecStep::Next)
     }
 }
 

@@ -1,8 +1,7 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::plugin::executor::sequence::chain::ChainNode;
-use crate::plugin::executor::{ExecResult, Executor};
+use crate::plugin::executor::{ExecResult, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -139,25 +138,32 @@ impl Plugin for Print {
 
 #[async_trait]
 impl Executor for Print {
-    async fn execute(
-        &self,
-        context: &mut DnsContext,
-        next: Option<&Arc<dyn ChainNode>>,
-    ) -> ExecResult {
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if let Some(before) = self.before_tel.as_ref() {
             for tmpl in before {
                 let msg = tmpl.render(context);
                 info!("{}", msg);
             }
         }
-        let outcome = continue_next!(next, context)?;
+        if self.after_tel.is_some() {
+            Ok(ExecStep::NextWithPost(None))
+        } else {
+            Ok(ExecStep::Next)
+        }
+    }
+
+    async fn post_execute(
+        &self,
+        context: &mut DnsContext,
+        _state: Option<crate::plugin::executor::ExecState>,
+    ) -> ExecResult {
         if let Some(after) = self.after_tel.as_ref() {
             for tmpl in after {
                 let msg = tmpl.render(context);
                 info!("{}", msg);
             }
         }
-        Ok(outcome)
+        Ok(())
     }
 }
 
