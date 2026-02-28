@@ -9,10 +9,10 @@
 //! Each context carries the request, response, metadata, and custom states.
 
 use crate::plugin::PluginRegistry;
+use ahash::AHashMap;
 use ahash::AHashSet;
 use hickory_proto::op::Message;
 use std::any::Any;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -55,7 +55,7 @@ pub struct DnsContext {
     pub marks: AHashSet<String>,
 
     /// Typed state bag for inter-plugin communication.
-    pub attributes: HashMap<String, Box<dyn Any + Send + Sync>>,
+    pub attributes: AHashMap<String, Box<dyn Any + Send + Sync>>,
 
     /// Reference to the plugin registry for runtime plugin lookup
     ///

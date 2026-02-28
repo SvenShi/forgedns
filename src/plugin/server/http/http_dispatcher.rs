@@ -10,6 +10,7 @@
 //! - POST method: DNS query passed in request body (binary format)
 
 use crate::plugin::server::{RequestHandle, RequestMeta};
+use ahash::AHashMap;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -17,7 +18,6 @@ use bytes::Bytes;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use http::{Method, Response, StatusCode};
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -28,14 +28,14 @@ use tracing::{debug, warn};
 /// incoming HTTP requests to the appropriate handler based on the request
 /// method and path.
 pub struct HttpDispatcher {
-    routes: HashMap<(Method, String), Box<dyn HttpHandler>>,
+    routes: AHashMap<(Method, String), Box<dyn HttpHandler>>,
 }
 
 impl HttpDispatcher {
     /// Create a new HTTP dispatcher
     pub fn new() -> Self {
         Self {
-            routes: HashMap::new(),
+            routes: AHashMap::new(),
         }
     }
 
