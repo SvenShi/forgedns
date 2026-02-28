@@ -20,8 +20,8 @@ use std::fmt::Debug;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
-#[cfg(test)]
 use std::time::Instant;
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct DomainSetArgs {
@@ -119,16 +119,40 @@ struct DomainMatcher {
     keyword_patterns: Vec<String>,
     /// Compiled multi-pattern matcher for keywords.
     keyword_matcher: Option<AhoCorasick>,
+    /// Number of keyword rules loaded.
+    keyword_rule_count: usize,
     /// Temporary regex patterns (`regexp:`). Cleared after `finalize`.
     regex_patterns: Vec<String>,
     /// Fast regex prefilter for boolean membership checks.
     regex_set: Option<RegexSet>,
+    /// Number of regex rules loaded.
+    regex_rule_count: usize,
 }
 
 impl DomainMatcher {
     #[inline]
     fn has_domain_rules(&self) -> bool {
         self.domain_rules.has_rules()
+    }
+
+    #[inline]
+    fn full_rule_count(&self) -> usize {
+        self.full_rules.len()
+    }
+
+    #[inline]
+    fn domain_rule_count(&self) -> usize {
+        self.domain_rules.rule_count
+    }
+
+    #[inline]
+    fn keyword_rule_count(&self) -> usize {
+        self.keyword_rule_count
+    }
+
+    #[inline]
+    fn regex_rule_count(&self) -> usize {
+        self.regex_rule_count
     }
 
     /// Parse and load one expression.
@@ -162,6 +186,7 @@ impl DomainMatcher {
             "keyword" => {
                 let value = normalize_rule_domain(value, source)?;
                 self.keyword_patterns.push(value);
+                self.keyword_rule_count += 1;
             }
             "regexp" => {
                 let value = value.trim();
@@ -180,6 +205,7 @@ impl DomainMatcher {
                         DnsError::plugin(format!("invalid regexp '{}' in {}: {}", value, source, e))
                     })?;
                 self.regex_patterns.push(value.to_string());
+                self.regex_rule_count += 1;
             }
             _ => unreachable!("validated in parser"),
         }
@@ -393,6 +419,7 @@ impl PluginFactory for DomainSetFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> DnsResult<UninitializedPlugin> {
+        let start = Instant::now();
         let args = plugin_config
             .args
             .clone()
@@ -400,6 +427,14 @@ impl PluginFactory for DomainSetFactory {
             .transpose()
             .map_err(|e| DnsError::plugin(format!("failed to parse domain_set config: {}", e)))?
             .unwrap_or_default();
+        let referenced_set_count = args.sets.len();
+        debug!(
+            tag = %plugin_config.tag,
+            exps = args.exps.len(),
+            files = args.files.len(),
+            sets = referenced_set_count,
+            "initializing domain_set"
+        );
 
         let mut local_matcher = DomainMatcher::default();
         local_matcher.load_exps(&args.exps)?;
@@ -411,6 +446,11 @@ impl PluginFactory for DomainSetFactory {
         push_unique_matcher(&mut matchers, &mut seen, Arc::new(local_matcher));
 
         for set_tag in args.sets {
+            debug!(
+                tag = %plugin_config.tag,
+                referenced_set = %set_tag,
+                "resolving referenced domain_set"
+            );
             let plugin = registry.get_plugin(set_tag.as_str()).ok_or_else(|| {
                 DnsError::plugin(format!("domain_set '{}' does not exist", set_tag))
             })?;
@@ -439,6 +479,23 @@ impl PluginFactory for DomainSetFactory {
         }
 
         let has_domain_rules = matchers.iter().any(|matcher| matcher.has_domain_rules());
+        let total_full_rules: usize = matchers.iter().map(|m| m.full_rule_count()).sum();
+        let total_domain_rules: usize = matchers.iter().map(|m| m.domain_rule_count()).sum();
+        let total_keyword_rules: usize = matchers.iter().map(|m| m.keyword_rule_count()).sum();
+        let total_regex_rules: usize = matchers.iter().map(|m| m.regex_rule_count()).sum();
+        let elapsed = start.elapsed();
+        info!(
+            tag = %plugin_config.tag,
+            flat_matchers = matchers.len(),
+            referenced_sets = referenced_set_count,
+            full_rules = total_full_rules,
+            domain_rules = total_domain_rules,
+            keyword_rules = total_keyword_rules,
+            regex_rules = total_regex_rules,
+            has_domain_rules,
+            elapsed_ms = elapsed.as_millis(),
+            "domain_set initialized"
+        );
 
         Ok(UninitializedPlugin::Provider(Box::new(DomainSet {
             tag: plugin_config.tag.clone(),

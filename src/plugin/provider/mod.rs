@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use crate::plugin::Plugin;
 
 pub mod domain_set;
+pub mod ip_set;
 
-#[allow(dead_code)]
 pub enum CheckTarget {
     IP(IpAddr),
     DOMAIN(String),
