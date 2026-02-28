@@ -12,10 +12,11 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::{response_records, rr_to_ip};
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    IpRule, load_rules_from_files, parse_ip_rules, parse_quick_setup_rules, parse_rules_from_value,
-    resolve_provider_tags, split_rule_sources,
+    load_rules_from_files, parse_ip_prefix_matcher, parse_quick_setup_rules,
+    parse_rules_from_value, resolve_provider_tags, split_rule_sources,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -82,16 +83,19 @@ fn build_resp_ip_matcher(
     })))
 }
 
-fn parse_resp_ip_rules(rules: Vec<String>) -> DnsResult<(Vec<IpRule>, Vec<String>)> {
+fn parse_resp_ip_rules(rules: Vec<String>) -> DnsResult<(IpPrefixMatcher, Vec<String>)> {
     let (mut inline_rules, ip_set_tags, files) = split_rule_sources(rules);
     let file_rules = load_rules_from_files(&files, "resp_ip")?;
     inline_rules.extend(file_rules);
-    let ip_rules = parse_ip_rules("resp_ip", &inline_rules)?;
+    let ip_rules = parse_ip_prefix_matcher("resp_ip", &inline_rules)?;
     Ok((ip_rules, ip_set_tags))
 }
 
-fn validate_non_empty_resp_ip_rules(ip_rules: &[IpRule], ip_set_tags: &[String]) -> DnsResult<()> {
-    if ip_rules.is_empty() && ip_set_tags.is_empty() {
+fn validate_non_empty_resp_ip_rules(
+    ip_rules: &IpPrefixMatcher,
+    ip_set_tags: &[String],
+) -> DnsResult<()> {
+    if !ip_rules.has_v4_rules() && !ip_rules.has_v6_rules() && ip_set_tags.is_empty() {
         return Err(DnsError::plugin(
             "resp_ip matcher requires at least one IP rule or ip_set tag",
         ));
@@ -102,7 +106,7 @@ fn validate_non_empty_resp_ip_rules(ip_rules: &[IpRule], ip_set_tags: &[String])
 #[derive(Debug)]
 struct RespIpMatcher {
     tag: String,
-    ip_rules: Vec<IpRule>,
+    ip_rules: IpPrefixMatcher,
     ip_set_tags: Vec<String>,
     ip_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
     registry: Arc<PluginRegistry>,
@@ -122,17 +126,15 @@ impl Plugin for RespIpMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for RespIpMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         let Some(response) = context.response.as_ref() else {
             return false;
         };
 
         response_records(response).any(|record| {
             rr_to_ip(record).is_some_and(|ip| {
-                self.ip_rules.iter().any(|rule| rule.contains(ip))
-                    || self.ip_sets.iter().any(|set| set.contains_ip(ip))
+                self.ip_rules.contains_ip(ip) || self.ip_sets.iter().any(|set| set.contains_ip(ip))
             })
         })
     }
@@ -170,7 +172,7 @@ mod tests {
     async fn test_resp_ip_matcher_only_checks_ip_rr() {
         let matcher = RespIpMatcher {
             tag: "resp_ip".into(),
-            ip_rules: parse_ip_rules("resp_ip", &["8.8.8.0/24".into()]).unwrap(),
+            ip_rules: parse_ip_prefix_matcher("resp_ip", &["8.8.8.0/24".into()]).unwrap(),
             ip_set_tags: vec![],
             ip_sets: vec![],
             registry: Arc::new(PluginRegistry::new()),
@@ -185,6 +187,6 @@ mod tests {
         ));
         ctx.response = Some(response);
 
-        assert!(!matcher.is_match(&mut ctx).await);
+        assert!(!matcher.is_match(&mut ctx));
     }
 }

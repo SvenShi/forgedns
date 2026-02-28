@@ -100,9 +100,8 @@ impl Plugin for MarkMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for MarkMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         !context.marks.is_disjoint(&self.marks)
     }
 }

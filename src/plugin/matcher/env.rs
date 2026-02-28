@@ -41,6 +41,8 @@ impl PluginFactory for EnvFactory {
             tag: plugin_config.tag.clone(),
             key,
             value,
+            cached_exists: false,
+            cached_value: None,
         })))
     }
 
@@ -56,6 +58,8 @@ impl PluginFactory for EnvFactory {
             tag: tag.to_string(),
             key,
             value,
+            cached_exists: false,
+            cached_value: None,
         })))
     }
 }
@@ -83,6 +87,8 @@ struct EnvMatcher {
     tag: String,
     key: String,
     value: Option<String>,
+    cached_exists: bool,
+    cached_value: Option<String>,
 }
 
 #[async_trait]
@@ -91,20 +97,23 @@ impl Plugin for EnvMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) {
+        let raw = std::env::var_os(&self.key);
+        self.cached_exists = raw.is_some();
+        self.cached_value = raw.map(|v| v.to_string_lossy().into_owned());
+    }
 
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for EnvMatcher {
-    async fn is_match(&self, _context: &mut DnsContext) -> bool {
-        let Some(raw) = std::env::var_os(&self.key) else {
+    fn is_match(&self, _context: &mut DnsContext) -> bool {
+        if !self.cached_exists {
             return false;
-        };
+        }
 
         if let Some(expect) = &self.value {
-            raw.to_string_lossy() == expect.as_str()
+            self.cached_value.as_deref() == Some(expect.as_str())
         } else {
             true
         }

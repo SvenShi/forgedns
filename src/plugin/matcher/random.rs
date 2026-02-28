@@ -90,9 +90,8 @@ impl Plugin for RandomMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for RandomMatcher {
-    async fn is_match(&self, _context: &mut DnsContext) -> bool {
+    fn is_match(&self, _context: &mut DnsContext) -> bool {
         if self.probability <= 0.0 {
             return false;
         }

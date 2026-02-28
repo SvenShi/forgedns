@@ -73,9 +73,8 @@ impl Plugin for HasRespMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for HasRespMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         context.response.is_some()
     }
 }
