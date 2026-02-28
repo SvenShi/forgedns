@@ -33,9 +33,24 @@ plugins:
   - tag: seq
     type: sequence
     args:
-      - exec: $cache
+      - matches: ["qtype A", "qname example.com"]
+        exec: $cache
       - exec: forward 223.5.5.5
 
+  # - tag: only_a
+  #   type: qtype
+  #   args: ["A"]
+  #
+  # - tag: has_cached_resp
+  #   type: has_resp
+  #
+  # - tag: rollout_gate
+  #   type: random
+  #   args: ["0.1"]
+  #
+  # - tag: only_noerror
+  #   type: rcode
+  #   args: ["NOERROR"]
 
   - tag: "udp_server"
     type: "udp_server"

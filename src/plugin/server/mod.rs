@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::dns_utils::build_response_from_request;
 use crate::plugin::executor::Executor;
 use crate::plugin::{Plugin, PluginRegistry};
-use hickory_proto::op::{Message, MessageType, ResponseCode};
+use hickory_proto::op::{Message, ResponseCode};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -48,7 +49,7 @@ impl RequestHandle {
             request: msg,
             response: None,
             exec_flow_state: ExecFlowState::Running,
-            mark: Vec::new(),
+            marks: Default::default(),
             attributes: HashMap::new(),
             registry: self.registry.clone(),
         };
@@ -122,12 +123,6 @@ impl RequestHandle {
 
     #[inline]
     fn build_base_response(&self, request: &Message, rcode: ResponseCode) -> Message {
-        let mut response = Message::new();
-        response.set_id(request.id());
-        response.set_op_code(request.op_code());
-        response.set_message_type(MessageType::Response);
-        response.set_response_code(rcode);
-        *response.queries_mut() = request.queries().to_vec();
-        response
+        build_response_from_request(request, rcode)
     }
 }

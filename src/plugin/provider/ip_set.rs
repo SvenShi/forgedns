@@ -12,7 +12,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result as DnsResult};
-use crate::plugin::provider::{CheckTarget, Provider};
+use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, PluginType, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashSet;
@@ -317,13 +317,6 @@ impl Plugin for IpSet {
 impl Provider for IpSet {
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    async fn contains(&self, check_target: CheckTarget) -> bool {
-        match check_target {
-            CheckTarget::IP(ip) => self.contains_ip(ip),
-            CheckTarget::DOMAIN(_) => false,
-        }
     }
 
     #[inline]

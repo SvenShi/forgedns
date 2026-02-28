@@ -9,6 +9,7 @@
 //! Each context carries the request, response, metadata, and custom states.
 
 use crate::plugin::PluginRegistry;
+use ahash::AHashSet;
 use hickory_proto::op::Message;
 use std::any::Any;
 use std::collections::HashMap;
@@ -49,8 +50,9 @@ pub struct DnsContext {
     /// - `Broken`: control flow requested early stop (e.g. `accept`/`reject`)
     pub exec_flow_state: ExecFlowState,
 
-    /// Marks/tags added by plugins for decision tracking
-    pub mark: Vec<String>,
+    /// Marks/tags added by plugins for decision tracking.
+    /// Hash-set layout reduces repeated membership checks on hot path.
+    pub marks: AHashSet<String>,
 
     /// Typed state bag for inter-plugin communication.
     pub attributes: HashMap<String, Box<dyn Any + Send + Sync>>,

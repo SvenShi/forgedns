@@ -5,7 +5,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result as DnsResult};
-use crate::plugin::provider::{CheckTarget, Provider};
+use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, PluginType, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::{AHashMap, AHashSet};
@@ -356,13 +356,6 @@ impl Provider for DomainSet {
         self
     }
 
-    async fn contains(&self, check_target: CheckTarget) -> bool {
-        match check_target {
-            CheckTarget::DOMAIN(domain) => self.contains_domain(domain.as_str()),
-            CheckTarget::IP(_) => false,
-        }
-    }
-
     #[inline]
     fn contains_domain(&self, domain: &str) -> bool {
         let normalized = normalize_domain_cow(domain);
@@ -650,13 +643,6 @@ mod tests {
     impl Provider for StaticDomainProvider {
         fn as_any(&self) -> &dyn Any {
             self
-        }
-
-        async fn contains(&self, check_target: CheckTarget) -> bool {
-            match check_target {
-                CheckTarget::DOMAIN(domain) => self.contains_domain(&domain),
-                CheckTarget::IP(ip) => self.contains_ip(ip),
-            }
         }
 
         fn contains_domain(&self, domain: &str) -> bool {
