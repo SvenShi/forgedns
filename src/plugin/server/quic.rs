@@ -15,7 +15,7 @@ use crate::network::tls_config::load_tls_config;
 use crate::network::transport::quic_transport::{
     QuicTransport, QuicTransportReader, QuicTransportWriter,
 };
-use crate::plugin::server::{RequestHandle, Server, udp};
+use crate::plugin::server::{RequestHandle, RequestMeta, Server, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -165,6 +165,7 @@ async fn handle_quic_connection(connecting: quinn::Incoming, handler: Arc<Reques
             return;
         }
     };
+    let server_name = extract_tls_server_name(&connection);
 
     debug!("QUIC connection established with {}", remote_addr);
 
@@ -174,9 +175,16 @@ async fn handle_quic_connection(connecting: quinn::Incoming, handler: Arc<Reques
         match transport.accept_bi().await {
             Ok((reader, writer)) => {
                 let handler = handler.clone();
+                let server_name = server_name.clone();
                 tokio::spawn(async move {
-                    if let Err(e) =
-                        handle_doq_bi_stream(reader, writer, handler.clone(), remote_addr).await
+                    if let Err(e) = handle_doq_bi_stream(
+                        reader,
+                        writer,
+                        handler.clone(),
+                        remote_addr,
+                        server_name,
+                    )
+                    .await
                     {
                         warn!("DoQ stream error ({}): {}", remote_addr, e);
                     }
@@ -197,10 +205,20 @@ async fn handle_doq_bi_stream(
     mut writer: QuicTransportWriter,
     handler: Arc<RequestHandle>,
     remote_addr: std::net::SocketAddr,
+    server_name: Option<String>,
 ) -> Result<()> {
     match reader.read_message().await {
         Ok(request_msg) => {
-            let response = handler.handle_request(request_msg, remote_addr).await;
+            let response = handler
+                .handle_request_with_meta(
+                    request_msg,
+                    remote_addr,
+                    RequestMeta {
+                        server_name,
+                        url_path: None,
+                    },
+                )
+                .await;
             if let Err(e) = writer.write_message(&response.response).await {
                 warn!("Failed to send DoQ response to {}: {}", remote_addr, e);
                 return Ok(());
@@ -212,6 +230,15 @@ async fn handle_doq_bi_stream(
         }
     }
     Ok(())
+}
+
+#[inline]
+fn extract_tls_server_name(connection: &quinn::Connection) -> Option<String> {
+    connection
+        .handshake_data()
+        .and_then(|data| data.downcast::<quinn::crypto::rustls::HandshakeData>().ok())
+        .and_then(|data| data.server_name)
+        .map(|name| name.to_ascii_lowercase())
 }
 
 pub fn build_quic_endpoint(

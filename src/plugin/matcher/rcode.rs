@@ -82,9 +82,8 @@ impl Plugin for RcodeMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for RcodeMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         let Some(response) = context.response.as_ref() else {
             return false;
         };
@@ -130,6 +129,6 @@ mod tests {
         response.set_response_code(ResponseCode::NoError);
         ctx.response = Some(response);
 
-        assert!(!matcher.is_match(&mut ctx).await);
+        assert!(!matcher.is_match(&mut ctx));
     }
 }

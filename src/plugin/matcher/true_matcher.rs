@@ -73,9 +73,8 @@ impl Plugin for TrueMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for TrueMatcher {
-    async fn is_match(&self, _context: &mut DnsContext) -> bool {
+    fn is_match(&self, _context: &mut DnsContext) -> bool {
         true
     }
 }

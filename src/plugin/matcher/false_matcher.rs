@@ -73,9 +73,8 @@ impl Plugin for FalseMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for FalseMatcher {
-    async fn is_match(&self, _context: &mut DnsContext) -> bool {
+    fn is_match(&self, _context: &mut DnsContext) -> bool {
         false
     }
 }

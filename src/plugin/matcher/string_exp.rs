@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_yml::Value;
 use std::fmt::Debug;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -111,7 +112,6 @@ enum StringSource {
     RespIp,
     Mark,
     ClientIp,
-    Listener,
     ServerName,
     UrlPath,
     Env(String),
@@ -138,9 +138,8 @@ impl Plugin for StringExpMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for StringExpMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         let value = self.expression.source.read(context);
         self.expression.op.evaluate(&value)
     }
@@ -181,24 +180,33 @@ impl StringSource {
                 let Some(response) = context.response.as_ref() else {
                     return String::new();
                 };
-                response_records(response)
-                    .filter_map(rr_to_ip)
-                    .map(|ip| ip.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
+                let mut out = String::new();
+                for ip in response_records(response).filter_map(rr_to_ip) {
+                    if !out.is_empty() {
+                        out.push(',');
+                    }
+                    // Writing directly avoids temporary Vec allocations.
+                    let _ = write!(&mut out, "{}", ip);
+                }
+                out
             }
-            StringSource::Mark => context.marks.iter().cloned().collect::<Vec<_>>().join(","),
+            StringSource::Mark => {
+                let mut out = String::new();
+                for mark in &context.marks {
+                    if !out.is_empty() {
+                        out.push(',');
+                    }
+                    out.push_str(mark);
+                }
+                out
+            }
             StringSource::ClientIp => context.src_addr.ip().to_string(),
-            StringSource::Listener => context
-                .get_attr::<String>("listener")
-                .cloned()
-                .unwrap_or_default(),
             StringSource::ServerName => context
-                .get_attr::<String>("server_name")
+                .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
                 .cloned()
                 .unwrap_or_default(),
             StringSource::UrlPath => context
-                .get_attr::<String>("url_path")
+                .get_attr::<String>(DnsContext::ATTR_URL_PATH)
                 .cloned()
                 .unwrap_or_default(),
             StringSource::Env(key) => std::env::var(key).unwrap_or_default(),
@@ -278,7 +286,6 @@ fn parse_source(raw: &str) -> DnsResult<StringSource> {
         "resp_ip" => Ok(StringSource::RespIp),
         "mark" => Ok(StringSource::Mark),
         "client_ip" => Ok(StringSource::ClientIp),
-        "listener" => Ok(StringSource::Listener),
         "server_name" => Ok(StringSource::ServerName),
         "url_path" => Ok(StringSource::UrlPath),
         _ => Err(DnsError::plugin(format!(
@@ -368,7 +375,7 @@ mod tests {
             expression: parse_string_expression("qname eq www.example.com").unwrap(),
         };
         let mut ctx = make_context();
-        assert!(matcher.is_match(&mut ctx).await);
+        assert!(matcher.is_match(&mut ctx));
     }
 
     #[tokio::test]
@@ -378,6 +385,6 @@ mod tests {
             expression: parse_string_expression("markcontains 1").unwrap(),
         };
         let mut ctx = make_context();
-        assert!(matcher.is_match(&mut ctx).await);
+        assert!(matcher.is_match(&mut ctx));
     }
 }

@@ -108,6 +108,7 @@ async fn handle_h3_connection(
             return;
         }
     };
+    let server_name = extract_tls_server_name(&connection);
     debug!("HTTP/3 connection established with {}", src);
 
     let mut h3_conn: h3::server::Connection<h3_quinn::Connection, Bytes> =
@@ -140,8 +141,17 @@ async fn handle_h3_connection(
 
         let dispatcher = dispatcher.clone();
         let src_ip_header_clone = src_ip_header.clone();
+        let server_name = server_name.clone();
         tokio::spawn(async move {
-            handle_h3_request(request, stream, dispatcher, src, src_ip_header_clone).await;
+            handle_h3_request(
+                request,
+                stream,
+                dispatcher,
+                src,
+                src_ip_header_clone,
+                server_name,
+            )
+            .await;
         });
     }
 }
@@ -153,6 +163,7 @@ async fn handle_h3_request(
     dispatcher: Arc<HttpDispatcher>,
     src: SocketAddr,
     src_ip_header: Arc<Option<String>>,
+    server_name: Option<String>,
 ) {
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -181,7 +192,7 @@ async fn handle_h3_request(
 
     let body = Bytes::from(body_bytes);
     let response = dispatcher
-        .handle_request(method, path, query, body, client_addr)
+        .handle_request(method, path, query, body, client_addr, server_name)
         .await;
 
     let (parts, response_bytes) = response.into_parts();
@@ -212,4 +223,13 @@ async fn handle_h3_request(
     }
 
     debug!("Response sent to {}", src);
+}
+
+#[inline]
+fn extract_tls_server_name(connection: &quinn::Connection) -> Option<String> {
+    connection
+        .handshake_data()
+        .and_then(|data| data.downcast::<quinn::crypto::rustls::HandshakeData>().ok())
+        .and_then(|data| data.server_name)
+        .map(|name| name.to_ascii_lowercase())
 }

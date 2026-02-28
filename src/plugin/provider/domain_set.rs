@@ -5,17 +5,15 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::rule_matcher::{DomainRuleMatcher, normalize_domain_cow, split_labels_rev};
 use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, PluginType, UninitializedPlugin};
 use crate::register_plugin_factory;
-use ahash::{AHashMap, AHashSet};
-use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
+use ahash::AHashSet;
 use async_trait::async_trait;
-use regex::{RegexBuilder, RegexSet, RegexSetBuilder};
 use serde::Deserialize;
 use smallvec::SmallVec;
 use std::any::Any;
-use std::borrow::Cow;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -37,180 +35,41 @@ struct DomainSetArgs {
 }
 
 #[derive(Debug, Default)]
-struct DomainTrieNode {
-    terminal: bool,
-    children: AHashMap<Box<str>, u32>,
-}
-
-#[derive(Debug)]
-struct DomainTrie {
-    /// Flat arena to avoid pointer-heavy tree allocations.
-    nodes: Vec<DomainTrieNode>,
-    rule_count: usize,
-}
-
-impl Default for DomainTrie {
-    fn default() -> Self {
-        Self {
-            nodes: vec![DomainTrieNode::default()],
-            rule_count: 0,
-        }
-    }
-}
-
-impl DomainTrie {
-    #[inline]
-    fn has_rules(&self) -> bool {
-        self.rule_count > 0
-    }
-
-    /// Insert a domain rule by reversed labels, e.g. `google.com` => `com -> google`.
-    fn insert(&mut self, domain: &str) {
-        let mut cursor = 0u32;
-        for label in domain.rsplit('.') {
-            if label.is_empty() {
-                continue;
-            }
-
-            let next = if let Some(next) = self.nodes[cursor as usize].children.get(label) {
-                *next
-            } else {
-                let idx = self.nodes.len() as u32;
-                self.nodes.push(DomainTrieNode::default());
-                self.nodes[cursor as usize]
-                    .children
-                    .insert(label.to_owned().into_boxed_str(), idx);
-                idx
-            };
-            cursor = next;
-        }
-
-        let node = &mut self.nodes[cursor as usize];
-        if !node.terminal {
-            node.terminal = true;
-            self.rule_count += 1;
-        }
-    }
-
-    /// Match a parsed query label slice against domain rules (`domain:` semantics).
-    #[inline]
-    fn contains_labels(&self, labels_rev: &[&str]) -> bool {
-        let mut cursor = 0u32;
-        for label in labels_rev {
-            let Some(next) = self.nodes[cursor as usize].children.get(*label) else {
-                return false;
-            };
-            cursor = *next;
-            if self.nodes[cursor as usize].terminal {
-                return true;
-            }
-        }
-        false
-    }
-}
-
-#[derive(Debug, Default)]
 struct DomainMatcher {
-    /// Exact match rules (`full:`).
-    full_rules: AHashSet<Box<str>>,
-    /// Suffix/domain rules (`domain:` or default).
-    domain_rules: DomainTrie,
-    /// Temporary keyword rules (`keyword:`). Cleared after `finalize`.
-    keyword_patterns: Vec<String>,
-    /// Compiled multi-pattern matcher for keywords.
-    keyword_matcher: Option<AhoCorasick>,
-    /// Number of keyword rules loaded.
-    keyword_rule_count: usize,
-    /// Temporary regex patterns (`regexp:`). Cleared after `finalize`.
-    regex_patterns: Vec<String>,
-    /// Fast regex prefilter for boolean membership checks.
-    regex_set: Option<RegexSet>,
-    /// Number of regex rules loaded.
-    regex_rule_count: usize,
+    rules: DomainRuleMatcher,
 }
 
 impl DomainMatcher {
     #[inline]
     fn has_domain_rules(&self) -> bool {
-        self.domain_rules.has_rules()
+        self.rules.has_trie_rules()
     }
 
     #[inline]
     fn full_rule_count(&self) -> usize {
-        self.full_rules.len()
+        self.rules.full_rule_count()
     }
 
     #[inline]
     fn domain_rule_count(&self) -> usize {
-        self.domain_rules.rule_count
+        self.rules.trie_rule_count()
     }
 
     #[inline]
     fn keyword_rule_count(&self) -> usize {
-        self.keyword_rule_count
+        self.rules.keyword_rule_count()
     }
 
     #[inline]
     fn regex_rule_count(&self) -> usize {
-        self.regex_rule_count
+        self.rules.regexp_rule_count()
     }
 
     /// Parse and load one expression.
     fn add_exp(&mut self, exp: &str, source: &str) -> DnsResult<()> {
-        let exp = exp.trim();
-        if exp.is_empty() {
-            return Ok(());
-        }
-
-        let (kind, value) = if let Some(v) = exp.strip_prefix("full:") {
-            ("full", v)
-        } else if let Some(v) = exp.strip_prefix("domain:") {
-            ("domain", v)
-        } else if let Some(v) = exp.strip_prefix("keyword:") {
-            ("keyword", v)
-        } else if let Some(v) = exp.strip_prefix("regexp:") {
-            ("regexp", v)
-        } else {
-            ("domain", exp)
-        };
-
-        match kind {
-            "full" => {
-                let value = normalize_rule_domain(value, source)?;
-                self.full_rules.insert(value.into_boxed_str());
-            }
-            "domain" => {
-                let value = normalize_rule_domain(value, source)?;
-                self.domain_rules.insert(&value);
-            }
-            "keyword" => {
-                let value = normalize_rule_domain(value, source)?;
-                self.keyword_patterns.push(value);
-                self.keyword_rule_count += 1;
-            }
-            "regexp" => {
-                let value = value.trim();
-                if value.is_empty() {
-                    return Err(DnsError::plugin(format!(
-                        "invalid empty regexp expression in {}",
-                        source
-                    )));
-                }
-
-                // Validate each regexp at load time so file errors keep precise line context.
-                RegexBuilder::new(value)
-                    .case_insensitive(true)
-                    .build()
-                    .map_err(|e| {
-                        DnsError::plugin(format!("invalid regexp '{}' in {}: {}", value, source, e))
-                    })?;
-                self.regex_patterns.push(value.to_string());
-                self.regex_rule_count += 1;
-            }
-            _ => unreachable!("validated in parser"),
-        }
-
-        Ok(())
+        self.rules
+            .add_expression(exp, source)
+            .map_err(DnsError::plugin)
     }
 
     fn load_exps(&mut self, exps: &[String]) -> DnsResult<()> {
@@ -272,48 +131,12 @@ impl DomainMatcher {
     }
 
     fn finalize(&mut self) -> DnsResult<()> {
-        if !self.keyword_patterns.is_empty() {
-            let ac = AhoCorasickBuilder::new()
-                .ascii_case_insensitive(false)
-                .build(&self.keyword_patterns)
-                .map_err(|e| DnsError::plugin(format!("failed to build keyword matcher: {}", e)))?;
-            self.keyword_matcher = Some(ac);
-            self.keyword_patterns.clear();
-            self.keyword_patterns.shrink_to_fit();
-        }
-
-        if !self.regex_patterns.is_empty() {
-            let set = RegexSetBuilder::new(&self.regex_patterns)
-                .case_insensitive(true)
-                .build()
-                .map_err(|e| DnsError::plugin(format!("failed to build regex set: {}", e)))?;
-            self.regex_set = Some(set);
-            self.regex_patterns.clear();
-            self.regex_patterns.shrink_to_fit();
-        }
-
-        Ok(())
+        self.rules.finalize().map_err(DnsError::plugin)
     }
 
     #[inline]
     fn contains_normalized(&self, domain: &str, labels_rev: &[&str]) -> bool {
-        if self.full_rules.contains(domain) {
-            return true;
-        }
-        if self.domain_rules.has_rules() && self.domain_rules.contains_labels(labels_rev) {
-            return true;
-        }
-        if let Some(regex_set) = &self.regex_set {
-            if regex_set.is_match(domain) {
-                return true;
-            }
-        }
-        if let Some(keyword_matcher) = &self.keyword_matcher {
-            if keyword_matcher.is_match(domain) {
-                return true;
-            }
-        }
-        false
+        self.rules.is_match_normalized(domain, labels_rev)
     }
 
     #[cfg(test)]
@@ -508,58 +331,6 @@ fn push_unique_matcher(
     if seen.insert(ptr) {
         matchers.push(matcher);
     }
-}
-
-#[inline]
-fn normalize_rule_domain(value: &str, source: &str) -> DnsResult<String> {
-    let value = normalize_domain_cow(value.trim());
-    if value.is_empty() {
-        return Err(DnsError::plugin(format!(
-            "invalid empty domain expression in {}",
-            source
-        )));
-    }
-    Ok(value.into_owned())
-}
-
-#[inline]
-fn normalize_domain_cow(domain: &str) -> Cow<'_, str> {
-    let bytes = domain.as_bytes();
-
-    // Trim start
-    let mut start = 0;
-    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
-        start += 1;
-    }
-
-    // Trim end
-    let mut end = bytes.len();
-    while end > start && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-
-    // Remove trailing dots
-    while end > start && bytes[end - 1] == b'.' {
-        end -= 1;
-    }
-
-    if start == end {
-        return Cow::Borrowed("");
-    }
-
-    let slice = &domain[start..end];
-
-    // 单次扫描是否需要 lower
-    if slice.bytes().any(|b| b.is_ascii_uppercase()) {
-        Cow::Owned(slice.to_ascii_lowercase())
-    } else {
-        Cow::Borrowed(slice)
-    }
-}
-#[inline]
-fn split_labels_rev<'a>(domain: &'a str, labels: &mut SmallVec<[&'a str; 8]>) {
-    labels.clear();
-    labels.extend(domain.rsplit('.').filter(|label| !label.is_empty()));
 }
 
 #[cfg(test)]

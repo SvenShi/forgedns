@@ -82,9 +82,8 @@ impl Plugin for QclassMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for QclassMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         context
             .request
             .queries()

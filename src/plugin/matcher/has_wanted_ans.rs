@@ -14,6 +14,7 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
+use ahash::AHashSet;
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -80,18 +81,32 @@ impl Plugin for HasWantedAnsMatcher {
     async fn destroy(&self) {}
 }
 
-#[async_trait]
 impl Matcher for HasWantedAnsMatcher {
-    async fn is_match(&self, context: &mut DnsContext) -> bool {
+    fn is_match(&self, context: &mut DnsContext) -> bool {
         let Some(response) = context.response.as_ref() else {
             return false;
         };
 
-        context.request.queries().iter().any(|query| {
-            response
+        let queries = context.request.queries();
+        if queries.is_empty() {
+            return false;
+        }
+
+        if queries.len() == 1 {
+            let qtype = queries[0].query_type();
+            return response
                 .answers()
                 .iter()
-                .any(|rr| rr.record_type() == query.query_type())
-        })
+                .any(|rr| rr.record_type() == qtype);
+        }
+
+        let mut wanted = AHashSet::with_capacity(queries.len());
+        for query in queries {
+            wanted.insert(u16::from(query.query_type()));
+        }
+        response
+            .answers()
+            .iter()
+            .any(|rr| wanted.contains(&u16::from(rr.record_type())))
     }
 }

@@ -27,6 +27,12 @@ pub struct RequestHandle {
     pub registry: Arc<PluginRegistry>,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct RequestMeta {
+    pub server_name: Option<String>,
+    pub url_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum RequestExit {
     Completed,
@@ -43,6 +49,16 @@ pub struct RequestResult {
 
 impl RequestHandle {
     pub async fn handle_request(&self, msg: Message, src_addr: SocketAddr) -> RequestResult {
+        self.handle_request_with_meta(msg, src_addr, RequestMeta::default())
+            .await
+    }
+
+    pub async fn handle_request_with_meta(
+        &self,
+        msg: Message,
+        src_addr: SocketAddr,
+        meta: RequestMeta,
+    ) -> RequestResult {
         // Parse DNS message
         let mut context = DnsContext {
             src_addr,
@@ -53,6 +69,7 @@ impl RequestHandle {
             attributes: AHashMap::new(),
             registry: self.registry.clone(),
         };
+        self.apply_request_meta(&mut context, meta);
 
         // Log request details only when debug logging is enabled
         if event_enabled!(Level::DEBUG) {
@@ -109,6 +126,16 @@ impl RequestHandle {
         }
 
         RequestResult { response, exit }
+    }
+
+    #[inline]
+    fn apply_request_meta(&self, context: &mut DnsContext, meta: RequestMeta) {
+        if let Some(server_name) = meta.server_name.filter(|value| !value.is_empty()) {
+            context.set_attr(DnsContext::ATTR_SERVER_NAME, server_name);
+        }
+        if let Some(url_path) = meta.url_path.filter(|value| !value.is_empty()) {
+            context.set_attr(DnsContext::ATTR_URL_PATH, url_path);
+        }
     }
 
     #[inline]

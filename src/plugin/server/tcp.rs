@@ -19,7 +19,7 @@ use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
-use crate::plugin::server::{RequestHandle, Server};
+use crate::plugin::server::{RequestHandle, RequestMeta, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 
@@ -179,8 +179,13 @@ async fn run_server(
                             if let Some(acceptor) = tls_acceptor {
                                 match acceptor.accept(stream).await {
                                     Ok(tls_stream) => {
+                                        let server_name = tls_stream
+                                            .get_ref()
+                                            .1
+                                            .server_name()
+                                            .map(str::to_ascii_lowercase);
                                         debug!("TLS handshake completed for client {}", src);
-                                        handle_dns_stream(tls_stream, src, handler)
+                                        handle_dns_stream(tls_stream, src, handler, server_name)
                                             .await;
                                     }
                                     Err(e) => {
@@ -190,7 +195,7 @@ async fn run_server(
                             } else {
                                 // Plain TCP connection
                                 debug!("TCP server connected to client {}", src);
-                                handle_dns_stream(stream, src, handler).await;
+                                handle_dns_stream(stream, src, handler, None).await;
                             }
                         });
                     }
@@ -218,8 +223,12 @@ async fn run_server(
 }
 
 /// Handle DNS messages over a TCP stream (works for both TLS and plain TCP)
-async fn handle_dns_stream<S>(stream: S, src: SocketAddr, handler: Arc<RequestHandle>)
-where
+async fn handle_dns_stream<S>(
+    stream: S,
+    src: SocketAddr,
+    handler: Arc<RequestHandle>,
+    server_name: Option<String>,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
     let transport = TcpTransport::new(stream);
@@ -242,9 +251,19 @@ where
     loop {
         let handler = handler.clone();
         let sender = sender.clone();
+        let server_name = server_name.clone();
         match reader.read_message().await {
             Ok(req_msg) => tokio::spawn(async move {
-                let response = handler.handle_request(req_msg, src).await;
+                let response = handler
+                    .handle_request_with_meta(
+                        req_msg,
+                        src,
+                        RequestMeta {
+                            server_name,
+                            url_path: None,
+                        },
+                    )
+                    .await;
                 if let Err(e) = sender.send(response.response).await {
                     warn!("Failed to write TCP response to {}: {}", src, e);
                 }
