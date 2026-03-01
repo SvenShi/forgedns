@@ -21,7 +21,7 @@ use crate::register_plugin_factory;
 use async_trait::async_trait;
 use hickory_proto::rr::RecordType;
 use std::fmt::Debug;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -132,9 +132,7 @@ impl Matcher for PtrIpMatcher {
             if query.query_type() != RecordType::PTR {
                 return false;
             }
-            let name = query.name().to_utf8();
-            let name = name.trim_end_matches('.');
-            let Some(ip) = parse_ptr_name_ip(&name) else {
+            let Some(ip) = parse_ptr_name_ip(query.name()) else {
                 return false;
             };
             self.ip_rules.contains_ip(ip) || self.ip_sets.iter().any(|set| set.contains_ip(ip))
@@ -142,67 +140,20 @@ impl Matcher for PtrIpMatcher {
     }
 }
 
-fn parse_ptr_name_ip(name: &str) -> Option<IpAddr> {
-    if let Some(v4) = parse_in_addr_arpa(name) {
-        return Some(IpAddr::V4(v4));
-    }
-    if let Some(v6) = parse_ip6_arpa(name) {
-        return Some(IpAddr::V6(v6));
-    }
-    None
+fn parse_ptr_name_ip(name: &hickory_proto::rr::Name) -> Option<IpAddr> {
+    name.parse_arpa_name()
+        .ok()
+        .map(|net| normalize_ip(net.addr()))
 }
 
-fn parse_in_addr_arpa(name: &str) -> Option<Ipv4Addr> {
-    let body = strip_ascii_case_suffix(name, ".in-addr.arpa")?;
-    let mut octets = [0u8; 4];
-    let mut count = 0usize;
-    for part in body.split('.') {
-        if part.is_empty() || count >= 4 {
-            return None;
-        }
-        octets[3 - count] = part.parse::<u8>().ok()?;
-        count += 1;
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
     }
-    if count != 4 {
-        return None;
-    }
-    Some(Ipv4Addr::from(octets))
-}
-
-fn parse_ip6_arpa(name: &str) -> Option<Ipv6Addr> {
-    let body = strip_ascii_case_suffix(name, ".ip6.arpa")?;
-    let mut nibbles = [0u8; 32];
-    let mut count = 0usize;
-    for part in body.split('.') {
-        if part.len() != 1 || count >= 32 {
-            return None;
-        }
-        nibbles[31 - count] = u8::from_str_radix(part, 16).ok()?;
-        count += 1;
-    }
-    if count != 32 {
-        return None;
-    }
-
-    let mut bytes = [0u8; 16];
-    for i in 0..16 {
-        bytes[i] = (nibbles[i * 2] << 4) | nibbles[i * 2 + 1];
-    }
-
-    Some(Ipv6Addr::from(bytes))
-}
-
-#[inline]
-fn strip_ascii_case_suffix<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
-    if name.len() < suffix.len() {
-        return None;
-    }
-    let split_at = name.len() - suffix.len();
-    let (prefix, tail) = name.split_at(split_at);
-    if !tail.eq_ignore_ascii_case(suffix) {
-        return None;
-    }
-    Some(prefix)
 }
 
 #[cfg(test)]

@@ -23,9 +23,12 @@ use hickory_proto::rr::{Name, RData, Record, RecordType};
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const DEFAULT_SIZE: usize = 65_535;
 const DEFAULT_TTL: u32 = 7_200;
+const CLEANUP_INTERVAL: u64 = 1024;
+const EVICTION_BATCH: usize = 512;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ReverseLookupConfig {
@@ -36,7 +39,7 @@ struct ReverseLookupConfig {
 
 #[derive(Debug, Clone)]
 struct CacheEntry {
-    domain: String,
+    domain: Name,
     expire_at_ms: u64,
 }
 
@@ -47,11 +50,7 @@ struct ReverseLookup {
     size: usize,
     ttl: u32,
     handle_ptr: bool,
-}
-
-#[derive(Debug)]
-struct PostState {
-    query_name: Option<String>,
+    ops: AtomicU64,
 }
 
 #[async_trait]
@@ -75,21 +74,17 @@ impl Executor for ReverseLookup {
             return Ok(ExecStep::Stop);
         }
 
-        let query_name = context.request.query().map(|q| q.name().to_utf8());
-        Ok(ExecStep::NextWithPost(Some(
-            Box::new(PostState { query_name }) as ExecState,
-        )))
+        Ok(ExecStep::NextWithPost(None))
     }
 
     async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let query_name = state
-            .and_then(|boxed| boxed.downcast::<PostState>().ok())
-            .and_then(|boxed| boxed.query_name.clone());
+        let _ = state;
 
         let Some(response) = context.response.as_mut() else {
             return Ok(());
         };
 
+        let query_name = context.request.query().map(|q| q.name().clone());
         let now = AppClock::elapsed_millis();
         for record in response.answers_mut() {
             let Some(ip) = rr_to_ip(record) else {
@@ -101,8 +96,9 @@ impl Executor for ReverseLookup {
             let expire_at_ms = now.saturating_add(effective_ttl as u64 * 1000);
 
             let domain = query_name
-                .clone()
-                .unwrap_or_else(|| record.name().to_utf8());
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| record.name().clone());
             self.cache.insert(
                 normalize_ip(ip),
                 CacheEntry {
@@ -112,7 +108,7 @@ impl Executor for ReverseLookup {
             );
         }
 
-        self.evict_if_needed(now);
+        self.maybe_cleanup(now);
         Ok(())
     }
 }
@@ -137,35 +133,31 @@ impl ReverseLookup {
         }
 
         let mut response = build_response_from_request(request, ResponseCode::NoError);
-        let target = hickory_proto::rr::Name::from_ascii(entry.domain.as_str()).ok()?;
         response.answers_mut().push(Record::from_rdata(
             query.name().clone(),
             5,
-            RData::PTR(PTR(target)),
+            RData::PTR(PTR(entry.domain.clone())),
         ));
         Some(response)
     }
 
-    fn evict_if_needed(&self, now: u64) {
+    fn maybe_cleanup(&self, now: u64) {
+        let op = self.ops.fetch_add(1, Ordering::Relaxed) + 1;
+        if op % CLEANUP_INTERVAL != 0 && self.cache.len() <= self.size {
+            return;
+        }
+
+        self.cache.retain(|_, entry| entry.expire_at_ms > now);
+
         if self.cache.len() <= self.size {
             return;
         }
 
-        let expired_keys: Vec<IpAddr> = self
+        let overflow = self
             .cache
-            .iter()
-            .filter(|entry| entry.value().expire_at_ms <= now)
-            .map(|entry| *entry.key())
-            .collect();
-        for key in expired_keys {
-            self.cache.remove(&key);
-        }
-
-        if self.cache.len() <= self.size {
-            return;
-        }
-
-        let overflow = self.cache.len().saturating_sub(self.size);
+            .len()
+            .saturating_sub(self.size)
+            .min(EVICTION_BATCH);
         if overflow == 0 {
             return;
         }
@@ -219,6 +211,7 @@ impl PluginFactory for ReverseLookupFactory {
             size,
             ttl,
             handle_ptr: cfg.handle_ptr.unwrap_or(false),
+            ops: AtomicU64::new(0),
         })))
     }
 }

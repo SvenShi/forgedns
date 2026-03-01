@@ -14,11 +14,13 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
+use ahash::AHashMap;
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use async_trait::async_trait;
 use hickory_proto::op::Query;
 use hickory_proto::rr::rdata::name::CNAME;
 use hickory_proto::rr::{DNSClass, Name, RData, Record};
-use regex::Regex;
+use regex::{Regex, RegexSet, RegexSetBuilder};
 use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -37,7 +39,7 @@ enum RuleMatcher {
     Full(String),
     Domain(String),
     Keyword(String),
-    Regexp(Regex),
+    Regexp(String),
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +52,17 @@ struct RedirectRule {
 struct RedirectExecutor {
     tag: String,
     rules: Vec<RedirectRule>,
+    index: RuleIndex,
+}
+
+#[derive(Debug, Default)]
+struct RuleIndex {
+    full_rules: AHashMap<Box<str>, usize>,
+    domain_rules: AHashMap<Box<str>, usize>,
+    keyword_matcher: Option<AhoCorasick>,
+    keyword_rule_indices: Vec<usize>,
+    regex_matcher: Option<RegexSet>,
+    regex_rule_indices: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -89,9 +102,8 @@ impl Executor for RedirectExecutor {
         };
         let original = query_view.raw_name().clone();
         let Some(rule) = self
-            .rules
-            .iter()
-            .find(|rule| rule_matches(&rule.matcher, query_view.normalized_name()))
+            .index
+            .match_rule(&self.rules, query_view.normalized_name())
         else {
             return Ok(ExecStep::Next);
         };
@@ -155,11 +167,12 @@ impl PluginFactory for RedirectFactory {
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
-        let rules = build_rules(&cfg)?;
+        let (rules, index) = build_rules(&cfg)?;
 
         Ok(UninitializedPlugin::Executor(Box::new(RedirectExecutor {
             tag: plugin_config.tag.clone(),
             rules,
+            index,
         })))
     }
 }
@@ -173,7 +186,7 @@ fn parse_config(args: Option<serde_yml::Value>) -> Result<RedirectConfig> {
         .map_err(|e| DnsError::plugin(format!("failed to parse redirect config: {}", e)))
 }
 
-fn build_rules(cfg: &RedirectConfig) -> Result<Vec<RedirectRule>> {
+fn build_rules(cfg: &RedirectConfig) -> Result<(Vec<RedirectRule>, RuleIndex)> {
     let mut out = Vec::new();
 
     for (idx, rule) in cfg.rules.iter().enumerate() {
@@ -229,7 +242,8 @@ fn build_rules(cfg: &RedirectConfig) -> Result<Vec<RedirectRule>> {
         }
     }
 
-    Ok(out)
+    let index = build_rule_index(&out)?;
+    Ok((out, index))
 }
 
 fn parse_redirect_rule(raw: &str) -> std::result::Result<RedirectRule, String> {
@@ -258,25 +272,99 @@ fn parse_rule_matcher(raw_rule: &str) -> std::result::Result<RuleMatcher, String
         return Ok(RuleMatcher::Keyword(v.to_ascii_lowercase()));
     }
     if let Some(v) = raw_rule.strip_prefix("regexp:") {
-        let re = Regex::new(v).map_err(|e| format!("invalid regexp '{}': {}", v, e))?;
-        return Ok(RuleMatcher::Regexp(re));
+        Regex::new(v).map_err(|e| format!("invalid regexp '{}': {}", v, e))?;
+        return Ok(RuleMatcher::Regexp(v.to_string()));
     }
 
     // redirect defaults to full match when prefix is omitted.
     Ok(RuleMatcher::Full(normalize_name(raw_rule)))
 }
 
-fn rule_matches(rule: &RuleMatcher, domain: &str) -> bool {
-    match rule {
-        RuleMatcher::Full(v) => domain == v,
-        RuleMatcher::Domain(v) => {
-            domain == v
-                || domain
-                    .strip_suffix(v)
-                    .is_some_and(|prefix| prefix.ends_with('.'))
+fn build_rule_index(rules: &[RedirectRule]) -> Result<RuleIndex> {
+    let mut index = RuleIndex::default();
+    let mut keyword_patterns = Vec::new();
+    let mut regex_patterns = Vec::new();
+
+    for (rule_idx, rule) in rules.iter().enumerate() {
+        match &rule.matcher {
+            RuleMatcher::Full(v) => {
+                index
+                    .full_rules
+                    .entry(v.clone().into_boxed_str())
+                    .or_insert(rule_idx);
+            }
+            RuleMatcher::Domain(v) => {
+                index
+                    .domain_rules
+                    .entry(v.clone().into_boxed_str())
+                    .or_insert(rule_idx);
+            }
+            RuleMatcher::Keyword(v) => {
+                keyword_patterns.push(v.clone());
+                index.keyword_rule_indices.push(rule_idx);
+            }
+            RuleMatcher::Regexp(v) => {
+                regex_patterns.push(v.clone());
+                index.regex_rule_indices.push(rule_idx);
+            }
         }
-        RuleMatcher::Keyword(v) => domain.contains(v),
-        RuleMatcher::Regexp(v) => v.is_match(domain),
+    }
+
+    if !keyword_patterns.is_empty() {
+        index.keyword_matcher = Some(
+            AhoCorasickBuilder::new()
+                .ascii_case_insensitive(false)
+                .build(&keyword_patterns)
+                .map_err(|e| {
+                    DnsError::plugin(format!("failed to build redirect keyword matcher: {}", e))
+                })?,
+        );
+    }
+
+    if !regex_patterns.is_empty() {
+        index.regex_matcher = Some(RegexSetBuilder::new(&regex_patterns).build().map_err(|e| {
+            DnsError::plugin(format!("failed to build redirect regex matcher: {}", e))
+        })?);
+    }
+
+    Ok(index)
+}
+
+impl RuleIndex {
+    fn match_rule<'a>(&self, rules: &'a [RedirectRule], domain: &str) -> Option<&'a RedirectRule> {
+        let mut best: Option<usize> = None;
+
+        if let Some(rule_idx) = self.full_rules.get(domain) {
+            best = Some(*rule_idx);
+        }
+
+        let mut suffix = domain;
+        loop {
+            if let Some(rule_idx) = self.domain_rules.get(suffix) {
+                best = Some(best.map_or(*rule_idx, |cur| cur.min(*rule_idx)));
+            }
+            let Some(dot) = suffix.find('.') else {
+                break;
+            };
+            suffix = &suffix[dot + 1..];
+        }
+
+        if let Some(matcher) = &self.keyword_matcher {
+            for m in matcher.find_iter(domain) {
+                let rule_idx = self.keyword_rule_indices[m.pattern().as_usize()];
+                best = Some(best.map_or(rule_idx, |cur| cur.min(rule_idx)));
+            }
+        }
+
+        if let Some(matcher) = &self.regex_matcher {
+            let matched = matcher.matches(domain);
+            for pid in matched.iter() {
+                let rule_idx = self.regex_rule_indices[pid];
+                best = Some(best.map_or(rule_idx, |cur| cur.min(rule_idx)));
+            }
+        }
+
+        best.map(|idx| &rules[idx])
     }
 }
 
