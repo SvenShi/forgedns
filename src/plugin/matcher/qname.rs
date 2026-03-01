@@ -79,6 +79,7 @@ fn build_qname_matcher(
         domains,
         domain_set_tags,
         domain_sets: Vec::new(),
+        domain_sets_has_trie_rules: false,
         registry,
     })))
 }
@@ -116,6 +117,7 @@ struct QnameMatcher {
     domains: DomainRuleMatcher,
     domain_set_tags: Vec<String>,
     domain_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
+    domain_sets_has_trie_rules: bool,
     registry: Arc<PluginRegistry>,
 }
 
@@ -128,6 +130,10 @@ impl Plugin for QnameMatcher {
     async fn init(&mut self) {
         self.domain_sets =
             resolve_provider_tags(&self.registry, &self.domain_set_tags, "qname", &self.tag);
+        self.domain_sets_has_trie_rules = self
+            .domain_sets
+            .iter()
+            .any(|set| set.has_trie_domain_rules());
     }
 
     async fn destroy(&self) {}
@@ -142,7 +148,7 @@ impl Matcher for QnameMatcher {
         if query_name.is_empty() {
             return false;
         }
-        let labels = if self.domains.has_trie_rules() {
+        let labels = if self.domains.has_trie_rules() || self.domain_sets_has_trie_rules {
             query_view.labels_rev()
         } else {
             SmallVec::<[&str; 8]>::new()
@@ -153,7 +159,7 @@ impl Matcher for QnameMatcher {
 
         self.domain_sets
             .iter()
-            .any(|set| set.contains_domain(query_name))
+            .any(|set| set.contains_domain_prepared(query_name, &labels))
     }
 }
 
@@ -195,6 +201,7 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
+            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
         let mut ctx = make_context();
@@ -219,6 +226,7 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
+            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
         let mut ctx = make_context();

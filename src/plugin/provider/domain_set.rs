@@ -183,7 +183,7 @@ impl Provider for DomainSet {
     fn contains_domain(&self, domain: &str) -> bool {
         let normalized = normalize_domain_cow(domain);
         let domain = normalized.as_ref();
-        if domain.is_empty() || self.matchers.is_empty() {
+        if domain.is_empty() {
             return false;
         }
 
@@ -192,17 +192,40 @@ impl Provider for DomainSet {
             split_labels_rev(domain, &mut labels);
         }
 
+        self.contains_domain_prepared(domain, &labels)
+    }
+
+    #[inline]
+    fn contains_domain_prepared(&self, domain: &str, labels_rev: &[&str]) -> bool {
+        if domain.is_empty() || self.matchers.is_empty() {
+            return false;
+        }
+
+        let mut labels_buf = SmallVec::<[&str; 8]>::new();
+        let labels = if self.has_domain_rules && labels_rev.is_empty() {
+            // Keep compatibility with callers that only pass normalized domain.
+            split_labels_rev(domain, &mut labels_buf);
+            labels_buf.as_slice()
+        } else {
+            labels_rev
+        };
+
         // Fast path for the common one-set case.
         if self.matchers.len() == 1 {
-            return self.matchers[0].contains_normalized(domain, &labels);
+            return self.matchers[0].contains_normalized(domain, labels);
         }
 
         for matcher in &self.matchers {
-            if matcher.contains_normalized(domain, &labels) {
+            if matcher.contains_normalized(domain, labels) {
                 return true;
             }
         }
         false
+    }
+
+    #[inline]
+    fn has_trie_domain_rules(&self) -> bool {
+        self.has_domain_rules
     }
 }
 

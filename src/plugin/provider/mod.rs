@@ -23,6 +23,21 @@ pub trait Provider: Plugin {
         false
     }
 
+    /// Domain membership check with pre-normalized domain and pre-split labels.
+    ///
+    /// `domain` is expected to be lowercased and without trailing dot.
+    /// `labels_rev` is expected to be reverse labels of `domain`.
+    #[inline]
+    fn contains_domain_prepared(&self, domain: &str, _labels_rev: &[&str]) -> bool {
+        self.contains_domain(domain)
+    }
+
+    /// Whether this provider has suffix-domain(trie) rules and can use `labels_rev`.
+    #[inline]
+    fn has_trie_domain_rules(&self) -> bool {
+        false
+    }
+
     /// Fast-path IP membership check for hot matcher paths.
     fn contains_ip(&self, _ip: IpAddr) -> bool {
         false
