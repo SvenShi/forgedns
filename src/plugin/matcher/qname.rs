@@ -11,11 +11,11 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
-use crate::core::rule_matcher::{DomainRuleMatcher, split_labels_rev};
+use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    load_rules_from_files, normalize_name, parse_quick_setup_rules, parse_rules_from_value,
-    resolve_provider_tags, split_rule_sources,
+    load_rules_from_files, parse_quick_setup_rules, parse_rules_from_value, resolve_provider_tags,
+    split_rule_sources,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -135,24 +135,25 @@ impl Plugin for QnameMatcher {
 
 impl Matcher for QnameMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        context.request.queries().iter().any(|query| {
-            let query_name = normalize_name(query.name());
-            if query_name.is_empty() {
-                return false;
-            }
+        let Some(query_view) = context.query_view() else {
+            return false;
+        };
+        let query_name = query_view.normalized_name();
+        if query_name.is_empty() {
+            return false;
+        }
+        let labels = if self.domains.has_trie_rules() {
+            query_view.labels_rev()
+        } else {
+            SmallVec::<[&str; 8]>::new()
+        };
+        if self.domains.is_match_normalized(query_name, &labels) {
+            return true;
+        }
 
-            let mut labels = SmallVec::<[&str; 8]>::new();
-            if self.domains.has_trie_rules() {
-                split_labels_rev(&query_name, &mut labels);
-            }
-            if self.domains.is_match_normalized(&query_name, &labels) {
-                return true;
-            }
-
-            self.domain_sets
-                .iter()
-                .any(|set| set.contains_domain(&query_name))
-        })
+        self.domain_sets
+            .iter()
+            .any(|set| set.contains_domain(query_name))
     }
 }
 
@@ -177,6 +178,7 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            query_view: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }

@@ -67,6 +67,7 @@ impl RequestHandle {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: AHashMap::new(),
+            query_view: None,
             registry: self.registry.clone(),
         };
         self.apply_request_meta(&mut context, meta);
@@ -83,7 +84,10 @@ impl RequestHandle {
         }
 
         // Execute entry plugin to process the request
-        let exec_outcome = self.entry_executor.execute(&mut context).await;
+        let exec_outcome = self
+            .entry_executor
+            .execute_with_handle(&mut context, None)
+            .await;
         let (response, exit) = match exec_outcome {
             Ok(_) => {
                 let exit = if context.exec_flow_state == ExecFlowState::ReachedTail {

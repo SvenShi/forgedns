@@ -67,7 +67,7 @@ pub struct Rule {
 #[allow(unused)]
 pub struct Sequence {
     tag: String,
-    program: OnceCell<ChainProgram>,
+    program: OnceCell<Arc<ChainProgram>>,
     rules: Vec<Rule>,
     registry: Arc<PluginRegistry>,
     quick_setup_executors: Vec<Arc<dyn Executor>>,

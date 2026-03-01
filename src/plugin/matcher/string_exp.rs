@@ -364,6 +364,7 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: ["1".to_string()].into_iter().collect(),
             attributes: Default::default(),
+            query_view: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }

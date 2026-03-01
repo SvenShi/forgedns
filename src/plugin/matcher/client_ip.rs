@@ -154,6 +154,7 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            query_view: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }

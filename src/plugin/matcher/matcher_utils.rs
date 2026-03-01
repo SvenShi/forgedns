@@ -11,7 +11,7 @@ use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::provider::Provider;
 use crate::plugin::{PluginRegistry, PluginType};
 use ahash::AHashSet;
-use hickory_proto::rr::{DNSClass, Name, RecordType};
+use hickory_proto::rr::{DNSClass, RecordType};
 use serde_yml::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -101,10 +101,6 @@ pub(crate) fn validate_non_empty_rules(field: &str, rules: &[String]) -> DnsResu
         )));
     }
     Ok(())
-}
-
-pub(crate) fn normalize_name(name: &Name) -> String {
-    name.to_utf8().trim_end_matches('.').to_ascii_lowercase()
 }
 
 pub(crate) fn split_rule_sources(
