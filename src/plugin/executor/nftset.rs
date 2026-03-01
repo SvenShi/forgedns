@@ -23,14 +23,19 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+#[cfg(target_os = "linux")]
+use std::thread;
+#[cfg(target_os = "linux")]
 use tracing::warn;
 
 #[cfg(target_os = "linux")]
 use crate::plugin::executor::netlink_nf::{
     NLM_F_REQUEST_ACK, NfNetlinkSocket, nla_put, nla_put_nested, nla_put_strz, nla_put_u32,
 };
+
 #[cfg(target_os = "linux")]
-use std::sync::Mutex;
+const NFTSET_WRITER_QUEUE_SIZE: usize = 256;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct NftSetConfig {
@@ -74,31 +79,34 @@ struct NftSetExecutor {
     tag: String,
     ipv4: Option<ResolvedSet>,
     ipv6: Option<ResolvedSet>,
-    enabled: AtomicBool,
+    enabled: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
-    backend: Arc<NftSetBackend>,
+    writer: SyncSender<NftSetBatch>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct NftSetBatch {
+    ipv4_prefixes: Vec<IpPrefix>,
+    ipv6_prefixes: Vec<IpPrefix>,
 }
 
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct NftSetBackend {
-    socket: Mutex<NfNetlinkSocket>,
+    socket: NfNetlinkSocket,
 }
 
 #[cfg(target_os = "linux")]
 impl NftSetBackend {
     fn new() -> Result<Self> {
         Ok(Self {
-            socket: Mutex::new(NfNetlinkSocket::open()?),
+            socket: NfNetlinkSocket::open()?,
         })
     }
 
-    fn add_prefixes(&self, set: &ResolvedSet, prefixes: &[IpPrefix]) -> Result<()> {
+    fn add_prefixes(&mut self, set: &ResolvedSet, prefixes: &[IpPrefix]) -> Result<()> {
         let family = nfproto_from_table_family(&set.table_family)?;
-        let mut socket = self
-            .socket
-            .lock()
-            .map_err(|_| DnsError::plugin("nftset netlink lock poisoned"))?;
 
         let mut attrs = Vec::with_capacity(512);
         nla_put_strz(&mut attrs, NFTA_SET_ELEM_LIST_TABLE, &set.table_name);
@@ -110,7 +118,7 @@ impl NftSetBackend {
         }
         nla_put_nested(&mut attrs, NFTA_SET_ELEM_LIST_ELEMENTS, &list);
 
-        socket.request(
+        self.socket.request(
             NFNL_SUBSYS_NFTABLES,
             NFT_MSG_NEWSETELEM,
             NLM_F_REQUEST_ACK,
@@ -267,47 +275,25 @@ impl Executor for NftSetExecutor {
         }
 
         #[cfg(target_os = "linux")]
-        let mut failed = false;
-        #[cfg(not(target_os = "linux"))]
-        let failed = false;
-
-        #[cfg(target_os = "linux")]
         {
-            if let Some(set) = self.ipv4.as_ref()
-                && !ipv4_prefixes.is_empty()
-            {
-                let prefixes: Vec<IpPrefix> = ipv4_prefixes.iter().cloned().collect();
-                if let Err(e) =
-                    tokio::task::block_in_place(|| self.backend.add_prefixes(set, &prefixes))
-                {
-                    warn!(
-                        plugin = %self.tag,
-                        err = %e,
-                        family = %set.table_family,
-                        table = %set.table_name,
-                        set = %set.set_name,
-                        "nftset netlink add element failed"
-                    );
-                    failed = true;
-                }
-            }
-
-            if let Some(set) = self.ipv6.as_ref()
-                && !ipv6_prefixes.is_empty()
-            {
-                let prefixes: Vec<IpPrefix> = ipv6_prefixes.iter().cloned().collect();
-                if let Err(e) =
-                    tokio::task::block_in_place(|| self.backend.add_prefixes(set, &prefixes))
-                {
-                    warn!(
-                        plugin = %self.tag,
-                        err = %e,
-                        family = %set.table_family,
-                        table = %set.table_name,
-                        set = %set.set_name,
-                        "nftset netlink add element failed"
-                    );
-                    failed = true;
+            if !ipv4_prefixes.is_empty() || !ipv6_prefixes.is_empty() {
+                let batch = NftSetBatch {
+                    ipv4_prefixes: ipv4_prefixes.into_iter().collect(),
+                    ipv6_prefixes: ipv6_prefixes.into_iter().collect(),
+                };
+                if let Err(e) = self.writer.try_send(batch) {
+                    match e {
+                        TrySendError::Full(_) => {
+                            // Best-effort side effect: dropping write preserves DNS path latency.
+                        }
+                        TrySendError::Disconnected(_) => {
+                            warn!(
+                                plugin = %self.tag,
+                                "nftset writer disconnected, disabling plugin"
+                            );
+                            self.enabled.store(false, Ordering::Relaxed);
+                        }
+                    }
                 }
             }
         }
@@ -316,10 +302,6 @@ impl Executor for NftSetExecutor {
         {
             let _ = ipv4_prefixes;
             let _ = ipv6_prefixes;
-        }
-
-        if failed {
-            self.enabled.store(false, Ordering::Relaxed);
         }
 
         Ok(ExecStep::Next)
@@ -347,15 +329,25 @@ impl PluginFactory for NftSetFactory {
         let (ipv4, ipv6) = resolve_sets(&cfg)?;
 
         #[cfg(target_os = "linux")]
-        let backend = Arc::new(NftSetBackend::new()?);
+        let enabled = Arc::new(AtomicBool::new(true));
+        #[cfg(target_os = "linux")]
+        let writer = spawn_nftset_writer(
+            plugin_config.tag.as_str(),
+            enabled.clone(),
+            ipv4.clone(),
+            ipv6.clone(),
+        )?;
+
+        #[cfg(not(target_os = "linux"))]
+        let enabled = Arc::new(AtomicBool::new(true));
 
         Ok(UninitializedPlugin::Executor(Box::new(NftSetExecutor {
             tag: plugin_config.tag.clone(),
             ipv4,
             ipv6,
-            enabled: AtomicBool::new(true),
+            enabled,
             #[cfg(target_os = "linux")]
-            backend,
+            writer,
         })))
     }
 
@@ -395,15 +387,20 @@ impl PluginFactory for NftSetFactory {
         }
 
         #[cfg(target_os = "linux")]
-        let backend = Arc::new(NftSetBackend::new()?);
+        let enabled = Arc::new(AtomicBool::new(true));
+        #[cfg(target_os = "linux")]
+        let writer = spawn_nftset_writer(tag, enabled.clone(), ipv4.clone(), ipv6.clone())?;
+
+        #[cfg(not(target_os = "linux"))]
+        let enabled = Arc::new(AtomicBool::new(true));
 
         Ok(UninitializedPlugin::Executor(Box::new(NftSetExecutor {
             tag: tag.to_string(),
             ipv4,
             ipv6,
-            enabled: AtomicBool::new(true),
+            enabled,
             #[cfg(target_os = "linux")]
-            backend,
+            writer,
         })))
     }
 }
@@ -493,6 +490,62 @@ fn validate_set(set: &ResolvedSet, ip_type: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_nftset_writer(
+    tag: &str,
+    enabled: Arc<AtomicBool>,
+    ipv4: Option<ResolvedSet>,
+    ipv6: Option<ResolvedSet>,
+) -> Result<SyncSender<NftSetBatch>> {
+    let (tx, rx) = sync_channel::<NftSetBatch>(NFTSET_WRITER_QUEUE_SIZE);
+    let thread_tag = tag.to_string();
+    let mut backend = NftSetBackend::new()?;
+
+    thread::Builder::new()
+        .name(format!("nftset-{}", thread_tag))
+        .spawn(move || {
+            while enabled.load(Ordering::Relaxed) {
+                let Ok(batch) = rx.recv() else {
+                    break;
+                };
+
+                if let Some(set) = ipv4.as_ref()
+                    && !batch.ipv4_prefixes.is_empty()
+                    && let Err(e) = backend.add_prefixes(set, &batch.ipv4_prefixes)
+                {
+                    warn!(
+                        plugin = %thread_tag,
+                        err = %e,
+                        family = %set.table_family,
+                        table = %set.table_name,
+                        set = %set.set_name,
+                        "nftset netlink add element failed"
+                    );
+                    enabled.store(false, Ordering::Relaxed);
+                    break;
+                }
+
+                if let Some(set) = ipv6.as_ref()
+                    && !batch.ipv6_prefixes.is_empty()
+                    && let Err(e) = backend.add_prefixes(set, &batch.ipv6_prefixes)
+                {
+                    warn!(
+                        plugin = %thread_tag,
+                        err = %e,
+                        family = %set.table_family,
+                        table = %set.table_name,
+                        set = %set.set_name,
+                        "nftset netlink add element failed"
+                    );
+                    enabled.store(false, Ordering::Relaxed);
+                    break;
+                }
+            }
+        })
+        .map_err(|e| DnsError::plugin(format!("failed to spawn nftset writer thread: {}", e)))?;
+    Ok(tx)
 }
 
 #[cfg(target_os = "linux")]
