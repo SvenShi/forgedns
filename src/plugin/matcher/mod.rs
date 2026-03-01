@@ -17,6 +17,7 @@ pub mod qclass;
 pub mod qname;
 pub mod qtype;
 pub mod random;
+pub mod rate_limiter;
 pub mod rcode;
 pub mod resp_ip;
 pub mod string_exp;

@@ -89,7 +89,9 @@ cargo build --release
 - **插件配置**：插件列表及其特定类型的配置
   - `udp_server`：UDP DNS 服务器监听器
   - `forward`：DNS 转发到上游解析器
+  - `debug_print`：结构化请求/应答调试日志
 - sequence 内建匹配器插件：`qname`、`qtype`、`qclass`、`ptr_ip`、`client_ip`、`has_resp`、`resp_ip`、`cname`、`rcode`、`has_wanted_ans`、`mark`、`string_exp`、`_true`、`_false`、`env`、`random`
+- sequence 内建执行器操作：`accept`、`reject`、`return`、`jump`、`goto`、`mark`
 - `sequence.matches` quick setup 可直接写插件名，例如 `qname example.com`、`qtype A`、`has_resp`、`random 0.5`
 
 ## 许可证

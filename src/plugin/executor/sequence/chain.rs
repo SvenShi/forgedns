@@ -6,11 +6,13 @@ use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::dns_utils::{build_response_from_request, parse_named_response_code};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
+use crate::plugin::executor::recursive::{NextChainRunner, RecursiveHandle};
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{SequenceRef, parse_sequence_ref};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
+use ahash::AHashSet;
 use hickory_proto::op::ResponseCode;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -36,6 +38,8 @@ enum BuiltinOp {
     Jump(Arc<dyn Executor>),
     /// Execute another sequence executor and stop current program immediately.
     Goto(Arc<dyn Executor>),
+    /// Insert marks into context and continue execution.
+    Mark(AHashSet<String>),
 }
 
 #[derive(Debug)]
@@ -68,10 +72,18 @@ impl ChainProgram {
     /// - Execute either executor opcode or builtin opcode.
     /// - Advance `pc` according to returned [`ExecStep`] / builtin semantics.
     /// - Execute deferred `post_execute` callbacks in LIFO order.
-    pub async fn run(&self, context: &mut DnsContext) -> Result<()> {
-        let mut pc = 0usize;
+    pub async fn run(self: &Arc<Self>, context: &mut DnsContext) -> Result<()> {
+        self.run_from_inner(context, 0).await
+    }
+
+    async fn run_from_inner(
+        self: &Arc<Self>,
+        context: &mut DnsContext,
+        mut pc: usize,
+    ) -> Result<()> {
         // Deferred post callbacks for `ExecStep::NextWithPost`.
         let mut post_stack: Vec<(Arc<dyn Executor>, Option<ExecState>)> = Vec::new();
+        let mut run_error: Option<crate::core::error::DnsError> = None;
 
         while pc < self.instructions.len() {
             let instruction = &self.instructions[pc];
@@ -81,14 +93,23 @@ impl ChainProgram {
             }
 
             match &instruction.op {
-                OpCode::Executor(executor) => match executor.execute(context).await? {
-                    ExecStep::Next => pc += 1,
-                    ExecStep::NextWithPost(state) => {
-                        post_stack.push((executor.clone(), state));
-                        pc += 1;
+                OpCode::Executor(executor) => {
+                    let next = RecursiveHandle::new(self.clone(), pc + 1);
+                    match executor.execute_with_handle(context, Some(next)).await {
+                        Ok(step) => match step {
+                            ExecStep::Next => pc += 1,
+                            ExecStep::NextWithPost(state) => {
+                                post_stack.push((executor.clone(), state));
+                                pc += 1;
+                            }
+                            ExecStep::Stop => break,
+                        },
+                        Err(e) => {
+                            run_error = Some(e);
+                            break;
+                        }
                     }
-                    ExecStep::Stop => break,
-                },
+                }
                 OpCode::Builtin(op) => match op {
                     BuiltinOp::Accept => {
                         context.exec_flow_state = ExecFlowState::Broken;
@@ -102,7 +123,10 @@ impl ChainProgram {
                         break;
                     }
                     BuiltinOp::Jump(executor) => {
-                        executor.execute(context).await?;
+                        if let Err(e) = executor.execute_with_handle(context, None).await {
+                            run_error = Some(e);
+                            break;
+                        }
                         if context.exec_flow_state == ExecFlowState::Broken {
                             break;
                         }
@@ -112,18 +136,39 @@ impl ChainProgram {
                         pc += 1;
                     }
                     BuiltinOp::Goto(executor) => {
-                        executor.execute(context).await?;
+                        if let Err(e) = executor.execute_with_handle(context, None).await {
+                            run_error = Some(e);
+                        }
                         break;
+                    }
+                    BuiltinOp::Mark(marks) => {
+                        context.marks.extend(marks.iter().cloned());
+                        pc += 1;
                     }
                 },
             }
         }
 
         while let Some((executor, state)) = post_stack.pop() {
-            executor.post_execute(context, state).await?;
+            if let Err(e) = executor.post_execute(context, state).await {
+                if run_error.is_none() {
+                    run_error = Some(e);
+                }
+            }
         }
 
-        Ok(())
+        if let Some(e) = run_error {
+            Err(e)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl NextChainRunner for ChainProgram {
+    async fn run_from(self: Arc<Self>, context: &mut DnsContext, start_pc: usize) -> Result<()> {
+        self.run_from_inner(context, start_pc).await
     }
 }
 
@@ -184,11 +229,17 @@ impl ChainBuilder {
         Ok(())
     }
 
-    pub fn build(self) -> (ChainProgram, Vec<Arc<dyn Executor>>, Vec<Arc<dyn Matcher>>) {
+    pub fn build(
+        self,
+    ) -> (
+        Arc<ChainProgram>,
+        Vec<Arc<dyn Executor>>,
+        Vec<Arc<dyn Matcher>>,
+    ) {
         (
-            ChainProgram {
+            Arc::new(ChainProgram {
                 instructions: self.instructions,
-            },
+            }),
             self.quick_setup_executors,
             self.quick_setup_matchers,
         )
@@ -232,6 +283,7 @@ impl ChainBuilder {
             "accept" => Ok(Some(BuiltinOp::Accept)),
             "return" => Ok(Some(BuiltinOp::Return)),
             "reject" => Ok(Some(BuiltinOp::Reject(parse_reject_rcode(arg)?))),
+            "mark" => Ok(Some(BuiltinOp::Mark(parse_mark_values(arg)?))),
             "jump" => Ok(Some(BuiltinOp::Jump(
                 self.resolve_jump_or_goto_executor("jump", arg).await?,
             ))),
@@ -375,4 +427,34 @@ fn parse_matcher_expr(raw: &str) -> Result<(bool, &str)> {
     } else {
         Ok((false, matcher_expr))
     }
+}
+
+/// Parse optional `mark` arguments into normalized mark strings.
+///
+/// Supported syntax:
+/// - `mark 1`
+/// - `mark 1,2,3`
+/// - `mark 1 2 3`
+fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<String>> {
+    let Some(raw) = arg else {
+        return Err(DnsError::plugin("mark requires at least one value"));
+    };
+
+    let mut marks = AHashSet::new();
+    for token in raw
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let mark = token
+            .parse::<u32>()
+            .map_err(|e| DnsError::plugin(format!("invalid mark value '{}': {}", token, e)))?;
+        marks.insert(mark.to_string());
+    }
+
+    if marks.is_empty() {
+        return Err(DnsError::plugin("mark requires at least one value"));
+    }
+
+    Ok(marks)
 }
