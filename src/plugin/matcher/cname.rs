@@ -80,6 +80,7 @@ fn build_cname_matcher(
         cname_rules,
         domain_set_tags,
         domain_sets: Vec::new(),
+        domain_sets_has_trie_rules: false,
         registry,
     })))
 }
@@ -117,6 +118,7 @@ struct CnameMatcher {
     cname_rules: DomainRuleMatcher,
     domain_set_tags: Vec<String>,
     domain_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
+    domain_sets_has_trie_rules: bool,
     registry: Arc<PluginRegistry>,
 }
 
@@ -129,6 +131,10 @@ impl Plugin for CnameMatcher {
     async fn init(&mut self) {
         self.domain_sets =
             resolve_provider_tags(&self.registry, &self.domain_set_tags, "cname", &self.tag);
+        self.domain_sets_has_trie_rules = self
+            .domain_sets
+            .iter()
+            .any(|set| set.has_trie_domain_rules());
     }
 
     async fn destroy(&self) {}
@@ -143,7 +149,7 @@ impl Matcher for CnameMatcher {
         response_records(response).any(|record| {
             rr_to_cname(record).is_some_and(|cname| {
                 let mut labels = SmallVec::<[&str; 8]>::new();
-                if self.cname_rules.has_trie_rules() {
+                if self.cname_rules.has_trie_rules() || self.domain_sets_has_trie_rules {
                     split_labels_rev(&cname, &mut labels);
                 }
                 if self.cname_rules.is_match_normalized(&cname, &labels) {
@@ -152,7 +158,7 @@ impl Matcher for CnameMatcher {
 
                 self.domain_sets
                     .iter()
-                    .any(|set| set.contains_domain(&cname))
+                    .any(|set| set.contains_domain_prepared(&cname, &labels))
             })
         })
     }
@@ -198,6 +204,7 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
+            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
 
@@ -231,6 +238,7 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
+            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
 
