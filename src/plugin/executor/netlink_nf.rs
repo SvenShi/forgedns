@@ -20,6 +20,8 @@ const NLA_HDR_LEN: usize = 4;
 const NLA_F_NESTED: u16 = 1 << 15;
 const NFNETLINK_V0: u8 = 0;
 
+pub const NLM_F_REQUEST_ACK: u16 = NlmF::REQUEST.bits() | NlmF::ACK.bits();
+
 #[inline]
 fn align4(v: usize) -> usize {
     (v + 3) & !3
@@ -120,12 +122,13 @@ impl NfNetlinkSocket {
                             return Ok(out);
                         }
                         let errno = (-code).max(1);
-                        if ignore_eexist && errno == libc::EEXIST {
+                        let io_error = std::io::Error::from_raw_os_error(errno);
+                        if ignore_eexist && io_error.kind() == std::io::ErrorKind::AlreadyExists {
                             return Ok(out);
                         }
                         return Err(DnsError::plugin(format!(
                             "netlink kernel error: {}",
-                            std::io::Error::from_raw_os_error(errno)
+                            io_error
                         )));
                     }
                     NlPayload::Payload(payload) => out.push(Vec::from(payload.clone())),
