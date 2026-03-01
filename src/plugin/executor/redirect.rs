@@ -136,14 +136,15 @@ impl Executor for RedirectExecutor {
             }
         }
 
-        let mut answer = Vec::with_capacity(response.answers().len() + 1);
-        answer.push(Record::from_rdata(
+        let old_answers = std::mem::take(response.answers_mut());
+        let mut answers = Vec::with_capacity(old_answers.len() + 1);
+        answers.push(Record::from_rdata(
             state.original,
             1,
             RData::CNAME(CNAME(state.target)),
         ));
-        answer.extend(response.answers().iter().cloned());
-        *response.answers_mut() = answer;
+        answers.extend(old_answers);
+        *response.answers_mut() = answers;
 
         Ok(())
     }

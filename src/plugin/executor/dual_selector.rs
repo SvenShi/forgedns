@@ -27,11 +27,11 @@ use dashmap::DashMap;
 use hickory_proto::op::ResponseCode;
 use hickory_proto::rr::RecordType;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const CACHE_TTL_MS: u64 = 60 * 60 * 1000;
-const CLEANUP_INTERVAL: u64 = 2048;
+const CLEANUP_INTERVAL_SECS: u64 = 30;
 const REFERENCE_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const SUB_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -40,7 +40,7 @@ struct DualSelector {
     tag: String,
     preferred_type: RecordType,
     cache: Arc<DashMap<String, u64>>,
-    ops: AtomicU64,
+    cleanup_started: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -59,7 +59,21 @@ impl Plugin for DualSelector {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) {
+        if self.cleanup_started.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let cache = self.cache.clone();
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
+            loop {
+                tokio::time::sleep(interval).await;
+                let now = AppClock::elapsed_millis();
+                cache.retain(|_, expire_at| *expire_at > now);
+            }
+        });
+    }
 
     async fn destroy(&self) {}
 }
@@ -106,8 +120,6 @@ impl DualSelector {
         context: &mut DnsContext,
         next: Option<RecursiveHandle>,
     ) -> Result<ExecStep> {
-        self.maybe_cleanup();
-
         if context.request.queries().len() != 1 {
             return Ok(ExecStep::Next);
         }
@@ -232,16 +244,6 @@ impl DualSelector {
             .get(domain)
             .is_some_and(|entry| *entry.value() > now)
     }
-
-    fn maybe_cleanup(&self) {
-        let op = self.ops.fetch_add(1, Ordering::Relaxed) + 1;
-        if op % CLEANUP_INTERVAL != 0 {
-            return;
-        }
-
-        let now = AppClock::elapsed_millis();
-        self.cache.retain(|_, expire_at| *expire_at > now);
-    }
 }
 
 async fn run_reference_sub_query(
@@ -310,7 +312,7 @@ impl PluginFactory for PreferIpv4Factory {
             tag: plugin_config.tag.clone(),
             preferred_type: RecordType::A,
             cache: Arc::new(DashMap::new()),
-            ops: AtomicU64::new(0),
+            cleanup_started: AtomicBool::new(false),
         })))
     }
 
@@ -324,7 +326,7 @@ impl PluginFactory for PreferIpv4Factory {
             tag: tag.to_string(),
             preferred_type: RecordType::A,
             cache: Arc::new(DashMap::new()),
-            ops: AtomicU64::new(0),
+            cleanup_started: AtomicBool::new(false),
         })))
     }
 }
@@ -339,7 +341,7 @@ impl PluginFactory for PreferIpv6Factory {
             tag: plugin_config.tag.clone(),
             preferred_type: RecordType::AAAA,
             cache: Arc::new(DashMap::new()),
-            ops: AtomicU64::new(0),
+            cleanup_started: AtomicBool::new(false),
         })))
     }
 
@@ -353,7 +355,7 @@ impl PluginFactory for PreferIpv6Factory {
             tag: tag.to_string(),
             preferred_type: RecordType::AAAA,
             cache: Arc::new(DashMap::new()),
-            ops: AtomicU64::new(0),
+            cleanup_started: AtomicBool::new(false),
         })))
     }
 }
@@ -447,7 +449,7 @@ mod tests {
             tag: "dual_selector_test".to_string(),
             preferred_type,
             cache: Arc::new(DashMap::new()),
-            ops: AtomicU64::new(0),
+            cleanup_started: AtomicBool::new(false),
         }
     }
 

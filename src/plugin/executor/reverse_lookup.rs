@@ -23,11 +23,12 @@ use hickory_proto::rr::{Name, RData, Record, RecordType};
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 const DEFAULT_SIZE: usize = 65_535;
 const DEFAULT_TTL: u32 = 7_200;
-const CLEANUP_INTERVAL: u64 = 1024;
+const CLEANUP_INTERVAL_SECS: u64 = 30;
 const EVICTION_BATCH: usize = 512;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -46,11 +47,11 @@ struct CacheEntry {
 #[derive(Debug)]
 struct ReverseLookup {
     tag: String,
-    cache: DashMap<IpAddr, CacheEntry>,
+    cache: Arc<DashMap<IpAddr, CacheEntry>>,
     size: usize,
     ttl: u32,
     handle_ptr: bool,
-    ops: AtomicU64,
+    cleanup_started: AtomicBool,
 }
 
 #[async_trait]
@@ -59,7 +60,38 @@ impl Plugin for ReverseLookup {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) {
+        if self.cleanup_started.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let cache = self.cache.clone();
+        let size = self.size;
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
+            loop {
+                tokio::time::sleep(interval).await;
+                let now = AppClock::elapsed_millis();
+                cache.retain(|_, entry| entry.expire_at_ms > now);
+
+                if cache.len() <= size {
+                    continue;
+                }
+                let overflow = cache.len().saturating_sub(size).min(EVICTION_BATCH);
+                if overflow == 0 {
+                    continue;
+                }
+                let keys: Vec<IpAddr> = cache
+                    .iter()
+                    .take(overflow)
+                    .map(|entry| *entry.key())
+                    .collect();
+                for key in keys {
+                    cache.remove(&key);
+                }
+            }
+        });
+    }
 
     async fn destroy(&self) {}
 }
@@ -108,7 +140,6 @@ impl Executor for ReverseLookup {
             );
         }
 
-        self.maybe_cleanup(now);
         Ok(())
     }
 }
@@ -139,38 +170,6 @@ impl ReverseLookup {
             RData::PTR(PTR(entry.domain.clone())),
         ));
         Some(response)
-    }
-
-    fn maybe_cleanup(&self, now: u64) {
-        let op = self.ops.fetch_add(1, Ordering::Relaxed) + 1;
-        if op % CLEANUP_INTERVAL != 0 && self.cache.len() <= self.size {
-            return;
-        }
-
-        self.cache.retain(|_, entry| entry.expire_at_ms > now);
-
-        if self.cache.len() <= self.size {
-            return;
-        }
-
-        let overflow = self
-            .cache
-            .len()
-            .saturating_sub(self.size)
-            .min(EVICTION_BATCH);
-        if overflow == 0 {
-            return;
-        }
-
-        let keys: Vec<IpAddr> = self
-            .cache
-            .iter()
-            .take(overflow)
-            .map(|entry| *entry.key())
-            .collect();
-        for key in keys {
-            self.cache.remove(&key);
-        }
     }
 }
 
@@ -207,11 +206,11 @@ impl PluginFactory for ReverseLookupFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(ReverseLookup {
             tag: plugin_config.tag.clone(),
-            cache: DashMap::with_capacity(size),
+            cache: Arc::new(DashMap::with_capacity(size)),
             size,
             ttl,
             handle_ptr: cfg.handle_ptr.unwrap_or(false),
-            ops: AtomicU64::new(0),
+            cleanup_started: AtomicBool::new(false),
         })))
     }
 }

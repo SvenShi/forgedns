@@ -20,6 +20,10 @@ use serde::Deserialize;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "linux")]
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+#[cfg(target_os = "linux")]
+use std::thread;
 use tracing::debug;
 #[cfg(target_os = "linux")]
 use tracing::warn;
@@ -29,8 +33,9 @@ use crate::plugin::executor::netlink_nf::{
     NLM_F_REQUEST_ACK, NfNetlinkSocket, nla_put, nla_put_nested, nla_put_strz, nla_put_u8,
     nla_put_u32,
 };
+
 #[cfg(target_os = "linux")]
-use std::sync::Mutex;
+const IPSET_WRITER_QUEUE_SIZE: usize = 256;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct IpSetConfig {
@@ -54,31 +59,26 @@ struct IpSetExecutor {
     set_name6: Option<String>,
     mask4: u8,
     mask6: u8,
-    enabled: AtomicBool,
+    enabled: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
-    backend: Arc<IpSetBackend>,
+    writer: SyncSender<Vec<IpSetEntry>>,
 }
 
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct IpSetBackend {
-    socket: Mutex<NfNetlinkSocket>,
+    socket: NfNetlinkSocket,
 }
 
 #[cfg(target_os = "linux")]
 impl IpSetBackend {
     fn new() -> Result<Self> {
         Ok(Self {
-            socket: Mutex::new(NfNetlinkSocket::open()?),
+            socket: NfNetlinkSocket::open()?,
         })
     }
 
-    fn add_entries(&self, entries: &[IpSetEntry]) -> Result<()> {
-        let mut socket = self
-            .socket
-            .lock()
-            .map_err(|_| DnsError::plugin("ipset netlink lock poisoned"))?;
-
+    fn add_entries(&mut self, entries: &[IpSetEntry]) -> Result<()> {
         for entry in entries {
             let mut attrs = Vec::with_capacity(96);
             nla_put_u8(&mut attrs, IPSET_ATTR_PROTOCOL, IPSET_PROTOCOL);
@@ -103,7 +103,7 @@ impl IpSetBackend {
                 IpAddr::V4(_) => NFPROTO_IPV4,
                 IpAddr::V6(_) => NFPROTO_IPV6,
             };
-            socket.request(
+            self.socket.request(
                 NFNL_SUBSYS_IPSET,
                 IPSET_CMD_ADD,
                 NLM_F_REQUEST_ACK,
@@ -166,14 +166,19 @@ impl Executor for IpSetExecutor {
         #[cfg(target_os = "linux")]
         {
             let entries: Vec<IpSetEntry> = entries.into_iter().collect();
-            let result = tokio::task::block_in_place(|| self.backend.add_entries(&entries));
-            if let Err(e) = result {
-                warn!(
-                    plugin = %self.tag,
-                    err = %e,
-                    "ipset netlink execution failed, disabling plugin"
-                );
-                self.enabled.store(false, Ordering::Relaxed);
+            if let Err(e) = self.writer.try_send(entries) {
+                match e {
+                    TrySendError::Full(_) => {
+                        // Best-effort side effect: dropping write preserves DNS path latency.
+                    }
+                    TrySendError::Disconnected(_) => {
+                        warn!(
+                            plugin = %self.tag,
+                            "ipset writer disconnected, disabling plugin"
+                        );
+                        self.enabled.store(false, Ordering::Relaxed);
+                    }
+                }
             }
         }
 
@@ -217,7 +222,13 @@ impl PluginFactory for IpSetFactory {
         );
 
         #[cfg(target_os = "linux")]
-        let backend = Arc::new(IpSetBackend::new()?);
+        #[cfg(target_os = "linux")]
+        let enabled = Arc::new(AtomicBool::new(true));
+        #[cfg(target_os = "linux")]
+        let writer = spawn_ipset_writer(plugin_config.tag.as_str(), enabled.clone())?;
+
+        #[cfg(not(target_os = "linux"))]
+        let enabled = Arc::new(AtomicBool::new(true));
 
         Ok(UninitializedPlugin::Executor(Box::new(IpSetExecutor {
             tag: plugin_config.tag.clone(),
@@ -225,9 +236,9 @@ impl PluginFactory for IpSetFactory {
             set_name6: cfg.set_name6.filter(|v| !v.trim().is_empty()),
             mask4,
             mask6,
-            enabled: AtomicBool::new(true),
+            enabled,
             #[cfg(target_os = "linux")]
-            backend,
+            writer,
         })))
     }
 
@@ -274,7 +285,13 @@ impl PluginFactory for IpSetFactory {
         validate_masks(mask4, mask6)?;
 
         #[cfg(target_os = "linux")]
-        let backend = Arc::new(IpSetBackend::new()?);
+        #[cfg(target_os = "linux")]
+        let enabled = Arc::new(AtomicBool::new(true));
+        #[cfg(target_os = "linux")]
+        let writer = spawn_ipset_writer(tag, enabled.clone())?;
+
+        #[cfg(not(target_os = "linux"))]
+        let enabled = Arc::new(AtomicBool::new(true));
 
         Ok(UninitializedPlugin::Executor(Box::new(IpSetExecutor {
             tag: tag.to_string(),
@@ -282,9 +299,9 @@ impl PluginFactory for IpSetFactory {
             set_name6: cfg.set_name6,
             mask4,
             mask6,
-            enabled: AtomicBool::new(true),
+            enabled,
             #[cfg(target_os = "linux")]
-            backend,
+            writer,
         })))
     }
 }
@@ -306,6 +323,36 @@ fn validate_masks(mask4: u8, mask6: u8) -> Result<()> {
         return Err(DnsError::plugin("ipset mask6 must be in range 0..=128"));
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_ipset_writer(tag: &str, enabled: Arc<AtomicBool>) -> Result<SyncSender<Vec<IpSetEntry>>> {
+    let (tx, rx) = sync_channel::<Vec<IpSetEntry>>(IPSET_WRITER_QUEUE_SIZE);
+    let mut backend = IpSetBackend::new()?;
+    let thread_tag = tag.to_string();
+    thread::Builder::new()
+        .name(format!("ipset-{}", thread_tag))
+        .spawn(move || {
+            while enabled.load(Ordering::Relaxed) {
+                let Ok(entries) = rx.recv() else {
+                    break;
+                };
+                if entries.is_empty() {
+                    continue;
+                }
+                if let Err(e) = backend.add_entries(&entries) {
+                    warn!(
+                        plugin = %thread_tag,
+                        err = %e,
+                        "ipset netlink execution failed, disabling plugin"
+                    );
+                    enabled.store(false, Ordering::Relaxed);
+                    break;
+                }
+            }
+        })
+        .map_err(|e| DnsError::plugin(format!("failed to spawn ipset writer thread: {}", e)))?;
+    Ok(tx)
 }
 
 #[cfg(target_os = "linux")]

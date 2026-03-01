@@ -44,6 +44,7 @@ impl PluginFactory for StringExpFactory {
         Ok(UninitializedPlugin::Matcher(Box::new(StringExpMatcher {
             tag: plugin_config.tag.clone(),
             expression,
+            env_cache: None,
         })))
     }
 
@@ -59,6 +60,7 @@ impl PluginFactory for StringExpFactory {
         Ok(UninitializedPlugin::Matcher(Box::new(StringExpMatcher {
             tag: tag.to_string(),
             expression,
+            env_cache: None,
         })))
     }
 }
@@ -96,6 +98,7 @@ fn parse_expression_from_value(args: Option<Value>) -> DnsResult<String> {
 struct StringExpMatcher {
     tag: String,
     expression: StringExpression,
+    env_cache: Option<String>,
 }
 
 #[derive(Debug)]
@@ -134,14 +137,21 @@ impl Plugin for StringExpMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) {
+        if let StringSource::Env(key) = &self.expression.source {
+            self.env_cache = std::env::var(key).ok();
+        }
+    }
 
     async fn destroy(&self) {}
 }
 
 impl Matcher for StringExpMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let value = self.expression.source.read(context);
+        let value: Cow<'_, str> = match &self.expression.source {
+            StringSource::Env(_) => Cow::Borrowed(self.env_cache.as_deref().unwrap_or("")),
+            source => source.read(context),
+        };
         self.expression.op.evaluate(value.as_ref())
     }
 }
@@ -209,7 +219,7 @@ impl StringSource {
                 .get_attr::<String>(DnsContext::ATTR_URL_PATH)
                 .map(|v| Cow::Borrowed(v.as_str()))
                 .unwrap_or_else(|| Cow::Borrowed("")),
-            StringSource::Env(key) => Cow::Owned(std::env::var(key).unwrap_or_default()),
+            StringSource::Env(_) => Cow::Borrowed(""),
         }
     }
 }
@@ -374,6 +384,7 @@ mod tests {
         let matcher = StringExpMatcher {
             tag: "string_exp".into(),
             expression: parse_string_expression("qname eq www.example.com").unwrap(),
+            env_cache: None,
         };
         let mut ctx = make_context();
         assert!(matcher.is_match(&mut ctx));
@@ -384,6 +395,7 @@ mod tests {
         let matcher = StringExpMatcher {
             tag: "string_exp".into(),
             expression: parse_string_expression("markcontains 1").unwrap(),
+            env_cache: None,
         };
         let mut ctx = make_context();
         assert!(matcher.is_match(&mut ctx));

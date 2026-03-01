@@ -41,10 +41,15 @@ const DEFAULT_CACHE_SIZE: usize = 1024;
 const DEFAULT_CLEANUP_INTERVAL: u64 = 60;
 // Default TTL (seconds)
 const DEFAULT_TTL: u32 = 300;
-// LRU eviction threshold
-const LRU_EVICTION_THRESHOLD: f32 = 0.9;
 // Default dump interval (seconds)
 const DEFAULT_DUMP_INTERVAL: u64 = 600;
+// Cleanup tuning
+const EVICT_HIGH_WATERMARK_PERCENT: usize = 95;
+const EVICT_LOW_WATERMARK_PERCENT: usize = 85;
+const EXPIRED_SWEEP_BATCH: usize = 2048;
+const EXPIRED_SWEEP_ROUNDS: usize = 4;
+const EVICTION_SAMPLE_SIZE: usize = 4096;
+const EVICTION_MAX_BATCH: usize = 2048;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
@@ -165,47 +170,75 @@ impl Cache {
                 sleep(cleanup_interval).await;
 
                 let now = AppClock::elapsed_millis();
-                let expired_keys: Vec<_> = domain_map
-                    .iter()
-                    .filter(|item| item.value().expire_time <= now)
-                    .map(|item| item.key().clone())
-                    .collect();
-
-                for key in &expired_keys {
-                    domain_map.remove(key);
+                let mut expired_removed = 0usize;
+                for _ in 0..EXPIRED_SWEEP_ROUNDS {
+                    let mut expired_keys = Vec::with_capacity(EXPIRED_SWEEP_BATCH);
+                    for item in domain_map.iter() {
+                        if item.value().expire_time <= now {
+                            expired_keys.push(item.key().clone());
+                            if expired_keys.len() >= EXPIRED_SWEEP_BATCH {
+                                break;
+                            }
+                        }
+                    }
+                    if expired_keys.is_empty() {
+                        break;
+                    }
+                    for key in expired_keys {
+                        if domain_map.remove(&key).is_some() {
+                            expired_removed += 1;
+                        }
+                    }
                 }
 
-                if !expired_keys.is_empty() {
-                    debug!("Cleaned {} expired cache entries", expired_keys.len());
+                if expired_removed > 0 {
+                    debug!("Cleaned {} expired cache entries", expired_removed);
                 }
 
                 let current_size = domain_map.len();
-                let threshold_size = (cache_size as f32 * LRU_EVICTION_THRESHOLD) as usize;
+                let high_watermark = cache_size
+                    .saturating_mul(EVICT_HIGH_WATERMARK_PERCENT)
+                    .saturating_div(100)
+                    .max(1);
+                if current_size <= high_watermark {
+                    continue;
+                }
 
-                if current_size > threshold_size {
-                    let mut entries: Vec<((String, RecordType, DNSClass), u64)> = domain_map
-                        .iter()
-                        .map(|item| (item.key().clone(), item.value().last_access_time))
-                        .collect();
+                let low_watermark = cache_size
+                    .saturating_mul(EVICT_LOW_WATERMARK_PERCENT)
+                    .saturating_div(100)
+                    .max(1);
+                let target_size = low_watermark.min(current_size);
+                let mut evict_target = current_size.saturating_sub(target_size);
+                evict_target = evict_target.min(EVICTION_MAX_BATCH);
 
-                    entries.sort_by_key(|(_, last)| *last);
+                let sample_cap = current_size.min(EVICTION_SAMPLE_SIZE);
+                let mut sample: Vec<((String, RecordType, DNSClass), u64)> =
+                    Vec::with_capacity(sample_cap);
+                for item in domain_map.iter().take(sample_cap) {
+                    sample.push((item.key().clone(), item.value().last_access_time));
+                }
 
-                    let evict_count = current_size - (threshold_size - threshold_size / 10);
-                    let mut evicted = 0;
-                    for (key, _) in entries.into_iter().take(evict_count) {
-                        if domain_map.remove(&key).is_some() {
-                            evicted += 1;
-                        }
+                if sample.is_empty() || evict_target == 0 {
+                    continue;
+                }
+
+                sample.sort_unstable_by_key(|(_, last)| *last);
+
+                let mut evicted = 0usize;
+                for (key, _) in sample.into_iter().take(evict_target) {
+                    if domain_map.remove(&key).is_some() {
+                        evicted += 1;
                     }
+                }
 
-                    if evicted > 0 {
-                        warn!(
-                            "LRU eviction: removed {} items, cache size {} -> {}",
-                            evicted,
-                            current_size,
-                            domain_map.len()
-                        );
-                    }
+                if evicted > 0 {
+                    warn!(
+                        "LRU eviction: removed {} items, cache size {} -> {}",
+                        evicted,
+                        current_size,
+                        domain_map.len()
+                    );
                 }
             }
         });

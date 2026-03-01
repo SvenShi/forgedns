@@ -19,8 +19,10 @@ use dashmap::DashMap;
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::oneshot;
 
 const DEFAULT_QPS: f64 = 20.0;
 const DEFAULT_BURST: f64 = 40.0;
@@ -52,6 +54,8 @@ struct RateLimiter {
     mask6: u8,
     buckets: Arc<DashMap<IpAddr, Bucket>>,
     cleanup_started: AtomicBool,
+    cleanup_stop: Mutex<Option<oneshot::Sender<()>>>,
+    cleanup_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +85,8 @@ impl PluginFactory for RateLimiterFactory {
             mask6: cfg.mask6.unwrap_or(DEFAULT_MASK6),
             buckets: Arc::new(DashMap::new()),
             cleanup_started: AtomicBool::new(false),
+            cleanup_stop: Mutex::new(None),
+            cleanup_handle: Mutex::new(None),
         })))
     }
 
@@ -101,6 +107,8 @@ impl PluginFactory for RateLimiterFactory {
             mask6: cfg.mask6.unwrap_or(DEFAULT_MASK6),
             buckets: Arc::new(DashMap::new()),
             cleanup_started: AtomicBool::new(false),
+            cleanup_stop: Mutex::new(None),
+            cleanup_handle: Mutex::new(None),
         })))
     }
 }
@@ -116,18 +124,44 @@ impl Plugin for RateLimiter {
             return;
         }
 
+        let (stop_tx, mut stop_rx) = oneshot::channel();
+        if let Ok(mut guard) = self.cleanup_stop.lock() {
+            *guard = Some(stop_tx);
+        }
+
         let buckets = self.buckets.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
             loop {
-                tokio::time::sleep(interval).await;
-                let now = AppClock::elapsed_millis();
-                buckets.retain(|_, bucket| now.saturating_sub(bucket.last_ms) <= STALE_TIMEOUT_MS);
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {
+                        let now = AppClock::elapsed_millis();
+                        buckets.retain(|_, bucket| now.saturating_sub(bucket.last_ms) <= STALE_TIMEOUT_MS);
+                    }
+                    _ = &mut stop_rx => {
+                        break;
+                    }
+                }
             }
         });
+        if let Ok(mut guard) = self.cleanup_handle.lock() {
+            *guard = Some(handle);
+        }
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) {
+        if let Ok(mut guard) = self.cleanup_stop.lock()
+            && let Some(tx) = guard.take()
+        {
+            let _ = tx.send(());
+        }
+        if let Ok(mut guard) = self.cleanup_handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            handle.abort();
+        }
+        self.cleanup_started.store(false, Ordering::Relaxed);
+    }
 }
 
 impl Matcher for RateLimiter {
