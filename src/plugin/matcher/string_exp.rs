@@ -17,6 +17,7 @@ use crate::register_plugin_factory;
 use async_trait::async_trait;
 use regex::Regex;
 use serde_yml::Value;
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -141,44 +142,43 @@ impl Plugin for StringExpMatcher {
 impl Matcher for StringExpMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
         let value = self.expression.source.read(context);
-        self.expression.op.evaluate(&value)
+        self.expression.op.evaluate(value.as_ref())
     }
 }
 
 impl StringSource {
-    fn read(&self, context: &DnsContext) -> String {
+    fn read<'a>(&self, context: &'a mut DnsContext) -> Cow<'a, str> {
         match self {
             StringSource::Qname => context
-                .request
-                .queries()
-                .first()
-                .map(|q| {
-                    q.name()
-                        .to_utf8()
-                        .trim_end_matches('.')
-                        .to_ascii_lowercase()
-                })
-                .unwrap_or_default(),
-            StringSource::Qtype => context
-                .request
-                .queries()
-                .first()
-                .map(|q| u16::from(q.query_type()).to_string())
-                .unwrap_or_default(),
-            StringSource::Qclass => context
-                .request
-                .queries()
-                .first()
-                .map(|q| u16::from(q.query_class()).to_string())
-                .unwrap_or_default(),
-            StringSource::Rcode => context
-                .response
-                .as_ref()
-                .map(|r| u16::from(r.response_code()).to_string())
-                .unwrap_or_default(),
+                .query_view()
+                .map(|view| Cow::Borrowed(view.normalized_name()))
+                .unwrap_or_else(|| Cow::Borrowed("")),
+            StringSource::Qtype => Cow::Owned(
+                context
+                    .request
+                    .queries()
+                    .first()
+                    .map(|q| u16::from(q.query_type()).to_string())
+                    .unwrap_or_default(),
+            ),
+            StringSource::Qclass => Cow::Owned(
+                context
+                    .request
+                    .queries()
+                    .first()
+                    .map(|q| u16::from(q.query_class()).to_string())
+                    .unwrap_or_default(),
+            ),
+            StringSource::Rcode => Cow::Owned(
+                context
+                    .response
+                    .as_ref()
+                    .map(|r| u16::from(r.response_code()).to_string())
+                    .unwrap_or_default(),
+            ),
             StringSource::RespIp => {
                 let Some(response) = context.response.as_ref() else {
-                    return String::new();
+                    return Cow::Borrowed("");
                 };
                 let mut out = String::new();
                 for ip in response_records(response).filter_map(rr_to_ip) {
@@ -188,7 +188,7 @@ impl StringSource {
                     // Writing directly avoids temporary Vec allocations.
                     let _ = write!(&mut out, "{}", ip);
                 }
-                out
+                Cow::Owned(out)
             }
             StringSource::Mark => {
                 let mut out = String::new();
@@ -198,18 +198,18 @@ impl StringSource {
                     }
                     out.push_str(mark);
                 }
-                out
+                Cow::Owned(out)
             }
-            StringSource::ClientIp => context.src_addr.ip().to_string(),
+            StringSource::ClientIp => Cow::Owned(context.src_addr.ip().to_string()),
             StringSource::ServerName => context
                 .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
-                .cloned()
-                .unwrap_or_default(),
+                .map(|v| Cow::Borrowed(v.as_str()))
+                .unwrap_or_else(|| Cow::Borrowed("")),
             StringSource::UrlPath => context
                 .get_attr::<String>(DnsContext::ATTR_URL_PATH)
-                .cloned()
-                .unwrap_or_default(),
-            StringSource::Env(key) => std::env::var(key).unwrap_or_default(),
+                .map(|v| Cow::Borrowed(v.as_str()))
+                .unwrap_or_else(|| Cow::Borrowed("")),
+            StringSource::Env(key) => Cow::Owned(std::env::var(key).unwrap_or_default()),
         }
     }
 }

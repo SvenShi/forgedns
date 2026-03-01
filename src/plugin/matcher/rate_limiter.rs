@@ -19,14 +19,15 @@ use dashmap::DashMap;
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 const DEFAULT_QPS: f64 = 20.0;
 const DEFAULT_BURST: f64 = 40.0;
 const DEFAULT_MASK4: u8 = 32;
 const DEFAULT_MASK6: u8 = 48;
 const STALE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
-const CLEANUP_INTERVAL: u64 = 2048;
+const CLEANUP_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RateLimiterConfig {
@@ -49,8 +50,8 @@ struct RateLimiter {
     burst: f64,
     mask4: u8,
     mask6: u8,
-    buckets: DashMap<IpAddr, Bucket>,
-    ops: AtomicU64,
+    buckets: Arc<DashMap<IpAddr, Bucket>>,
+    cleanup_started: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -78,8 +79,8 @@ impl PluginFactory for RateLimiterFactory {
             burst: cfg.burst.unwrap_or(DEFAULT_BURST as u32) as f64,
             mask4: cfg.mask4.unwrap_or(DEFAULT_MASK4),
             mask6: cfg.mask6.unwrap_or(DEFAULT_MASK6),
-            buckets: DashMap::new(),
-            ops: AtomicU64::new(0),
+            buckets: Arc::new(DashMap::new()),
+            cleanup_started: AtomicBool::new(false),
         })))
     }
 
@@ -98,8 +99,8 @@ impl PluginFactory for RateLimiterFactory {
             burst: cfg.burst.unwrap_or(DEFAULT_BURST as u32) as f64,
             mask4: cfg.mask4.unwrap_or(DEFAULT_MASK4),
             mask6: cfg.mask6.unwrap_or(DEFAULT_MASK6),
-            buckets: DashMap::new(),
-            ops: AtomicU64::new(0),
+            buckets: Arc::new(DashMap::new()),
+            cleanup_started: AtomicBool::new(false),
         })))
     }
 }
@@ -110,15 +111,27 @@ impl Plugin for RateLimiter {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) {
+        if self.cleanup_started.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let buckets = self.buckets.clone();
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
+            loop {
+                tokio::time::sleep(interval).await;
+                let now = AppClock::elapsed_millis();
+                buckets.retain(|_, bucket| now.saturating_sub(bucket.last_ms) <= STALE_TIMEOUT_MS);
+            }
+        });
+    }
 
     async fn destroy(&self) {}
 }
 
 impl Matcher for RateLimiter {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        self.maybe_cleanup();
-
         let masked = mask_ip(context.src_addr.ip(), self.mask4, self.mask6);
         let Some(masked) = masked else {
             return true;
@@ -152,27 +165,6 @@ impl Matcher for RateLimiter {
                 },
             );
             true
-        }
-    }
-}
-
-impl RateLimiter {
-    fn maybe_cleanup(&self) {
-        let op = self.ops.fetch_add(1, Ordering::Relaxed) + 1;
-        if op % CLEANUP_INTERVAL != 0 {
-            return;
-        }
-
-        let now = AppClock::elapsed_millis();
-        let stale: Vec<IpAddr> = self
-            .buckets
-            .iter()
-            .filter(|entry| now.saturating_sub(entry.value().last_ms) > STALE_TIMEOUT_MS)
-            .map(|entry| *entry.key())
-            .collect();
-
-        for key in stale {
-            self.buckets.remove(&key);
         }
     }
 }

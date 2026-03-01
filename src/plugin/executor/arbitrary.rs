@@ -40,7 +40,13 @@ struct ArbitraryConfig {
 #[derive(Debug)]
 struct Arbitrary {
     tag: String,
-    records: AHashMap<(String, RecordType), Vec<Record>>,
+    records: AHashMap<String, NameRecords>,
+}
+
+#[derive(Debug, Default)]
+struct NameRecords {
+    by_type: AHashMap<RecordType, Vec<Record>>,
+    any: Vec<Record>,
 }
 
 #[async_trait]
@@ -66,14 +72,14 @@ impl Executor for Arbitrary {
         };
         let qname = query_view.normalized_name();
 
+        let Some(name_records) = self.records.get(qname) else {
+            return Ok(ExecStep::Next);
+        };
+
         let mut answers = Vec::new();
         if qtype == RecordType::ANY {
-            for ((name, _), records) in &self.records {
-                if *name == qname {
-                    answers.extend(records.iter().cloned());
-                }
-            }
-        } else if let Some(records) = self.records.get(&(qname.to_string(), qtype)) {
+            answers.extend(name_records.any.iter().cloned());
+        } else if let Some(records) = name_records.by_type.get(&qtype) {
             answers.extend(records.iter().cloned());
         }
 
@@ -123,15 +129,21 @@ fn parse_config(args: Option<serde_yml::Value>) -> Result<ArbitraryConfig> {
         .map_err(|e| DnsError::plugin(format!("failed to parse arbitrary config: {}", e)))
 }
 
-fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<(String, RecordType), Vec<Record>>> {
-    let mut map: AHashMap<(String, RecordType), Vec<Record>> = AHashMap::new();
+fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>> {
+    let mut map: AHashMap<String, NameRecords> = AHashMap::new();
 
     for (idx, line) in cfg.rules.iter().enumerate() {
         let record = parse_zone_line(line).map_err(|e| {
             DnsError::plugin(format!("invalid arbitrary rule #{} '{}': {}", idx, line, e))
         })?;
-        let key = (normalize_name(record.name()), record.record_type());
-        map.entry(key).or_default().push(record);
+        let key = normalize_name(record.name());
+        let entry = map.entry(key).or_default();
+        entry
+            .by_type
+            .entry(record.record_type())
+            .or_default()
+            .push(record.clone());
+        entry.any.push(record);
     }
 
     for path in &cfg.files {
@@ -170,8 +182,14 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<(String, RecordType),
                     path, line_no, raw, e
                 ))
             })?;
-            let key = (normalize_name(record.name()), record.record_type());
-            map.entry(key).or_default().push(record);
+            let key = normalize_name(record.name());
+            let entry = map.entry(key).or_default();
+            entry
+                .by_type
+                .entry(record.record_type())
+                .or_default()
+                .push(record.clone());
+            entry.any.push(record);
         }
     }
 
