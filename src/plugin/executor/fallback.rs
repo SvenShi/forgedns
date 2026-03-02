@@ -282,7 +282,7 @@ async fn run_executor(
     context: &mut DnsContext,
     source: &'static str,
 ) -> Outcome {
-    match executor.execute_with_handle(context, None).await {
+    match executor.execute(context).await {
         Ok(_) => Outcome {
             response: context.response.clone(),
             source,

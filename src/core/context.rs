@@ -108,6 +108,12 @@ impl DnsContext {
     /// Context attribute key: HTTP URL path for DoH request.
     pub const ATTR_URL_PATH: &'static str = "url_path";
 
+    /// Context attribute key: dual_selector requests extra preferred-type probe in forward.
+    pub const ATTR_FORWARD_PROBE_REQUEST: &'static str = "dual_selector.forward_probe_request";
+
+    /// Context attribute key: forward returns probe result back to dual_selector.
+    pub const ATTR_FORWARD_PROBE_RESULT: &'static str = "dual_selector.forward_probe_result";
+
     /// Set a custom attribute in the context
     ///
     /// Allows plugins to store typed data for later retrieval

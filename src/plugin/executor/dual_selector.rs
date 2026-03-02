@@ -10,15 +10,14 @@
 //!   pass query through and cache positive preferred-type answers.
 //! - For non-preferred qtype:
 //!   1) block immediately when cache says preferred type exists.
-//!   2) otherwise run original query and preferred-type reference query
-//!      concurrently on the remaining chain and decide whether to block.
+//!   2) otherwise ask `forward` to run an extra preferred-type probe.
+//!      The final block/pass decision is applied in post_execute.
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::build_response_from_request;
 use crate::core::error::{DnsError, Result};
-use crate::plugin::executor::recursive::RecursiveHandle;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -26,31 +25,63 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use hickory_proto::op::ResponseCode;
 use hickory_proto::rr::RecordType;
+use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-const CACHE_TTL_MS: u64 = 60 * 60 * 1000;
 const CLEANUP_INTERVAL_SECS: u64 = 30;
-const REFERENCE_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
-const SUB_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_CACHE_ENABLED: bool = true;
+const DEFAULT_CACHE_TTL_SECS: u64 = 60 * 60;
+const DEFAULT_CACHE_TTL_MS: u64 = DEFAULT_CACHE_TTL_SECS * 1000;
+
+/// Probe request passed from `dual_selector` to `forward`.
+#[derive(Debug, Clone, Copy)]
+pub struct ForwardProbeRequest {
+    pub preferred_type: RecordType,
+}
+
+/// Probe result passed from `forward` to `dual_selector`.
+#[derive(Debug)]
+pub struct ForwardProbeResult {
+    pub preferred_has_answer: bool,
+    pub preferred_error: Option<String>,
+    pub original_error: Option<String>,
+}
 
 #[derive(Debug)]
 struct DualSelector {
     tag: String,
     preferred_type: RecordType,
-    cache: Arc<DashMap<String, u64>>,
+    cache: Arc<DashMap<String, CachedPreferredState>>,
+    cache_enabled: bool,
+    cache_ttl_ms: u64,
     cleanup_started: AtomicBool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct CachedPreferredState {
+    expire_at: u64,
+    preferred_exists: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum PostMode {
+    Preferred,
+    NonPreferredProbe,
 }
 
 #[derive(Debug)]
 struct PostState {
     domain: String,
+    mode: PostMode,
 }
 
-struct OriginalQueryOutcome {
-    context: DnsContext,
-    error: Option<DnsError>,
+#[derive(Debug, Clone, Deserialize, Default)]
+struct DualSelectorConfig {
+    #[serde(default)]
+    cache: Option<bool>,
+    cache_ttl: Option<u64>,
 }
 
 #[async_trait]
@@ -60,6 +91,9 @@ impl Plugin for DualSelector {
     }
 
     async fn init(&mut self) {
+        if !self.cache_enabled {
+            return;
+        }
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
             return;
         }
@@ -70,7 +104,7 @@ impl Plugin for DualSelector {
             loop {
                 tokio::time::sleep(interval).await;
                 let now = AppClock::elapsed_millis();
-                cache.retain(|_, expire_at| *expire_at > now);
+                cache.retain(|_, state| state.expire_at > now);
             }
         });
     }
@@ -81,15 +115,7 @@ impl Plugin for DualSelector {
 #[async_trait]
 impl Executor for DualSelector {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        self.execute_inner(context, None).await
-    }
-
-    async fn execute_with_handle(
-        &self,
-        context: &mut DnsContext,
-        next: Option<RecursiveHandle>,
-    ) -> Result<ExecStep> {
-        self.execute_inner(context, next).await
+        self.execute_inner(context).await
     }
 
     async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
@@ -100,26 +126,25 @@ impl Executor for DualSelector {
             return Ok(());
         };
 
-        let has_preferred_answer = context.response.as_ref().is_some_and(|resp| {
-            resp.answers()
-                .iter()
-                .any(|rr| rr.record_type() == self.preferred_type)
-        });
-
-        if has_preferred_answer {
-            self.cache_preferred(&state.domain);
+        match state.mode {
+            PostMode::Preferred => {
+                let has_preferred_answer = context.response.as_ref().is_some_and(|resp| {
+                    resp.answers()
+                        .iter()
+                        .any(|rr| rr.record_type() == self.preferred_type)
+                });
+                if has_preferred_answer {
+                    self.cache_preferred(&state.domain);
+                }
+                Ok(())
+            }
+            PostMode::NonPreferredProbe => self.apply_probe_result(context, &state.domain),
         }
-
-        Ok(())
     }
 }
 
 impl DualSelector {
-    async fn execute_inner(
-        &self,
-        context: &mut DnsContext,
-        next: Option<RecursiveHandle>,
-    ) -> Result<ExecStep> {
+    async fn execute_inner(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if context.request.queries().len() != 1 {
             return Ok(ExecStep::Next);
         }
@@ -139,179 +164,167 @@ impl DualSelector {
         };
 
         if qtype == self.preferred_type {
-            return Ok(ExecStep::NextWithPost(Some(
-                Box::new(PostState { domain }) as ExecState
-            )));
+            return Ok(ExecStep::NextWithPost(Some(Box::new(PostState {
+                domain,
+                mode: PostMode::Preferred,
+            }) as ExecState)));
         }
 
-        if self.cache_contains_fresh(&domain) {
+        if self.cache_enabled {
+            if let Some(preferred_exists) = self.cache_get_preferred_state(&domain) {
+                if preferred_exists {
+                    context.response = Some(build_response_from_request(
+                        &context.request,
+                        ResponseCode::NoError,
+                    ));
+                    return Ok(ExecStep::Stop);
+                }
+                return Ok(ExecStep::Next);
+            }
+        }
+
+        context.set_attr(
+            DnsContext::ATTR_FORWARD_PROBE_REQUEST,
+            ForwardProbeRequest {
+                preferred_type: self.preferred_type,
+            },
+        );
+
+        Ok(ExecStep::NextWithPost(Some(Box::new(PostState {
+            domain,
+            mode: PostMode::NonPreferredProbe,
+        }) as ExecState)))
+    }
+
+    fn apply_probe_result(&self, context: &mut DnsContext, domain: &str) -> Result<()> {
+        let Some(probe) =
+            context.remove_attr::<ForwardProbeResult>(DnsContext::ATTR_FORWARD_PROBE_RESULT)
+        else {
+            return Ok(());
+        };
+
+        // Probe errors mean preferred-type availability is unknown.
+        // Never cache/block in this case to avoid false positive suppression.
+        if probe.preferred_error.is_some() {
+            if context.response.is_none() {
+                if let Some(err) = probe.original_error {
+                    return Err(DnsError::plugin(err));
+                }
+            }
+            return Ok(());
+        }
+
+        if probe.preferred_has_answer {
+            if self.cache_enabled {
+                self.cache_probe_result(domain, true);
+            }
             context.response = Some(build_response_from_request(
                 &context.request,
                 ResponseCode::NoError,
             ));
-            return Ok(ExecStep::Stop);
+            return Ok(());
         }
 
-        let Some(next) = next else {
-            // No recursive runner available (non-sequence invocation), degrade
-            // to pass-through behavior.
-            return Ok(ExecStep::Next);
-        };
-
-        self.run_concurrent_reference(context, next, domain).await
-    }
-
-    async fn run_concurrent_reference(
-        &self,
-        context: &mut DnsContext,
-        next: RecursiveHandle,
-        domain: String,
-    ) -> Result<ExecStep> {
-        let mut preferred_ctx = context.clone_for_subquery();
-        if !set_first_query_type(&mut preferred_ctx, self.preferred_type) {
-            return Ok(ExecStep::Next);
+        if self.cache_enabled {
+            self.cache_probe_result(domain, false);
         }
-        let original_ctx = context.clone_for_subquery();
 
-        let mut preferred_task = tokio::spawn(run_reference_sub_query(
-            next.clone(),
-            preferred_ctx,
-            self.preferred_type,
-            self.cache.clone(),
-            domain.clone(),
-        ));
-        let mut original_task = tokio::spawn(run_original_sub_query(next, original_ctx));
-
-        tokio::select! {
-            preferred_joined = &mut preferred_task => {
-                let should_block = preferred_joined.unwrap_or(false);
-                if should_block {
-                    original_task.abort();
-                    context.response = Some(build_response_from_request(
-                        &context.request,
-                        ResponseCode::NoError,
-                    ));
-                    return Ok(ExecStep::Stop);
-                }
-
-                let original_outcome = original_task.await.map_err(|e| {
-                    DnsError::plugin(format!("dual_selector original task join failed: {}", e))
-                })?;
-                return Self::apply_original_outcome(context, original_outcome);
-            }
-            original_joined = &mut original_task => {
-                let original_outcome = original_joined.map_err(|e| {
-                    DnsError::plugin(format!("dual_selector original task join failed: {}", e))
-                })?;
-
-                let should_block = match tokio::time::timeout(REFERENCE_WAIT_TIMEOUT, &mut preferred_task).await {
-                    Ok(Ok(should_block)) => should_block,
-                    _ => false,
-                };
-
-                if should_block {
-                    context.response = Some(build_response_from_request(
-                        &context.request,
-                        ResponseCode::NoError,
-                    ));
-                    return Ok(ExecStep::Stop);
-                }
-
-                return Self::apply_original_outcome(context, original_outcome);
+        if context.response.is_none() {
+            if let Some(err) = probe.original_error {
+                return Err(DnsError::plugin(err));
             }
         }
-    }
 
-    fn apply_original_outcome(
-        context: &mut DnsContext,
-        outcome: OriginalQueryOutcome,
-    ) -> Result<ExecStep> {
-        context.replace_with_subquery_result(outcome.context);
-        if let Some(err) = outcome.error {
-            return Err(err);
-        }
-        Ok(ExecStep::Stop)
+        Ok(())
     }
 
     fn cache_preferred(&self, domain: &str) {
-        let expire_at = AppClock::elapsed_millis().saturating_add(CACHE_TTL_MS);
-        self.cache.insert(domain.to_string(), expire_at);
+        if !self.cache_enabled {
+            return;
+        }
+        self.cache_probe_result(domain, true);
     }
 
-    fn cache_contains_fresh(&self, domain: &str) -> bool {
+    fn cache_probe_result(&self, domain: &str, preferred_exists: bool) {
+        let expire_at = AppClock::elapsed_millis().saturating_add(self.cache_ttl_ms);
+        self.cache.insert(
+            domain.to_string(),
+            CachedPreferredState {
+                expire_at,
+                preferred_exists,
+            },
+        );
+    }
+
+    fn cache_get_preferred_state(&self, domain: &str) -> Option<bool> {
         let now = AppClock::elapsed_millis();
-        self.cache
-            .get(domain)
-            .is_some_and(|entry| *entry.value() > now)
+        let entry = self.cache.get(domain)?;
+        let cached = *entry.value();
+        if cached.expire_at > now {
+            Some(cached.preferred_exists)
+        } else {
+            drop(entry);
+            self.cache.remove(domain);
+            None
+        }
     }
 }
 
-async fn run_reference_sub_query(
-    next: RecursiveHandle,
-    mut context: DnsContext,
-    preferred_type: RecordType,
-    cache: Arc<DashMap<String, u64>>,
-    domain: String,
-) -> bool {
-    let Ok(Ok(())) = tokio::time::timeout(SUB_QUERY_TIMEOUT, next.exec_next(&mut context)).await
-    else {
-        return false;
-    };
+#[derive(Debug, Clone)]
+pub struct DualSelectorFactory {
+    record_type: RecordType,
+}
 
-    let has_preferred_answer = context.response.as_ref().is_some_and(|resp| {
-        resp.answers()
-            .iter()
-            .any(|rr| rr.record_type() == preferred_type)
-    });
-    if has_preferred_answer {
-        let expire_at = AppClock::elapsed_millis().saturating_add(CACHE_TTL_MS);
-        cache.insert(domain, expire_at);
-        return true;
+register_plugin_factory!("prefer_ipv4", DualSelectorFactory::new(RecordType::A));
+register_plugin_factory!("prefer_ipv6", DualSelectorFactory::new(RecordType::AAAA));
+
+impl DualSelectorFactory {
+    fn new(record_type: RecordType) -> Self {
+        Self { record_type }
     }
-    false
 }
 
-async fn run_original_sub_query(
-    next: RecursiveHandle,
-    mut context: DnsContext,
-) -> OriginalQueryOutcome {
-    let error = match tokio::time::timeout(SUB_QUERY_TIMEOUT, next.exec_next(&mut context)).await {
-        Ok(Ok(())) => None,
-        Ok(Err(e)) => Some(e),
-        Err(_) => Some(DnsError::plugin(
-            "dual_selector original sub-query timed out",
-        )),
+fn parse_dual_selector_config(args: Option<serde_yml::Value>) -> Result<(bool, u64)> {
+    let cfg = match args {
+        Some(args) => serde_yml::from_value::<DualSelectorConfig>(args).map_err(|e| {
+            DnsError::plugin(format!("failed to parse dual_selector config: {}", e))
+        })?,
+        None => DualSelectorConfig::default(),
     };
-    OriginalQueryOutcome { context, error }
-}
 
-fn set_first_query_type(context: &mut DnsContext, qtype: RecordType) -> bool {
-    let Some(query) = context.request.queries_mut().first_mut() else {
-        return false;
+    let cache_enabled = cfg.cache.unwrap_or(DEFAULT_CACHE_ENABLED);
+    let cache_ttl_secs = cfg.cache_ttl.unwrap_or(DEFAULT_CACHE_TTL_SECS);
+    if cache_enabled && cache_ttl_secs == 0 {
+        return Err(DnsError::plugin(
+            "dual_selector cache_ttl must be greater than 0 seconds",
+        ));
+    }
+    let cache_ttl_ms = if cache_ttl_secs == 0 {
+        DEFAULT_CACHE_TTL_MS
+    } else {
+        cache_ttl_secs.saturating_mul(1000)
     };
-    query.query_type = qtype;
-    true
+    Ok((cache_enabled, cache_ttl_ms))
 }
 
-#[derive(Debug, Clone)]
-pub struct PreferIpv4Factory;
+impl PluginFactory for DualSelectorFactory {
+    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
+        let _ = parse_dual_selector_config(plugin_config.args.clone())?;
+        Ok(())
+    }
 
-#[derive(Debug, Clone)]
-pub struct PreferIpv6Factory;
-
-register_plugin_factory!("prefer_ipv4", PreferIpv4Factory {});
-register_plugin_factory!("prefer_ipv6", PreferIpv6Factory {});
-
-impl PluginFactory for PreferIpv4Factory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
+        let (cache_enabled, cache_ttl_ms) = parse_dual_selector_config(plugin_config.args.clone())?;
         Ok(UninitializedPlugin::Executor(Box::new(DualSelector {
             tag: plugin_config.tag.clone(),
-            preferred_type: RecordType::A,
+            preferred_type: self.record_type,
             cache: Arc::new(DashMap::new()),
+            cache_enabled,
+            cache_ttl_ms,
             cleanup_started: AtomicBool::new(false),
         })))
     }
@@ -324,37 +337,10 @@ impl PluginFactory for PreferIpv4Factory {
     ) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(DualSelector {
             tag: tag.to_string(),
-            preferred_type: RecordType::A,
+            preferred_type: self.record_type,
             cache: Arc::new(DashMap::new()),
-            cleanup_started: AtomicBool::new(false),
-        })))
-    }
-}
-
-impl PluginFactory for PreferIpv6Factory {
-    fn create(
-        &self,
-        plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
-        Ok(UninitializedPlugin::Executor(Box::new(DualSelector {
-            tag: plugin_config.tag.clone(),
-            preferred_type: RecordType::AAAA,
-            cache: Arc::new(DashMap::new()),
-            cleanup_started: AtomicBool::new(false),
-        })))
-    }
-
-    fn quick_setup(
-        &self,
-        tag: &str,
-        _param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
-        Ok(UninitializedPlugin::Executor(Box::new(DualSelector {
-            tag: tag.to_string(),
-            preferred_type: RecordType::AAAA,
-            cache: Arc::new(DashMap::new()),
+            cache_enabled: DEFAULT_CACHE_ENABLED,
+            cache_ttl_ms: DEFAULT_CACHE_TTL_MS,
             cleanup_started: AtomicBool::new(false),
         })))
     }
@@ -364,67 +350,11 @@ impl PluginFactory for PreferIpv6Factory {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
-    use crate::plugin::executor::recursive::{NextChainRunner, RecursiveHandle};
-    use crate::plugin::registry::PluginRegistry;
     use ahash::{AHashMap, AHashSet};
-    use async_trait::async_trait;
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::rdata::{A, AAAA};
     use hickory_proto::rr::{Name, RData, Record};
     use std::net::{Ipv4Addr, Ipv6Addr};
-    use std::sync::Arc;
-    use tokio::time::sleep;
-
-    #[derive(Debug)]
-    struct MockRunner {
-        preferred_type: RecordType,
-        has_preferred_answer: bool,
-        preferred_delay: Duration,
-        original_delay: Duration,
-    }
-
-    #[async_trait]
-    impl NextChainRunner for MockRunner {
-        async fn run_from(
-            self: Arc<Self>,
-            context: &mut DnsContext,
-            _start_pc: usize,
-        ) -> Result<()> {
-            let query = context.request.query().expect("query must exist");
-            let qtype = query.query_type;
-            let qname = query.name().clone();
-
-            if qtype == self.preferred_type {
-                sleep(self.preferred_delay).await;
-            } else {
-                sleep(self.original_delay).await;
-            }
-
-            let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
-            let should_answer = if qtype == self.preferred_type {
-                self.has_preferred_answer
-            } else {
-                true
-            };
-            if should_answer {
-                match qtype {
-                    RecordType::A => response.answers_mut().push(Record::from_rdata(
-                        qname,
-                        60,
-                        RData::A(A(Ipv4Addr::new(1, 2, 3, 4))),
-                    )),
-                    RecordType::AAAA => response.answers_mut().push(Record::from_rdata(
-                        qname,
-                        60,
-                        RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)),
-                    )),
-                    _ => {}
-                }
-            }
-            context.response = Some(response);
-            Ok(())
-        }
-    }
 
     fn make_context(qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
@@ -449,8 +379,30 @@ mod tests {
             tag: "dual_selector_test".to_string(),
             preferred_type,
             cache: Arc::new(DashMap::new()),
+            cache_enabled: true,
+            cache_ttl_ms: DEFAULT_CACHE_TTL_MS,
             cleanup_started: AtomicBool::new(false),
         }
+    }
+
+    fn set_answer(context: &mut DnsContext, qtype: RecordType) {
+        let query = context.request.query().expect("query must exist");
+        let qname = query.name().clone();
+        let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
+        match qtype {
+            RecordType::A => response.answers_mut().push(Record::from_rdata(
+                qname,
+                60,
+                RData::A(A(Ipv4Addr::new(1, 2, 3, 4))),
+            )),
+            RecordType::AAAA => response.answers_mut().push(Record::from_rdata(
+                qname,
+                60,
+                RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)),
+            )),
+            _ => {}
+        }
+        context.response = Some(response);
     }
 
     fn has_answer_of_type(context: &DnsContext, qtype: RecordType) -> bool {
@@ -463,69 +415,199 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blocks_non_preferred_when_reference_has_preferred_answer() {
+    async fn cache_hit_blocks_non_preferred_immediately() {
         let selector = make_selector(RecordType::A);
-        let runner = Arc::new(MockRunner {
-            preferred_type: RecordType::A,
-            has_preferred_answer: true,
-            preferred_delay: Duration::from_millis(10),
-            original_delay: Duration::from_millis(20),
-        });
-        let handle = RecursiveHandle::new(runner, 0);
-        let mut context = make_context(RecordType::AAAA);
+        selector.cache_preferred("example.com");
 
-        let step = selector
-            .execute_with_handle(&mut context, Some(handle))
-            .await
-            .unwrap();
+        let mut context = make_context(RecordType::AAAA);
+        let step = selector.execute(&mut context).await.unwrap();
+
         assert!(matches!(step, ExecStep::Stop));
         assert!(!has_answer_of_type(&context, RecordType::AAAA));
     }
 
     #[tokio::test]
-    async fn passes_non_preferred_when_reference_has_no_preferred_answer() {
+    async fn preferred_post_warms_cache_for_next_non_preferred_request() {
         let selector = make_selector(RecordType::A);
-        let runner = Arc::new(MockRunner {
-            preferred_type: RecordType::A,
-            has_preferred_answer: false,
-            preferred_delay: Duration::from_millis(10),
-            original_delay: Duration::from_millis(20),
-        });
-        let handle = RecursiveHandle::new(runner, 0);
-        let mut context = make_context(RecordType::AAAA);
+        let mut preferred_context = make_context(RecordType::A);
 
-        let step = selector
-            .execute_with_handle(&mut context, Some(handle))
+        let step = selector.execute(&mut preferred_context).await.unwrap();
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        set_answer(&mut preferred_context, RecordType::A);
+        selector
+            .post_execute(&mut preferred_context, state)
             .await
             .unwrap();
-        assert!(matches!(step, ExecStep::Stop));
-        assert!(has_answer_of_type(&context, RecordType::AAAA));
+
+        let mut non_preferred_context = make_context(RecordType::AAAA);
+        let step2 = selector.execute(&mut non_preferred_context).await.unwrap();
+        assert!(matches!(step2, ExecStep::Stop));
+        assert!(!has_answer_of_type(
+            &non_preferred_context,
+            RecordType::AAAA
+        ));
     }
 
     #[tokio::test]
-    async fn late_reference_still_warms_cache_for_next_request() {
+    async fn non_preferred_uses_probe_result_and_blocks_when_preferred_exists() {
         let selector = make_selector(RecordType::A);
-        let runner = Arc::new(MockRunner {
-            preferred_type: RecordType::A,
-            has_preferred_answer: true,
-            preferred_delay: Duration::from_millis(700),
-            original_delay: Duration::from_millis(10),
-        });
-        let handle = RecursiveHandle::new(runner, 0);
+        let mut context = make_context(RecordType::AAAA);
 
-        let mut first = make_context(RecordType::AAAA);
-        let step = selector
-            .execute_with_handle(&mut first, Some(handle))
-            .await
-            .unwrap();
-        assert!(matches!(step, ExecStep::Stop));
-        assert!(has_answer_of_type(&first, RecordType::AAAA));
+        let step = selector.execute(&mut context).await.unwrap();
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
 
-        sleep(Duration::from_millis(900)).await;
+        let probe = context
+            .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
+            .copied()
+            .expect("probe request should be set");
+        assert_eq!(probe.preferred_type, RecordType::A);
+
+        set_answer(&mut context, RecordType::AAAA);
+        context.set_attr(
+            DnsContext::ATTR_FORWARD_PROBE_RESULT,
+            ForwardProbeResult {
+                preferred_has_answer: true,
+                preferred_error: None,
+                original_error: None,
+            },
+        );
+
+        selector.post_execute(&mut context, state).await.unwrap();
+        assert!(!has_answer_of_type(&context, RecordType::AAAA));
 
         let mut second = make_context(RecordType::AAAA);
         let step2 = selector.execute(&mut second).await.unwrap();
         assert!(matches!(step2, ExecStep::Stop));
         assert!(!has_answer_of_type(&second, RecordType::AAAA));
+    }
+
+    #[tokio::test]
+    async fn non_preferred_without_preferred_answer_is_cached_to_skip_next_probe() {
+        let selector = make_selector(RecordType::A);
+        let mut first = make_context(RecordType::AAAA);
+
+        let step = selector.execute(&mut first).await.unwrap();
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        set_answer(&mut first, RecordType::AAAA);
+        first.set_attr(
+            DnsContext::ATTR_FORWARD_PROBE_RESULT,
+            ForwardProbeResult {
+                preferred_has_answer: false,
+                preferred_error: None,
+                original_error: None,
+            },
+        );
+        selector.post_execute(&mut first, state).await.unwrap();
+        assert!(has_answer_of_type(&first, RecordType::AAAA));
+
+        let mut second = make_context(RecordType::AAAA);
+        let step2 = selector.execute(&mut second).await.unwrap();
+        assert!(matches!(step2, ExecStep::Next));
+        assert!(
+            second
+                .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_disabled_always_probes_non_preferred() {
+        let mut selector = make_selector(RecordType::A);
+        selector.cache_enabled = false;
+
+        let mut first = make_context(RecordType::AAAA);
+        let step1 = selector.execute(&mut first).await.unwrap();
+        let state1 = match step1 {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        set_answer(&mut first, RecordType::AAAA);
+        first.set_attr(
+            DnsContext::ATTR_FORWARD_PROBE_RESULT,
+            ForwardProbeResult {
+                preferred_has_answer: false,
+                preferred_error: None,
+                original_error: None,
+            },
+        );
+        selector.post_execute(&mut first, state1).await.unwrap();
+
+        let mut second = make_context(RecordType::AAAA);
+        let step2 = selector.execute(&mut second).await.unwrap();
+        assert!(matches!(step2, ExecStep::NextWithPost(_)));
+        assert!(
+            second
+                .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn non_preferred_returns_forward_error_when_probe_not_blocking() {
+        let selector = make_selector(RecordType::A);
+        let mut context = make_context(RecordType::AAAA);
+
+        let step = selector.execute(&mut context).await.unwrap();
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        context.set_attr(
+            DnsContext::ATTR_FORWARD_PROBE_RESULT,
+            ForwardProbeResult {
+                preferred_has_answer: false,
+                preferred_error: None,
+                original_error: Some("forward original query failed".to_string()),
+            },
+        );
+        context.response = None;
+
+        let err = selector
+            .post_execute(&mut context, state)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("forward original query failed"));
+    }
+
+    #[tokio::test]
+    async fn probe_error_does_not_block_or_warm_cache() {
+        let selector = make_selector(RecordType::A);
+        let mut context = make_context(RecordType::AAAA);
+
+        let step = selector.execute(&mut context).await.unwrap();
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        set_answer(&mut context, RecordType::AAAA);
+        context.set_attr(
+            DnsContext::ATTR_FORWARD_PROBE_RESULT,
+            ForwardProbeResult {
+                preferred_has_answer: true,
+                preferred_error: Some("probe timeout".to_string()),
+                original_error: None,
+            },
+        );
+
+        selector.post_execute(&mut context, state).await.unwrap();
+        assert!(has_answer_of_type(&context, RecordType::AAAA));
+
+        let mut second = make_context(RecordType::AAAA);
+        let step2 = selector.execute(&mut second).await.unwrap();
+        assert!(matches!(step2, ExecStep::NextWithPost(_)));
     }
 }

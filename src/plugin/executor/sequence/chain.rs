@@ -6,7 +6,6 @@ use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::dns_utils::{build_response_from_request, parse_named_response_code};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
-use crate::plugin::executor::recursive::{NextChainRunner, RecursiveHandle};
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{SequenceRef, parse_sequence_ref};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
@@ -83,7 +82,7 @@ impl ChainProgram {
     ) -> Result<()> {
         // Deferred post callbacks for `ExecStep::NextWithPost`.
         let mut post_stack: Vec<(Arc<dyn Executor>, Option<ExecState>)> = Vec::new();
-        let mut run_error: Option<crate::core::error::DnsError> = None;
+        let mut run_error: Option<DnsError> = None;
 
         while pc < self.instructions.len() {
             let instruction = &self.instructions[pc];
@@ -93,23 +92,20 @@ impl ChainProgram {
             }
 
             match &instruction.op {
-                OpCode::Executor(executor) => {
-                    let next = RecursiveHandle::new(self.clone(), pc + 1);
-                    match executor.execute_with_handle(context, Some(next)).await {
-                        Ok(step) => match step {
-                            ExecStep::Next => pc += 1,
-                            ExecStep::NextWithPost(state) => {
-                                post_stack.push((executor.clone(), state));
-                                pc += 1;
-                            }
-                            ExecStep::Stop => break,
-                        },
-                        Err(e) => {
-                            run_error = Some(e);
-                            break;
+                OpCode::Executor(executor) => match executor.execute(context).await {
+                    Ok(step) => match step {
+                        ExecStep::Next => pc += 1,
+                        ExecStep::NextWithPost(state) => {
+                            post_stack.push((executor.clone(), state));
+                            pc += 1;
                         }
+                        ExecStep::Stop => break,
+                    },
+                    Err(e) => {
+                        run_error = Some(e);
+                        break;
                     }
-                }
+                },
                 OpCode::Builtin(op) => match op {
                     BuiltinOp::Accept => {
                         context.exec_flow_state = ExecFlowState::Broken;
@@ -123,7 +119,7 @@ impl ChainProgram {
                         break;
                     }
                     BuiltinOp::Jump(executor) => {
-                        if let Err(e) = executor.execute_with_handle(context, None).await {
+                        if let Err(e) = executor.execute(context).await {
                             run_error = Some(e);
                             break;
                         }
@@ -136,7 +132,7 @@ impl ChainProgram {
                         pc += 1;
                     }
                     BuiltinOp::Goto(executor) => {
-                        if let Err(e) = executor.execute_with_handle(context, None).await {
+                        if let Err(e) = executor.execute(context).await {
                             run_error = Some(e);
                         }
                         break;
@@ -162,13 +158,6 @@ impl ChainProgram {
         } else {
             Ok(())
         }
-    }
-}
-
-#[async_trait::async_trait]
-impl NextChainRunner for ChainProgram {
-    async fn run_from(self: Arc<Self>, context: &mut DnsContext, start_pc: usize) -> Result<()> {
-        self.run_from_inner(context, start_pc).await
     }
 }
 

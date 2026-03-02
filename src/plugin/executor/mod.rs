@@ -7,7 +7,6 @@ use std::any::Any;
 
 use crate::core::error::Result;
 use crate::{core::context::DnsContext, plugin::Plugin};
-use recursive::RecursiveHandle;
 
 pub type ExecResult = Result<()>;
 pub type ExecState = Box<dyn Any + Send + Sync>;
@@ -32,11 +31,8 @@ pub mod forward_edns0opt;
 pub mod hosts;
 pub mod ipset;
 pub mod metrics_collector;
-#[cfg(target_os = "linux")]
-pub mod netlink_nf;
 pub mod nftset;
 pub mod query_summary;
-pub mod recursive;
 pub mod redirect;
 pub mod reverse_lookup;
 pub mod sequence;
@@ -49,17 +45,6 @@ pub trait Executor: Plugin {
     ///
     /// Return [`ExecStep`] to instruct the sequence engine how to advance.
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep>;
-
-    /// Optional execute path with access to recursive "next-chain" handle.
-    ///
-    /// Most executors can ignore this and keep implementing only `execute`.
-    async fn execute_with_handle(
-        &self,
-        context: &mut DnsContext,
-        _next: Option<RecursiveHandle>,
-    ) -> Result<ExecStep> {
-        self.execute(context).await
-    }
 
     /// Optional post-stage callback executed when `execute` returns `NextWithPost`.
     async fn post_execute(

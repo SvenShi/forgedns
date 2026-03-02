@@ -29,7 +29,7 @@ use tracing::debug;
 use tracing::warn;
 
 #[cfg(target_os = "linux")]
-use crate::plugin::executor::netlink_nf::{
+use crate::network::netlink_nf::{
     NLM_F_REQUEST_ACK, NfNetlinkSocket, nla_put, nla_put_nested, nla_put_strz, nla_put_u8,
     nla_put_u32,
 };
