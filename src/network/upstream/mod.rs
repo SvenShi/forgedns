@@ -405,8 +405,8 @@ impl ConnectionInfo {
     const DEFAULT_MAX_CONNS_SIZE: usize = 64;
     const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
     const DEFAULT_IDLE_TIME: u64 = 10;
-    pub fn with_addr(addr: &str) -> Self {
-        let (connection_type, host, port, path) = detect_connection_type(addr);
+    pub fn with_addr(addr: &str) -> Result<Self> {
+        let (connection_type, host, port, path) = detect_connection_type(addr)?;
         let port = port.unwrap_or(connection_type.default_port());
 
         debug!(
@@ -416,7 +416,7 @@ impl ConnectionInfo {
 
         let remote_ip = resolve_ip_from_host(&host, None, false);
 
-        ConnectionInfo {
+        Ok(ConnectionInfo {
             tag: None,
             remote_ip,
             port,
@@ -434,14 +434,15 @@ impl ConnectionInfo {
             so_mark: None,
             bind_to_device: None,
             max_conns: None,
-        }
+        })
     }
 }
 
-impl From<UpstreamConfig> for ConnectionInfo {
-    fn from(upstream_config: UpstreamConfig) -> Self {
-        let (connection_type, host, port, path) = detect_connection_type(&upstream_config.addr);
+impl TryFrom<UpstreamConfig> for ConnectionInfo {
+    type Error = DnsError;
 
+    fn try_from(upstream_config: UpstreamConfig) -> Result<Self> {
+        let (connection_type, host, port, path) = detect_connection_type(&upstream_config.addr)?;
         let port = upstream_config
             .port
             .or(port)
@@ -462,7 +463,7 @@ impl From<UpstreamConfig> for ConnectionInfo {
                 &bootstrap_server,
                 &host,
                 upstream_config.bootstrap_version,
-            )))
+            )?))
         } else {
             None
         };
@@ -487,7 +488,7 @@ impl From<UpstreamConfig> for ConnectionInfo {
             None
         };
 
-        ConnectionInfo {
+        Ok(ConnectionInfo {
             tag: upstream_config.tag,
             remote_ip,
             port,
@@ -505,7 +506,7 @@ impl From<UpstreamConfig> for ConnectionInfo {
             so_mark: upstream_config.so_mark,
             bind_to_device: upstream_config.bind_to_device,
             max_conns: upstream_config.max_conns,
-        }
+        })
     }
 }
 
@@ -549,19 +550,19 @@ fn resolve_ip_from_host(
 }
 
 /// Detect the connection type from the config address
-fn detect_connection_type(addr: &str) -> (ConnectionType, String, Option<u16>, String) {
+fn detect_connection_type(addr: &str) -> Result<(ConnectionType, String, Option<u16>, String)> {
     if !addr.contains("//") {
         return detect_connection_type(&("udp://".to_owned() + addr));
     }
 
-    let url = Url::parse(addr).expect("Invalid upstream URL");
+    let url =
+        Url::parse(addr).map_err(|e| DnsError::plugin(format!("invalid upstream URL: {}", e)))?;
     let connection_type;
 
-    let host = if let Some(host) = url.host_str() {
-        host.to_owned()
-    } else {
-        panic!("Invalid upstream URL, no host specified");
-    };
+    let host = url
+        .host_str()
+        .map(|host| host.to_owned())
+        .ok_or_else(|| DnsError::plugin("invalid upstream URL: no host specified"))?;
 
     match url.scheme() {
         "udp" => {
@@ -580,7 +581,10 @@ fn detect_connection_type(addr: &str) -> (ConnectionType, String, Option<u16>, S
             connection_type = ConnectionType::DoH;
         }
         other => {
-            panic!("Invalid upstream URL scheme: {}", other);
+            return Err(DnsError::plugin(format!(
+                "invalid upstream URL scheme: {}",
+                other
+            )));
         }
     };
 
@@ -593,7 +597,7 @@ fn detect_connection_type(addr: &str) -> (ConnectionType, String, Option<u16>, S
         url.path()
     );
 
-    (connection_type, host, url.port(), url.path().to_string())
+    Ok((connection_type, host, url.port(), url.path().to_string()))
 }
 
 /// Builder for creating upstream instances
@@ -707,9 +711,9 @@ impl UpstreamBuilder {
     }
 
     /// Build an upstream instance from configuration
-    pub fn with_upstream_config(upstream_config: UpstreamConfig) -> Box<dyn Upstream> {
-        let connection_info = ConnectionInfo::from(upstream_config);
-        Self::with_connection_info(connection_info)
+    pub fn with_upstream_config(upstream_config: UpstreamConfig) -> Result<Box<dyn Upstream>> {
+        let connection_info = ConnectionInfo::try_from(upstream_config)?;
+        Ok(Self::with_connection_info(connection_info))
     }
 }
 

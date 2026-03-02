@@ -75,15 +75,16 @@ impl Bootstrap {
     /// * `domain` - Domain name to resolve (FQDN format)
     /// * `ip_version` - IP version preference: Some(6) for IPv6, None or Some(4) for IPv4
     ///
-    /// # Panics
-    /// Panics if the domain name is invalid (validation happens at initialization time)
-    ///
     /// # Performance
     /// Pre-builds the DNS query message to avoid repeated allocations on each query
-    pub fn new(bootstrap_server: &str, domain: &str, ip_version: Option<u8>) -> Self {
+    pub fn new(bootstrap_server: &str, domain: &str, ip_version: Option<u8>) -> Result<Self> {
         // Pre-parse domain name (fail-fast strategy during initialization)
-        let parsed_name = Name::from_str(domain)
-            .unwrap_or_else(|e| panic!("Invalid domain name '{}': {}", domain, e));
+        let parsed_name = Name::from_str(domain).map_err(|e| {
+            DnsError::plugin(format!(
+                "invalid bootstrap target domain '{}': {}",
+                domain, e
+            ))
+        })?;
 
         // Pre-build DNS query message to optimize hot path performance
         // This message template will be cloned for each actual query
@@ -100,16 +101,21 @@ impl Bootstrap {
             },
         ));
 
-        Bootstrap {
-            upstream: UpstreamBuilder::with_connection_info(ConnectionInfo::with_addr(
-                bootstrap_server,
-            )),
+        let bootstrap_info = ConnectionInfo::with_addr(bootstrap_server).map_err(|e| {
+            DnsError::plugin(format!(
+                "invalid bootstrap upstream '{}': {}",
+                bootstrap_server, e
+            ))
+        })?;
+
+        Ok(Bootstrap {
+            upstream: UpstreamBuilder::with_connection_info(bootstrap_info),
             state: AtomicU8::new(STATE_NONE),
             cache: RwLock::new(None),
             query_done: Notify::new(),
             message,
             domain: domain.to_string(),
-        }
+        })
     }
 
     /// Get the resolved IP address, using cache or triggering a new query

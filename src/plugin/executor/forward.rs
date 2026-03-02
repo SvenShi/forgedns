@@ -12,7 +12,7 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::network::upstream::{Upstream, UpstreamBuilder, UpstreamConfig};
+use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::dual_selector::{ForwardProbeRequest, ForwardProbeResult};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -272,14 +272,18 @@ impl ConcurrentForwarder {
         let (response, last_error) = self.query_any_upstream(context.request.clone()).await;
         if let Some(response) = response {
             context.response = Some(response);
-        } else {
-            warn!(
-                "forward plugin '{}' failed across all concurrent upstreams: {}",
-                self.tag,
-                last_error.unwrap_or_else(|| "no upstream response".to_string())
-            );
+            return Ok(ExecStep::Next);
         }
-        Ok(ExecStep::Next)
+
+        let err = last_error.unwrap_or_else(|| "no upstream response".to_string());
+        warn!(
+            "forward plugin '{}' failed across all concurrent upstreams: {}",
+            self.tag, err
+        );
+        Err(DnsError::plugin(format!(
+            "forward plugin '{}' failed across all concurrent upstreams: {}",
+            self.tag, err
+        )))
     }
 
     async fn execute_with_probe(
@@ -400,6 +404,45 @@ fn response_has_answer_of_type(message: &Message, qtype: RecordType) -> bool {
         .any(|answer| answer.record_type() == qtype)
 }
 
+fn parse_forward_config(plugin_config: &PluginConfig) -> Result<ForwardConfig> {
+    let cfg = plugin_config.args.clone().ok_or_else(|| {
+        DnsError::plugin("forward plugin requires 'concurrent' and 'upstreams' configuration")
+    })?;
+    let cfg = serde_yml::from_value::<ForwardConfig>(cfg)
+        .map_err(|e| DnsError::plugin(format!("failed to parse forward plugin config: {}", e)))?;
+    validate_forward_config(&cfg)?;
+    Ok(cfg)
+}
+
+fn validate_forward_config(cfg: &ForwardConfig) -> Result<()> {
+    if cfg.upstreams.is_empty() {
+        return Err(DnsError::plugin(
+            "forward plugin requires at least one upstream",
+        ));
+    }
+
+    for (idx, upstream) in cfg.upstreams.iter().enumerate() {
+        validate_upstream_addr(&upstream.addr).map_err(|e| {
+            DnsError::plugin(format!(
+                "forward plugin upstream[{}] addr '{}' is invalid: {}",
+                idx, upstream.addr, e
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn validate_upstream_addr(addr: &str) -> std::result::Result<(), String> {
+    ConnectionInfo::with_addr(addr)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn build_upstream(upstream_config: UpstreamConfig) -> Result<Box<dyn Upstream>> {
+    UpstreamBuilder::with_upstream_config(upstream_config)
+}
+
 /// Forward plugin configuration
 #[derive(Deserialize)]
 #[allow(unused)]
@@ -419,18 +462,7 @@ register_plugin_factory!("forward", ForwardFactory {});
 
 impl PluginFactory for ForwardFactory {
     fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        // Parse and validate forward-specific configuration
-        let _forward_config = match plugin_config.args.clone() {
-            Some(args) => serde_yml::from_value::<ForwardConfig>(args).map_err(|e| {
-                DnsError::plugin(format!("Failed to parse Forward plugin config: {}", e))
-            })?,
-            None => {
-                return Err(DnsError::plugin(
-                    "Forward plugin requires 'concurrent' and 'upstreams' configuration",
-                ));
-            }
-        };
-
+        let _ = parse_forward_config(plugin_config)?;
         Ok(())
     }
 
@@ -439,9 +471,7 @@ impl PluginFactory for ForwardFactory {
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        // valid config
-        let forward_config =
-            serde_yml::from_value::<ForwardConfig>(plugin_config.args.clone().unwrap())?;
+        let forward_config = parse_forward_config(plugin_config)?;
 
         if forward_config.upstreams.len() == 1 {
             // Single upstream configuration
@@ -454,7 +484,7 @@ impl PluginFactory for ForwardFactory {
             Ok(UninitializedPlugin::Executor(Box::new(
                 SingleDnsForwarder {
                     tag: plugin_config.tag.clone(),
-                    upstream: UpstreamBuilder::with_upstream_config(upstream_config.clone()),
+                    upstream: build_upstream(upstream_config.clone())?,
                 },
             )))
         } else {
@@ -467,7 +497,7 @@ impl PluginFactory for ForwardFactory {
             let mut upstreams = Vec::with_capacity(forward_config.upstreams.len());
 
             for upstream_config in forward_config.upstreams {
-                upstreams.push(UpstreamBuilder::with_upstream_config(upstream_config).into());
+                upstreams.push(build_upstream(upstream_config)?.into());
             }
 
             // Multi-upstream configuration (not yet implemented)
@@ -487,15 +517,19 @@ impl PluginFactory for ForwardFactory {
         param: Option<String>,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        if param.is_none() {
-            return Err(DnsError::plugin(
-                "forward quick setup requires non-empty upstream address parameter",
-            ));
-        }
+        let param = param.ok_or_else(|| {
+            DnsError::plugin("forward quick setup requires non-empty upstream address parameter")
+        })?;
+        validate_upstream_addr(&param).map_err(|e| {
+            DnsError::plugin(format!(
+                "forward quick setup upstream '{}' is invalid: {}",
+                param, e
+            ))
+        })?;
 
         let upstream_config = UpstreamConfig {
             tag: None,
-            addr: param.unwrap(),
+            addr: param,
             dial_addr: None,
             port: None,
             bootstrap: None,
@@ -514,8 +548,155 @@ impl PluginFactory for ForwardFactory {
         Ok(UninitializedPlugin::Executor(Box::new(
             SingleDnsForwarder {
                 tag: tag.to_string(),
-                upstream: UpstreamBuilder::with_upstream_config(upstream_config),
+                upstream: build_upstream(upstream_config)?,
             },
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::ExecFlowState;
+    use ahash::{AHashMap, AHashSet};
+    use hickory_proto::op::{Query, ResponseCode};
+    use hickory_proto::rr::Name;
+
+    #[derive(Debug)]
+    struct MockUpstream {
+        connection_info: crate::network::upstream::ConnectionInfo,
+        fail_message: Option<String>,
+    }
+
+    impl MockUpstream {
+        fn ok() -> Self {
+            Self {
+                connection_info: crate::network::upstream::ConnectionInfo::with_addr("1.1.1.1")
+                    .expect("mock upstream addr must be valid"),
+                fail_message: None,
+            }
+        }
+
+        fn fail(msg: &str) -> Self {
+            Self {
+                connection_info: crate::network::upstream::ConnectionInfo::with_addr("1.1.1.1")
+                    .expect("mock upstream addr must be valid"),
+                fail_message: Some(msg.to_string()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Upstream for MockUpstream {
+        async fn inner_query(&self, request: Message) -> Result<Message> {
+            if let Some(err) = self.fail_message.as_ref() {
+                return Err(DnsError::plugin(err.clone()));
+            }
+            Ok(crate::core::dns_utils::build_response_from_request(
+                &request,
+                ResponseCode::NoError,
+            ))
+        }
+
+        fn connection_info(&self) -> &crate::network::upstream::ConnectionInfo {
+            &self.connection_info
+        }
+    }
+
+    fn make_context() -> DnsContext {
+        let mut request = Message::new();
+        request.add_query(Query::query(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+        ));
+        DnsContext {
+            src_addr: "127.0.0.1:5533".parse().unwrap(),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: AHashSet::new(),
+            attributes: AHashMap::new(),
+            query_view: None,
+            registry: Arc::new(PluginRegistry::new()),
+        }
+    }
+
+    fn make_plugin_config(args: &str) -> PluginConfig {
+        PluginConfig {
+            tag: "forward-test".to_string(),
+            plugin_type: "forward".to_string(),
+            args: Some(serde_yml::from_str(args).unwrap()),
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_returns_error_when_all_upstreams_fail() {
+        let forwarder = ConcurrentForwarder {
+            tag: "forward-test".to_string(),
+            active_concurrent: 2,
+            upstreams: vec![
+                Arc::new(MockUpstream::fail("u1 fail")),
+                Arc::new(MockUpstream::fail("u2 fail")),
+            ],
+        };
+
+        let mut context = make_context();
+        let err = forwarder.execute(&mut context).await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("failed across all concurrent upstreams")
+        );
+        assert!(context.response.is_none());
+    }
+
+    #[test]
+    fn validate_rejects_empty_upstreams() {
+        let factory = ForwardFactory;
+        let cfg = make_plugin_config("upstreams: []");
+        let err = factory.validate_config(&cfg).unwrap_err();
+        assert!(err.to_string().contains("at least one upstream"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_upstream_addr() {
+        let factory = ForwardFactory;
+        let cfg = make_plugin_config(
+            r#"
+upstreams:
+  - addr: "udp://"
+"#,
+        );
+        let err = factory.validate_config(&cfg).unwrap_err();
+        assert!(err.to_string().contains("is invalid"));
+    }
+
+    #[test]
+    fn quick_setup_rejects_invalid_upstream_addr() {
+        let factory = ForwardFactory;
+        let result = factory.quick_setup(
+            "forward-test",
+            Some("udp://".to_string()),
+            Arc::new(PluginRegistry::new()),
+        );
+        let err = match result {
+            Ok(_) => panic!("expected quick_setup to fail for invalid upstream addr"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("is invalid"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_success_sets_response() {
+        let forwarder = ConcurrentForwarder {
+            tag: "forward-test".to_string(),
+            active_concurrent: 1,
+            upstreams: vec![Arc::new(MockUpstream::ok())],
+        };
+
+        let mut context = make_context();
+        let step = forwarder.execute(&mut context).await.unwrap();
+        assert!(matches!(step, ExecStep::Next));
+        assert!(context.response.is_some());
     }
 }
