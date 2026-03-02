@@ -7,6 +7,16 @@
 //!
 //! Collects lightweight in-process counters and latency statistics for a
 //! sequence section.
+//!
+//! Like server-side request handling in `plugin/server/mod.rs`, this plugin
+//! only observes and annotates request lifecycle without changing resolver
+//! routing decisions:
+//! - `execute`: increments total/inflight counters and stores start timestamp.
+//! - `post_execute`: decrements inflight, records success/error and latency.
+//! - snapshot logging: emits aggregated metrics every 1024 requests.
+//!
+//! Design goal is low overhead on hot paths: atomics with relaxed ordering and
+//! no allocation in steady-state execution.
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;

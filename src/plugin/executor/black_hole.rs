@@ -6,6 +6,15 @@
 //! `black_hole` executor plugin.
 //!
 //! Generates synthetic A/AAAA responses for matched query type.
+//!
+//! Typical usage is ad-blocking / sinkhole policy where matched domains should
+//! be answered locally without upstream queries.
+//!
+//! Behavior:
+//! - only handles single-question requests.
+//! - for `A` queries returns configured IPv4 list.
+//! - for `AAAA` queries returns configured IPv6 list.
+//! - for other types, plugin is pass-through (`Next` without response changes).
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

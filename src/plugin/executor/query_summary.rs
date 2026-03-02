@@ -6,6 +6,13 @@
 //! `query_summary` executor plugin.
 //!
 //! Logs compact query summary after downstream execution.
+//!
+//! This plugin is an observer-only stage:
+//! - `execute` stores request start timestamp via post state.
+//! - `post_execute` logs source, qname/qtype, final rcode and elapsed time.
+//!
+//! It does not change request routing or response content, so it can be placed
+//! anywhere in a sequence for tracing and latency attribution.
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;

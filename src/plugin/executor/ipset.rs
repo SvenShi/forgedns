@@ -6,6 +6,17 @@
 //! `ipset` executor plugin.
 //!
 //! Writes response IP addresses into Linux ipset sets via netlink.
+//!
+//! Runtime flow:
+//! - scans response answers and extracts unique A/AAAA addresses.
+//! - applies family-specific masks (`mask4`/`mask6`) and target sets.
+//! - sends batched add requests to a dedicated background writer thread.
+//!
+//! Performance and resilience:
+//! - request path uses non-blocking queue write (`try_send`) to avoid adding
+//!   latency to DNS hot path.
+//! - queue overflow drops side effects (best effort).
+//! - writer failure disables plugin to prevent repeated netlink overhead.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

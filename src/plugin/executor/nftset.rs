@@ -6,6 +6,18 @@
 //! `nftset` executor plugin.
 //!
 //! Writes response IP addresses into nftables sets via netlink.
+//!
+//! Operational model:
+//! - extracts unique A/AAAA addresses from response answers.
+//! - converts addresses to configured CIDR prefixes (`mask4`/`mask6`).
+//! - enqueues batched writes to a dedicated background writer thread.
+//!
+//! Hot-path and failure semantics:
+//! - DNS path is best-effort and non-blocking (`try_send`); full queue drops
+//!   side-effects instead of stalling request processing.
+//! - when writer/backend disconnects, plugin disables itself to avoid repeated
+//!   errors and extra overhead.
+//! - on non-Linux platforms this plugin degrades to no-op behavior.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

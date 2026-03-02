@@ -5,7 +5,20 @@
 
 //! `fallback` executor plugin.
 //!
-//! Runs a primary executable and falls back to secondary on failure / timeout.
+//! Runs a primary executor and falls back to a secondary executor on
+//! failure/timeout.
+//!
+//! Scheduling model:
+//! - `primary` starts immediately.
+//! - `secondary` starts after `threshold` milliseconds, or starts immediately
+//!   in standby mode (`always_standby = true`).
+//! - first successful response wins; unfinished sibling tasks are cancelled.
+//!
+//! Result semantics:
+//! - if either branch produces a response, plugin writes it to
+//!   `DnsContext.response` and returns `Next`.
+//! - if both branches fail (or return no response), plugin returns error so the
+//!   server request handler can generate a failure response.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

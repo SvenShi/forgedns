@@ -5,7 +5,17 @@
 
 //! `ecs_handler` executor plugin.
 //!
-//! Implements EDNS Client Subnet (ECS) option insertion for outgoing queries.
+//! Implements EDNS Client Subnet (ECS) processing for outgoing queries.
+//!
+//! Supported policies:
+//! - `forward = true`: keep client-supplied ECS when present.
+//! - `forward = false`: remove client-supplied ECS.
+//! - `send = true`: synthesize ECS from source IP when request has no ECS.
+//! - `preset`: force ECS source IP regardless of client source address.
+//!
+//! Post-stage behavior:
+//! - when ECS was not forwarded from client, response ECS is stripped to avoid
+//!   leaking internally generated subnet metadata back to downstream clients.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

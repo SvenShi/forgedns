@@ -6,6 +6,10 @@
 //! `drop_resp` executor plugin.
 //!
 //! Clears the current response from [`DnsContext`].
+//!
+//! This plugin is useful when a previous executor produced a response but a
+//! later policy requires re-querying or rebuilding output. It only resets
+//! `context.response` and keeps request metadata/marks untouched.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

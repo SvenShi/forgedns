@@ -5,7 +5,19 @@
 
 //! `ttl` executor plugin.
 //!
-//! Supports fixed TTL (`ttl 300`) and range clamp (`ttl 300-600`).
+//! Rewrites TTL values on generated response records.
+//!
+//! This executor follows the same request lifecycle contract as server modules:
+//! it reads and mutates `DnsContext.response` in-place, then returns `Next`
+//! to keep sequence execution moving.
+//!
+//! Supported policies:
+//! - fixed TTL: `ttl 300` or `{ fix: 300 }`
+//! - clamp range: `ttl 300-600` or `{ min: 300, max: 600 }`
+//!
+//! Coverage:
+//! - answers and authority records are always rewritten.
+//! - additional records are rewritten except EDNS OPT pseudo-records.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

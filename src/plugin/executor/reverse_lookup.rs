@@ -5,7 +5,18 @@
 
 //! `reverse_lookup` executor plugin.
 //!
-//! Caches answer IP -> domain mapping and optionally serves PTR queries.
+//! Caches answer IP -> domain mappings and optionally serves PTR queries.
+//!
+//! Pipeline semantics:
+//! - `execute`: optionally intercepts PTR requests and answers directly from
+//!   cache (`handle_ptr = true`).
+//! - `post_execute`: after downstream response is available, extracts A/AAAA
+//!   answer IPs and updates cache with bounded TTL.
+//!
+//! Cache design:
+//! - concurrent map for lock-sharded reads/writes.
+//! - periodic cleanup removes expired entries and trims overflow in batches.
+//! - IPv4-mapped IPv6 addresses are normalized to keep lookup keys consistent.
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;

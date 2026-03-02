@@ -5,7 +5,16 @@
 
 //! `string_exp` matcher plugin.
 //!
-//! Experimental string expression matcher.
+//! String expression matcher for context-derived values.
+//!
+//! Expression format:
+//! - `<source> <op> <arg...>` (or compact `<source><op> <arg...>`).
+//! - sources include `qname`, `qtype`, `rcode`, `resp_ip`, `mark`,
+//!   `client_ip`, `server_name`, `url_path`, and `$ENV_KEY`.
+//! - operations include `eq`, `prefix`, `suffix`, `contains`, `regexp`, `zl`.
+//!
+//! This matcher is designed for flexible policy composition when dedicated
+//! typed matchers are not enough.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

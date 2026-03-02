@@ -5,7 +5,12 @@
 
 //! `sleep` executor plugin.
 //!
-//! Adds an intentional delay in the sequence pipeline, mainly for testing.
+//! Adds an intentional async delay in the sequence pipeline.
+//!
+//! This plugin is primarily for testing/benchmark experiments (for example,
+//! validating fallback thresholds and concurrency behavior). It uses
+//! `tokio::time::sleep`, so it does not block worker threads, but it does add
+//! end-to-end request latency by design.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

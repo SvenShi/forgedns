@@ -6,6 +6,19 @@
 //! `hosts` executor plugin.
 //!
 //! Maps domain rules to static IP responses.
+//!
+//! Rule sources:
+//! - inline `entries`
+//! - external files (`files`)
+//!
+//! Supported matchers follow mosdns-style expressions:
+//! - exact name (`full:example.com`)
+//! - suffix domain (`domain:example.com`)
+//! - keyword (`keyword:cdn`)
+//! - regex (`regexp:^api\\.`)
+//!
+//! Execution only answers IN-class `A`/`AAAA` requests. Non-matching queries
+//! pass through to downstream executors unchanged.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

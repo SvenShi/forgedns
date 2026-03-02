@@ -3,6 +3,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+//! High-performance domain expression set provider.
+//!
+//! Responsibilities:
+//! - load domain expressions from inline config and files.
+//! - resolve referenced `domain_set` providers and flatten them.
+//! - provide hot-path membership checks for matcher plugins.
+//!
+//! Performance model:
+//! - expressions are compiled once at init time.
+//! - runtime lookup uses pre-normalized input and optional pre-split labels.
+//! - flattened matcher graph avoids recursive provider traversal.
+
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, normalize_domain_cow, split_labels_rev};

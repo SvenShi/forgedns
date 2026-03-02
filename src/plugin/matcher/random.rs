@@ -6,6 +6,11 @@
 //! `random` matcher plugin.
 //!
 //! Returns true with configured probability.
+//!
+//! This matcher is useful for probabilistic rollout / sampling policies in
+//! sequence rules. Configuration takes exactly one probability in `[0.0, 1.0]`.
+//! - `0.0`: always false
+//! - `1.0`: always true
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

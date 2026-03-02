@@ -7,6 +7,15 @@
 //!
 //! Rewrites request qname to target qname, executes subsequent chain, then
 //! restores original question and prepends a CNAME answer.
+//!
+//! Two-stage behavior:
+//! - `execute`: match rule by original qname and replace request query name
+//!   with redirect target.
+//! - `post_execute`: restore original query name in request/response and add
+//!   synthetic CNAME from original -> target before upstream answers.
+//!
+//! This keeps downstream resolution consistent with redirected target while
+//! still returning a client-facing CNAME chain.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

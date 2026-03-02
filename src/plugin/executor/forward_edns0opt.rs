@@ -5,8 +5,19 @@
 
 //! `forward_edns0opt` executor plugin.
 //!
-//! Forwards selected EDNS0 option codes from downstream request to query and
-//! then to response.
+//! Forwards selected EDNS0 option codes from downstream request to final
+//! response.
+//!
+//! Runtime behavior:
+//! - `execute`: extracts configured option codes from request OPT records and
+//!   stores them in post state.
+//! - `post_execute`: re-inserts those options into response OPT records after
+//!   downstream executors complete.
+//!
+//! Safety/perf notes:
+//! - options are filtered by code allow-list (`codes`) and deduplicated.
+//! - response OPT record is created only when needed.
+//! - when no codes are configured, plugin becomes near no-op.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;

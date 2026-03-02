@@ -6,6 +6,20 @@
 //! `rate_limiter` matcher plugin.
 //!
 //! Token-bucket matcher keyed by masked client IP.
+//!
+//! Matching semantics:
+//! - each masked IP owns one token bucket.
+//! - matcher returns `true` when one token can be consumed.
+//! - matcher returns `false` when bucket is exhausted.
+//!
+//! Configuration controls:
+//! - `qps`: refill rate per second.
+//! - `burst`: bucket capacity.
+//! - `mask4`/`mask6`: aggregation granularity for IPv4/IPv6 clients.
+//!
+//! Lifecycle:
+//! - `init` starts periodic cleanup for stale buckets.
+//! - `destroy` stops cleanup task and releases background resources.
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
