@@ -10,12 +10,12 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    load_rules_from_files, parse_quick_setup_rules, parse_rules_from_value, resolve_provider_tags,
-    split_rule_sources,
+    parse_domain_rules_and_set_tags, parse_quick_setup_rules, parse_rules_from_value,
+    resolve_provider_tags, validate_non_empty_domain_rules_or_set_tags,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -32,15 +32,20 @@ register_plugin_factory!("qname", QnameFactory {});
 impl PluginFactory for QnameFactory {
     fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        let (domains, domain_set_tags) = parse_qname_rules(rules)?;
-        validate_non_empty_qname_rules(&domains, &domain_set_tags)
+        let (domains, domain_set_tags) = parse_domain_rules_and_set_tags(rules, "qname")?;
+        validate_non_empty_domain_rules_or_set_tags(
+            "qname",
+            &domains,
+            &domain_set_tags,
+            "domain_set",
+        )
     }
 
     fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
         let Ok(rules) = parse_rules_from_value(plugin_config.args.clone()) else {
             return vec![];
         };
-        let Ok((_, domain_set_tags)) = parse_qname_rules(rules) else {
+        let Ok((_, domain_set_tags)) = parse_domain_rules_and_set_tags(rules, "qname") else {
             return vec![];
         };
         domain_set_tags
@@ -71,8 +76,8 @@ fn build_qname_matcher(
     rules: Vec<String>,
     registry: Arc<PluginRegistry>,
 ) -> DnsResult<UninitializedPlugin> {
-    let (domains, domain_set_tags) = parse_qname_rules(rules)?;
-    validate_non_empty_qname_rules(&domains, &domain_set_tags)?;
+    let (domains, domain_set_tags) = parse_domain_rules_and_set_tags(rules, "qname")?;
+    validate_non_empty_domain_rules_or_set_tags("qname", &domains, &domain_set_tags, "domain_set")?;
 
     Ok(UninitializedPlugin::Matcher(Box::new(QnameMatcher {
         tag,
@@ -82,33 +87,6 @@ fn build_qname_matcher(
         domain_sets_has_trie_rules: false,
         registry,
     })))
-}
-
-fn parse_qname_rules(rules: Vec<String>) -> DnsResult<(DomainRuleMatcher, Vec<String>)> {
-    let (mut inline_rules, domain_set_tags, files) = split_rule_sources(rules);
-    let file_rules = load_rules_from_files(&files, "qname")?;
-    inline_rules.extend(file_rules);
-    let mut domain_rules = DomainRuleMatcher::default();
-    for (idx, rule) in inline_rules.into_iter().enumerate() {
-        let source = format!("qname rule[{}]", idx);
-        domain_rules
-            .add_expression(&rule, &source)
-            .map_err(DnsError::plugin)?;
-    }
-    domain_rules.finalize().map_err(DnsError::plugin)?;
-    Ok((domain_rules, domain_set_tags))
-}
-
-fn validate_non_empty_qname_rules(
-    domains: &DomainRuleMatcher,
-    domain_set_tags: &[String],
-) -> DnsResult<()> {
-    if !domains.has_rules() && domain_set_tags.is_empty() {
-        return Err(DnsError::plugin(
-            "qname matcher requires at least one domain rule or domain_set tag",
-        ));
-    }
-    Ok(())
 }
 
 #[derive(Debug)]

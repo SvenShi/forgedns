@@ -11,6 +11,7 @@ use crate::plugin::Plugin;
 
 pub mod domain_set;
 pub mod ip_set;
+pub(crate) mod provider_utils;
 
 #[async_trait]
 #[allow(dead_code)]

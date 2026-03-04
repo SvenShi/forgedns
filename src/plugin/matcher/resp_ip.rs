@@ -11,12 +11,14 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::{response_records, rr_to_ip};
-use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::matcher::Matcher;
+#[cfg(test)]
+use crate::plugin::matcher::matcher_utils::parse_ip_prefix_matcher;
 use crate::plugin::matcher::matcher_utils::{
-    load_rules_from_files, parse_ip_prefix_matcher, parse_quick_setup_rules,
-    parse_rules_from_value, resolve_provider_tags, split_rule_sources,
+    parse_ip_rules_and_set_tags, parse_quick_setup_rules, parse_rules_from_value,
+    resolve_provider_tags, validate_non_empty_ip_rules_or_set_tags,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -32,15 +34,15 @@ register_plugin_factory!("resp_ip", RespIpFactory {});
 impl PluginFactory for RespIpFactory {
     fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        let (ip_rules, ip_set_tags) = parse_resp_ip_rules(rules)?;
-        validate_non_empty_resp_ip_rules(&ip_rules, &ip_set_tags)
+        let (ip_rules, ip_set_tags) = parse_ip_rules_and_set_tags(rules, "resp_ip")?;
+        validate_non_empty_ip_rules_or_set_tags("resp_ip", &ip_rules, &ip_set_tags, "ip_set")
     }
 
     fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
         let Ok(rules) = parse_rules_from_value(plugin_config.args.clone()) else {
             return vec![];
         };
-        let Ok((_, ip_set_tags)) = parse_resp_ip_rules(rules) else {
+        let Ok((_, ip_set_tags)) = parse_ip_rules_and_set_tags(rules, "resp_ip") else {
             return vec![];
         };
         ip_set_tags
@@ -71,8 +73,8 @@ fn build_resp_ip_matcher(
     rules: Vec<String>,
     registry: Arc<PluginRegistry>,
 ) -> DnsResult<UninitializedPlugin> {
-    let (ip_rules, ip_set_tags) = parse_resp_ip_rules(rules)?;
-    validate_non_empty_resp_ip_rules(&ip_rules, &ip_set_tags)?;
+    let (ip_rules, ip_set_tags) = parse_ip_rules_and_set_tags(rules, "resp_ip")?;
+    validate_non_empty_ip_rules_or_set_tags("resp_ip", &ip_rules, &ip_set_tags, "ip_set")?;
 
     Ok(UninitializedPlugin::Matcher(Box::new(RespIpMatcher {
         tag,
@@ -81,26 +83,6 @@ fn build_resp_ip_matcher(
         ip_sets: Vec::new(),
         registry,
     })))
-}
-
-fn parse_resp_ip_rules(rules: Vec<String>) -> DnsResult<(IpPrefixMatcher, Vec<String>)> {
-    let (mut inline_rules, ip_set_tags, files) = split_rule_sources(rules);
-    let file_rules = load_rules_from_files(&files, "resp_ip")?;
-    inline_rules.extend(file_rules);
-    let ip_rules = parse_ip_prefix_matcher("resp_ip", &inline_rules)?;
-    Ok((ip_rules, ip_set_tags))
-}
-
-fn validate_non_empty_resp_ip_rules(
-    ip_rules: &IpPrefixMatcher,
-    ip_set_tags: &[String],
-) -> DnsResult<()> {
-    if !ip_rules.has_v4_rules() && !ip_rules.has_v6_rules() && ip_set_tags.is_empty() {
-        return Err(DnsError::plugin(
-            "resp_ip matcher requires at least one IP rule or ip_set tag",
-        ));
-    }
-    Ok(())
 }
 
 #[derive(Debug)]

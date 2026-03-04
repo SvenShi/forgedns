@@ -95,12 +95,13 @@ async fn run_server(addr: String, handler: Arc<RequestHandle>) {
     loop {
         match transport.read_message_from(&mut buf).await {
             Ok((msg, src_addr)) => {
+                let max_payload = msg.max_payload();
                 let handler = handler.clone();
                 let transport = transport.clone();
                 tokio::spawn(async move {
                     let response = handler.handle_request(msg, src_addr).await;
                     if let Err(e) = transport
-                        .write_message_to(&response.response, src_addr)
+                        .write_message_to(&response.response, src_addr, max_payload)
                         .await
                     {
                         warn!("Failed to send response to {}: {}", src_addr, e);

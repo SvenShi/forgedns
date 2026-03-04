@@ -19,6 +19,7 @@ use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, normalize_domain_cow, split_labels_rev};
 use crate::plugin::provider::Provider;
+use crate::plugin::provider::provider_utils::{for_each_nonempty_rule_line, push_unique_matcher};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, PluginType, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashSet;
@@ -27,8 +28,6 @@ use serde::Deserialize;
 use smallvec::SmallVec;
 use std::any::Any;
 use std::fmt::Debug;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info};
@@ -94,45 +93,10 @@ impl DomainMatcher {
 
     /// Load expressions from file and attach precise line info to parsing errors.
     fn load_file(&mut self, path: &str) -> DnsResult<()> {
-        if path.trim().is_empty() {
-            return Ok(());
-        }
-
-        let file = File::open(path).map_err(|e| {
-            DnsError::plugin(format!(
-                "failed to open domain rules file '{}': {}",
-                path, e
-            ))
-        })?;
-        let mut reader = BufReader::with_capacity(256 * 1024, file);
-
-        // Reuse one line buffer to avoid per-line allocations while loading huge files.
-        let mut line = String::with_capacity(256);
-        let mut line_no = 0usize;
-        loop {
-            line.clear();
-            let n = reader.read_line(&mut line).map_err(|e| {
-                DnsError::plugin(format!(
-                    "failed to read domain rules file '{}' at line {}: {}",
-                    path,
-                    line_no + 1,
-                    e
-                ))
-            })?;
-            if n == 0 {
-                break;
-            }
-            line_no += 1;
-
-            let raw = line.trim();
-            if raw.is_empty() || raw.starts_with('#') {
-                continue;
-            }
+        for_each_nonempty_rule_line(path, "domain rules", |raw, line_no| {
             let source = format!("file '{}', line {}", path, line_no);
-            self.add_exp(raw, &source)?;
-        }
-
-        Ok(())
+            self.add_exp(raw, &source)
+        })
     }
 
     fn load_files(&mut self, files: &[String]) -> DnsResult<()> {
@@ -353,18 +317,6 @@ impl PluginFactory for DomainSetFactory {
             matchers,
             has_domain_rules,
         })))
-    }
-}
-
-#[inline]
-fn push_unique_matcher(
-    matchers: &mut Vec<Arc<DomainMatcher>>,
-    seen: &mut AHashSet<usize>,
-    matcher: Arc<DomainMatcher>,
-) {
-    let ptr = Arc::as_ptr(&matcher) as usize;
-    if seen.insert(ptr) {
-        matchers.push(matcher);
     }
 }
 

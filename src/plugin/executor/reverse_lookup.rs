@@ -14,7 +14,7 @@
 //!   answer IPs and updates cache with bounded TTL.
 //!
 //! Cache design:
-//! - concurrent map for lock-sharded reads/writes.
+//! - shared TTL cache component for consistent cache behavior across plugins.
 //! - periodic cleanup removes expired entries and trims overflow in batches.
 //! - IPv4-mapped IPv6 addresses are normalized to keep lookup keys consistent.
 
@@ -23,11 +23,11 @@ use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::{build_response_from_request, rr_to_ip};
 use crate::core::error::{DnsError, Result};
+use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use hickory_proto::op::ResponseCode;
 use hickory_proto::rr::rdata::name::PTR;
 use hickory_proto::rr::{Name, RData, Record, RecordType};
@@ -52,13 +52,12 @@ struct ReverseLookupConfig {
 #[derive(Debug, Clone)]
 struct CacheEntry {
     domain: Name,
-    expire_at_ms: u64,
 }
 
 #[derive(Debug)]
 struct ReverseLookup {
     tag: String,
-    cache: Arc<DashMap<IpAddr, CacheEntry>>,
+    cache: TtlCache<IpAddr, CacheEntry>,
     size: usize,
     ttl: u32,
     handle_ptr: bool,
@@ -83,7 +82,8 @@ impl Plugin for ReverseLookup {
             loop {
                 tokio::time::sleep(interval).await;
                 let now = AppClock::elapsed_millis();
-                cache.retain(|_, entry| entry.expire_at_ms > now);
+
+                while cache.remove_expired_batch(now, EVICTION_BATCH) > 0 {}
 
                 if cache.len() <= size {
                     continue;
@@ -92,13 +92,11 @@ impl Plugin for ReverseLookup {
                 if overflow == 0 {
                     continue;
                 }
-                let keys: Vec<IpAddr> = cache
-                    .iter()
-                    .take(overflow)
-                    .map(|entry| *entry.key())
-                    .collect();
-                for key in keys {
-                    cache.remove(&key);
+
+                let mut keys: Vec<(IpAddr, u64)> = cache.sample_last_access(overflow);
+                keys.sort_unstable_by_key(|(_, last_access_ms)| *last_access_ms);
+                for (key, _) in keys.into_iter().take(overflow) {
+                    let _ = cache.remove(&key);
                 }
             }
         });
@@ -142,13 +140,8 @@ impl Executor for ReverseLookup {
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| record.name().clone());
-            self.cache.insert(
-                normalize_ip(ip),
-                CacheEntry {
-                    domain,
-                    expire_at_ms,
-                },
-            );
+            self.cache
+                .insert_or_update(normalize_ip(ip), CacheEntry { domain }, now, expire_at_ms);
         }
 
         Ok(())
@@ -168,17 +161,13 @@ impl ReverseLookup {
         let ip = parse_ptr_name(query.name())?;
         let ip = normalize_ip(ip);
         let now = AppClock::elapsed_millis();
-        let entry = self.cache.get(&ip)?;
-        if entry.expire_at_ms <= now {
-            self.cache.remove(&ip);
-            return None;
-        }
+        let entry = self.cache.get_fresh_cloned(&ip, now, 1000)?;
 
         let mut response = build_response_from_request(request, ResponseCode::NoError);
         response.answers_mut().push(Record::from_rdata(
             query.name().clone(),
             5,
-            RData::PTR(PTR(entry.domain.clone())),
+            RData::PTR(PTR(entry.value.domain)),
         ));
         Some(response)
     }
@@ -217,7 +206,7 @@ impl PluginFactory for ReverseLookupFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(ReverseLookup {
             tag: plugin_config.tag.clone(),
-            cache: Arc::new(DashMap::with_capacity(size)),
+            cache: TtlCache::with_capacity(size),
             size,
             ttl,
             handle_ptr: cfg.handle_ptr.unwrap_or(false),

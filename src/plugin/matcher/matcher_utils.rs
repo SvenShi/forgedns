@@ -7,7 +7,7 @@
 
 use crate::core::dns_utils::parse_named_response_code;
 use crate::core::error::{DnsError, Result as DnsResult};
-use crate::core::rule_matcher::IpPrefixMatcher;
+use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
 use crate::plugin::provider::Provider;
 use crate::plugin::{PluginRegistry, PluginType};
 use ahash::AHashSet;
@@ -80,6 +80,66 @@ pub(crate) fn parse_ip_prefix_matcher(
             .map_err(|e| DnsError::plugin(format!("invalid {} rule '{}': {}", field, v, e)))?;
     }
     Ok(matcher)
+}
+
+pub(crate) fn parse_domain_rules_and_set_tags(
+    raw_rules: Vec<String>,
+    field: &str,
+) -> DnsResult<(DomainRuleMatcher, Vec<String>)> {
+    let (mut inline_rules, set_tags, files) = split_rule_sources(raw_rules);
+    let file_rules = load_rules_from_files(&files, field)?;
+    inline_rules.extend(file_rules);
+
+    let mut domain_rules = DomainRuleMatcher::default();
+    for (idx, rule) in inline_rules.into_iter().enumerate() {
+        let source = format!("{} rule[{}]", field, idx);
+        domain_rules
+            .add_expression(&rule, &source)
+            .map_err(DnsError::plugin)?;
+    }
+    domain_rules.finalize().map_err(DnsError::plugin)?;
+    Ok((domain_rules, set_tags))
+}
+
+pub(crate) fn validate_non_empty_domain_rules_or_set_tags(
+    field: &str,
+    domain_rules: &DomainRuleMatcher,
+    set_tags: &[String],
+    set_name: &str,
+) -> DnsResult<()> {
+    if !domain_rules.has_rules() && set_tags.is_empty() {
+        return Err(DnsError::plugin(format!(
+            "{} matcher requires at least one domain rule or {} tag",
+            field, set_name
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_ip_rules_and_set_tags(
+    raw_rules: Vec<String>,
+    field: &str,
+) -> DnsResult<(IpPrefixMatcher, Vec<String>)> {
+    let (mut inline_rules, set_tags, files) = split_rule_sources(raw_rules);
+    let file_rules = load_rules_from_files(&files, field)?;
+    inline_rules.extend(file_rules);
+    let ip_rules = parse_ip_prefix_matcher(field, &inline_rules)?;
+    Ok((ip_rules, set_tags))
+}
+
+pub(crate) fn validate_non_empty_ip_rules_or_set_tags(
+    field: &str,
+    ip_rules: &IpPrefixMatcher,
+    set_tags: &[String],
+    set_name: &str,
+) -> DnsResult<()> {
+    if !ip_rules.has_v4_rules() && !ip_rules.has_v6_rules() && set_tags.is_empty() {
+        return Err(DnsError::plugin(format!(
+            "{} matcher requires at least one IP rule or {} tag",
+            field, set_name
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_quick_setup_rules(param: Option<String>) -> DnsResult<Vec<String>> {

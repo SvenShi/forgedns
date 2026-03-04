@@ -26,6 +26,7 @@ plugins:
   - tag: cache
     type: cache
     args:
+      ecs_in_key: false
       short_circuit: true
       dump_file: "./dns_cache.dump"
       dump_interval: 10

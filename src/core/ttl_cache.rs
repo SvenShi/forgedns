@@ -1,0 +1,247 @@
+/*
+ * SPDX-FileCopyrightText: 2025 Sven Shi
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+//! Shared TTL cache component.
+//!
+//! This module provides a reusable concurrent cache with:
+//! - per-entry expiration timestamp
+//! - last-access timestamp for sampled LRU eviction
+//! - lightweight helpers for periodic cleanup tasks
+//!
+//! It is designed for plugin-level caches where each plugin keeps its own key
+//! and value types but shares the same cache behavior.
+
+use ahash::RandomState as AHashBuilder;
+use dashmap::DashMap;
+use std::hash::Hash;
+use std::sync::Arc;
+
+/// Snapshot of one cached entry with metadata.
+#[derive(Debug, Clone)]
+pub struct TtlCacheEntry<V> {
+    /// User data stored in cache.
+    pub value: V,
+    /// Insert/update timestamp in milliseconds.
+    pub cache_time_ms: u64,
+    /// Expiration timestamp in milliseconds.
+    pub expire_at_ms: u64,
+    /// Last access timestamp in milliseconds.
+    pub last_access_ms: u64,
+}
+
+/// Shared concurrent TTL cache.
+#[derive(Debug)]
+pub struct TtlCache<K, V>
+where
+    K: Eq + Hash,
+{
+    map: Arc<DashMap<K, TtlCacheEntry<V>, AHashBuilder>>,
+}
+
+impl<K, V> Clone for TtlCache<K, V>
+where
+    K: Eq + Hash,
+{
+    fn clone(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+        }
+    }
+}
+
+impl<K, V> TtlCache<K, V>
+where
+    K: Eq + Hash,
+{
+    /// Create cache using AHash hasher with expected capacity.
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            map: Arc::new(DashMap::with_capacity_and_hasher(
+                capacity,
+                AHashBuilder::default(),
+            )),
+        }
+    }
+
+    /// Current number of cached entries.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Returns true when cache has no entries.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+impl<K, V> TtlCache<K, V>
+where
+    K: Eq + Hash,
+{
+    /// Insert or update one entry using "now" for cache and access timestamps.
+    #[inline]
+    pub fn insert_or_update(&self, key: K, value: V, now_ms: u64, expire_at_ms: u64) {
+        self.insert_or_update_with_meta(key, value, now_ms, expire_at_ms, now_ms);
+    }
+
+    /// Insert or update one entry with explicit metadata.
+    #[inline]
+    pub fn insert_or_update_with_meta(
+        &self,
+        key: K,
+        value: V,
+        cache_time_ms: u64,
+        expire_at_ms: u64,
+        last_access_ms: u64,
+    ) {
+        match self.map.get_mut(&key) {
+            Some(mut existing) => {
+                existing.value = value;
+                existing.cache_time_ms = cache_time_ms;
+                existing.expire_at_ms = expire_at_ms;
+                existing.last_access_ms = last_access_ms;
+            }
+            None => {
+                self.map.insert(
+                    key,
+                    TtlCacheEntry {
+                        value,
+                        cache_time_ms,
+                        expire_at_ms,
+                        last_access_ms,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Get one non-expired entry and optionally refresh its access timestamp.
+    ///
+    /// Returns `None` when key is missing or already expired.
+    #[inline]
+    pub fn get_fresh_cloned(
+        &self,
+        key: &K,
+        now_ms: u64,
+        touch_interval_ms: u64,
+    ) -> Option<TtlCacheEntry<V>>
+    where
+        V: Clone,
+    {
+        let entry = self.map.get(key)?;
+        if entry.expire_at_ms <= now_ms {
+            drop(entry);
+            let _ = self
+                .map
+                .remove_if(key, |_, existing| existing.expire_at_ms <= now_ms);
+            return None;
+        }
+
+        let snapshot = TtlCacheEntry {
+            value: entry.value.clone(),
+            cache_time_ms: entry.cache_time_ms,
+            expire_at_ms: entry.expire_at_ms,
+            last_access_ms: entry.last_access_ms,
+        };
+        drop(entry);
+
+        if touch_interval_ms > 0
+            && now_ms.saturating_sub(snapshot.last_access_ms) >= touch_interval_ms
+            && let Some(mut existing) = self.map.get_mut(key)
+            && existing.expire_at_ms > now_ms
+            && existing.last_access_ms < now_ms
+        {
+            existing.last_access_ms = now_ms;
+        }
+
+        Some(snapshot)
+    }
+
+    /// Remove one entry only when already expired at `now_ms`.
+    #[inline]
+    pub fn remove_if_expired(&self, key: &K, now_ms: u64) -> bool {
+        self.map
+            .remove_if(key, |_, existing| existing.expire_at_ms <= now_ms)
+            .is_some()
+    }
+
+    /// Remove one entry by key.
+    #[inline]
+    pub fn remove(&self, key: &K) -> bool {
+        self.map.remove(key).is_some()
+    }
+}
+
+impl<K, V> TtlCache<K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    /// Remove at most `batch` expired entries and return removed count.
+    #[inline]
+    pub fn remove_expired_batch(&self, now_ms: u64, batch: usize) -> usize {
+        if batch == 0 {
+            return 0;
+        }
+
+        let mut expired_keys = Vec::with_capacity(batch);
+        for item in self.map.iter() {
+            if item.value().expire_at_ms <= now_ms {
+                expired_keys.push(item.key().clone());
+                if expired_keys.len() >= batch {
+                    break;
+                }
+            }
+        }
+
+        let mut removed = 0usize;
+        for key in expired_keys {
+            if self
+                .map
+                .remove_if(&key, |_, existing| existing.expire_at_ms <= now_ms)
+                .is_some()
+            {
+                removed += 1;
+            }
+        }
+
+        removed
+    }
+
+    /// Collect up to `limit` key + last-access pairs for sampled LRU eviction.
+    #[inline]
+    pub fn sample_last_access(&self, limit: usize) -> Vec<(K, u64)> {
+        let cap = self.map.len().min(limit);
+        let mut sample = Vec::with_capacity(cap);
+        for item in self.map.iter().take(limit) {
+            sample.push((item.key().clone(), item.value().last_access_ms));
+        }
+        sample
+    }
+
+    /// Snapshot all entries (key + metadata + cloned value).
+    #[inline]
+    pub fn iter_entries_cloned(&self) -> Vec<(K, TtlCacheEntry<V>)>
+    where
+        V: Clone,
+    {
+        let mut entries = Vec::with_capacity(self.map.len());
+        for item in self.map.iter() {
+            let value = item.value();
+            entries.push((
+                item.key().clone(),
+                TtlCacheEntry {
+                    value: value.value.clone(),
+                    cache_time_ms: value.cache_time_ms,
+                    expire_at_ms: value.expire_at_ms,
+                    last_access_ms: value.last_access_ms,
+                },
+            ));
+        }
+        entries
+    }
+}

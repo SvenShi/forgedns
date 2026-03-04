@@ -4,7 +4,7 @@
  */
 
 use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use hickory_proto::serialize::binary::{BinDecodable, BinEncodable, BinEncoder};
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 
@@ -81,10 +81,13 @@ impl UdpTransport {
     }
 
     #[inline]
-    pub async fn write_message_to(&self, msg: &Message, to: SocketAddr) -> Result<()> {
-        let bytes = msg
-            .to_bytes()
-            .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
+    pub async fn write_message_to(
+        &self,
+        msg: &Message,
+        to: SocketAddr,
+        max_payload: u16,
+    ) -> Result<()> {
+        let bytes = encode_message_with_max_payload(msg, max_payload)?;
 
         let n = self
             .socket
@@ -100,4 +103,13 @@ impl UdpTransport {
         }
         Ok(())
     }
+}
+#[inline]
+fn encode_message_with_max_payload(msg: &Message, max_payload: u16) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(512);
+    let mut encoder = BinEncoder::new(&mut bytes);
+    encoder.set_max_size(max_payload.max(512));
+    msg.emit(&mut encoder)
+        .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
+    Ok(bytes)
 }

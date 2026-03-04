@@ -25,11 +25,11 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::ttl_cache::TtlCache;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -66,7 +66,7 @@ struct RateLimiter {
     burst: f64,
     mask4: u8,
     mask6: u8,
-    buckets: Arc<DashMap<IpAddr, Bucket>>,
+    buckets: TtlCache<IpAddr, Bucket>,
     cleanup_started: AtomicBool,
     cleanup_stop: Mutex<Option<oneshot::Sender<()>>>,
     cleanup_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -97,7 +97,7 @@ impl PluginFactory for RateLimiterFactory {
             burst: cfg.burst.unwrap_or(DEFAULT_BURST as u32) as f64,
             mask4: cfg.mask4.unwrap_or(DEFAULT_MASK4),
             mask6: cfg.mask6.unwrap_or(DEFAULT_MASK6),
-            buckets: Arc::new(DashMap::new()),
+            buckets: TtlCache::with_capacity(4096),
             cleanup_started: AtomicBool::new(false),
             cleanup_stop: Mutex::new(None),
             cleanup_handle: Mutex::new(None),
@@ -119,7 +119,7 @@ impl PluginFactory for RateLimiterFactory {
             burst: cfg.burst.unwrap_or(DEFAULT_BURST as u32) as f64,
             mask4: cfg.mask4.unwrap_or(DEFAULT_MASK4),
             mask6: cfg.mask6.unwrap_or(DEFAULT_MASK6),
-            buckets: Arc::new(DashMap::new()),
+            buckets: TtlCache::with_capacity(4096),
             cleanup_started: AtomicBool::new(false),
             cleanup_stop: Mutex::new(None),
             cleanup_handle: Mutex::new(None),
@@ -150,7 +150,7 @@ impl Plugin for RateLimiter {
                 tokio::select! {
                     _ = tokio::time::sleep(interval) => {
                         let now = AppClock::elapsed_millis();
-                        buckets.retain(|_, bucket| now.saturating_sub(bucket.last_ms) <= STALE_TIMEOUT_MS);
+                        while buckets.remove_expired_batch(now, 2048) > 0 {}
                     }
                     _ = &mut stop_rx => {
                         break;
@@ -186,9 +186,10 @@ impl Matcher for RateLimiter {
         };
 
         let now = AppClock::elapsed_millis();
+        let expire_at_ms = now.saturating_add(STALE_TIMEOUT_MS);
 
-        if let Some(mut entry) = self.buckets.get_mut(&masked) {
-            let mut bucket = *entry;
+        if let Some(entry) = self.buckets.get_fresh_cloned(&masked, now, 0) {
+            let mut bucket = entry.value;
             let elapsed = now.saturating_sub(bucket.last_ms) as f64 / 1000.0;
             if elapsed > 0.0 {
                 bucket.tokens = (bucket.tokens + elapsed * self.qps).min(self.burst);
@@ -197,20 +198,24 @@ impl Matcher for RateLimiter {
 
             if bucket.tokens >= 1.0 {
                 bucket.tokens -= 1.0;
-                *entry = bucket;
+                self.buckets
+                    .insert_or_update(masked, bucket, now, expire_at_ms);
                 true
             } else {
-                *entry = bucket;
+                self.buckets
+                    .insert_or_update(masked, bucket, now, expire_at_ms);
                 false
             }
         } else {
             let tokens = (self.burst - 1.0).max(0.0);
-            self.buckets.insert(
+            self.buckets.insert_or_update(
                 masked,
                 Bucket {
                     tokens,
                     last_ms: now,
                 },
+                now,
+                expire_at_ms,
             );
             true
         }

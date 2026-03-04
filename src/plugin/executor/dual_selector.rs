@@ -18,11 +18,11 @@ use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::build_response_from_request;
 use crate::core::error::{DnsError, Result};
+use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use hickory_proto::op::ResponseCode;
 use hickory_proto::rr::RecordType;
 use serde::Deserialize;
@@ -53,7 +53,7 @@ pub struct ForwardProbeResult {
 struct DualSelector {
     tag: String,
     preferred_type: RecordType,
-    cache: Arc<DashMap<String, CachedPreferredState>>,
+    cache: TtlCache<String, CachedPreferredState>,
     cache_enabled: bool,
     cache_ttl_ms: u64,
     cleanup_started: AtomicBool,
@@ -61,7 +61,6 @@ struct DualSelector {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct CachedPreferredState {
-    expire_at: u64,
     preferred_exists: bool,
 }
 
@@ -104,7 +103,7 @@ impl Plugin for DualSelector {
             loop {
                 tokio::time::sleep(interval).await;
                 let now = AppClock::elapsed_millis();
-                cache.retain(|_, state| state.expire_at > now);
+                while cache.remove_expired_batch(now, 256) > 0 {}
             }
         });
     }
@@ -115,36 +114,6 @@ impl Plugin for DualSelector {
 #[async_trait]
 impl Executor for DualSelector {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        self.execute_inner(context).await
-    }
-
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let Some(state) = state
-            .and_then(|boxed| boxed.downcast::<PostState>().ok())
-            .map(|boxed| *boxed)
-        else {
-            return Ok(());
-        };
-
-        match state.mode {
-            PostMode::Preferred => {
-                let has_preferred_answer = context.response.as_ref().is_some_and(|resp| {
-                    resp.answers()
-                        .iter()
-                        .any(|rr| rr.record_type() == self.preferred_type)
-                });
-                if has_preferred_answer {
-                    self.cache_preferred(&state.domain);
-                }
-                Ok(())
-            }
-            PostMode::NonPreferredProbe => self.apply_probe_result(context, &state.domain),
-        }
-    }
-}
-
-impl DualSelector {
-    async fn execute_inner(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if context.request.queries().len() != 1 {
             return Ok(ExecStep::Next);
         }
@@ -196,6 +165,32 @@ impl DualSelector {
         }) as ExecState)))
     }
 
+    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
+        let Some(state) = state
+            .and_then(|boxed| boxed.downcast::<PostState>().ok())
+            .map(|boxed| *boxed)
+        else {
+            return Ok(());
+        };
+
+        match state.mode {
+            PostMode::Preferred => {
+                let has_preferred_answer = context.response.as_ref().is_some_and(|resp| {
+                    resp.answers()
+                        .iter()
+                        .any(|rr| rr.record_type() == self.preferred_type)
+                });
+                if has_preferred_answer {
+                    self.cache_preferred(&state.domain);
+                }
+                Ok(())
+            }
+            PostMode::NonPreferredProbe => self.apply_probe_result(context, &state.domain),
+        }
+    }
+}
+
+impl DualSelector {
     fn apply_probe_result(&self, context: &mut DnsContext, domain: &str) -> Result<()> {
         let Some(probe) =
             context.remove_attr::<ForwardProbeResult>(DnsContext::ATTR_FORWARD_PROBE_RESULT)
@@ -246,27 +241,21 @@ impl DualSelector {
     }
 
     fn cache_probe_result(&self, domain: &str, preferred_exists: bool) {
-        let expire_at = AppClock::elapsed_millis().saturating_add(self.cache_ttl_ms);
-        self.cache.insert(
+        let now = AppClock::elapsed_millis();
+        let expire_at = now.saturating_add(self.cache_ttl_ms);
+        self.cache.insert_or_update(
             domain.to_string(),
-            CachedPreferredState {
-                expire_at,
-                preferred_exists,
-            },
+            CachedPreferredState { preferred_exists },
+            now,
+            expire_at,
         );
     }
 
-    fn cache_get_preferred_state(&self, domain: &str) -> Option<bool> {
+    fn cache_get_preferred_state(&self, domain: &String) -> Option<bool> {
         let now = AppClock::elapsed_millis();
-        let entry = self.cache.get(domain)?;
-        let cached = *entry.value();
-        if cached.expire_at > now {
-            Some(cached.preferred_exists)
-        } else {
-            drop(entry);
-            self.cache.remove(domain);
-            None
-        }
+        self.cache
+            .get_fresh_cloned(domain, now, 1000)
+            .map(|entry| entry.value.preferred_exists)
     }
 }
 
@@ -322,7 +311,7 @@ impl PluginFactory for DualSelectorFactory {
         Ok(UninitializedPlugin::Executor(Box::new(DualSelector {
             tag: plugin_config.tag.clone(),
             preferred_type: self.record_type,
-            cache: Arc::new(DashMap::new()),
+            cache: TtlCache::with_capacity(4096),
             cache_enabled,
             cache_ttl_ms,
             cleanup_started: AtomicBool::new(false),
@@ -338,7 +327,7 @@ impl PluginFactory for DualSelectorFactory {
         Ok(UninitializedPlugin::Executor(Box::new(DualSelector {
             tag: tag.to_string(),
             preferred_type: self.record_type,
-            cache: Arc::new(DashMap::new()),
+            cache: TtlCache::with_capacity(4096),
             cache_enabled: DEFAULT_CACHE_ENABLED,
             cache_ttl_ms: DEFAULT_CACHE_TTL_MS,
             cleanup_started: AtomicBool::new(false),
@@ -378,7 +367,7 @@ mod tests {
         DualSelector {
             tag: "dual_selector_test".to_string(),
             preferred_type,
-            cache: Arc::new(DashMap::new()),
+            cache: TtlCache::with_capacity(1024),
             cache_enabled: true,
             cache_ttl_ms: DEFAULT_CACHE_TTL_MS,
             cleanup_started: AtomicBool::new(false),
