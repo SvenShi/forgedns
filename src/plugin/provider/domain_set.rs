@@ -16,6 +16,7 @@
 //! - flattened matcher graph avoids recursive provider traversal.
 
 use crate::config::types::PluginConfig;
+use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, normalize_domain_cow, split_labels_rev};
 use crate::plugin::provider::Provider;
@@ -29,7 +30,6 @@ use smallvec::SmallVec;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Instant;
 use tracing::{debug, info};
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -234,7 +234,8 @@ impl PluginFactory for DomainSetFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> DnsResult<UninitializedPlugin> {
-        let start = Instant::now();
+        // Provider init latency logging does not require high-precision syscall timing.
+        let start_ms = AppClock::elapsed_millis();
         let args = plugin_config
             .args
             .clone()
@@ -298,7 +299,7 @@ impl PluginFactory for DomainSetFactory {
         let total_domain_rules: usize = matchers.iter().map(|m| m.domain_rule_count()).sum();
         let total_keyword_rules: usize = matchers.iter().map(|m| m.keyword_rule_count()).sum();
         let total_regex_rules: usize = matchers.iter().map(|m| m.regex_rule_count()).sum();
-        let elapsed = start.elapsed();
+        let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
         info!(
             tag = %plugin_config.tag,
             flat_matchers = matchers.len(),
@@ -308,7 +309,7 @@ impl PluginFactory for DomainSetFactory {
             keyword_rules = total_keyword_rules,
             regex_rules = total_regex_rules,
             has_domain_rules,
-            elapsed_ms = elapsed.as_millis(),
+            elapsed_ms,
             "domain_set initialized"
         );
 
@@ -324,7 +325,7 @@ impl PluginFactory for DomainSetFactory {
 mod tests {
     use super::*;
     use std::net::IpAddr;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn test_domain_match_priority() {

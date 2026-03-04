@@ -11,6 +11,7 @@
 //! - Precise parse errors for file-based rules.
 
 use crate::config::types::PluginConfig;
+use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::provider::Provider;
@@ -24,7 +25,6 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::Instant;
 use tracing::{debug, info};
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -188,7 +188,8 @@ impl PluginFactory for IpSetFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> DnsResult<UninitializedPlugin> {
-        let start = Instant::now();
+        // Plugin init duration only needs coarse monotonic timing from AppClock.
+        let start_ms = AppClock::elapsed_millis();
         let args = plugin_config
             .args
             .clone()
@@ -248,7 +249,7 @@ impl PluginFactory for IpSetFactory {
         let has_v6_rules = matchers.iter().any(|matcher| matcher.has_v6_rules());
         let total_v4_rules: usize = matchers.iter().map(|m| m.v4_rule_count()).sum();
         let total_v6_rules: usize = matchers.iter().map(|m| m.v6_rule_count()).sum();
-        let elapsed = start.elapsed();
+        let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
         info!(
             tag = %plugin_config.tag,
             flat_matchers = matchers.len(),
@@ -257,7 +258,7 @@ impl PluginFactory for IpSetFactory {
             v6_rules = total_v6_rules,
             has_v4_rules,
             has_v6_rules,
-            elapsed_ms = elapsed.as_millis(),
+            elapsed_ms,
             "ip_set initialized"
         );
 
@@ -286,6 +287,7 @@ fn normalize_rule_line(line: &str) -> &str {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+    use std::time::Instant;
 
     #[test]
     fn test_ipv4_and_ipv6_match() {
