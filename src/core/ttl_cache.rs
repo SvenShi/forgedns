@@ -51,6 +51,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 impl<K, V> TtlCache<K, V>
 where
     K: Eq + Hash,

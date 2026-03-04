@@ -12,7 +12,7 @@ plugins:
           # insecure_skip_verify: true
           # bootstrap: 223.5.5.5
           # enable_pipeline: true
-        # 当配置多个上游服务器时，会自动启用并发模式
+        # 配置多个上游时，forward 默认并发为 1（随机起点），可通过 concurrent 调整（最大 3）
         # - addr: "119.29.29.29"  # 腾讯 DNS
         # - addr: "114.114.114.114"  # 114 DNS
   - tag: debug_print

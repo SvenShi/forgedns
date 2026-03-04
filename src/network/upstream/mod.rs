@@ -82,10 +82,10 @@ impl ConnectionType {
     pub fn schemes(&self) -> Vec<&str> {
         match self {
             ConnectionType::UDP => vec!["udp", ""],
-            ConnectionType::TCP => vec!["tcp"],
-            ConnectionType::DoT => vec!["tls"],
+            ConnectionType::TCP => vec!["tcp", "tcp+pipeline"],
+            ConnectionType::DoT => vec!["tls", "tls+pipeline"],
             ConnectionType::DoQ => vec!["doq", "quic"],
-            ConnectionType::DoH => vec!["doh", "https"],
+            ConnectionType::DoH => vec!["doh", "https", "h3"],
         }
     }
 }
@@ -405,7 +405,7 @@ impl ConnectionInfo {
     const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
     const DEFAULT_IDLE_TIME: u64 = 10;
     pub fn with_addr(addr: &str) -> Result<Self> {
-        let (connection_type, host, port, path) = detect_connection_type(addr)?;
+        let (connection_type, host, port, path, _) = detect_connection_type(addr)?;
         let port = port.unwrap_or(connection_type.default_port());
 
         debug!(
@@ -441,9 +441,35 @@ impl TryFrom<UpstreamConfig> for ConnectionInfo {
     type Error = DnsError;
 
     fn try_from(upstream_config: UpstreamConfig) -> Result<Self> {
-        let (connection_type, host, port, path) = detect_connection_type(&upstream_config.addr)?;
-        let port = upstream_config
-            .port
+        let UpstreamConfig {
+            tag,
+            addr,
+            dial_addr,
+            port: config_port,
+            bootstrap,
+            bootstrap_version,
+            socks5,
+            idle_timeout,
+            max_conns,
+            insecure_skip_verify,
+            timeout,
+            enable_pipeline,
+            enable_http3,
+            so_mark,
+            bind_to_device,
+        } = upstream_config;
+        let (connection_type, host, port, path, helper_flags) = detect_connection_type(&addr)?;
+        let enable_pipeline = if helper_flags.force_pipeline {
+            Some(true)
+        } else {
+            enable_pipeline
+        };
+        let enable_http3 = if helper_flags.force_http3 {
+            true
+        } else {
+            enable_http3.unwrap_or(false)
+        };
+        let port = config_port
             .or(port)
             .unwrap_or(connection_type.default_port());
 
@@ -452,26 +478,26 @@ impl TryFrom<UpstreamConfig> for ConnectionInfo {
             connection_type, &host, port, path
         );
 
-        let has_bootstrap = upstream_config.bootstrap.is_some();
-        let remote_ip = resolve_ip_from_host(&host, upstream_config.dial_addr, has_bootstrap);
+        let has_bootstrap = bootstrap.is_some();
+        let remote_ip = resolve_ip_from_host(&host, dial_addr, has_bootstrap);
 
-        let bootstrap = if let Some(bootstrap_server) = upstream_config.bootstrap
+        let bootstrap = if let Some(bootstrap_server) = bootstrap
             && remote_ip.is_none()
         {
             Some(Arc::new(Bootstrap::new(
                 &bootstrap_server,
                 &host,
-                upstream_config.bootstrap_version,
+                bootstrap_version,
             )?))
         } else {
             None
         };
 
-        let socks5 = if let Some(socks5_str) = upstream_config.socks5 {
+        let socks5 = if let Some(socks5_str) = socks5 {
             match connection_type {
                 ConnectionType::TCP | ConnectionType::DoT => parse_socks5_opt(&socks5_str),
                 ConnectionType::DoH => {
-                    if upstream_config.enable_http3.unwrap_or(false) {
+                    if enable_http3 {
                         warn!("Sock5 proxy only support tcp portal");
                         None
                     } else {
@@ -488,23 +514,23 @@ impl TryFrom<UpstreamConfig> for ConnectionInfo {
         };
 
         Ok(ConnectionInfo {
-            tag: upstream_config.tag,
+            tag,
             remote_ip,
             port,
             socks5,
             connection_type,
             bootstrap,
             path,
-            timeout: upstream_config.timeout.unwrap_or(Self::DEFAULT_TIMEOUT),
+            timeout: timeout.unwrap_or(Self::DEFAULT_TIMEOUT),
             server_name: host,
-            insecure_skip_verify: upstream_config.insecure_skip_verify.unwrap_or(false),
-            idle_timeout: upstream_config.idle_timeout,
-            raw_addr: upstream_config.addr,
-            enable_pipeline: upstream_config.enable_pipeline,
-            enable_http3: upstream_config.enable_http3.unwrap_or(false),
-            so_mark: upstream_config.so_mark,
-            bind_to_device: upstream_config.bind_to_device,
-            max_conns: upstream_config.max_conns,
+            insecure_skip_verify: insecure_skip_verify.unwrap_or(false),
+            idle_timeout,
+            raw_addr: addr,
+            enable_pipeline,
+            enable_http3,
+            so_mark,
+            bind_to_device,
+            max_conns,
         })
     }
 }
@@ -549,13 +575,22 @@ fn resolve_ip_from_host(
 }
 
 /// Detect the connection type from the config address
-fn detect_connection_type(addr: &str) -> Result<(ConnectionType, String, Option<u16>, String)> {
+#[derive(Clone, Copy, Debug, Default)]
+struct HelperFlags {
+    force_pipeline: bool,
+    force_http3: bool,
+}
+
+fn detect_connection_type(
+    addr: &str,
+) -> Result<(ConnectionType, String, Option<u16>, String, HelperFlags)> {
     if !addr.contains("//") {
         return detect_connection_type(&("udp://".to_owned() + addr));
     }
 
     let url =
         Url::parse(addr).map_err(|e| DnsError::plugin(format!("invalid upstream URL: {}", e)))?;
+    let mut helper_flags = HelperFlags::default();
     let connection_type;
 
     let host = url
@@ -570,13 +605,25 @@ fn detect_connection_type(addr: &str) -> Result<(ConnectionType, String, Option<
         "tcp" => {
             connection_type = ConnectionType::TCP;
         }
+        "tcp+pipeline" => {
+            helper_flags.force_pipeline = true;
+            connection_type = ConnectionType::TCP;
+        }
         "tls" => {
+            connection_type = ConnectionType::DoT;
+        }
+        "tls+pipeline" => {
+            helper_flags.force_pipeline = true;
             connection_type = ConnectionType::DoT;
         }
         "quic" | "doq" => {
             connection_type = ConnectionType::DoQ;
         }
         "https" | "doh" => {
+            connection_type = ConnectionType::DoH;
+        }
+        "h3" => {
+            helper_flags.force_http3 = true;
             connection_type = ConnectionType::DoH;
         }
         other => {
@@ -596,7 +643,13 @@ fn detect_connection_type(addr: &str) -> Result<(ConnectionType, String, Option<
         url.path()
     );
 
-    Ok((connection_type, host, url.port(), url.path().to_string()))
+    Ok((
+        connection_type,
+        host,
+        url.port(),
+        url.path().to_string(),
+        helper_flags,
+    ))
 }
 
 /// Builder for creating upstream instances
@@ -1192,6 +1245,52 @@ fn parse_socks5_opt(socks5_str: &str) -> Option<Socks5Opt> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_upstream_config(addr: &str) -> UpstreamConfig {
+        UpstreamConfig {
+            tag: None,
+            addr: addr.to_string(),
+            dial_addr: None,
+            port: None,
+            bootstrap: None,
+            bootstrap_version: None,
+            socks5: None,
+            idle_timeout: None,
+            max_conns: None,
+            insecure_skip_verify: None,
+            timeout: None,
+            enable_pipeline: None,
+            enable_http3: None,
+            so_mark: None,
+            bind_to_device: None,
+        }
+    }
+
+    #[test]
+    fn test_helper_scheme_tcp_pipeline_forces_pipeline() {
+        let mut cfg = make_upstream_config("tcp+pipeline://1.1.1.1");
+        cfg.enable_pipeline = Some(false);
+        let info = ConnectionInfo::try_from(cfg).expect("helper scheme should be accepted");
+        assert_eq!(info.connection_type, ConnectionType::TCP);
+        assert_eq!(info.enable_pipeline, Some(true));
+    }
+
+    #[test]
+    fn test_helper_scheme_h3_forces_http3() {
+        let mut cfg = make_upstream_config("h3://dns.google/dns-query");
+        cfg.enable_http3 = Some(false);
+        let info = ConnectionInfo::try_from(cfg).expect("helper scheme should be accepted");
+        assert_eq!(info.connection_type, ConnectionType::DoH);
+        assert!(info.enable_http3);
+    }
+
+    #[test]
+    fn test_max_conns_is_preserved() {
+        let mut cfg = make_upstream_config("8.8.8.8");
+        cfg.max_conns = Some(999);
+        let info = ConnectionInfo::try_from(cfg).expect("upstream config should parse");
+        assert_eq!(info.max_conns, Some(999));
+    }
 
     #[test]
     fn test_parse_socks5_opt_ip_without_auth() {

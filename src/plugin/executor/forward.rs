@@ -20,8 +20,9 @@ use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::op::Message;
+use hickory_proto::op::{Message, ResponseCode};
 use hickory_proto::rr::RecordType;
+use rand::RngExt;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,6 +30,7 @@ use tokio::task::JoinSet;
 use tracing::{Level, debug, event_enabled, info, warn};
 
 const PROBE_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+const MAX_CONCURRENT_QUERIES: usize = 3;
 
 /// Single-upstream DNS forwarder
 ///
@@ -232,18 +234,26 @@ impl Executor for ConcurrentForwarder {
 
 impl ConcurrentForwarder {
     async fn query_any_upstream(&self, request: Message) -> (Option<Message>, Option<String>) {
+        let total_upstreams = self.upstreams.len();
+        if total_upstreams == 0 {
+            return (None, Some("no upstream configured".to_string()));
+        }
+
         let mut join_set = JoinSet::new();
         let mut last_error: Option<String> = None;
+        let mut completed = 0usize;
+        let start_idx = rand::rng().random_range(0..total_upstreams);
 
         for i in 0..self.active_concurrent {
-            let upstream = self.upstreams[i].clone();
+            let selected_idx = (start_idx + i) % total_upstreams;
+            let upstream = self.upstreams[selected_idx].clone();
             let message = request.clone();
             join_set.spawn(async move {
-                let result = upstream.query(message).await;
+                let result: Result<Message> = upstream.query(message).await;
                 if event_enabled!(Level::DEBUG) {
                     debug!(
                         "DNS ConcurrentForwarder received message {}, remote_addr: {}",
-                        i,
+                        selected_idx,
                         upstream.connection_info().raw_addr
                     );
                 }
@@ -252,8 +262,14 @@ impl ConcurrentForwarder {
         }
 
         while let Some(joined) = join_set.join_next().await {
+            completed += 1;
             match joined {
                 Ok(Ok(response)) => {
+                    if completed < self.active_concurrent
+                        && !is_preferred_response_code(response.response_code())
+                    {
+                        continue;
+                    }
                     join_set.abort_all();
                     return (Some(response), None);
                 }
@@ -406,6 +422,11 @@ fn response_has_answer_of_type(message: &Message, qtype: RecordType) -> bool {
         .any(|answer| answer.record_type() == qtype)
 }
 
+#[inline]
+fn is_preferred_response_code(code: ResponseCode) -> bool {
+    code == ResponseCode::NoError || code == ResponseCode::NXDomain
+}
+
 fn parse_forward_config(plugin_config: &PluginConfig) -> Result<ForwardConfig> {
     let cfg = plugin_config.args.clone().ok_or_else(|| {
         DnsError::plugin("forward plugin requires 'concurrent' and 'upstreams' configuration")
@@ -445,13 +466,57 @@ fn build_upstream(upstream_config: UpstreamConfig) -> Result<Box<dyn Upstream>> 
     UpstreamBuilder::with_upstream_config(upstream_config)
 }
 
+#[inline]
+fn resolve_active_concurrent(concurrent: Option<usize>) -> usize {
+    concurrent.unwrap_or(1).max(1).min(MAX_CONCURRENT_QUERIES)
+}
+
+fn parse_quick_setup_upstream_addrs(param: Option<String>) -> Result<Vec<String>> {
+    let param = param.ok_or_else(|| {
+        DnsError::plugin("forward quick setup requires non-empty upstream address parameter")
+    })?;
+    let upstream_addrs: Vec<String> = param
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    if upstream_addrs.is_empty() {
+        return Err(DnsError::plugin(
+            "forward quick setup requires non-empty upstream address parameter",
+        ));
+    }
+    Ok(upstream_addrs)
+}
+
+#[inline]
+fn make_default_upstream_config(addr: String) -> UpstreamConfig {
+    UpstreamConfig {
+        tag: None,
+        addr,
+        dial_addr: None,
+        port: None,
+        bootstrap: None,
+        bootstrap_version: None,
+        socks5: None,
+        idle_timeout: None,
+        max_conns: None,
+        insecure_skip_verify: None,
+        timeout: None,
+        enable_pipeline: None,
+        enable_http3: None,
+        so_mark: None,
+        bind_to_device: None,
+    }
+}
+
 /// Forward plugin configuration
 #[derive(Deserialize)]
 #[allow(unused)]
 pub struct ForwardConfig {
     /// Number of upstreams to query concurrently in multi-upstream mode.
     ///
-    /// Effective value is clamped to `1..=upstreams.len()`.
+    /// Defaults to `1`, and clamped to `1..=3`.
     pub concurrent: Option<usize>,
 
     /// List of upstream DNS servers
@@ -492,11 +557,7 @@ impl PluginFactory for ForwardFactory {
                 },
             )))
         } else {
-            let active_concurrent = forward_config
-                .concurrent
-                .unwrap_or(forward_config.upstreams.len())
-                .max(1)
-                .min(forward_config.upstreams.len());
+            let active_concurrent = resolve_active_concurrent(forward_config.concurrent);
 
             let mut upstreams = Vec::with_capacity(forward_config.upstreams.len());
 
@@ -521,40 +582,40 @@ impl PluginFactory for ForwardFactory {
         param: Option<String>,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        let param = param.ok_or_else(|| {
-            DnsError::plugin("forward quick setup requires non-empty upstream address parameter")
-        })?;
-        validate_upstream_addr(&param).map_err(|e| {
-            DnsError::plugin(format!(
-                "forward quick setup upstream '{}' is invalid: {}",
-                param, e
-            ))
-        })?;
+        let upstream_addrs = parse_quick_setup_upstream_addrs(param)?;
+        let mut upstream_configs = Vec::with_capacity(upstream_addrs.len());
 
-        let upstream_config = UpstreamConfig {
-            tag: None,
-            addr: param,
-            dial_addr: None,
-            port: None,
-            bootstrap: None,
-            bootstrap_version: None,
-            socks5: None,
-            idle_timeout: None,
-            max_conns: None,
-            insecure_skip_verify: None,
-            timeout: None,
-            enable_pipeline: None,
-            enable_http3: None,
-            so_mark: None,
-            bind_to_device: None,
-        };
+        for (idx, upstream_addr) in upstream_addrs.into_iter().enumerate() {
+            validate_upstream_addr(&upstream_addr).map_err(|e| {
+                DnsError::plugin(format!(
+                    "forward quick setup upstream[{}] '{}' is invalid: {}",
+                    idx, upstream_addr, e
+                ))
+            })?;
+            upstream_configs.push(make_default_upstream_config(upstream_addr));
+        }
 
-        Ok(UninitializedPlugin::Executor(Box::new(
-            SingleDnsForwarder {
-                tag: tag.to_string(),
-                upstream: build_upstream(upstream_config)?,
-            },
-        )))
+        if upstream_configs.len() == 1 {
+            let upstream_config = upstream_configs.pop().unwrap();
+            Ok(UninitializedPlugin::Executor(Box::new(
+                SingleDnsForwarder {
+                    tag: tag.to_string(),
+                    upstream: build_upstream(upstream_config)?,
+                },
+            )))
+        } else {
+            let mut upstreams = Vec::with_capacity(upstream_configs.len());
+            for upstream_config in upstream_configs {
+                upstreams.push(build_upstream(upstream_config)?.into());
+            }
+            Ok(UninitializedPlugin::Executor(Box::new(
+                ConcurrentForwarder {
+                    tag: tag.to_string(),
+                    active_concurrent: MAX_CONCURRENT_QUERIES,
+                    upstreams,
+                },
+            )))
+        }
     }
 }
 
@@ -568,24 +629,34 @@ mod tests {
 
     #[derive(Debug)]
     struct MockUpstream {
-        connection_info: crate::network::upstream::ConnectionInfo,
+        connection_info: ConnectionInfo,
+        response_code: Option<ResponseCode>,
         fail_message: Option<String>,
+        delay: Duration,
     }
 
     impl MockUpstream {
         fn ok() -> Self {
+            Self::response(ResponseCode::NoError, Duration::ZERO)
+        }
+
+        fn response(response_code: ResponseCode, delay: Duration) -> Self {
             Self {
-                connection_info: crate::network::upstream::ConnectionInfo::with_addr("1.1.1.1")
+                connection_info: ConnectionInfo::with_addr("1.1.1.1")
                     .expect("mock upstream addr must be valid"),
+                response_code: Some(response_code),
                 fail_message: None,
+                delay,
             }
         }
 
-        fn fail(msg: &str) -> Self {
+        fn fail(msg: &str, delay: Duration) -> Self {
             Self {
-                connection_info: crate::network::upstream::ConnectionInfo::with_addr("1.1.1.1")
+                connection_info: ConnectionInfo::with_addr("1.1.1.1")
                     .expect("mock upstream addr must be valid"),
+                response_code: None,
                 fail_message: Some(msg.to_string()),
+                delay,
             }
         }
     }
@@ -593,16 +664,20 @@ mod tests {
     #[async_trait]
     impl Upstream for MockUpstream {
         async fn inner_query(&self, request: Message) -> Result<Message> {
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
             if let Some(err) = self.fail_message.as_ref() {
                 return Err(DnsError::plugin(err.clone()));
             }
+            let response_code = self.response_code.unwrap_or(ResponseCode::NoError);
             Ok(crate::core::dns_utils::build_response_from_request(
                 &request,
-                ResponseCode::NoError,
+                response_code,
             ))
         }
 
-        fn connection_info(&self) -> &crate::network::upstream::ConnectionInfo {
+        fn connection_info(&self) -> &ConnectionInfo {
             &self.connection_info
         }
     }
@@ -639,8 +714,8 @@ mod tests {
             tag: "forward-test".to_string(),
             active_concurrent: 2,
             upstreams: vec![
-                Arc::new(MockUpstream::fail("u1 fail")),
-                Arc::new(MockUpstream::fail("u2 fail")),
+                Arc::new(MockUpstream::fail("u1 fail", Duration::ZERO)),
+                Arc::new(MockUpstream::fail("u2 fail", Duration::ZERO)),
             ],
         };
 
@@ -691,6 +766,31 @@ upstreams:
     }
 
     #[tokio::test]
+    async fn quick_setup_accepts_multiple_upstreams() {
+        let factory = ForwardFactory;
+        let result = factory.quick_setup(
+            "forward-test",
+            Some("1.1.1.1 8.8.8.8".to_string()),
+            Arc::new(PluginRegistry::new()),
+        );
+        match result {
+            Ok(UninitializedPlugin::Executor(_)) => {}
+            Ok(_) => panic!("expected quick setup forward to return an executor plugin"),
+            Err(err) => panic!("expected quick setup with multi upstreams to succeed, got {err}"),
+        }
+    }
+
+    #[test]
+    fn active_concurrent_defaults_to_one() {
+        assert_eq!(resolve_active_concurrent(None), 1);
+    }
+
+    #[test]
+    fn active_concurrent_caps_at_three() {
+        assert_eq!(resolve_active_concurrent(Some(10)), MAX_CONCURRENT_QUERIES);
+    }
+
+    #[tokio::test]
     async fn concurrent_success_sets_response() {
         let forwarder = ConcurrentForwarder {
             tag: "forward-test".to_string(),
@@ -702,5 +802,65 @@ upstreams:
         let step = forwarder.execute(&mut context).await.unwrap();
         assert!(matches!(step, ExecStep::Next));
         assert!(context.response.is_some());
+    }
+
+    #[tokio::test]
+    async fn concurrent_prefers_noerror_over_early_servfail() {
+        let forwarder = ConcurrentForwarder {
+            tag: "forward-test".to_string(),
+            active_concurrent: 2,
+            upstreams: vec![
+                Arc::new(MockUpstream::response(
+                    ResponseCode::ServFail,
+                    Duration::ZERO,
+                )),
+                Arc::new(MockUpstream::response(
+                    ResponseCode::NoError,
+                    Duration::from_millis(20),
+                )),
+            ],
+        };
+
+        let mut context = make_context();
+        let step = forwarder.execute(&mut context).await.unwrap();
+        assert!(matches!(step, ExecStep::Next));
+        assert_eq!(
+            context
+                .response
+                .as_ref()
+                .expect("response must exist")
+                .response_code(),
+            ResponseCode::NoError
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_returns_last_non_preferred_rcode_when_no_preferred_response() {
+        let forwarder = ConcurrentForwarder {
+            tag: "forward-test".to_string(),
+            active_concurrent: 2,
+            upstreams: vec![
+                Arc::new(MockUpstream::response(
+                    ResponseCode::ServFail,
+                    Duration::ZERO,
+                )),
+                Arc::new(MockUpstream::response(
+                    ResponseCode::Refused,
+                    Duration::from_millis(20),
+                )),
+            ],
+        };
+
+        let mut context = make_context();
+        let step = forwarder.execute(&mut context).await.unwrap();
+        assert!(matches!(step, ExecStep::Next));
+        assert_eq!(
+            context
+                .response
+                .as_ref()
+                .expect("response must exist")
+                .response_code(),
+            ResponseCode::Refused
+        );
     }
 }
