@@ -34,12 +34,17 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct EcsHandlerConfig {
+    /// Keep client-supplied ECS option when present.
     #[serde(default)]
     forward: bool,
+    /// Synthesize ECS from source IP when request has no ECS.
     #[serde(default)]
     send: bool,
+    /// Optional fixed IP used as ECS source instead of client source IP.
     preset: Option<String>,
+    /// Source prefix length for synthesized IPv4 ECS.
     mask4: Option<u8>,
+    /// Source prefix length for synthesized IPv6 ECS.
     mask6: Option<u8>,
 }
 

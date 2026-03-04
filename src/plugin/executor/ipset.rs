@@ -50,9 +50,13 @@ const IPSET_WRITER_QUEUE_SIZE: usize = 256;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct IpSetConfig {
+    /// IPv4 ipset name used for A answers.
     set_name4: Option<String>,
+    /// IPv6 ipset name used for AAAA answers.
     set_name6: Option<String>,
+    /// Prefix length used when writing IPv4 entries.
     mask4: Option<u8>,
+    /// Prefix length used when writing IPv6 entries.
     mask6: Option<u8>,
 }
 

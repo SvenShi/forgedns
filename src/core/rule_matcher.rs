@@ -611,6 +611,8 @@ fn parse_ip_prefix(raw: &str) -> Result<ParsedPrefix, String> {
         return Err("empty input".to_string());
     }
 
+    // Accept both "ip" and "ip/prefix" forms. For "ip/prefix", reject multiple
+    // slashes early so parse errors are deterministic and user-facing.
     let (ip_part, prefix_part) = if let Some((ip, prefix)) = raw.split_once('/') {
         if raw.as_bytes().iter().filter(|&&b| b == b'/').count() != 1 {
             return Err("invalid cidr format".to_string());
@@ -626,6 +628,7 @@ fn parse_ip_prefix(raw: &str) -> Result<ParsedPrefix, String> {
 
     match ip {
         IpAddr::V4(ip) => {
+            // Bare IPv4 address means host prefix /32.
             let prefix_len = match prefix_part {
                 Some(s) => s
                     .parse::<u8>()
@@ -645,6 +648,7 @@ fn parse_ip_prefix(raw: &str) -> Result<ParsedPrefix, String> {
             })
         }
         IpAddr::V6(ip) => {
+            // Bare IPv6 address means host prefix /128.
             let prefix_len = match prefix_part {
                 Some(s) => s
                     .parse::<u8>()

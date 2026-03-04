@@ -78,8 +78,10 @@ struct PostState {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct DualSelectorConfig {
+    /// Enable preferred-result cache for non-preferred query short-circuiting.
     #[serde(default)]
     cache: Option<bool>,
+    /// Cache TTL in seconds for preferred-result probe state.
     cache_ttl: Option<u64>,
 }
 

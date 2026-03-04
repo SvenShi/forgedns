@@ -30,6 +30,7 @@ const DEFAULT_MSG: &str = "query summary";
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct QuerySummaryConfig {
+    /// Optional summary title shown in logs.
     msg: Option<String>,
 }
 

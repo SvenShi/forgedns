@@ -15,8 +15,8 @@ use crate::core::error::{DnsError, Result};
 /// Designed to be consistent with other transport modules: provides
 /// `write_message` and `read_message` methods operating on Hickory `Message`.
 ///
-/// This struct assumes the socket is "connected" to a remote endpoint.
-/// For unconnected sockets, prefer using helper functions in `transport::mod`.
+/// Supports both connected-client style I/O (`read_message`/`write_message`)
+/// and unconnected-server style I/O (`read_message_from`/`write_message_to`).
 #[derive(Debug)]
 pub struct UdpTransport {
     socket: UdpSocket,
@@ -65,7 +65,7 @@ impl UdpTransport {
             .map_err(|e| DnsError::protocol(format!("Failed to parse DNS message from UDP: {}", e)))
     }
 
-    // Add support for unconnected server-style operations
+    /// Receive one UDP datagram from any peer and decode it as DNS message.
     #[inline]
     pub async fn read_message_from(&self, buf: &mut [u8]) -> Result<(Message, SocketAddr)> {
         let (n, addr) = self
@@ -108,6 +108,8 @@ impl UdpTransport {
 fn encode_message_with_max_payload(msg: &Message, max_payload: u16) -> Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(512);
     let mut encoder = BinEncoder::new(&mut bytes);
+    // RFC-compliant minimum UDP DNS payload is 512 bytes even when peer advertises
+    // a smaller EDNS value. Hickory encoder will set TC when records exceed this cap.
     encoder.set_max_size(max_payload.max(512));
     msg.emit(&mut encoder)
         .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;

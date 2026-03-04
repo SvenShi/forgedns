@@ -182,14 +182,13 @@ pub struct UpstreamConfig {
 
     /// Connection idle timeout in seconds
     ///
-    /// Currently not implemented. Reserved for future connection pool optimization
-    /// to automatically close idle connections.
+    /// Used by connection pools to recycle idle connections and bound
+    /// long-lived unused sockets.
     pub idle_timeout: Option<u64>,
 
     /// Maximum number of connections in the pool
     ///
-    /// Currently not implemented. Reserved for future connection pool scaling
-    /// to limit resource usage per upstream.
+    /// Used as the pool size upper bound to limit per-upstream resource usage.
     pub max_conns: Option<usize>,
 
     /// Skip TLS certificate verification (**INSECURE**, testing only!)

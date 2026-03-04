@@ -42,8 +42,10 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct HostsConfig {
+    /// Inline hosts rules.
     #[serde(default)]
     entries: Vec<String>,
+    /// Paths to hosts rule files.
     #[serde(default)]
     files: Vec<String>,
 }

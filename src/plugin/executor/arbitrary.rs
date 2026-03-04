@@ -31,8 +31,12 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ArbitraryConfig {
+    /// Inline arbitrary DNS records.
+    ///
+    /// Each item uses the same syntax as quick setup rules.
     #[serde(default)]
     rules: Vec<String>,
+    /// Paths to rule files containing arbitrary DNS records.
     #[serde(default)]
     files: Vec<String>,
 }

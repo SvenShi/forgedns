@@ -56,8 +56,11 @@ impl TtlPolicy {
 
 #[derive(Debug, Clone, Deserialize)]
 struct TtlConfig {
+    /// Force all response TTLs to a fixed value.
     fix: Option<u32>,
+    /// Lower bound applied to response TTLs.
     min: Option<u32>,
+    /// Upper bound applied to response TTLs.
     max: Option<u32>,
 }
 

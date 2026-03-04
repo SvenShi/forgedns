@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ForwardEdns0OptConfig {
+    /// EDNS option codes to preserve and forward.
     #[serde(default)]
     codes: Vec<u16>,
 }

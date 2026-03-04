@@ -100,6 +100,8 @@ async fn run_server(addr: String, handler: Arc<RequestHandle>) {
                 let transport = transport.clone();
                 tokio::spawn(async move {
                     let response = handler.handle_request(msg, src_addr).await;
+                    // Use requester-advertised UDP payload limit (EDNS) when encoding
+                    // response so oversize replies become TC=1 DNS messages, not raw truncation.
                     if let Err(e) = transport
                         .write_message_to(&response.response, src_addr, max_payload)
                         .await

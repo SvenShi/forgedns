@@ -37,8 +37,10 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RedirectConfig {
+    /// Inline redirect rules.
     #[serde(default)]
     rules: Vec<String>,
+    /// Paths to redirect rule files.
     #[serde(default)]
     files: Vec<String>,
 }

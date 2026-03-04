@@ -35,6 +35,7 @@ const DEFAULT_NAME: &str = "default";
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct MetricsCollectorConfig {
+    /// Optional metrics namespace/name label.
     name: Option<String>,
 }
 

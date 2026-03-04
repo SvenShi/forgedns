@@ -168,6 +168,8 @@ impl Cache {
                 sleep(interval).await;
                 let changed = updated_keys.swap(0, Ordering::Relaxed);
                 if changed < MINIMUM_CHANGES_TO_DUMP {
+                    // Keep sparse updates accumulated so low-write workloads still persist
+                    // eventually without triggering dump every interval.
                     if changed > 0 {
                         updated_keys.fetch_add(changed, Ordering::Relaxed);
                     }
@@ -224,6 +226,7 @@ impl Cache {
                     continue;
                 }
 
+                // Approximate LRU: sort sampled keys by last-access and evict oldest subset.
                 sample.sort_unstable_by_key(|(_, last)| *last);
 
                 let mut evicted = 0usize;

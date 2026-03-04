@@ -47,9 +47,13 @@ const CLEANUP_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RateLimiterConfig {
+    /// Refill rate in queries per second.
     qps: Option<f64>,
+    /// Maximum burst size in tokens.
     burst: Option<u32>,
+    /// IPv4 prefix length for client key aggregation.
     mask4: Option<u8>,
+    /// IPv6 prefix length for client key aggregation.
     mask6: Option<u8>,
 }
 

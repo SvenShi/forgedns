@@ -51,24 +51,38 @@ const NFTSET_WRITER_QUEUE_SIZE: usize = 256;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct NftSetConfig {
+    /// Legacy IPv4 table family (for quick setup compatibility).
     table_family4: Option<String>,
+    /// Legacy IPv6 table family (for quick setup compatibility).
     table_family6: Option<String>,
+    /// Legacy IPv4 table name (for quick setup compatibility).
     table_name4: Option<String>,
+    /// Legacy IPv6 table name (for quick setup compatibility).
     table_name6: Option<String>,
+    /// Legacy IPv4 set name (for quick setup compatibility).
     set_name4: Option<String>,
+    /// Legacy IPv6 set name (for quick setup compatibility).
     set_name6: Option<String>,
+    /// Legacy IPv4 prefix length.
     mask4: Option<u8>,
+    /// Legacy IPv6 prefix length.
     mask6: Option<u8>,
 
+    /// Structured IPv4 nftset target arguments.
     ipv4: Option<NftSetArgs>,
+    /// Structured IPv6 nftset target arguments.
     ipv6: Option<NftSetArgs>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct NftSetArgs {
+    /// nftables table family, e.g. `ip` or `ip6`.
     table_family: String,
+    /// nftables table name.
     table_name: String,
+    /// nftables set name.
     set_name: String,
+    /// Prefix length used when writing matched addresses.
     mask: Option<u8>,
 }
 

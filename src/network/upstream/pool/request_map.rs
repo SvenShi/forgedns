@@ -6,10 +6,10 @@
 //! Lock-free request/response correlation map
 //!
 //! Maps DNS query IDs to response channels using lock-free atomic operations.
-//! This is a hot path - all operations are wait-free for maximum performance.
+//! This is a hot path with lock-free operations and low contention under load.
 //!
 //! # Performance Characteristics
-//! - Store operation: O(1) average case with random retry
+//! - Store operation: expected O(1) at normal load, worst-case O(n) when saturated
 //! - Take operation: O(1) atomic swap
 //! - No locks or async operations
 //! - Cache-friendly: slots are inline in the array
@@ -26,7 +26,7 @@ const MAX_IDS: usize = u16::MAX as usize;
 /// Lock-free request correlation map
 ///
 /// Uses atomic pointers to map DNS query IDs to response channels.
-/// All operations are wait-free for hot-path performance.
+/// Designed for hot-path performance without locks.
 #[derive(Debug)]
 pub struct RequestMap {
     /// Array of atomic pointers to response senders
@@ -109,7 +109,7 @@ impl RequestMap {
         }
 
         // All slots occupied - clean up and panic
-        // This should be extremely rare in practice (requires 65536 concurrent requests)
+        // This should be extremely rare in practice (requires 65535 concurrent requests)
         unsafe {
             let _ = Box::from_raw(ptr);
         }

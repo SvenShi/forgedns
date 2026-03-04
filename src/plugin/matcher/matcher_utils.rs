@@ -86,6 +86,10 @@ pub(crate) fn parse_domain_rules_and_set_tags(
     raw_rules: Vec<String>,
     field: &str,
 ) -> DnsResult<(DomainRuleMatcher, Vec<String>)> {
+    // Rule source grammar:
+    // - plain token => inline rule
+    // - '$tag'      => provider tag
+    // - '&path'     => external rule file
     let (mut inline_rules, set_tags, files) = split_rule_sources(raw_rules);
     let file_rules = load_rules_from_files(&files, field)?;
     inline_rules.extend(file_rules);
@@ -120,6 +124,7 @@ pub(crate) fn parse_ip_rules_and_set_tags(
     raw_rules: Vec<String>,
     field: &str,
 ) -> DnsResult<(IpPrefixMatcher, Vec<String>)> {
+    // Keep the same source grammar as domain rules so matcher configs stay uniform.
     let (mut inline_rules, set_tags, files) = split_rule_sources(raw_rules);
     let file_rules = load_rules_from_files(&files, field)?;
     inline_rules.extend(file_rules);
@@ -175,6 +180,8 @@ pub(crate) fn split_rule_sources(
         if token.is_empty() {
             continue;
         }
+        // '$' and '&' are reserved prefixes for provider/file sources; all other
+        // tokens are treated as inline rules and parsed by concrete matcher logic.
         if let Some(tag) = token.strip_prefix('$') {
             if !tag.trim().is_empty() {
                 set_tags.push(tag.trim().to_string());
@@ -248,6 +255,8 @@ pub(crate) fn resolve_provider_tags(
                 matcher_name, matcher_tag, tag
             );
         }
+        // `to_provider()` returns a shared runtime handle managed by registry;
+        // cloning Arc here is cheap and keeps dependency ownership explicit.
         providers.push(plugin.to_provider());
     }
     providers

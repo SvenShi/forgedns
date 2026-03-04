@@ -36,10 +36,14 @@ use tokio::task::JoinSet;
 
 #[derive(Debug, Clone, Deserialize)]
 struct FallbackConfig {
+    /// Executor tag used as the primary path.
     primary: String,
+    /// Executor tag used as the standby path.
     secondary: String,
+    /// Timeout threshold in milliseconds before primary is treated as slow.
     #[serde(default)]
     threshold: u64,
+    /// Always run standby path in parallel regardless of primary latency.
     #[serde(default)]
     always_standby: bool,
 }
@@ -119,6 +123,8 @@ impl Executor for FallbackExecutor {
                             match *primary_state_rx.borrow() {
                                 PrimaryState::Running => {}
                                 PrimaryState::Success => {
+                                    // Primary already won before threshold; skip secondary execution
+                                    // and return an empty outcome just to unblock join loop.
                                     return Outcome {
                                         response: None,
                                         source: "secondary",
@@ -143,6 +149,8 @@ impl Executor for FallbackExecutor {
             tokio::select! {
                 _ = &mut standby_timer, if self.always_standby && !threshold_reached => {
                     threshold_reached = true;
+                    // In standby mode, secondary can finish early but should not win until
+                    // the threshold elapses. Flush buffered response once timer fires.
                     if let Some(response) = buffered_secondary.take() {
                         context.response = Some(response);
                         join_set.abort_all();
@@ -181,6 +189,8 @@ impl Executor for FallbackExecutor {
                                     join_set.abort_all();
                                     return Ok(ExecStep::Next);
                                 }
+                                // Standby mode before threshold: keep secondary result as backup
+                                // and still wait for primary to finish or timer to fire.
                                 buffered_secondary = Some(response);
                             }
                         }

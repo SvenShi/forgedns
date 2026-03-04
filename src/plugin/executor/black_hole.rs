@@ -33,6 +33,9 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct BlackHoleConfig {
+    /// IP addresses returned as synthesized black-hole answers.
+    ///
+    /// IPv4 values are used for A queries, IPv6 values for AAAA queries.
     #[serde(default)]
     ips: Vec<String>,
 }

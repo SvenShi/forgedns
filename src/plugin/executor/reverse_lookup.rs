@@ -44,8 +44,11 @@ const EVICTION_BATCH: usize = 512;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ReverseLookupConfig {
+    /// Maximum number of reverse lookup cache entries.
     size: Option<usize>,
+    /// Whether PTR queries should be resolved via reverse cache.
     handle_ptr: Option<bool>,
+    /// Cache TTL in seconds for IP -> domain mappings.
     ttl: Option<u32>,
 }
 

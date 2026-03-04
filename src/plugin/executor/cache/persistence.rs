@@ -97,6 +97,7 @@ pub(super) async fn dump_cache_to_file(cache_map: &CacheMap, dump_path: &str) ->
 
     let encoded = wincode::serialize(&entries)?;
 
+    // Write-then-rename to avoid partially written cache dump on crash.
     let tmp_path = format!("{}.tmp", dump_path);
     let mut file = File::create(&tmp_path).await?;
     file.write_all(&encoded).await?;
@@ -144,6 +145,8 @@ fn to_cache_key(entry: &PersistedCacheEntry, ecs_in_key: bool) -> Option<CacheKe
             _ => return None,
         }
     } else {
+        // Runtime config disabled ECS dimension; intentionally merge all persisted
+        // ECS variants into one non-ECS cache key bucket.
         None
     };
 

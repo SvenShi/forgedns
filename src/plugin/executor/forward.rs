@@ -6,8 +6,10 @@
 //! DNS forwarding plugin
 //!
 //! Forwards DNS queries to configured upstream resolvers.
-//! Currently, supports single-upstream forwarding with timeout handling.
-//! Multi-upstream load balancing is planned for future implementation.
+//! Supports:
+//! - single-upstream forwarding
+//! - multi-upstream concurrent racing (`concurrent`) with first-success return
+//! - optional dual-stack probe flow used by `dual_selector`
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -447,7 +449,9 @@ fn build_upstream(upstream_config: UpstreamConfig) -> Result<Box<dyn Upstream>> 
 #[derive(Deserialize)]
 #[allow(unused)]
 pub struct ForwardConfig {
-    /// Number of concurrent forwarding threads (not implemented yet)
+    /// Number of upstreams to query concurrently in multi-upstream mode.
+    ///
+    /// Effective value is clamped to `1..=upstreams.len()`.
     pub concurrent: Option<usize>,
 
     /// List of upstream DNS servers
@@ -500,7 +504,7 @@ impl PluginFactory for ForwardFactory {
                 upstreams.push(build_upstream(upstream_config)?.into());
             }
 
-            // Multi-upstream configuration (not yet implemented)
+            // Multi-upstream concurrent configuration
             Ok(UninitializedPlugin::Executor(Box::new(
                 ConcurrentForwarder {
                     tag: plugin_config.tag.clone(),
