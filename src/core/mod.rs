@@ -16,6 +16,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::log::ForgeDnsLogFormatter;
 use crate::core::runtime::{Options, Runtime};
 use clap::Parser;
+use tracing::{info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -41,8 +42,6 @@ pub fn init() -> Runtime {
     // Start background clock for efficient timestamp generation
     AppClock::start();
 
-    eprintln!("Core runtime initialized (clock started)");
-
     Runtime {
         options,
         log_guard: None, // Will be set later during logging initialization
@@ -60,7 +59,6 @@ pub fn init() -> Runtime {
 pub fn init_log(log: LogConfig) -> WorkerGuard {
     // Create file appender if a file path is configured
     let (file_writer, guard) = if let Some(ref file_path) = log.file {
-        eprintln!("Logging to file: {}", file_path);
         let file_appender = tracing_appender::rolling::never(
             std::path::Path::new(&file_path).parent().unwrap(),
             std::path::Path::new(&file_path).file_name().unwrap(),
@@ -83,10 +81,10 @@ pub fn init_log(log: LogConfig) -> WorkerGuard {
             .with_writer(writer)
     });
 
-    let mut filter = EnvFilter::try_new(&log.level).unwrap_or_else(|_| {
-        eprintln!("Invalid log level '{}', defaulting to 'info'", log.level);
-        EnvFilter::new("info")
-    });
+    let (mut filter, invalid_level) = match EnvFilter::try_new(&log.level) {
+        Ok(filter) => (filter, false),
+        Err(_) => (EnvFilter::new("info"), true),
+    };
 
     // Suppress noisy hickory_server logs
     filter = filter.add_directive("hickory_server::server=off".parse().unwrap());
@@ -101,7 +99,23 @@ pub fn init_log(log: LogConfig) -> WorkerGuard {
         subscriber.init();
     };
 
-    eprintln!("Logging system initialized with level: {}", log.level);
+    if invalid_level {
+        warn!(
+            requested_level = %log.level,
+            effective_level = "info",
+            "Invalid log level from config, fallback applied"
+        );
+    }
+
+    if let Some(file_path) = log.file.as_deref() {
+        info!(
+            level = %log.level,
+            file = %file_path,
+            "Logging system initialized"
+        );
+    } else {
+        info!(level = %log.level, "Logging system initialized");
+    }
 
     // Return WorkerGuard to ensure logs are flushed before program exit
     guard.unwrap_or_else(|| {

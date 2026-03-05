@@ -62,25 +62,41 @@ async fn run_async_main() -> Result<()> {
     let mut runtime = core::init();
     let options = runtime.options.clone();
 
-    info!("Loading configuration from: {:?}", options.config);
     let config = match config::init(&options.config) {
         Ok(cfg) => cfg,
         Err(e) => {
-            error!("Configuration initialization failed: {}", e);
+            eprintln!(
+                "Configuration initialization failed for {}: {}",
+                options.config.display(),
+                e
+            );
             std::process::exit(1);
         }
     };
 
     // Override log level from command line if provided
     let mut log_config = config.log.clone();
-    if let Some(level) = options.log_level {
-        info!("Overriding log level from config to: {}", level);
+    let configured_level = log_config.level.clone();
+    if let Some(level) = options.log_level.clone() {
         log_config.level = level;
     }
 
     // Initialize logging and save the guard to ensure logs are flushed
+    let effective_log_level = log_config.level.clone();
     runtime.log_guard = Some(core::init_log(log_config));
-    info!("ForgeDNS server initializing...");
+    info!(
+        config = %options.config.display(),
+        plugins = config.plugins.len(),
+        "Configuration loaded"
+    );
+    if let Some(level) = options.log_level {
+        info!(
+            config_level = %configured_level,
+            cli_level = %level,
+            "Log level overridden by CLI option"
+        );
+    }
+    info!(log_level = %effective_log_level, "ForgeDNS server initializing");
 
     // Initialize plugins with dependency resolution
     // The registry is created and returned by init()

@@ -111,24 +111,13 @@ impl Server for TcpServer {
         let addr = listen.clone();
         let tls_mode = self.tls_acceptor.is_some();
 
-        if tls_mode {
-            info!("Starting TLS-enabled TCP server on {}", listen);
-        } else {
-            info!("Starting TCP server on {}", listen);
-        }
-
+        debug!(listen = %listen, tls = tls_mode, "Spawning TCP server task");
         tokio::spawn(run_server(
             addr,
             self.request_handle.clone(),
             self.tls_acceptor.clone(),
             self.idle_timeout,
         ));
-
-        if tls_mode {
-            info!("TLS TCP server listening on {}", listen);
-        } else {
-            info!("TCP server listening on {}", listen);
-        }
     }
 }
 

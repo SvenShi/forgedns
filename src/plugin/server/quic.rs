@@ -92,14 +92,13 @@ impl Server for QuicServer {
 
         // Spawn the QUIC server loop. This call is non-blocking and returns immediately.
         // The event loop will accept incoming QUIC connections and process DoQ streams.
-        info!("Starting QUIC server on {}", listen);
+        debug!(listen = %listen, "Spawning QUIC server task");
         tokio::spawn(run_server(
             addr,
             self.request_handle.clone(),
             self.server_config.clone(),
             self.idle_timeout,
         ));
-        info!("QUIC server listening on {}", listen);
     }
 }
 
@@ -116,6 +115,7 @@ async fn run_server(
             return;
         }
     };
+    info!(listen = %addr, "QUIC server listening");
     // QUIC endpoint created successfully; enter the accept loop.
     debug!("QUIC server event loop started on {}", addr);
 

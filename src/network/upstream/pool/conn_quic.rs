@@ -19,7 +19,7 @@ use tokio::select;
 
 use tokio::sync::Notify;
 use tokio::time::timeout;
-use tracing::{debug, info, warn};
+use tracing::{debug, trace, warn};
 
 pub struct QuicConnection {
     id: u16,
@@ -120,7 +120,7 @@ impl Connection for QuicConnection {
             Ok(msg) => match msg {
                 Ok(mut resp) => {
                     resp.set_id(raw_id);
-                    debug!(
+                    trace!(
                         conn_id = self.id,
                         query_id = raw_id,
                         "Successfully received DNS response over QUIC"
@@ -232,7 +232,7 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
         )
         .await?;
 
-        info!(
+        debug!(
             conn_id,
             server_name = %self.server_name,
             remote_addr = ?quic_conn.remote_address(),

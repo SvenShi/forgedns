@@ -21,7 +21,7 @@ use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, trace, warn};
 
 /// Represents a single UDP connection used in DNS upstream queries.
 /// Each connection manages its own socket and maintains a mapping
@@ -90,7 +90,7 @@ impl Connection for UdpConnection {
             let query_id = self.request_map.store(tx);
             request.set_id(query_id);
 
-            debug!(
+            trace!(
                 conn_id = self.id,
                 attempt,
                 query_id,
@@ -113,11 +113,11 @@ impl Connection for UdpConnection {
                 Ok(res) => match res {
                     Ok(mut response) => {
                         response.set_id(raw_id);
-                        debug!(conn_id = self.id, query_id, raw_id, "Received UDP response");
+                        trace!(conn_id = self.id, query_id, raw_id, "Received UDP response");
                         return Ok(response);
                     }
                     Err(_canceled) => {
-                        debug!(
+                        trace!(
                             conn_id = self.id,
                             query_id, "Listener dropped channel, retrying"
                         );
@@ -126,7 +126,7 @@ impl Connection for UdpConnection {
                     }
                 },
                 Err(_elapsed) => {
-                    debug!(
+                    trace!(
                         conn_id = self.id,
                         query_id,
                         timeout_ms = current_timeout.as_millis(),
@@ -209,13 +209,13 @@ impl UdpConnection {
                             if let Some(sender) = self.request_map.take(id) {
                                 let _ = sender.send(msg);
                                 self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
-                                debug!(
+                                trace!(
                                     conn_id = self.id,
                                     id,
                                     "Delivered UDP response to waiting query"
                                 );
                             } else {
-                                debug!(conn_id = self.id, id, "No pending query for response");
+                                trace!(conn_id = self.id, id, "No pending query for response");
                             }
                         }
                         Err(e) => {
@@ -284,7 +284,7 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
             self.bind_to_device.clone(),
         )?;
 
-        info!(
+        debug!(
             conn_id,
             local_addr = ?socket.local_addr(),
             remote_addr = ?socket.peer_addr(),

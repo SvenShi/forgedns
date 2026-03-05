@@ -28,10 +28,5 @@ pub fn init(file: &PathBuf) -> Result<Config> {
 
     // Validate configuration - ConfigError is auto-converted to DnsError
     config.validate()?;
-
-    eprintln!(
-        "Configuration loaded and validated: {} plugin(s) configured",
-        config.plugins.len()
-    );
     Ok(config)
 }

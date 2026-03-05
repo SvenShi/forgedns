@@ -153,6 +153,12 @@ impl Server for HttpServer {
     fn run(&self) {
         let listen = self.listen.clone();
         let tls_mode = self.server_config.is_some();
+        debug!(
+            listen = %listen,
+            tls = tls_mode,
+            http3 = self.enable_http3.unwrap_or(false),
+            "Spawning HTTP server tasks"
+        );
 
         // Start HTTP/2 server (over TCP)
         tokio::spawn(http2_server::run_server(
@@ -163,16 +169,9 @@ impl Server for HttpServer {
             self.src_ip_header.clone(),
         ));
 
-        if tls_mode {
-            info!("HTTPS (HTTP/2) server listening on {}", listen);
-        } else {
-            info!("HTTP (HTTP/2) server listening on {}", listen);
-        }
-
         if self.enable_http3.unwrap_or(false) {
             match self.server_config.clone() {
                 Some(cfg) => {
-                    info!("HTTP/3 server listening on {}", listen);
                     tokio::spawn(http3_server::run_server(
                         listen.clone(),
                         self.dispatcher.clone(),

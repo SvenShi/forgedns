@@ -69,9 +69,8 @@ impl Server for UdpServer {
         let listen = self.listen.clone();
         let addr = listen.clone();
 
-        info!("Starting UDP server on {}", listen);
+        debug!(listen = %listen, "Spawning UDP server task");
         tokio::spawn(run_server(addr, self.request_handle.clone()));
-        info!("UDP server listening on {}", listen);
     }
 }
 
@@ -88,6 +87,7 @@ async fn run_server(addr: String, handler: Arc<RequestHandle>) {
         }
     };
 
+    info!(listen = %addr, "UDP server listening");
     debug!("UDP server event loop started on {}", addr);
 
     let transport = Arc::new(UdpTransport::new(socket));

@@ -26,7 +26,7 @@ use tokio::sync::{
     oneshot,
 };
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, trace, warn};
 
 /// Represents a single persistent TCP-based DNS connection.
 /// Handles both plaintext TCP and TLS (DoT) connections, supporting
@@ -91,7 +91,7 @@ impl Connection for TcpConnection {
         let (tx, rx) = oneshot::channel();
         let query_id = self.request_map.store(tx);
 
-        debug!(
+        trace!(
             conn_id = self.id,
             query_id,
             active_queries = self.using_count(),
@@ -118,7 +118,7 @@ impl Connection for TcpConnection {
         match timeout(self.timeout, rx).await {
             Ok(Ok(mut res)) => {
                 res.set_id(raw_id); // Restore original query ID
-                debug!(
+                trace!(
                     conn_id = self.id,
                     query_id, "Successfully received DNS response over TCP"
                 );
@@ -264,13 +264,13 @@ impl TcpConnection {
                             if let Some(sender) = self.request_map.take(id) {
                                 let _ = sender.send(msg);
                                 self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
-                                debug!(
+                                trace!(
                                     conn_id = self.id,
                                     query_id = id,
                                     "Matched and delivered DNS response to waiting query"
                                 );
                             } else {
-                                debug!(
+                                trace!(
                                     conn_id = self.id,
                                     query_id = id,
                                     "Discarded DNS response (no matching query or already timed out)"
@@ -300,7 +300,7 @@ impl TcpConnection {
             }
         }
 
-        warn!(conn_id = self.id, "TCP listener task terminated");
+        debug!(conn_id = self.id, "TCP listener task terminated");
     }
 }
 
@@ -359,7 +359,7 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
         )
         .await?;
 
-        info!(
+        debug!(
             conn_id,
             connection_type = ?self.connection_type,
             remote = ?stream.peer_addr(),

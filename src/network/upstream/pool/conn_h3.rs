@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::timeout;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 pub struct H3Connection {
     id: u16,
@@ -87,7 +87,7 @@ impl Connection for H3Connection {
             Ok(Ok(bytes)) => {
                 let mut resp = Message::from_vec(&bytes)?;
                 resp.set_id(raw_id);
-                debug!(conn_id = self.id, raw_id, "Received H3 response");
+                trace!(conn_id = self.id, raw_id, "Received H3 response");
                 Ok(resp)
             }
             Ok(Err(e)) => {

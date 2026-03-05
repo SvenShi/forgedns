@@ -11,7 +11,7 @@ use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 /// Main HTTP/3 server loop (over QUIC)
 ///
@@ -48,10 +48,10 @@ pub async fn run_server(
         }
     };
 
-    debug!(
+    info!(
         listen = %addr,
         idle_timeout_secs = idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT),
-        "HTTP/3 QUIC endpoint bound successfully"
+        "HTTP/3 server listening"
     );
 
     // Wrap header name in Arc to avoid cloning Strings per request

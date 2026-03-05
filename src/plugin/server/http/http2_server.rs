@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 /// Main HTTP/2 server loop (over TCP)
 ///
@@ -50,11 +50,11 @@ pub async fn run_server(
         }
     };
 
-    debug!(
+    info!(
         listen = %addr,
         idle_timeout_secs = timeout.as_secs(),
         has_tls = %server_config.is_some(),
-        "HTTP/2 server bound successfully"
+        "HTTP/2 server listening"
     );
 
     // Wrap header name in Arc to avoid cloning Strings per request
