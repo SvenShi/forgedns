@@ -29,9 +29,10 @@ use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::io::Error;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
@@ -79,6 +80,8 @@ pub struct TcpServer {
     request_handle: Arc<RequestHandle>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     idle_timeout: Option<u64>,
+    shutdown_tx: watch::Sender<bool>,
+    task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for TcpServer {
@@ -92,32 +95,80 @@ impl std::fmt::Debug for TcpServer {
     }
 }
 
+impl TcpServer {
+    fn spawn_server_task(
+        &self,
+        startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
+    ) -> Result<()> {
+        let mut task_slot = self
+            .task_handle
+            .lock()
+            .map_err(|_| DnsError::runtime("TCP server task lock poisoned"))?;
+
+        if task_slot.is_some() {
+            if let Some(startup_tx) = startup_tx {
+                let _ = startup_tx.send(Ok(()));
+            }
+            return Ok(());
+        }
+
+        let addr = self.listen.clone();
+        let handler = self.request_handle.clone();
+        let tls_acceptor = self.tls_acceptor.clone();
+        let idle_timeout = self.idle_timeout;
+        let shutdown_rx = self.shutdown_tx.subscribe();
+        *task_slot = Some(tokio::spawn(run_server(
+            addr,
+            handler,
+            tls_acceptor,
+            idle_timeout,
+            shutdown_rx,
+            startup_tx,
+        )));
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl Plugin for TcpServer {
     fn tag(&self) -> &str {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) {
-        self.run();
+    async fn init(&mut self) -> Result<()> {
+        let (startup_tx, startup_rx) = oneshot::channel();
+        self.spawn_server_task(Some(startup_tx))?;
+        match startup_rx.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(DnsError::plugin(e)),
+            Err(_) => Err(DnsError::plugin(
+                "TCP server startup channel closed unexpectedly",
+            )),
+        }
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        let _ = self.shutdown_tx.send(true);
+        let handle = self
+            .task_handle
+            .lock()
+            .map_err(|_| DnsError::runtime("TCP server task lock poisoned"))?
+            .take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
+        }
+        Ok(())
+    }
 }
 
 impl Server for TcpServer {
     fn run(&self) {
-        let listen = self.listen.clone();
-        let addr = listen.clone();
         let tls_mode = self.tls_acceptor.is_some();
 
-        debug!(listen = %listen, tls = tls_mode, "Spawning TCP server task");
-        tokio::spawn(run_server(
-            addr,
-            self.request_handle.clone(),
-            self.tls_acceptor.clone(),
-            self.idle_timeout,
-        ));
+        debug!(listen = %self.listen, tls = tls_mode, "Spawning TCP server task");
+        if let Err(e) = self.spawn_server_task(None) {
+            error!(plugin = %self.tag, error = %e, "Failed to spawn TCP server task");
+        }
     }
 }
 
@@ -131,16 +182,25 @@ async fn run_server(
     handler: Arc<RequestHandle>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     idle_timeout: Option<u64>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
 ) {
+    let mut startup_tx = startup_tx;
     let timeout = Duration::from_secs(idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT));
     let listener = match build_tcp_listener(&addr, timeout) {
         Ok(s) => s,
         Err(e) => {
+            if let Some(tx) = startup_tx.take() {
+                let _ = tx.send(Err(format!("Failed to bind TCP socket to {}: {}", addr, e)));
+            }
             error!("Failed to bind TCP socket to {}: {}", addr, e);
             return;
         }
     };
 
+    if let Some(tx) = startup_tx.take() {
+        let _ = tx.send(Ok(()));
+    }
     info!(
         listen = %addr,
         idle_timeout_secs = timeout.as_secs(),
@@ -154,6 +214,11 @@ async fn run_server(
 
     loop {
         tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_ok() && *shutdown_rx.borrow() {
+                    break;
+                }
+            }
             // Accept new connections
             accept_result = listener.accept() => {
                 match accept_result {
@@ -209,6 +274,10 @@ async fn run_server(
             }
         }
     }
+
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    info!(listen = %addr, "TCP server stopped");
 }
 
 /// Handle DNS messages over a TCP stream (works for both TLS and plain TCP)
@@ -385,6 +454,8 @@ impl PluginFactory for TcpServerFactory {
                 }),
                 tls_acceptor,
                 idle_timeout: tcp_config.idle_timeout,
+                shutdown_tx: watch::channel(false).0,
+                task_handle: Mutex::new(None),
             },
         )))
     }

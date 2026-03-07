@@ -32,7 +32,8 @@ use rustls::ServerConfig;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::{oneshot, watch};
 use tracing::{debug, error, info, warn};
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT: u64 = 30;
@@ -120,6 +121,10 @@ pub struct HttpServer {
     idle_timeout: Option<u64>,
     /// Enable HTTP/3 for DoH connections
     enable_http3: Option<bool>,
+    /// Shared shutdown signal for HTTP/2 and HTTP/3 tasks
+    shutdown_tx: watch::Sender<bool>,
+    /// Spawned top-level server task handles
+    task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for HttpServer {
@@ -136,21 +141,27 @@ impl std::fmt::Debug for HttpServer {
     }
 }
 
-#[async_trait]
-impl Plugin for HttpServer {
-    fn tag(&self) -> &str {
-        self.tag.as_str()
-    }
+impl HttpServer {
+    fn spawn_server_tasks(
+        &self,
+        h2_startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
+        h3_startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
+    ) -> Result<()> {
+        let mut task_handles = self
+            .task_handles
+            .lock()
+            .map_err(|_| DnsError::runtime("HTTP server task lock poisoned"))?;
 
-    async fn init(&mut self) {
-        self.run();
-    }
+        if !task_handles.is_empty() {
+            if let Some(tx) = h2_startup_tx {
+                let _ = tx.send(Ok(()));
+            }
+            if let Some(tx) = h3_startup_tx {
+                let _ = tx.send(Ok(()));
+            }
+            return Ok(());
+        }
 
-    async fn destroy(&self) {}
-}
-
-impl Server for HttpServer {
-    fn run(&self) {
         let listen = self.listen.clone();
         let tls_mode = self.server_config.is_some();
         debug!(
@@ -160,30 +171,108 @@ impl Server for HttpServer {
             "Spawning HTTP server tasks"
         );
 
-        // Start HTTP/2 server (over TCP)
-        tokio::spawn(http2_server::run_server(
+        task_handles.push(tokio::spawn(http2_server::run_server(
             listen.clone(),
             self.dispatcher.clone(),
             self.server_config.clone(),
             self.idle_timeout,
             self.src_ip_header.clone(),
-        ));
+            self.shutdown_tx.subscribe(),
+            h2_startup_tx,
+        )));
 
         if self.enable_http3.unwrap_or(false) {
             match self.server_config.clone() {
                 Some(cfg) => {
-                    tokio::spawn(http3_server::run_server(
+                    task_handles.push(tokio::spawn(http3_server::run_server(
                         listen.clone(),
                         self.dispatcher.clone(),
                         cfg,
                         self.idle_timeout,
                         self.src_ip_header.clone(),
-                    ));
+                        self.shutdown_tx.subscribe(),
+                        h3_startup_tx,
+                    )));
                 }
                 None => {
-                    error!("HTTP/3 requires TLS; server_config is missing");
+                    if let Some(tx) = h3_startup_tx {
+                        let _ = tx.send(Err("HTTP/3 requires TLS".to_string()));
+                    }
+                    return Err(DnsError::plugin(
+                        "HTTP/3 requires TLS; cert/key are missing",
+                    ));
                 }
             };
+        } else if let Some(tx) = h3_startup_tx {
+            let _ = tx.send(Ok(()));
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Plugin for HttpServer {
+    fn tag(&self) -> &str {
+        self.tag.as_str()
+    }
+
+    async fn init(&mut self) -> Result<()> {
+        let (h2_tx, h2_rx) = oneshot::channel();
+        let (h3_tx, h3_rx) = if self.enable_http3.unwrap_or(false) {
+            let (tx, rx) = oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+
+        self.spawn_server_tasks(Some(h2_tx), h3_tx)?;
+
+        match h2_rx.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(DnsError::plugin(e)),
+            Err(_) => {
+                return Err(DnsError::plugin(
+                    "HTTP/2 server startup channel closed unexpectedly",
+                ));
+            }
+        }
+
+        if let Some(h3_rx) = h3_rx {
+            match h3_rx.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(DnsError::plugin(e)),
+                Err(_) => {
+                    return Err(DnsError::plugin(
+                        "HTTP/3 server startup channel closed unexpectedly",
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn destroy(&self) -> Result<()> {
+        let _ = self.shutdown_tx.send(true);
+        let handles = {
+            let mut task_handles = self
+                .task_handles
+                .lock()
+                .map_err(|_| DnsError::runtime("HTTP server task lock poisoned"))?;
+            std::mem::take(&mut *task_handles)
+        };
+        for handle in handles {
+            let _ = handle.await;
+        }
+        Ok(())
+    }
+}
+
+impl Server for HttpServer {
+    fn run(&self) {
+        if let Err(e) = self.spawn_server_tasks(None, None) {
+            error!(plugin = %self.tag, error = %e, "Failed to spawn HTTP server task");
         }
     }
 }
@@ -268,6 +357,8 @@ impl PluginFactory for HttpServerFactory {
                 server_config,
                 idle_timeout: http_config.idle_timeout,
                 enable_http3: http_config.enable_http3,
+                shutdown_tx: watch::channel(false).0,
+                task_handles: Mutex::new(Vec::new()),
             },
         )))
     }

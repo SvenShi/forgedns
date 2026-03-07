@@ -52,11 +52,14 @@ impl Plugin for SingleDnsForwarder {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> Result<()> {
         info!("DNS SingleDnsForwarder initialized tag: {}", self.tag);
+        Ok(())
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -212,11 +215,14 @@ impl Plugin for ConcurrentForwarder {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> Result<()> {
         info!("DNS ConcurrentForwarder initialized tag: {}", self.tag);
+        Ok(())
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]

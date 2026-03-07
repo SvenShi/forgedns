@@ -25,7 +25,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, watch};
 use tokio::time::sleep;
 use tracing::{Level, debug, event_enabled, warn};
 
@@ -144,6 +144,9 @@ pub struct Cache {
 
     /// Number of cache entry updates since last dump.
     updated_keys: Arc<AtomicU64>,
+
+    /// Shutdown signal for background cache tasks.
+    shutdown_tx: watch::Sender<bool>,
 }
 
 impl Cache {
@@ -161,11 +164,20 @@ impl Cache {
         dump_path: String,
         dump_interval: u64,
         updated_keys: Arc<AtomicU64>,
+        mut shutdown_rx: watch::Receiver<bool>,
     ) {
         tokio::spawn(async move {
             let interval = Duration::from_secs(dump_interval);
             loop {
-                sleep(interval).await;
+                tokio::select! {
+                    _ = sleep(interval) => {}
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_ok() && *shutdown_rx.borrow() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
                 let changed = updated_keys.swap(0, Ordering::Relaxed);
                 if changed < MINIMUM_CHANGES_TO_DUMP {
                     // Keep sparse updates accumulated so low-write workloads still persist
@@ -182,11 +194,24 @@ impl Cache {
         });
     }
 
-    fn spawn_cleanup_task(&self, cache_map: CacheMap, cache_size: usize) {
+    fn spawn_cleanup_task(
+        &self,
+        cache_map: CacheMap,
+        cache_size: usize,
+        mut shutdown_rx: watch::Receiver<bool>,
+    ) {
         tokio::spawn(async move {
             let cleanup_interval = Duration::from_secs(DEFAULT_CLEANUP_INTERVAL);
             loop {
-                sleep(cleanup_interval).await;
+                tokio::select! {
+                    _ = sleep(cleanup_interval) => {}
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_ok() && *shutdown_rx.borrow() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
 
                 let now = AppClock::elapsed_millis();
                 let mut expired_removed = 0usize;
@@ -440,7 +465,7 @@ impl Plugin for Cache {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> Result<()> {
         let cache_map = CacheMap::with_capacity(self.cache_size);
 
         let _ = self.cache_map.set(cache_map.clone());
@@ -453,19 +478,23 @@ impl Plugin for Cache {
                 dump_file.clone(),
                 dump_interval,
                 self.updated_keys.clone(),
+                self.shutdown_tx.subscribe(),
             );
         }
 
-        self.spawn_cleanup_task(cache_map, self.cache_size);
+        self.spawn_cleanup_task(cache_map, self.cache_size, self.shutdown_tx.subscribe());
+        Ok(())
     }
 
-    async fn destroy(&self) {
+    async fn destroy(&self) -> Result<()> {
+        let _ = self.shutdown_tx.send(true);
         if let Some(dump_file) = &self.config.dump_file
             && let Some(cache_map) = self.cache_map.get()
             && let Err(e) = dump_cache_to_file(cache_map, dump_file).await
         {
             warn!("Failed to dump cache to {}: {}", dump_file, e);
         }
+        Ok(())
     }
 }
 
@@ -618,6 +647,7 @@ impl PluginFactory for CacheFactory {
             cache_size: cache_config.size.unwrap_or(DEFAULT_CACHE_SIZE),
             config: cache_config,
             updated_keys: Arc::new(AtomicU64::new(0)),
+            shutdown_tx: watch::channel(false).0,
         })))
     }
 }
@@ -652,6 +682,7 @@ mod tests {
             config,
             updated_keys: Arc::new(AtomicU64::new(0)),
             cache_size,
+            shutdown_tx: watch::channel(false).0,
         }
     }
 
@@ -840,7 +871,7 @@ mod tests {
     #[tokio::test]
     async fn truncated_response_is_not_cached() {
         let mut cache = test_cache(default_test_config());
-        cache.init().await;
+        let _ = cache.init().await;
 
         let mut context = make_context(make_request_with_query("example.com.", false, false));
         let state = match cache.execute(&mut context).await.unwrap() {

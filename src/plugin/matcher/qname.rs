@@ -105,16 +105,19 @@ impl Plugin for QnameMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> DnsResult<()> {
         self.domain_sets =
             resolve_provider_tags(&self.registry, &self.domain_set_tags, "qname", &self.tag);
         self.domain_sets_has_trie_rules = self
             .domain_sets
             .iter()
             .any(|set| set.has_trie_domain_rules());
+        Ok(())
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> DnsResult<()> {
+        Ok(())
+    }
 }
 
 impl Matcher for QnameMatcher {

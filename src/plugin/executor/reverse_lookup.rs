@@ -36,6 +36,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::watch;
 
 const DEFAULT_SIZE: usize = 65_535;
 const DEFAULT_TTL: u32 = 7_200;
@@ -65,6 +66,7 @@ struct ReverseLookup {
     ttl: u32,
     handle_ptr: bool,
     cleanup_started: AtomicBool,
+    shutdown_tx: watch::Sender<bool>,
 }
 
 #[async_trait]
@@ -73,17 +75,26 @@ impl Plugin for ReverseLookup {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> Result<()> {
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
-            return;
+            return Ok(());
         }
 
         let cache = self.cache.clone();
         let size = self.size;
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
         tokio::spawn(async move {
             let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
             loop {
-                tokio::time::sleep(interval).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {}
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_ok() && *shutdown_rx.borrow() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
                 let now = AppClock::elapsed_millis();
 
                 while cache.remove_expired_batch(now, EVICTION_BATCH) > 0 {}
@@ -103,9 +114,14 @@ impl Plugin for ReverseLookup {
                 }
             }
         });
+        Ok(())
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        let _ = self.shutdown_tx.send(true);
+        self.cleanup_started.store(false, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -214,6 +230,7 @@ impl PluginFactory for ReverseLookupFactory {
             ttl,
             handle_ptr: cfg.handle_ptr.unwrap_or(false),
             cleanup_started: AtomicBool::new(false),
+            shutdown_tx: watch::channel(false).0,
         })))
     }
 }

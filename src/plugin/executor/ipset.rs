@@ -137,9 +137,20 @@ impl Plugin for IpSetExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) -> Result<()> {
+        Ok(())
+    }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        self.enabled.store(false, Ordering::Relaxed);
+        #[cfg(target_os = "linux")]
+        {
+            // Wake the writer thread if it is blocked on recv so it can observe
+            // the disabled flag and exit quickly.
+            let _ = self.writer.try_send(Vec::new());
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -237,7 +248,6 @@ impl PluginFactory for IpSetFactory {
         );
 
         #[cfg(target_os = "linux")]
-        #[cfg(target_os = "linux")]
         let enabled = Arc::new(AtomicBool::new(true));
         #[cfg(target_os = "linux")]
         let writer = spawn_ipset_writer(plugin_config.tag.as_str(), enabled.clone())?;
@@ -299,7 +309,6 @@ impl PluginFactory for IpSetFactory {
         let mask6 = cfg.mask6.unwrap_or(32);
         validate_masks(mask4, mask6)?;
 
-        #[cfg(target_os = "linux")]
         #[cfg(target_os = "linux")]
         let enabled = Arc::new(AtomicBool::new(true));
         #[cfg(target_os = "linux")]

@@ -22,8 +22,9 @@ use async_trait::async_trait;
 use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
 use rustls::ServerConfig;
 use serde::Deserialize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
@@ -61,7 +62,6 @@ pub struct QuicServerConfig {
 
 /// QUIC DNS server plugin
 #[allow(unused)]
-#[derive(Debug)]
 pub struct QuicServer {
     tag: String,
     listen: String,
@@ -70,6 +70,52 @@ pub struct QuicServer {
     idle_timeout: Option<u64>,
 
     request_handle: Arc<RequestHandle>,
+    shutdown_tx: watch::Sender<bool>,
+    task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl std::fmt::Debug for QuicServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuicServer")
+            .field("tag", &self.tag)
+            .field("listen", &self.listen)
+            .field("idle_timeout", &self.idle_timeout)
+            .finish()
+    }
+}
+
+impl QuicServer {
+    fn spawn_server_task(
+        &self,
+        startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
+    ) -> Result<()> {
+        let mut task_slot = self
+            .task_handle
+            .lock()
+            .map_err(|_| DnsError::runtime("QUIC server task lock poisoned"))?;
+
+        if task_slot.is_some() {
+            if let Some(startup_tx) = startup_tx {
+                let _ = startup_tx.send(Ok(()));
+            }
+            return Ok(());
+        }
+
+        let addr = self.listen.clone();
+        let handler = self.request_handle.clone();
+        let server_config = self.server_config.clone();
+        let idle_timeout = self.idle_timeout;
+        let shutdown_rx = self.shutdown_tx.subscribe();
+        *task_slot = Some(tokio::spawn(run_server(
+            addr,
+            handler,
+            server_config,
+            idle_timeout,
+            shutdown_rx,
+            startup_tx,
+        )));
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -78,27 +124,40 @@ impl Plugin for QuicServer {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) {
-        self.run();
+    async fn init(&mut self) -> Result<()> {
+        let (startup_tx, startup_rx) = oneshot::channel();
+        self.spawn_server_task(Some(startup_tx))?;
+        match startup_rx.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(DnsError::plugin(e)),
+            Err(_) => Err(DnsError::plugin(
+                "QUIC server startup channel closed unexpectedly",
+            )),
+        }
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        let _ = self.shutdown_tx.send(true);
+        let handle = self
+            .task_handle
+            .lock()
+            .map_err(|_| DnsError::runtime("QUIC server task lock poisoned"))?
+            .take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
+        }
+        Ok(())
+    }
 }
 
 impl Server for QuicServer {
     fn run(&self) {
-        let listen = self.listen.clone();
-        let addr = listen.clone();
-
         // Spawn the QUIC server loop. This call is non-blocking and returns immediately.
         // The event loop will accept incoming QUIC connections and process DoQ streams.
-        debug!(listen = %listen, "Spawning QUIC server task");
-        tokio::spawn(run_server(
-            addr,
-            self.request_handle.clone(),
-            self.server_config.clone(),
-            self.idle_timeout,
-        ));
+        debug!(listen = %self.listen, "Spawning QUIC server task");
+        if let Err(e) = self.spawn_server_task(None) {
+            error!(plugin = %self.tag, error = %e, "Failed to spawn QUIC server task");
+        }
     }
 }
 
@@ -107,14 +166,26 @@ async fn run_server(
     handler: Arc<RequestHandle>,
     server_config: ServerConfig,
     idle_timeout: Option<u64>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
 ) {
+    let mut startup_tx = startup_tx;
     let endpoint = match build_quic_endpoint(&addr, server_config, idle_timeout) {
         Ok(s) => s,
         Err(e) => {
+            if let Some(tx) = startup_tx.take() {
+                let _ = tx.send(Err(format!(
+                    "Failed to bind QUIC endpoint to {}: {}",
+                    addr, e
+                )));
+            }
             error!("Failed to bind QUIC endpoint to {}: {}", addr, e);
             return;
         }
     };
+    if let Some(tx) = startup_tx.take() {
+        let _ = tx.send(Ok(()));
+    }
     info!(listen = %addr, "QUIC server listening");
     // QUIC endpoint created successfully; enter the accept loop.
     debug!("QUIC server event loop started on {}", addr);
@@ -126,6 +197,11 @@ async fn run_server(
     // Accept QUIC connections and spawn a task per connection.
     loop {
         tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_ok() && *shutdown_rx.borrow() {
+                    break;
+                }
+            }
             maybe_connecting = endpoint.accept() => {
                 match maybe_connecting {
                     Some(connecting) => {
@@ -152,6 +228,10 @@ async fn run_server(
             }
         }
     }
+
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    info!(listen = %addr, "QUIC server stopped");
 }
 
 /// Accept a QUIC connection and handle all bidirectional streams (DNS over QUIC).
@@ -360,6 +440,8 @@ impl PluginFactory for QuicServerFactory {
                     entry_executor: entry.to_executor().clone(),
                     registry,
                 }),
+                shutdown_tx: watch::channel(false).0,
+                task_handle: Mutex::new(None),
             },
         )))
     }

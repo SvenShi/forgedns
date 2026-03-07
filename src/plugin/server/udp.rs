@@ -23,7 +23,10 @@ use std::net::SocketAddr;
 use std::net::UdpSocket as StdUdpSocket;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::net::UdpSocket;
+use tokio::sync::{oneshot, watch};
+use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 /// UDP server configuration
@@ -44,11 +47,51 @@ pub struct UdpServerConfig {
 
 /// UDP DNS server plugin
 #[allow(unused)]
-#[derive(Debug)]
 pub struct UdpServer {
     tag: String,
     listen: String,
     request_handle: Arc<RequestHandle>,
+    shutdown_tx: watch::Sender<bool>,
+    task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl std::fmt::Debug for UdpServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UdpServer")
+            .field("tag", &self.tag)
+            .field("listen", &self.listen)
+            .finish()
+    }
+}
+
+impl UdpServer {
+    fn spawn_server_task(
+        &self,
+        startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
+    ) -> Result<()> {
+        let mut task_slot = self
+            .task_handle
+            .lock()
+            .map_err(|_| DnsError::runtime("UDP server task lock poisoned"))?;
+
+        if task_slot.is_some() {
+            if let Some(startup_tx) = startup_tx {
+                let _ = startup_tx.send(Ok(()));
+            }
+            return Ok(());
+        }
+
+        let addr = self.listen.clone();
+        let handler = self.request_handle.clone();
+        let shutdown_rx = self.shutdown_tx.subscribe();
+        *task_slot = Some(tokio::spawn(run_server(
+            addr,
+            handler,
+            shutdown_rx,
+            startup_tx,
+        )));
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -57,20 +100,38 @@ impl Plugin for UdpServer {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) {
-        self.run();
+    async fn init(&mut self) -> Result<()> {
+        let (startup_tx, startup_rx) = oneshot::channel();
+        self.spawn_server_task(Some(startup_tx))?;
+        match startup_rx.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(DnsError::plugin(e)),
+            Err(_) => Err(DnsError::plugin(
+                "UDP server startup channel closed unexpectedly",
+            )),
+        }
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        let _ = self.shutdown_tx.send(true);
+        let handle = self
+            .task_handle
+            .lock()
+            .map_err(|_| DnsError::runtime("UDP server task lock poisoned"))?
+            .take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
+        }
+        Ok(())
+    }
 }
 
 impl Server for UdpServer {
     fn run(&self) {
-        let listen = self.listen.clone();
-        let addr = listen.clone();
-
-        debug!(listen = %listen, "Spawning UDP server task");
-        tokio::spawn(run_server(addr, self.request_handle.clone()));
+        debug!(listen = %self.listen, "Spawning UDP server task");
+        if let Err(e) = self.spawn_server_task(None) {
+            error!(plugin = %self.tag, error = %e, "Failed to spawn UDP server task");
+        }
     }
 }
 
@@ -78,44 +139,74 @@ impl Server for UdpServer {
 ///
 /// Creates a UDP stream, listens for incoming DNS queries, and spawns
 /// handler tasks for each request. Performs periodic cleanup of finished tasks.
-async fn run_server(addr: String, handler: Arc<RequestHandle>) {
+async fn run_server(
+    addr: String,
+    handler: Arc<RequestHandle>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
+) {
+    let mut startup_tx = startup_tx;
     let socket = match build_udp_socket(&addr) {
         Ok(s) => UdpSocket::from_std(s).unwrap(),
         Err(e) => {
+            if let Some(tx) = startup_tx.take() {
+                let _ = tx.send(Err(format!("Failed to bind UDP socket to {}: {}", addr, e)));
+            }
             error!("Failed to bind UDP socket to {}: {}", addr, e);
             return;
         }
     };
 
+    if let Some(tx) = startup_tx.take() {
+        let _ = tx.send(Ok(()));
+    }
     info!(listen = %addr, "UDP server listening");
     debug!("UDP server event loop started on {}", addr);
 
     let transport = Arc::new(UdpTransport::new(socket));
     let mut buf = [0u8; 4096];
+    let mut tasks: JoinSet<()> = JoinSet::new();
     loop {
-        match transport.read_message_from(&mut buf).await {
-            Ok((msg, src_addr)) => {
-                let max_payload = msg.max_payload();
-                let handler = handler.clone();
-                let transport = transport.clone();
-                tokio::spawn(async move {
-                    let response = handler.handle_request(msg, src_addr).await;
-                    // Use requester-advertised UDP payload limit (EDNS) when encoding
-                    // response so oversize replies become TC=1 DNS messages, not raw truncation.
-                    if let Err(e) = transport
-                        .write_message_to(&response.response, src_addr, max_payload)
-                        .await
-                    {
-                        warn!("Failed to send response to {}: {}", src_addr, e);
-                    }
-                });
+        tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_ok() && *shutdown_rx.borrow() {
+                    break;
+                }
             }
-            Err(e) => {
-                warn!("Error receiving message on UDP socket: {}", e);
-                continue;
+            recv = transport.read_message_from(&mut buf) => {
+                match recv {
+                    Ok((msg, src_addr)) => {
+                        let max_payload = msg.max_payload();
+                        let handler = handler.clone();
+                        let transport = transport.clone();
+                        tasks.spawn(async move {
+                            let response = handler.handle_request(msg, src_addr).await;
+                            // Use requester-advertised UDP payload limit (EDNS) when encoding
+                            // response so oversize replies become TC=1 DNS messages, not raw truncation.
+                            if let Err(e) = transport
+                                .write_message_to(&response.response, src_addr, max_payload)
+                                .await
+                            {
+                                warn!("Failed to send response to {}: {}", src_addr, e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        warn!("Error receiving message on UDP socket: {}", e);
+                    }
+                }
+            }
+            Some(result) = tasks.join_next(), if !tasks.is_empty() => {
+                if let Err(e) = result {
+                    warn!("UDP request task panicked: {:?}", e);
+                }
             }
         }
     }
+
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    info!(listen = %addr, "UDP server stopped");
 }
 
 /// Build a UDP socket with reuse_address and reuse_port options
@@ -221,6 +312,8 @@ impl PluginFactory for UdpServerFactory {
                     entry_executor: entry.to_executor().clone(),
                     registry,
                 }),
+                shutdown_tx: watch::channel(false).0,
+                task_handle: Mutex::new(None),
             },
         )))
     }

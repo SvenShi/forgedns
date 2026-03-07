@@ -97,13 +97,16 @@ impl Plugin for EnvMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> DnsResult<()> {
         let raw = std::env::var_os(&self.key);
         self.cached_exists = raw.is_some();
         self.cached_value = raw.map(|v| v.to_string_lossy().into_owned());
+        Ok(())
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> DnsResult<()> {
+        Ok(())
+    }
 }
 
 impl Matcher for EnvMatcher {

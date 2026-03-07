@@ -12,9 +12,9 @@ use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::{PluginFactory, PluginInfo};
 use dashmap::DashMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 /// Plugin registry that manages plugin factories and instances
 ///
@@ -91,6 +91,16 @@ impl PluginRegistry {
     pub(crate) async fn init_plugins(self: Arc<Self>, configs: Vec<PluginConfig>) -> Result<()> {
         use crate::plugin::dependency;
 
+        let mut seen_tags = HashSet::new();
+        for config in &configs {
+            if !seen_tags.insert(config.tag.as_str()) {
+                return Err(DnsError::plugin(format!(
+                    "Duplicate plugin tag '{}' in configuration",
+                    config.tag
+                )));
+            }
+        }
+
         // Step 1: Validate all plugin configurations
         info!("Validating plugin configurations...");
         for config in &configs {
@@ -138,13 +148,21 @@ impl PluginRegistry {
                 })?;
 
             // Create plugin using the factory and registry
-            let mut plugin_info = self
+            let plugin_info = self
                 .create_plugin_info_and_init(plugin_config, factory)
                 .await?;
 
             // DashMap allows insertion even with Arc<Self>
-            self.plugins
-                .insert(plugin_config.tag.clone(), Arc::new(plugin_info));
+            if self
+                .plugins
+                .insert(plugin_config.tag.clone(), Arc::new(plugin_info))
+                .is_some()
+            {
+                return Err(DnsError::plugin(format!(
+                    "Duplicate runtime plugin tag '{}'",
+                    plugin_config.tag
+                )));
+            }
             if let Ok(mut order) = self.init_order.lock() {
                 order.push(plugin_config.tag.clone());
             }
@@ -166,7 +184,7 @@ impl PluginRegistry {
         let uninitialized = factory.create(config, self.clone())?;
 
         // Initialize and wrap into PluginType (with Arc)
-        let plugin_holder = uninitialized.init_and_wrap().await;
+        let plugin_holder = uninitialized.init_and_wrap().await?;
 
         // Initialize and wrap into PluginHolder (with Arc)
         Ok(PluginInfo {
@@ -211,7 +229,13 @@ impl PluginRegistry {
 
         for tag in order.into_iter().rev() {
             if let Some(entry) = self.plugins.remove(&tag) {
-                entry.1.as_plugin().destroy().await;
+                if let Err(err) = entry.1.as_plugin().destroy().await {
+                    error!(
+                        plugin = %tag,
+                        error = %err,
+                        "Plugin destroy failed"
+                    );
+                }
                 drop(entry);
             }
         }

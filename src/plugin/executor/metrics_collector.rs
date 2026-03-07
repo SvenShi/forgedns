@@ -61,9 +61,13 @@ impl Plugin for MetricsCollector {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) -> Result<()> {
+        Ok(())
+    }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]

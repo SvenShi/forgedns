@@ -4,7 +4,7 @@
  */
 use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::dns_utils::build_response_from_request;
-use crate::plugin::executor::Executor;
+use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
 use crate::plugin::{Plugin, PluginRegistry};
 use ahash::AHashMap;
 use hickory_proto::op::{Message, ResponseCode};
@@ -84,9 +84,16 @@ impl RequestHandle {
         }
 
         // Execute entry plugin to process the request
-        let exec_outcome = self.entry_executor.execute(&mut context).await;
+        let exec_outcome = execute_with_post(self.entry_executor.as_ref(), &mut context).await;
         let (response, exit) = match exec_outcome {
-            Ok(_) => {
+            Ok(step) => {
+                if context.exec_flow_state == ExecFlowState::Running {
+                    context.exec_flow_state = match step {
+                        ExecStep::Next => ExecFlowState::ReachedTail,
+                        ExecStep::Stop => ExecFlowState::Broken,
+                        ExecStep::NextWithPost(_) => ExecFlowState::Running,
+                    };
+                }
                 let exit = if context.exec_flow_state == ExecFlowState::ReachedTail {
                     RequestExit::Completed
                 } else {

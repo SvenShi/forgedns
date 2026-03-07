@@ -10,6 +10,7 @@ use bytes::Bytes;
 use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
@@ -38,15 +39,24 @@ pub async fn run_server(
     mut server_config: ServerConfig,
     idle_timeout: Option<u64>,
     src_ip_header: Option<String>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    startup_tx: Option<oneshot::Sender<Result<(), String>>>,
 ) {
+    let mut startup_tx = startup_tx;
     server_config.alpn_protocols = vec![b"h3".to_vec()];
     let endpoint = match quic::build_quic_endpoint(&addr, server_config, idle_timeout) {
         Ok(value) => value,
         Err(e) => {
+            if let Some(tx) = startup_tx.take() {
+                let _ = tx.send(Err(format!("QUIC endpoint build failed: {}", e)));
+            }
             error!("QUIC endpoint build failed: {}", e);
             return;
         }
     };
+    if let Some(tx) = startup_tx.take() {
+        let _ = tx.send(Ok(()));
+    }
 
     info!(
         listen = %addr,
@@ -62,6 +72,11 @@ pub async fn run_server(
     loop {
         // Accept new connections
         tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_ok() && *shutdown_rx.borrow() {
+                    break;
+                }
+            }
             accept_result = endpoint.accept()  => {
                 match accept_result {
                     Some(connecting) => {
@@ -92,6 +107,10 @@ pub async fn run_server(
             }
         }
     }
+
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    info!(listen = %addr, "HTTP/3 server stopped");
 }
 
 /// Handle a single QUIC connection and all its HTTP/3 request streams

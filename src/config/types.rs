@@ -9,6 +9,7 @@
 
 use serde::Deserialize;
 use serde_yml::Value;
+use std::collections::HashSet;
 use thiserror::Error;
 
 /// Configuration validation errors
@@ -22,6 +23,9 @@ pub enum ConfigError {
 
     #[error("Plugin type cannot be empty")]
     EmptyPluginType,
+
+    #[error("Duplicate plugin tag: {0}")]
+    DuplicatePluginTag(String),
 }
 
 /// Main server configuration
@@ -49,10 +53,14 @@ impl Config {
         }
 
         // Validate plugins - basic structure checks
+        let mut seen_tags = HashSet::new();
         for plugin in &self.plugins {
             // Check for empty tag
             if plugin.tag.is_empty() {
                 return Err(ConfigError::EmptyPluginTag);
+            }
+            if !seen_tags.insert(plugin.tag.as_str()) {
+                return Err(ConfigError::DuplicatePluginTag(plugin.tag.clone()));
             }
 
             // Check for empty type

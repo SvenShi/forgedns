@@ -137,9 +137,9 @@ impl Plugin for RateLimiter {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> DnsResult<()> {
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
-            return;
+            return Ok(());
         }
 
         let (stop_tx, mut stop_rx) = oneshot::channel();
@@ -165,9 +165,10 @@ impl Plugin for RateLimiter {
         if let Ok(mut guard) = self.cleanup_handle.lock() {
             *guard = Some(handle);
         }
+        Ok(())
     }
 
-    async fn destroy(&self) {
+    async fn destroy(&self) -> DnsResult<()> {
         if let Ok(mut guard) = self.cleanup_stop.lock()
             && let Some(tx) = guard.take()
         {
@@ -179,6 +180,7 @@ impl Plugin for RateLimiter {
             handle.abort();
         }
         self.cleanup_started.store(false, Ordering::Relaxed);
+        Ok(())
     }
 }
 

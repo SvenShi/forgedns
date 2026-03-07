@@ -56,3 +56,21 @@ pub trait Executor: Plugin {
         Ok(())
     }
 }
+
+/// Execute one executor stage and immediately run its post callback when needed.
+///
+/// This helper is intended for call sites that execute a single executor directly
+/// (without sequence's deferred post stack), such as server entry dispatch and
+/// composite executors that invoke child executors.
+pub async fn execute_with_post(
+    executor: &dyn Executor,
+    context: &mut DnsContext,
+) -> Result<ExecStep> {
+    match executor.execute(context).await? {
+        ExecStep::NextWithPost(state) => {
+            executor.post_execute(context, state).await?;
+            Ok(ExecStep::Next)
+        }
+        step => Ok(step),
+    }
+}

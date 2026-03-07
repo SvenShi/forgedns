@@ -256,9 +256,22 @@ impl Plugin for NftSetExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) -> Result<()> {
+        Ok(())
+    }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        self.enabled.store(false, Ordering::Relaxed);
+        #[cfg(target_os = "linux")]
+        {
+            // Wake the writer thread if blocked on recv so it can stop.
+            let _ = self.writer.try_send(NftSetBatch {
+                ipv4_prefixes: Vec::new(),
+                ipv6_prefixes: Vec::new(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]

@@ -29,6 +29,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::watch;
 
 const CLEANUP_INTERVAL_SECS: u64 = 30;
 const DEFAULT_CACHE_ENABLED: bool = true;
@@ -57,6 +58,7 @@ struct DualSelector {
     cache_enabled: bool,
     cache_ttl_ms: u64,
     cleanup_started: AtomicBool,
+    shutdown_tx: watch::Sender<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -91,26 +93,40 @@ impl Plugin for DualSelector {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> Result<()> {
         if !self.cache_enabled {
-            return;
+            return Ok(());
         }
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
-            return;
+            return Ok(());
         }
 
         let cache = self.cache.clone();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
         tokio::spawn(async move {
             let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
             loop {
-                tokio::time::sleep(interval).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {}
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_ok() && *shutdown_rx.borrow() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
                 let now = AppClock::elapsed_millis();
                 while cache.remove_expired_batch(now, 256) > 0 {}
             }
         });
+        Ok(())
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        let _ = self.shutdown_tx.send(true);
+        self.cleanup_started.store(false, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -317,6 +333,7 @@ impl PluginFactory for DualSelectorFactory {
             cache_enabled,
             cache_ttl_ms,
             cleanup_started: AtomicBool::new(false),
+            shutdown_tx: watch::channel(false).0,
         })))
     }
 
@@ -333,6 +350,7 @@ impl PluginFactory for DualSelectorFactory {
             cache_enabled: DEFAULT_CACHE_ENABLED,
             cache_ttl_ms: DEFAULT_CACHE_TTL_MS,
             cleanup_started: AtomicBool::new(false),
+            shutdown_tx: watch::channel(false).0,
         })))
     }
 }
@@ -373,6 +391,7 @@ mod tests {
             cache_enabled: true,
             cache_ttl_ms: DEFAULT_CACHE_TTL_MS,
             cleanup_started: AtomicBool::new(false),
+            shutdown_tx: watch::channel(false).0,
         }
     }
 

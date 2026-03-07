@@ -144,9 +144,13 @@ impl Plugin for DomainSet {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) -> DnsResult<()> {
+        Ok(())
+    }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> DnsResult<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -393,9 +397,13 @@ mod tests {
             "static-provider"
         }
 
-        async fn init(&mut self) {}
+        async fn init(&mut self) -> crate::core::error::Result<()> {
+            Ok(())
+        }
 
-        async fn destroy(&self) {}
+        async fn destroy(&self) -> crate::core::error::Result<()> {
+            Ok(())
+        }
     }
 
     #[async_trait]

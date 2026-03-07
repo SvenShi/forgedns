@@ -80,28 +80,41 @@ impl Plugin for Sequence {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> DnsResult<()> {
         let mut builder = ChainBuilder::new(self.registry.clone(), self.tag.clone());
         for rule in &self.rules {
-            if let Err(e) = builder.append_node(rule).await {
-                panic!(
-                    "failed to build sequence quick setup chain, plugin '{}': {}",
-                    self.tag, e
-                );
-            }
+            builder.append_node(rule).await?;
         }
+
         let (program, quick_setup_executors, quick_setup_matchers) = builder.build();
-        self.program.set(program).unwrap();
+        self.program
+            .set(program)
+            .map_err(|_| DnsError::plugin("sequence program is already initialized"))?;
         self.quick_setup_executors = quick_setup_executors;
         self.quick_setup_matchers = quick_setup_matchers;
+        Ok(())
     }
 
-    async fn destroy(&self) {
+    async fn destroy(&self) -> DnsResult<()> {
+        let mut first_err: Option<DnsError> = None;
         for executor in &self.quick_setup_executors {
-            executor.destroy().await;
+            if let Err(e) = executor.destroy().await {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
         }
         for matcher in &self.quick_setup_matchers {
-            matcher.destroy().await;
+            if let Err(e) = matcher.destroy().await {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        if let Some(e) = first_err {
+            Err(e)
+        } else {
+            Ok(())
         }
     }
 }

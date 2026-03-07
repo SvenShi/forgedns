@@ -146,13 +146,16 @@ impl Plugin for StringExpMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> DnsResult<()> {
         if let StringSource::Env(key) = &self.expression.source {
             self.env_cache = std::env::var(key).ok();
         }
+        Ok(())
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> DnsResult<()> {
+        Ok(())
+    }
 }
 
 impl Matcher for StringExpMatcher {

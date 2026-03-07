@@ -100,12 +100,15 @@ impl Plugin for RespIpMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> DnsResult<()> {
         self.ip_sets =
             resolve_provider_tags(&self.registry, &self.ip_set_tags, "resp_ip", &self.tag);
+        Ok(())
     }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> DnsResult<()> {
+        Ok(())
+    }
 }
 
 impl Matcher for RespIpMatcher {

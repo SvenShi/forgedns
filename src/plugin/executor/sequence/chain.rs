@@ -8,7 +8,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{SequenceRef, parse_sequence_ref};
-use crate::plugin::executor::{ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecState, ExecStep, Executor, execute_with_post};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
 use ahash::AHashSet;
@@ -119,20 +119,34 @@ impl ChainProgram {
                         break;
                     }
                     BuiltinOp::Jump(executor) => {
-                        if let Err(e) = executor.execute(context).await {
-                            run_error = Some(e);
-                            break;
+                        let step = match execute_with_post(executor.as_ref(), context).await {
+                            Ok(step) => step,
+                            Err(e) => {
+                                run_error = Some(e);
+                                break;
+                            }
+                        };
+                        match step {
+                            ExecStep::Stop => break,
+                            ExecStep::Next => {
+                                if context.exec_flow_state == ExecFlowState::Broken {
+                                    break;
+                                }
+                                if context.exec_flow_state == ExecFlowState::ReachedTail {
+                                    context.exec_flow_state = ExecFlowState::Running;
+                                }
+                                pc += 1;
+                            }
+                            ExecStep::NextWithPost(_) => {
+                                run_error = Some(DnsError::plugin(
+                                    "unexpected NextWithPost after execute_with_post in jump",
+                                ));
+                                break;
+                            }
                         }
-                        if context.exec_flow_state == ExecFlowState::Broken {
-                            break;
-                        }
-                        if context.exec_flow_state == ExecFlowState::ReachedTail {
-                            context.exec_flow_state = ExecFlowState::Running;
-                        }
-                        pc += 1;
                     }
                     BuiltinOp::Goto(executor) => {
-                        if let Err(e) = executor.execute(context).await {
+                        if let Err(e) = execute_with_post(executor.as_ref(), context).await {
                             run_error = Some(e);
                         }
                         break;
@@ -330,10 +344,15 @@ impl ChainBuilder {
                     param,
                     self.registry.clone(),
                 )?;
-                let executor = uninitialized.init_and_wrap().await;
+                let executor = uninitialized.init_and_wrap().await?;
                 let executor = match executor {
                     PluginHolder::Executor(executor) => executor,
-                    _ => panic!("Plugin {} is not executor", plugin_type),
+                    _ => {
+                        return Err(DnsError::plugin(format!(
+                            "quick setup plugin '{}' is not an executor",
+                            plugin_type
+                        )));
+                    }
                 };
                 self.quick_setup_executors.push(executor.clone());
                 Ok(executor)
@@ -366,10 +385,15 @@ impl ChainBuilder {
                     param,
                     self.registry.clone(),
                 )?;
-                let matcher = uninitialized.init_and_wrap().await;
+                let matcher = uninitialized.init_and_wrap().await?;
                 let matcher = match matcher {
                     PluginHolder::Matcher(matcher) => matcher,
-                    _ => panic!("Plugin {} is not matcher", plugin_type),
+                    _ => {
+                        return Err(DnsError::plugin(format!(
+                            "quick setup plugin '{}' is not a matcher",
+                            plugin_type
+                        )));
+                    }
                 };
                 self.quick_setup_matchers.push(matcher.clone());
                 Ok(matcher)

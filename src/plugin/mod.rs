@@ -51,23 +51,23 @@ pub enum UninitializedPlugin {
 
 impl UninitializedPlugin {
     /// Initialize the plugin and convert to PluginType (Arc-wrapped)
-    pub async fn init_and_wrap(self) -> PluginHolder {
+    pub async fn init_and_wrap(self) -> Result<PluginHolder> {
         match self {
             UninitializedPlugin::Server(mut server) => {
-                server.as_mut().init().await;
-                PluginHolder::Server(server.into())
+                server.as_mut().init().await?;
+                Ok(PluginHolder::Server(server.into()))
             }
             UninitializedPlugin::Executor(mut executor) => {
-                executor.as_mut().init().await;
-                PluginHolder::Executor(executor.into())
+                executor.as_mut().init().await?;
+                Ok(PluginHolder::Executor(executor.into()))
             }
             UninitializedPlugin::Matcher(mut matcher) => {
-                matcher.as_mut().init().await;
-                PluginHolder::Matcher(matcher.into())
+                matcher.as_mut().init().await?;
+                Ok(PluginHolder::Matcher(matcher.into()))
             }
             UninitializedPlugin::Provider(mut provider) => {
-                provider.as_mut().init().await;
-                PluginHolder::Provider(provider.into())
+                provider.as_mut().init().await?;
+                Ok(PluginHolder::Provider(provider.into()))
             }
         }
     }
@@ -205,10 +205,10 @@ pub trait Plugin: Debug + Send + Sync + 'static {
     fn tag(&self) -> &str;
 
     /// Initialize the plugin (called once during server startup)
-    async fn init(&mut self);
+    async fn init(&mut self) -> Result<()>;
 
     /// Clean up plugin resources (called during shutdown)
-    async fn destroy(&self);
+    async fn destroy(&self) -> Result<()>;
 }
 
 /// Plugin factory trait for creating plugin instances from configuration

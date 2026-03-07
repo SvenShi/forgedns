@@ -11,7 +11,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Resolve plugin dependencies and return plugins in initialization order
 ///
@@ -44,12 +44,28 @@ pub fn resolve_dependencies(
     // Build the reverse dependency graph and calculate in-degrees
     for config in &configs {
         let deps = get_deps(config);
+        let mut unique_deps = HashSet::new();
+        for dep in deps {
+            if dep == config.tag {
+                return Err(DnsError::dependency(format!(
+                    "Plugin '{}' cannot depend on itself",
+                    config.tag
+                )));
+            }
+            if !in_degree.contains_key(dep.as_str()) {
+                return Err(DnsError::dependency(format!(
+                    "Plugin '{}' depends on missing plugin '{}'",
+                    config.tag, dep
+                )));
+            }
+            unique_deps.insert(dep);
+        }
 
         // Set in-degree to number of dependencies
-        *in_degree.get_mut(&config.tag).unwrap() = deps.len();
+        *in_degree.get_mut(&config.tag).unwrap() = unique_deps.len();
 
         // Add reverse edges: dependency -> who depends on it
-        for dep in deps {
+        for dep in unique_deps {
             reverse_graph
                 .entry(dep.clone())
                 .or_insert_with(Vec::new)

@@ -11,6 +11,7 @@ use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
@@ -40,15 +41,27 @@ pub async fn run_server(
     server_config: Option<ServerConfig>,
     idle_timeout: Option<u64>,
     src_ip_header: Option<String>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    startup_tx: Option<oneshot::Sender<Result<(), String>>>,
 ) {
+    let mut startup_tx = startup_tx;
     let timeout = Duration::from_secs(idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT));
     let listener = match tcp::build_tcp_listener(&addr, timeout) {
         Ok(s) => s,
         Err(e) => {
+            if let Some(tx) = startup_tx.take() {
+                let _ = tx.send(Err(format!(
+                    "Failed to bind HTTP socket to {}: {}",
+                    addr, e
+                )));
+            }
             error!("Failed to bind HTTP socket to {}: {}", addr, e);
             return;
         }
     };
+    if let Some(tx) = startup_tx.take() {
+        let _ = tx.send(Ok(()));
+    }
 
     info!(
         listen = %addr,
@@ -72,6 +85,11 @@ pub async fn run_server(
 
     loop {
         tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_ok() && *shutdown_rx.borrow() {
+                    break;
+                }
+            }
             // Accept new connections
             accept_result = listener.accept() => {
                 match accept_result {
@@ -136,6 +154,10 @@ pub async fn run_server(
             }
         }
     }
+
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    info!(listen = %addr, "HTTP/2 server stopped");
 }
 
 /// Handle HTTP/2 requests over a stream (works for both TLS and plain HTTP)

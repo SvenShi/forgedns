@@ -77,9 +77,13 @@ impl Plugin for QtypeMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) -> DnsResult<()> {
+        Ok(())
+    }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> DnsResult<()> {
+        Ok(())
+    }
 }
 
 impl Matcher for QtypeMatcher {

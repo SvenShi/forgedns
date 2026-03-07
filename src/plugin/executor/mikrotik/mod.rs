@@ -228,13 +228,13 @@ impl Plugin for MikrotikExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) {
+    async fn init(&mut self) -> Result<()> {
         if self.manager.is_none() || self.command_tx.is_some() {
-            return;
+            return Ok(());
         }
 
         let Some(manager) = self.manager.take() else {
-            return;
+            return Ok(());
         };
 
         let persistent_reload = Some(PersistentReloadConfig {
@@ -249,12 +249,14 @@ impl Plugin for MikrotikExecutor {
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
         }
+        Ok(())
     }
 
-    async fn destroy(&self) {
+    async fn destroy(&self) -> Result<()> {
         if let Some(runtime) = self.runtime.lock().ok().and_then(|mut slot| slot.take()) {
             runtime.shutdown(self.config.cleanup_on_shutdown).await;
         }
+        Ok(())
     }
 }
 
@@ -1795,11 +1797,11 @@ persistent_route:
         let api = Arc::new(MockMikrotikApi::default()) as Arc<dyn MikrotikApi>;
         let mut executor =
             build_executor_for_test("mk", true, false, Some("172.16.1.2"), None, api);
-        executor.init().await;
+        let _ = executor.init().await;
         let mut ctx = make_context();
         let step = executor.execute(&mut ctx).await.unwrap();
         assert!(matches!(step, ExecStep::NextWithPost(_)));
-        executor.destroy().await;
+        let _ = executor.destroy().await;
     }
 
     #[tokio::test]
@@ -1807,10 +1809,10 @@ persistent_route:
         let api = Arc::new(MockMikrotikApi::default()) as Arc<dyn MikrotikApi>;
         let mut executor =
             build_executor_for_test("mk", true, false, Some("172.16.1.2"), None, api);
-        executor.init().await;
+        let _ = executor.init().await;
         let mut ctx = make_context();
         executor.post_execute(&mut ctx, None).await.unwrap();
-        executor.destroy().await;
+        let _ = executor.destroy().await;
     }
 
     #[tokio::test]
@@ -1824,7 +1826,7 @@ persistent_route:
             Some("fe80::2%ether1"),
             api.clone() as Arc<dyn MikrotikApi>,
         );
-        executor.init().await;
+        let _ = executor.init().await;
         let mut ctx = make_context();
         ctx.response = Some(response_with_records(vec![
             a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
@@ -1837,7 +1839,7 @@ persistent_route:
         assert_eq!(state.upsert_v4, 0);
         assert!(state.upsert_v6 >= 1);
         drop(state);
-        executor.destroy().await;
+        let _ = executor.destroy().await;
     }
 
     #[tokio::test]
@@ -1855,7 +1857,7 @@ persistent_route:
             None,
             api as Arc<dyn MikrotikApi>,
         );
-        executor.init().await;
+        let _ = executor.init().await;
 
         let mut ctx = make_context();
         ctx.response = Some(response_with_records(vec![a_record(
@@ -1867,7 +1869,7 @@ persistent_route:
             ctx.response.is_some(),
             "DNS response should be kept unchanged"
         );
-        executor.destroy().await;
+        let _ = executor.destroy().await;
     }
 
     #[tokio::test]
@@ -1881,7 +1883,7 @@ persistent_route:
             None,
             api.clone() as Arc<dyn MikrotikApi>,
         );
-        executor.init().await;
+        let _ = executor.init().await;
         let mut ctx = make_context();
         ctx.response = Some(response_with_records(vec![a_record(
             Ipv4Addr::new(6, 6, 6, 6),
@@ -1891,7 +1893,7 @@ persistent_route:
 
         tokio::time::sleep(Duration::from_millis(80)).await;
         assert!(api.route_count() > 0);
-        executor.destroy().await;
+        let _ = executor.destroy().await;
     }
 
     #[tokio::test]
@@ -1905,7 +1907,7 @@ persistent_route:
             None,
             api.clone() as Arc<dyn MikrotikApi>,
         );
-        executor.init().await;
+        let _ = executor.init().await;
         let mut ctx = make_context();
         ctx.response = Some(response_with_records(vec![a_record(
             Ipv4Addr::new(11, 11, 11, 11),
@@ -1915,7 +1917,7 @@ persistent_route:
         tokio::time::sleep(Duration::from_millis(80)).await;
         assert!(api.route_count() > 0);
 
-        executor.destroy().await;
+        let _ = executor.destroy().await;
         let state = api.state.lock().unwrap();
         assert!(state.routes.is_empty(), "dynamic routes should be cleaned");
     }

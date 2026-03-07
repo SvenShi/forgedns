@@ -23,11 +23,10 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::plugin::executor::{ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, PluginType, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::op::Message;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,9 +58,8 @@ struct FallbackExecutor {
     always_standby: bool,
 }
 
-#[derive(Debug)]
 struct Outcome {
-    response: Option<Message>,
+    context: Option<DnsContext>,
     source: &'static str,
     error: Option<String>,
 }
@@ -79,9 +77,13 @@ impl Plugin for FallbackExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) {}
+    async fn init(&mut self) -> Result<()> {
+        Ok(())
+    }
 
-    async fn destroy(&self) {}
+    async fn destroy(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -92,10 +94,10 @@ impl Executor for FallbackExecutor {
         let (primary_state_tx, primary_state_rx) = watch::channel(PrimaryState::Running);
 
         let primary = self.primary.clone();
-        let mut primary_ctx = base.clone_for_subquery();
+        let primary_ctx = base.clone_for_subquery();
         join_set.spawn(async move {
-            let outcome = run_executor(primary, &mut primary_ctx, "primary").await;
-            let state = if outcome.response.is_some() {
+            let outcome = run_executor(primary, primary_ctx, "primary").await;
+            let state = if outcome.context.is_some() {
                 PrimaryState::Success
             } else {
                 PrimaryState::Failed
@@ -105,7 +107,7 @@ impl Executor for FallbackExecutor {
         });
 
         let secondary = self.secondary.clone();
-        let mut secondary_ctx = base.clone_for_subquery();
+        let secondary_ctx = base.clone_for_subquery();
         let delay = self.threshold;
         let always_standby = self.always_standby;
         let mut primary_state_rx = primary_state_rx.clone();
@@ -126,7 +128,7 @@ impl Executor for FallbackExecutor {
                                     // Primary already won before threshold; skip secondary execution
                                     // and return an empty outcome just to unblock join loop.
                                     return Outcome {
-                                        response: None,
+                                        context: None,
                                         source: "secondary",
                                         error: None,
                                     };
@@ -137,11 +139,11 @@ impl Executor for FallbackExecutor {
                     }
                 }
             }
-            run_executor(secondary, &mut secondary_ctx, "secondary").await
+            run_executor(secondary, secondary_ctx, "secondary").await
         });
 
         let mut last_err = String::new();
-        let mut buffered_secondary: Option<Message> = None;
+        let mut buffered_secondary: Option<DnsContext> = None;
         let mut threshold_reached = !self.always_standby;
         let standby_timer = tokio::time::sleep(self.threshold);
         tokio::pin!(standby_timer);
@@ -151,8 +153,8 @@ impl Executor for FallbackExecutor {
                     threshold_reached = true;
                     // In standby mode, secondary can finish early but should not win until
                     // the threshold elapses. Flush buffered response once timer fires.
-                    if let Some(response) = buffered_secondary.take() {
-                        context.response = Some(response);
+                    if let Some(secondary_ctx) = buffered_secondary.take() {
+                        context.replace_with_subquery_result(secondary_ctx);
                         join_set.abort_all();
                         return Ok(ExecStep::Next);
                     }
@@ -171,27 +173,27 @@ impl Executor for FallbackExecutor {
 
                     match outcome.source {
                         "primary" => {
-                            if let Some(response) = outcome.response {
-                                context.response = Some(response);
+                            if let Some(primary_ctx) = outcome.context {
+                                context.replace_with_subquery_result(primary_ctx);
                                 join_set.abort_all();
                                 return Ok(ExecStep::Next);
                             }
-                            if let Some(response) = buffered_secondary.take() {
-                                context.response = Some(response);
+                            if let Some(secondary_ctx) = buffered_secondary.take() {
+                                context.replace_with_subquery_result(secondary_ctx);
                                 join_set.abort_all();
                                 return Ok(ExecStep::Next);
                             }
                         }
                         "secondary" => {
-                            if let Some(response) = outcome.response {
+                            if let Some(secondary_ctx) = outcome.context {
                                 if !self.always_standby || threshold_reached {
-                                    context.response = Some(response);
+                                    context.replace_with_subquery_result(secondary_ctx);
                                     join_set.abort_all();
                                     return Ok(ExecStep::Next);
                                 }
                                 // Standby mode before threshold: keep secondary result as backup
                                 // and still wait for primary to finish or timer to fire.
-                                buffered_secondary = Some(response);
+                                buffered_secondary = Some(secondary_ctx);
                             }
                         }
                         _ => {}
@@ -302,21 +304,24 @@ impl PluginFactory for FallbackFactory {
 
 async fn run_executor(
     executor: Arc<dyn Executor>,
-    context: &mut DnsContext,
+    mut context: DnsContext,
     source: &'static str,
 ) -> Outcome {
-    match executor.execute(context).await {
-        Ok(_) => Outcome {
-            response: context.response.clone(),
-            source,
-            error: if context.response.is_none() {
-                Some("executor returned without response".to_string())
-            } else {
-                None
-            },
-        },
+    match execute_with_post(executor.as_ref(), &mut context).await {
+        Ok(step) => {
+            let has_response = context.response.is_some();
+            Outcome {
+                context: if has_response { Some(context) } else { None },
+                source,
+                error: if has_response {
+                    None
+                } else {
+                    Some(format!("executor returned {:?} without response", step))
+                },
+            }
+        }
         Err(e) => Outcome {
-            response: None,
+            context: None,
             source,
             error: Some(e.to_string()),
         },
