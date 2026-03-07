@@ -31,6 +31,7 @@ pub mod forward_edns0opt;
 pub mod hosts;
 pub mod ipset;
 pub mod metrics_collector;
+pub mod mikrotik;
 pub mod nftset;
 pub mod query_summary;
 pub mod redirect;
