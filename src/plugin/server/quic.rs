@@ -15,6 +15,7 @@ use crate::network::tls_config::load_tls_config;
 use crate::network::transport::quic_transport::{
     QuicTransport, QuicTransportReader, QuicTransportWriter,
 };
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{RequestHandle, RequestMeta, Server, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
@@ -354,46 +355,11 @@ register_plugin_factory!("quic_server", QuicServerFactory {});
 
 #[async_trait]
 impl PluginFactory for QuicServerFactory {
-    /// Validate QUIC server configuration
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        use std::net::SocketAddr;
-        use std::str::FromStr;
-
-        // Parse and validate QUIC-specific configuration
-        let quic_config = match plugin_config.args.clone() {
-            Some(args) => serde_yml::from_value::<QuicServerConfig>(args).map_err(|e| {
-                DnsError::plugin(format!("QUIC Server config parsing failed: {}", e))
-            })?,
-            None => {
-                return Err(DnsError::plugin(
-                    "QUIC Server must configure 'listen' and 'entry' in config file",
-                ));
-            }
-        };
-
-        // Validate listen address format
-        if SocketAddr::from_str(&quic_config.listen).is_err() {
-            return Err(DnsError::plugin(format!(
-                "Invalid listen address: {}",
-                quic_config.listen
-            )));
-        }
-
-        // Validate entry is not empty
-        if quic_config.entry.is_empty() {
-            return Err(DnsError::plugin(
-                "QUIC Server 'entry' field cannot be empty",
-            ));
-        }
-
-        Ok(())
-    }
-
     /// Get dependencies (the entry executor plugin)
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         if let Some(args) = &plugin_config.args {
             if let Ok(config) = serde_yml::from_value::<QuicServerConfig>(args.clone()) {
-                return vec![config.entry];
+                return vec![DependencySpec::executor("args.entry", config.entry)];
             }
         }
         vec![]
@@ -412,13 +378,12 @@ impl PluginFactory for QuicServerFactory {
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse QUIC Server config: {}", e)))?;
 
-        // Look up the entry plugin using the registry
-        let entry = registry.get_plugin(&quic_config.entry).ok_or_else(|| {
-            DnsError::plugin(format!(
-                "QUIC Server [{}] entry plugin [{}] not found",
-                plugin_config.tag, quic_config.entry
-            ))
-        })?;
+        // Resolve and type-check the entry executor using contextual diagnostics.
+        let entry_executor = registry.get_executor_dependency(
+            &plugin_config.tag,
+            "args.entry",
+            &quic_config.entry,
+        )?;
 
         // Load TLS configuration if cert and key are provided
         let server_config =
@@ -437,7 +402,7 @@ impl PluginFactory for QuicServerFactory {
                 server_config,
                 idle_timeout: quic_config.idle_timeout,
                 request_handle: Arc::new(RequestHandle {
-                    entry_executor: entry.to_executor().clone(),
+                    entry_executor,
                     registry,
                 }),
                 shutdown_tx: watch::channel(false).0,

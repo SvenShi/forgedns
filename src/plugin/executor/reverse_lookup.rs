@@ -198,15 +198,6 @@ pub struct ReverseLookupFactory;
 register_plugin_factory!("reverse_lookup", ReverseLookupFactory {});
 
 impl PluginFactory for ReverseLookupFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        if let Some(args) = plugin_config.args.clone() {
-            let _: ReverseLookupConfig = serde_yml::from_value(args).map_err(|e| {
-                DnsError::plugin(format!("failed to parse reverse_lookup config: {}", e))
-            })?;
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

@@ -22,6 +22,7 @@ mod http_dispatcher;
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::network::tls_config::load_tls_config;
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
@@ -303,18 +304,15 @@ impl PluginFactory for HttpServerFactory {
 
         // Register routes for each configured entry
         // Each entry maps a path to an executor that processes DNS queries
-        for entry in &http_config.entries {
-            // Look up the executor plugin by its tag
-            let executor = registry.get_plugin(&entry.exec).ok_or_else(|| {
-                DnsError::plugin(format!(
-                    "HTTP Server [{}] executor plugin [{}] not found",
-                    plugin_config.tag, entry.exec
-                ))
-            })?;
+        for (idx, entry) in http_config.entries.iter().enumerate() {
+            let field = format!("args.entries[{}].exec", idx);
+            // Resolve and type-check executor with field context.
+            let executor =
+                registry.get_executor_dependency(&plugin_config.tag, &field, &entry.exec)?;
 
             // Create request handle that wraps the executor
             let request_handle = Arc::new(RequestHandle {
-                entry_executor: executor.to_executor().clone(),
+                entry_executor: executor,
                 registry: registry.clone(),
             });
 
@@ -363,43 +361,8 @@ impl PluginFactory for HttpServerFactory {
         )))
     }
 
-    /// Validate HTTP server configuration
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        use std::net::SocketAddr;
-        use std::str::FromStr;
-
-        // Parse and validate HTTP-specific configuration
-        let http_config = match plugin_config.args.clone() {
-            Some(args) => serde_yml::from_value::<HttpServerConfig>(args).map_err(|e| {
-                DnsError::plugin(format!("HTTP Server config parsing failed: {}", e))
-            })?,
-            None => {
-                return Err(DnsError::plugin(
-                    "HTTP Server must configure 'listen' and 'entries' in config file",
-                ));
-            }
-        };
-
-        // Validate listen address format
-        if SocketAddr::from_str(&http_config.listen).is_err() {
-            return Err(DnsError::plugin(format!(
-                "Invalid listen address: {}",
-                http_config.listen
-            )));
-        }
-
-        // Validate entry is not empty
-        if http_config.entries.is_empty() {
-            return Err(DnsError::plugin(
-                "HTTP Server 'entries' field cannot be empty",
-            ));
-        }
-
-        Ok(())
-    }
-
     /// Get dependencies (the entry executor plugins)
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         let http_config = match plugin_config.args.clone() {
             Some(args) => match serde_yml::from_value::<HttpServerConfig>(args) {
                 Ok(config) => config,
@@ -410,7 +373,14 @@ impl PluginFactory for HttpServerFactory {
 
         // Return all entry executors as dependencies
         // This ensures executors are initialized before the HTTP server
-        http_config.entries.iter().map(|e| e.exec.clone()).collect()
+        http_config
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                DependencySpec::executor(format!("args.entries[{}].exec", idx), entry.exec.clone())
+            })
+            .collect()
     }
 }
 

@@ -619,11 +619,6 @@ pub struct CacheFactory;
 register_plugin_factory!("cache", CacheFactory {});
 
 impl PluginFactory for CacheFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let config = parse_cache_config(plugin_config.args.clone())?;
-        validate_cache_config(&config)
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

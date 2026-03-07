@@ -54,10 +54,6 @@ pub struct DropRespFactory;
 register_plugin_factory!("drop_resp", DropRespFactory {});
 
 impl PluginFactory for DropRespFactory {
-    fn validate_config(&self, _plugin_config: &PluginConfig) -> Result<()> {
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

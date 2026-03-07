@@ -23,13 +23,6 @@ pub struct HasRespFactory {}
 register_plugin_factory!("has_resp", HasRespFactory {});
 
 impl PluginFactory for HasRespFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        if plugin_config.args.is_some() {
-            return Err(DnsError::plugin("has_resp does not accept args"));
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

@@ -29,13 +29,6 @@ pub struct RcodeFactory {}
 register_plugin_factory!("rcode", RcodeFactory {});
 
 impl PluginFactory for RcodeFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        validate_non_empty_rules("rcode", &rules)?;
-        let _ = parse_u16_rules("rcode", &rules, parse_rcode)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

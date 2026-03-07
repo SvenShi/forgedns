@@ -29,13 +29,6 @@ pub struct QclassFactory {}
 register_plugin_factory!("qclass", QclassFactory {});
 
 impl PluginFactory for QclassFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        validate_non_empty_rules("qclass", &rules)?;
-        let _ = parse_u16_rules("qclass", &rules, parse_dns_class)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

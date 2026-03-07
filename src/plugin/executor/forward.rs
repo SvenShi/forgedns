@@ -536,11 +536,6 @@ pub struct ForwardFactory;
 register_plugin_factory!("forward", ForwardFactory {});
 
 impl PluginFactory for ForwardFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let _ = parse_forward_config(plugin_config)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,
@@ -739,7 +734,10 @@ mod tests {
     fn validate_rejects_empty_upstreams() {
         let factory = ForwardFactory;
         let cfg = make_plugin_config("upstreams: []");
-        let err = factory.validate_config(&cfg).unwrap_err();
+        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new())) {
+            Ok(_) => panic!("expected create to fail for empty upstreams"),
+            Err(err) => err,
+        };
         assert!(err.to_string().contains("at least one upstream"));
     }
 
@@ -752,7 +750,10 @@ upstreams:
   - addr: "udp://"
 "#,
         );
-        let err = factory.validate_config(&cfg).unwrap_err();
+        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new())) {
+            Ok(_) => panic!("expected create to fail for invalid upstream addr"),
+            Err(err) => err,
+        };
         assert!(err.to_string().contains("is invalid"));
     }
 

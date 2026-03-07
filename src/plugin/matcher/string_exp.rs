@@ -37,12 +37,6 @@ pub struct StringExpFactory {}
 register_plugin_factory!("string_exp", StringExpFactory {});
 
 impl PluginFactory for StringExpFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let expression = parse_expression_from_value(plugin_config.args.clone())?;
-        let _ = parse_string_expression(&expression)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

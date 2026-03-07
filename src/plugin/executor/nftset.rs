@@ -353,12 +353,6 @@ pub struct NftSetFactory;
 register_plugin_factory!("nftset", NftSetFactory {});
 
 impl PluginFactory for NftSetFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let cfg = parse_config(plugin_config.args.clone())?;
-        let _ = resolve_sets(&cfg)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

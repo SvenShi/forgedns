@@ -12,6 +12,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::DomainRuleMatcher;
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
     parse_domain_rules_and_set_tags, parse_quick_setup_rules, parse_rules_from_value,
@@ -30,18 +31,7 @@ pub struct QnameFactory {}
 register_plugin_factory!("qname", QnameFactory {});
 
 impl PluginFactory for QnameFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        let (domains, domain_set_tags) = parse_domain_rules_and_set_tags(rules, "qname")?;
-        validate_non_empty_domain_rules_or_set_tags(
-            "qname",
-            &domains,
-            &domain_set_tags,
-            "domain_set",
-        )
-    }
-
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         let Ok(rules) = parse_rules_from_value(plugin_config.args.clone()) else {
             return vec![];
         };
@@ -49,6 +39,16 @@ impl PluginFactory for QnameFactory {
             return vec![];
         };
         domain_set_tags
+            .into_iter()
+            .enumerate()
+            .map(|(idx, tag)| {
+                DependencySpec::provider_type(
+                    format!("args.domain_set_tags[{}]", idx),
+                    tag,
+                    "domain_set",
+                )
+            })
+            .collect()
     }
 
     fn create(
@@ -107,7 +107,7 @@ impl Plugin for QnameMatcher {
 
     async fn init(&mut self) -> DnsResult<()> {
         self.domain_sets =
-            resolve_provider_tags(&self.registry, &self.domain_set_tags, "qname", &self.tag);
+            resolve_provider_tags(&self.registry, &self.domain_set_tags, "qname", &self.tag)?;
         self.domain_sets_has_trie_rules = self
             .domain_sets
             .iter()

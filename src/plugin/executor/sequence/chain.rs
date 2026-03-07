@@ -268,7 +268,7 @@ impl ChainBuilder {
             .ok_or_else(|| DnsError::plugin("rule must have 'exec' field"))?;
 
         // Builtin syntax has priority; otherwise resolve as normal executor reference.
-        let op = if let Some(op) = self.parse_builtin(exec).await? {
+        let op = if let Some(op) = self.parse_builtin(exec, node_index).await? {
             OpCode::Builtin(op)
         } else {
             OpCode::Executor(self.resolve_executor_ref(exec, node_index).await?)
@@ -277,7 +277,7 @@ impl ChainBuilder {
         Ok(Instruction { matchers, op })
     }
 
-    async fn parse_builtin(&mut self, expr: &str) -> Result<Option<BuiltinOp>> {
+    async fn parse_builtin(&mut self, expr: &str, node_index: usize) -> Result<Option<BuiltinOp>> {
         let mut split = expr.trim().splitn(2, char::is_whitespace);
         let op = split.next().unwrap_or_default();
         let arg = split.next().map(str::trim).filter(|s| !s.is_empty());
@@ -288,10 +288,12 @@ impl ChainBuilder {
             "reject" => Ok(Some(BuiltinOp::Reject(parse_reject_rcode(arg)?))),
             "mark" => Ok(Some(BuiltinOp::Mark(parse_mark_values(arg)?))),
             "jump" => Ok(Some(BuiltinOp::Jump(
-                self.resolve_jump_or_goto_executor("jump", arg).await?,
+                self.resolve_jump_or_goto_executor("jump", arg, node_index)
+                    .await?,
             ))),
             "goto" => Ok(Some(BuiltinOp::Goto(
-                self.resolve_jump_or_goto_executor("goto", arg).await?,
+                self.resolve_jump_or_goto_executor("goto", arg, node_index)
+                    .await?,
             ))),
             _ => Ok(None),
         }
@@ -301,6 +303,7 @@ impl ChainBuilder {
         &mut self,
         op: &str,
         arg: Option<&str>,
+        node_index: usize,
     ) -> Result<Arc<dyn Executor>> {
         // `jump/goto` only accept plugin tag references (`$tag`) to avoid
         // nested quick-setup ambiguity and lifecycle complexity.
@@ -316,11 +319,9 @@ impl ChainBuilder {
             }
         };
 
-        let plugin = self
-            .registry
-            .get_plugin(&tag)
-            .ok_or_else(|| DnsError::plugin(format!("plugin does not exist for {}", tag)))?;
-        Ok(plugin.to_executor())
+        let field = format!("args[{}].exec", node_index);
+        self.registry
+            .get_executor_dependency(&self.sequence_tag, &field, &tag)
     }
 
     async fn resolve_executor_ref(
@@ -330,10 +331,9 @@ impl ChainBuilder {
     ) -> Result<Arc<dyn Executor>> {
         match parse_sequence_ref(expr)? {
             SequenceRef::PluginTag(tag) => {
-                let plugin = self.registry.get_plugin(&tag).ok_or_else(|| {
-                    DnsError::plugin(format!("plugin does not exist for {}", tag))
-                })?;
-                Ok(plugin.to_executor())
+                let field = format!("args[{}].exec", node_index);
+                self.registry
+                    .get_executor_dependency(&self.sequence_tag, &field, &tag)
             }
             SequenceRef::QuickSetup { plugin_type, param } => {
                 // Generate deterministic synthetic runtime tag for quick-setup executor.
@@ -368,10 +368,9 @@ impl ChainBuilder {
     ) -> Result<Arc<dyn Matcher>> {
         match parse_sequence_ref(expr)? {
             SequenceRef::PluginTag(tag) => {
-                let plugin = self.registry.get_plugin(&tag).ok_or_else(|| {
-                    DnsError::plugin(format!("matcher plugin does not exist for {}", tag))
-                })?;
-                Ok(plugin.to_matcher())
+                let field = format!("args[{}].matches[{}]", node_index, match_index);
+                self.registry
+                    .get_matcher_dependency(&self.sequence_tag, &field, &tag)
             }
             SequenceRef::QuickSetup { plugin_type, param } => {
                 // Generate deterministic synthetic runtime tag for quick-setup matcher.

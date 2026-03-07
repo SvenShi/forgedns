@@ -223,11 +223,6 @@ pub struct IpSetFactory;
 register_plugin_factory!("ipset", IpSetFactory {});
 
 impl PluginFactory for IpSetFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let cfg = parse_config(plugin_config.args.clone())?;
-        validate_masks(cfg.mask4.unwrap_or(24), cfg.mask6.unwrap_or(32))
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

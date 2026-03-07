@@ -23,13 +23,6 @@ pub struct TrueMatcherFactory {}
 register_plugin_factory!("_true", TrueMatcherFactory {});
 
 impl PluginFactory for TrueMatcherFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        if plugin_config.args.is_some() {
-            return Err(DnsError::plugin("_true does not accept args"));
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

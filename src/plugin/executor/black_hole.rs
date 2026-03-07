@@ -113,20 +113,6 @@ pub struct BlackHoleFactory;
 register_plugin_factory!("black_hole", BlackHoleFactory {});
 
 impl PluginFactory for BlackHoleFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        if let Some(args) = plugin_config.args.clone() {
-            if args.is_string() || args.is_sequence() {
-                let _ = parse_ip_tokens_from_value(Some(args))?;
-                return Ok(());
-            }
-            let cfg: BlackHoleConfig = serde_yml::from_value(args).map_err(|e| {
-                DnsError::plugin(format!("failed to parse black_hole config: {}", e))
-            })?;
-            let _ = parse_ip_tokens(cfg.ips)?;
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

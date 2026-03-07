@@ -29,13 +29,6 @@ pub struct QtypeFactory {}
 register_plugin_factory!("qtype", QtypeFactory {});
 
 impl PluginFactory for QtypeFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        validate_non_empty_rules("qtype", &rules)?;
-        let _ = parse_u16_rules("qtype", &rules, parse_record_type)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

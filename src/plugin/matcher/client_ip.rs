@@ -12,6 +12,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::IpPrefixMatcher;
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 #[cfg(test)]
 use crate::plugin::matcher::matcher_utils::parse_ip_prefix_matcher;
@@ -31,13 +32,7 @@ pub struct ClientIpFactory {}
 register_plugin_factory!("client_ip", ClientIpFactory {});
 
 impl PluginFactory for ClientIpFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        let (ip_rules, ip_set_tags) = parse_ip_rules_and_set_tags(rules, "client_ip")?;
-        validate_non_empty_ip_rules_or_set_tags("client_ip", &ip_rules, &ip_set_tags, "ip_set")
-    }
-
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         let Ok(rules) = parse_rules_from_value(plugin_config.args.clone()) else {
             return vec![];
         };
@@ -45,6 +40,12 @@ impl PluginFactory for ClientIpFactory {
             return vec![];
         };
         ip_set_tags
+            .into_iter()
+            .enumerate()
+            .map(|(idx, tag)| {
+                DependencySpec::provider_type(format!("args.ip_set_tags[{}]", idx), tag, "ip_set")
+            })
+            .collect()
     }
 
     fn create(
@@ -101,7 +102,7 @@ impl Plugin for ClientIpMatcher {
 
     async fn init(&mut self) -> DnsResult<()> {
         self.ip_sets =
-            resolve_provider_tags(&self.registry, &self.ip_set_tags, "client_ip", &self.tag);
+            resolve_provider_tags(&self.registry, &self.ip_set_tags, "client_ip", &self.tag)?;
         Ok(())
     }
 

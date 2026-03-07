@@ -13,6 +13,7 @@ use crate::core::context::DnsContext;
 use crate::core::dns_utils::{response_records, rr_to_cname};
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::{DomainRuleMatcher, split_labels_rev};
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
     parse_domain_rules_and_set_tags, parse_quick_setup_rules, parse_rules_from_value,
@@ -31,18 +32,7 @@ pub struct CnameFactory {}
 register_plugin_factory!("cname", CnameFactory {});
 
 impl PluginFactory for CnameFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        let (cname_rules, domain_set_tags) = parse_domain_rules_and_set_tags(rules, "cname")?;
-        validate_non_empty_domain_rules_or_set_tags(
-            "cname",
-            &cname_rules,
-            &domain_set_tags,
-            "domain_set",
-        )
-    }
-
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         let Ok(rules) = parse_rules_from_value(plugin_config.args.clone()) else {
             return vec![];
         };
@@ -50,6 +40,16 @@ impl PluginFactory for CnameFactory {
             return vec![];
         };
         domain_set_tags
+            .into_iter()
+            .enumerate()
+            .map(|(idx, tag)| {
+                DependencySpec::provider_type(
+                    format!("args.domain_set_tags[{}]", idx),
+                    tag,
+                    "domain_set",
+                )
+            })
+            .collect()
     }
 
     fn create(
@@ -113,7 +113,7 @@ impl Plugin for CnameMatcher {
 
     async fn init(&mut self) -> DnsResult<()> {
         self.domain_sets =
-            resolve_provider_tags(&self.registry, &self.domain_set_tags, "cname", &self.tag);
+            resolve_provider_tags(&self.registry, &self.domain_set_tags, "cname", &self.tag)?;
         self.domain_sets_has_trie_rules = self
             .domain_sets
             .iter()

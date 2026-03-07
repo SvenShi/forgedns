@@ -25,12 +25,6 @@ pub struct MarkFactory {}
 register_plugin_factory!("mark", MarkFactory {});
 
 impl PluginFactory for MarkFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let marks = parse_rules_from_value(plugin_config.args.clone())?;
-        let _ = parse_mark_values(&marks)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

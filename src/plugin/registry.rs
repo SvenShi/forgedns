@@ -10,9 +10,13 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
-use crate::plugin::{PluginFactory, PluginInfo};
+use crate::plugin::dependency::DependencyKind;
+use crate::plugin::executor::Executor;
+use crate::plugin::matcher::Matcher;
+use crate::plugin::provider::Provider;
+use crate::plugin::{PluginFactory, PluginInfo, PluginType};
 use dashmap::DashMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
 
@@ -26,6 +30,9 @@ use tracing::{debug, error, info};
 pub struct PluginRegistry {
     /// Map of plugin type names to their factory implementations
     factories: HashMap<String, Box<dyn PluginFactory>>,
+
+    /// Map of plugin type names to their category kind
+    factory_kinds: HashMap<String, DependencyKind>,
 
     /// Map of plugin tags to their runtime instances
     ///
@@ -43,6 +50,7 @@ impl PluginRegistry {
     pub fn new() -> Self {
         Self {
             factories: HashMap::new(),
+            factory_kinds: HashMap::new(),
             plugins: DashMap::new(),
             init_order: Mutex::new(Vec::new()),
         }
@@ -53,8 +61,14 @@ impl PluginRegistry {
     /// # Arguments
     /// * `plugin_type` - The type name for this plugin (e.g., "forward", "udp_server")
     /// * `factory` - The factory implementation for creating plugin instances
-    pub fn register_factory(&mut self, plugin_type: &str, factory: Box<dyn PluginFactory>) {
+    pub fn register_factory(
+        &mut self,
+        plugin_type: &str,
+        kind: DependencyKind,
+        factory: Box<dyn PluginFactory>,
+    ) {
         self.factories.insert(plugin_type.to_string(), factory);
+        self.factory_kinds.insert(plugin_type.to_string(), kind);
     }
 
     /// Build an uninitialized plugin from quick setup `type [param...]`.
@@ -91,37 +105,41 @@ impl PluginRegistry {
     pub(crate) async fn init_plugins(self: Arc<Self>, configs: Vec<PluginConfig>) -> Result<()> {
         use crate::plugin::dependency;
 
-        let mut seen_tags = HashSet::new();
-        for config in &configs {
-            if !seen_tags.insert(config.tag.as_str()) {
+        let mut seen_tags = HashMap::new();
+        for (idx, config) in configs.iter().enumerate() {
+            if let Some(prev_idx) = seen_tags.insert(config.tag.as_str(), idx) {
                 return Err(DnsError::plugin(format!(
-                    "Duplicate plugin tag '{}' in configuration",
-                    config.tag
+                    "Duplicate plugin tag '{}' in configuration: plugins[{}] and plugins[{}]",
+                    config.tag, prev_idx, idx
                 )));
             }
         }
 
-        // Step 1: Validate all plugin configurations
-        info!("Validating plugin configurations...");
-        for config in &configs {
-            let factory = self.factories.get(&config.plugin_type).ok_or_else(|| {
-                DnsError::plugin(format!("Unknown plugin type: {}", config.plugin_type))
-            })?;
-
-            factory.validate_config(config)?;
-        }
-
-        // Step 2: Resolve dependencies using factory's get_dependencies
+        // Step 1: Resolve dependencies from structured factory descriptors.
+        //
+        // Dependency collection should stay lightweight. Full schema parsing
+        // and validation are performed exactly once in each factory `create()`.
+        // We rely on:
+        // - dependency graph checks (missing/type/cycle/self reference), and
+        // - `create()` parse/validation during actual plugin construction.
+        //
+        // This keeps diagnostics intact while avoiding duplicated parse passes.
         info!("Resolving plugin dependencies...");
         let get_deps = |config: &PluginConfig| {
             self.factories
                 .get(&config.plugin_type)
-                .map(|f| f.get_dependencies(config))
+                .map(|f| f.get_dependency_specs(config))
                 .unwrap_or_default()
         };
-        let sorted_plugins = dependency::resolve_dependencies(configs, &get_deps)?;
+        let get_kind = |config: &PluginConfig| {
+            self.factory_kinds
+                .get(&config.plugin_type)
+                .copied()
+                .unwrap_or(DependencyKind::Unknown)
+        };
+        let sorted_plugins = dependency::resolve_dependencies(configs, &get_deps, &get_kind)?;
 
-        // Step 3: Initialize plugins in dependency order
+        // Step 2: Initialize plugins in dependency order.
         info!(
             "Initializing {} plugins in dependency order",
             sorted_plugins.len()
@@ -189,6 +207,7 @@ impl PluginRegistry {
         // Initialize and wrap into PluginHolder (with Arc)
         Ok(PluginInfo {
             tag: config.tag.clone(),
+            plugin_name: config.plugin_type.clone(),
             plugin_type: plugin_holder.plugin_type(),
             plugin_holder,
             args: config.args.clone(),
@@ -198,6 +217,117 @@ impl PluginRegistry {
     /// Get a plugin instance by tag
     pub fn get_plugin(&self, tag: &str) -> Option<Arc<PluginInfo>> {
         self.plugins.get(tag).map(|entry| entry.clone())
+    }
+
+    fn plugin_kind_name(plugin_type: PluginType) -> &'static str {
+        match plugin_type {
+            PluginType::Server => "server",
+            PluginType::Executor => "executor",
+            PluginType::Matcher => "matcher",
+            PluginType::Provider => "provider",
+        }
+    }
+
+    fn get_required_plugin(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+    ) -> Result<Arc<PluginInfo>> {
+        self.get_plugin(target_tag).ok_or_else(|| {
+            DnsError::plugin(format!(
+                "plugin '{}' field '{}' references missing plugin '{}'",
+                source_tag, field, target_tag
+            ))
+        })
+    }
+
+    pub fn get_executor_dependency(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+    ) -> Result<Arc<dyn Executor>> {
+        let plugin = self.get_required_plugin(source_tag, field, target_tag)?;
+        if plugin.plugin_type != PluginType::Executor {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' field '{}' expects executor plugin, but '{}' is {} (type '{}')",
+                source_tag,
+                field,
+                target_tag,
+                Self::plugin_kind_name(plugin.plugin_type),
+                plugin.plugin_name
+            )));
+        }
+        Ok(plugin.to_executor())
+    }
+
+    pub fn get_matcher_dependency(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+    ) -> Result<Arc<dyn Matcher>> {
+        let plugin = self.get_required_plugin(source_tag, field, target_tag)?;
+        if plugin.plugin_type != PluginType::Matcher {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' field '{}' expects matcher plugin, but '{}' is {} (type '{}')",
+                source_tag,
+                field,
+                target_tag,
+                Self::plugin_kind_name(plugin.plugin_type),
+                plugin.plugin_name
+            )));
+        }
+        Ok(plugin.to_matcher())
+    }
+
+    pub fn get_provider_dependency(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+    ) -> Result<Arc<dyn Provider>> {
+        let plugin = self.get_required_plugin(source_tag, field, target_tag)?;
+        if plugin.plugin_type != PluginType::Provider {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' field '{}' expects provider plugin, but '{}' is {} (type '{}')",
+                source_tag,
+                field,
+                target_tag,
+                Self::plugin_kind_name(plugin.plugin_type),
+                plugin.plugin_name
+            )));
+        }
+        Ok(plugin.to_provider())
+    }
+
+    pub fn get_provider_dependency_of_type(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+        expected_plugin_type: &str,
+    ) -> Result<Arc<dyn Provider>> {
+        let plugin = self.get_required_plugin(source_tag, field, target_tag)?;
+        if plugin.plugin_type != PluginType::Provider {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' field '{}' expects provider plugin type '{}', but '{}' is {} (type '{}')",
+                source_tag,
+                field,
+                expected_plugin_type,
+                target_tag,
+                Self::plugin_kind_name(plugin.plugin_type),
+                plugin.plugin_name
+            )));
+        }
+        if plugin.plugin_name != expected_plugin_type {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' field '{}' expects provider plugin type '{}', but '{}' has type '{}'",
+                source_tag, field, expected_plugin_type, target_tag, plugin.plugin_name
+            )));
+        }
+        Ok(plugin.to_provider())
     }
 
     /// Get all registered plugin tags

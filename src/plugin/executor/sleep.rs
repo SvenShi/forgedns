@@ -67,14 +67,6 @@ pub struct SleepFactory;
 register_plugin_factory!("sleep", SleepFactory {});
 
 impl PluginFactory for SleepFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        if let Some(args) = plugin_config.args.clone() {
-            let _: SleepConfig = serde_yml::from_value(args)
-                .map_err(|e| DnsError::plugin(format!("failed to parse sleep config: {}", e)))?;
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

@@ -6,12 +6,11 @@
 //! `debug_print` executor plugin.
 //!
 //! This plugin logs request/response objects at info level for debugging.
-//! It mirrors mosdns `debug_print` quick setup semantics while keeping the
-//! existing ForgeDNS plugin lifecycle and sequence execution model.
+//! It mirrors mosdns `debug_print` quick setup semantics in ForgeDNS.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::error::{DnsError, Result};
+use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -69,18 +68,6 @@ pub struct DebugPrintFactory;
 register_plugin_factory!("debug_print", DebugPrintFactory {});
 
 impl PluginFactory for DebugPrintFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        if let Some(args) = plugin_config.args.clone() {
-            if args.is_string() {
-                return Ok(());
-            }
-            let _: DebugPrintConfig = serde_yml::from_value(args).map_err(|e| {
-                DnsError::plugin(format!("failed to parse debug_print config: {}", e))
-            })?;
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

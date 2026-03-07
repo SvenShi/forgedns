@@ -82,11 +82,6 @@ pub struct RateLimiterFactory;
 register_plugin_factory!("rate_limiter", RateLimiterFactory {});
 
 impl PluginFactory for RateLimiterFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let cfg = parse_config(plugin_config.args.clone())?;
-        validate_cfg(&cfg)
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

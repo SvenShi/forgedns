@@ -369,12 +369,6 @@ pub struct MikrotikFactory;
 register_plugin_factory!("mikrotik", MikrotikFactory {});
 
 impl PluginFactory for MikrotikFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        validate_comment_token("plugin tag", plugin_config.tag.as_str())?;
-        let _ = parse_plugin_config(plugin_config.args.clone(), false)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,
@@ -1171,11 +1165,17 @@ comment_prefix: "forgedns"
             ),
         };
         let factory = MikrotikFactory;
-        let err = factory.validate_config(&cfg).unwrap_err();
+        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new())) {
+            Ok(_) => panic!("expected create to fail for invalid plugin tag"),
+            Err(err) => err,
+        };
         assert!(err.to_string().contains("plugin tag"));
 
         cfg.tag = "mk=bad".to_string();
-        let err = factory.validate_config(&cfg).unwrap_err();
+        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new())) {
+            Ok(_) => panic!("expected create to fail for invalid plugin tag"),
+            Err(err) => err,
+        };
         assert!(err.to_string().contains("plugin tag"));
     }
 

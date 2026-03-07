@@ -29,12 +29,6 @@ pub struct RandomFactory {}
 register_plugin_factory!("random", RandomFactory {});
 
 impl PluginFactory for RandomFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let args = parse_rules_from_value(plugin_config.args.clone())?;
-        let _ = parse_probability(args)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

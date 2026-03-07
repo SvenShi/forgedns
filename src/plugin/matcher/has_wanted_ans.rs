@@ -25,13 +25,6 @@ pub struct HasWantedAnsFactory {}
 register_plugin_factory!("has_wanted_ans", HasWantedAnsFactory {});
 
 impl PluginFactory for HasWantedAnsFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        if plugin_config.args.is_some() {
-            return Err(DnsError::plugin("has_wanted_ans does not accept args"));
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

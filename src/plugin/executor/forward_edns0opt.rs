@@ -109,11 +109,6 @@ pub struct ForwardEdns0OptFactory;
 register_plugin_factory!("forward_edns0opt", ForwardEdns0OptFactory {});
 
 impl PluginFactory for ForwardEdns0OptFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let _ = parse_codes_from_value(plugin_config.args.clone())?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

@@ -171,12 +171,6 @@ pub struct RedirectFactory;
 register_plugin_factory!("redirect", RedirectFactory {});
 
 impl PluginFactory for RedirectFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let cfg = parse_config(plugin_config.args.clone())?;
-        let _ = build_rules(&cfg)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

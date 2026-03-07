@@ -24,12 +24,6 @@ pub struct EnvFactory {}
 register_plugin_factory!("env", EnvFactory {});
 
 impl PluginFactory for EnvFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        let args = parse_rules_from_value(plugin_config.args.clone())?;
-        let _ = parse_env_args(args)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

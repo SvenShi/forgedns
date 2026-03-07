@@ -144,11 +144,6 @@ pub struct EcsHandlerFactory;
 register_plugin_factory!("ecs_handler", EcsHandlerFactory {});
 
 impl PluginFactory for EcsHandlerFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let _ = parse_handler_from_value(plugin_config.tag.as_str(), plugin_config.args.clone())?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,
@@ -165,7 +160,7 @@ impl PluginFactory for EcsHandlerFactory {
         param: Option<String>,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        // Compatibility with legacy quick setup: `ecs [ip/mask]`.
+        // Quick setup syntax: `ecs [ip[/mask]]`.
         let preset = param
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())

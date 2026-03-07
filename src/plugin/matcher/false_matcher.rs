@@ -23,13 +23,6 @@ pub struct FalseMatcherFactory {}
 register_plugin_factory!("_false", FalseMatcherFactory {});
 
 impl PluginFactory for FalseMatcherFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        if plugin_config.args.is_some() {
-            return Err(DnsError::plugin("_false does not accept args"));
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

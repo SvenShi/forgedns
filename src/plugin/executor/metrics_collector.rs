@@ -21,7 +21,7 @@
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
-use crate::core::error::{DnsError, Result};
+use crate::core::error::Result;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -124,18 +124,6 @@ pub struct MetricsCollectorFactory;
 register_plugin_factory!("metrics_collector", MetricsCollectorFactory {});
 
 impl PluginFactory for MetricsCollectorFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        if let Some(args) = plugin_config.args.clone() {
-            if args.is_string() {
-                return Ok(());
-            }
-            let _: MetricsCollectorConfig = serde_yml::from_value(args).map_err(|e| {
-                DnsError::plugin(format!("failed to parse metrics_collector config: {}", e))
-            })?;
-        }
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

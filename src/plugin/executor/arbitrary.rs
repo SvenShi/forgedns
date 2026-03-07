@@ -107,12 +107,6 @@ pub struct ArbitraryFactory;
 register_plugin_factory!("arbitrary", ArbitraryFactory {});
 
 impl PluginFactory for ArbitraryFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let cfg = parse_config(plugin_config.args.clone())?;
-        let _ = build_records(&cfg)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

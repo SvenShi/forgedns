@@ -7,6 +7,7 @@ pub mod chain;
 use crate::config::types::PluginConfig;
 use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainProgram};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -152,38 +153,33 @@ pub struct SequenceFactory {}
 register_plugin_factory!("sequence", SequenceFactory {});
 
 impl PluginFactory for SequenceFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        match plugin_config.args.clone() {
-            Some(args) => {
-                serde_yml::from_value::<Vec<Rule>>(args).map_err(|e| {
-                    DnsError::plugin(format!("sequence config parsing failed: {}", e))
-                })?;
-                Ok(())
-            }
-            None => Err(DnsError::plugin(
-                "sequence must configure 'exec' in config file",
-            )),
-        }
-    }
-
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         let mut result = Vec::new();
 
-        let rules =
-            serde_yml::from_value::<Vec<Rule>>(plugin_config.args.clone().unwrap()).unwrap();
-        for rule in rules {
+        let Some(args) = plugin_config.args.clone() else {
+            return result;
+        };
+        let Ok(rules) = serde_yml::from_value::<Vec<Rule>>(args) else {
+            return result;
+        };
+
+        for (rule_idx, rule) in rules.into_iter().enumerate() {
             if let Some(matches) = rule.matches {
-                for matcher in matches {
+                for (match_idx, matcher) in matches.into_iter().enumerate() {
                     if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&matcher) {
-                        result.push(tag);
+                        result.push(DependencySpec::matcher(
+                            format!("args[{}].matches[{}]", rule_idx, match_idx),
+                            tag,
+                        ));
                     }
                 }
             }
             if let Some(exec) = rule.exec {
+                let field = format!("args[{}].exec", rule_idx);
                 if let Some(tag) = parse_control_flow_dependency(&exec) {
-                    result.push(tag);
+                    result.push(DependencySpec::executor(field, tag));
                 } else if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&exec) {
-                    result.push(tag);
+                    result.push(DependencySpec::executor(field, tag));
                 }
             }
         }

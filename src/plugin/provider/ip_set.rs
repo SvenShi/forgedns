@@ -14,9 +14,10 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::IpPrefixMatcher;
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::plugin::provider::provider_utils::{for_each_nonempty_rule_line, push_unique_matcher};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, PluginType, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
@@ -170,20 +171,20 @@ pub struct IpSetFactory {}
 register_plugin_factory!("ip_set", IpSetFactory {});
 
 impl PluginFactory for IpSetFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> DnsResult<()> {
-        if let Some(args) = plugin_config.args.clone() {
-            serde_yml::from_value::<IpSetArgs>(args)
-                .map_err(|e| DnsError::plugin(format!("ip_set config parsing failed: {}", e)))?;
-        }
-        Ok(())
-    }
-
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         plugin_config
             .args
             .clone()
             .and_then(|args| serde_yml::from_value::<IpSetArgs>(args).ok())
-            .map(|args| args.sets)
+            .map(|args| {
+                args.sets
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, tag)| {
+                        DependencySpec::provider_type(format!("args.sets[{}]", idx), tag, "ip_set")
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -219,28 +220,23 @@ impl PluginFactory for IpSetFactory {
         let mut seen = AHashSet::with_capacity(1 + args.sets.len());
         push_unique_matcher(&mut matchers, &mut seen, Arc::new(local_matcher));
 
-        for set_tag in args.sets {
+        for (set_idx, set_tag) in args.sets.into_iter().enumerate() {
+            let field = format!("args.sets[{}]", set_idx);
             debug!(
                 tag = %plugin_config.tag,
                 referenced_set = %set_tag,
                 "resolving referenced ip_set"
             );
-            let plugin = registry
-                .get_plugin(set_tag.as_str())
-                .ok_or_else(|| DnsError::plugin(format!("ip_set '{}' does not exist", set_tag)))?;
-
-            if !matches!(plugin.plugin_type, PluginType::Provider) {
-                return Err(DnsError::plugin(format!(
-                    "'{}' is not a provider plugin",
-                    set_tag
-                )));
-            }
-
-            let provider = plugin.to_provider();
+            let provider = registry.get_provider_dependency_of_type(
+                &plugin_config.tag,
+                &field,
+                set_tag.as_str(),
+                "ip_set",
+            )?;
             let ip_set = provider.as_any().downcast_ref::<IpSet>().ok_or_else(|| {
                 DnsError::plugin(format!(
-                    "'{}' is not an ip_set plugin and cannot be used in sets",
-                    set_tag
+                    "plugin '{}' field '{}' expects provider instance 'ip_set', but '{}' is not IpSet",
+                    plugin_config.tag, field, set_tag
                 ))
             })?;
 

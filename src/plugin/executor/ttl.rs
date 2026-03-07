@@ -115,11 +115,6 @@ pub struct TtlFactory;
 register_plugin_factory!("ttl", TtlFactory {});
 
 impl PluginFactory for TtlFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let _ = parse_policy_from_config(plugin_config.args.clone())?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

@@ -12,6 +12,7 @@
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::network::transport::udp_transport::UdpTransport;
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{RequestHandle, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
@@ -240,44 +241,11 @@ register_plugin_factory!("udp_server", UdpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for UdpServerFactory {
-    /// Validate UDP server configuration
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        use std::net::SocketAddr;
-        use std::str::FromStr;
-
-        // Parse and validate UDP-specific configuration
-        let udp_config = match plugin_config.args.clone() {
-            Some(args) => serde_yml::from_value::<UdpServerConfig>(args).map_err(|e| {
-                DnsError::plugin(format!("UDP Server config parsing failed: {}", e))
-            })?,
-            None => {
-                return Err(DnsError::plugin(
-                    "UDP Server must configure 'listen' and 'entry' in config file",
-                ));
-            }
-        };
-
-        // Validate listen address format
-        if SocketAddr::from_str(&udp_config.listen).is_err() {
-            return Err(DnsError::plugin(format!(
-                "Invalid listen address: {}",
-                udp_config.listen
-            )));
-        }
-
-        // Validate entry is not empty
-        if udp_config.entry.is_empty() {
-            return Err(DnsError::plugin("UDP Server 'entry' field cannot be empty"));
-        }
-
-        Ok(())
-    }
-
     /// Get dependencies (the entry executor plugin)
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         if let Some(args) = &plugin_config.args {
             if let Ok(config) = serde_yml::from_value::<UdpServerConfig>(args.clone()) {
-                return vec![config.entry];
+                return vec![DependencySpec::executor("args.entry", config.entry)];
             }
         }
         vec![]
@@ -296,20 +264,19 @@ impl PluginFactory for UdpServerFactory {
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse UDP Server config: {}", e)))?;
 
-        // Look up the entry plugin using the registry
-        let entry = registry.get_plugin(&udp_config.entry).ok_or_else(|| {
-            DnsError::plugin(format!(
-                "UDP Server [{}] entry plugin [{}] not found",
-                plugin_config.tag, udp_config.entry
-            ))
-        })?;
+        // Resolve and type-check the entry executor using contextual diagnostics.
+        let entry_executor = registry.get_executor_dependency(
+            &plugin_config.tag,
+            "args.entry",
+            &udp_config.entry,
+        )?;
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             UdpServer {
                 tag: plugin_config.tag.clone(),
                 listen: udp_config.listen,
                 request_handle: Arc::new(RequestHandle {
-                    entry_executor: entry.to_executor().clone(),
+                    entry_executor,
                     registry,
                 }),
                 shutdown_tx: watch::channel(false).0,

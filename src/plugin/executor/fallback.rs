@@ -23,8 +23,9 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, PluginType, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -226,30 +227,17 @@ pub struct FallbackFactory;
 register_plugin_factory!("fallback", FallbackFactory {});
 
 impl PluginFactory for FallbackFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let cfg: FallbackConfig = serde_yml::from_value(
-            plugin_config
-                .args
-                .clone()
-                .ok_or_else(|| DnsError::plugin("fallback requires args"))?,
-        )
-        .map_err(|e| DnsError::plugin(format!("failed to parse fallback config: {}", e)))?;
-
-        if cfg.primary.trim().is_empty() || cfg.secondary.trim().is_empty() {
-            return Err(DnsError::plugin(
-                "fallback requires non-empty 'primary' and 'secondary'",
-            ));
-        }
-
-        Ok(())
-    }
-
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         plugin_config
             .args
             .clone()
             .and_then(|args| serde_yml::from_value::<FallbackConfig>(args).ok())
-            .map(|cfg| vec![cfg.primary, cfg.secondary])
+            .map(|cfg| {
+                vec![
+                    DependencySpec::executor("args.primary", cfg.primary),
+                    DependencySpec::executor("args.secondary", cfg.secondary),
+                ]
+            })
             .unwrap_or_default()
     }
 
@@ -266,32 +254,23 @@ impl PluginFactory for FallbackFactory {
         )
         .map_err(|e| DnsError::plugin(format!("failed to parse fallback config: {}", e)))?;
 
-        let primary = registry.get_plugin(cfg.primary.as_str()).ok_or_else(|| {
-            DnsError::plugin(format!("fallback primary '{}' not found", cfg.primary))
-        })?;
-        if !matches!(primary.plugin_type, PluginType::Executor) {
-            return Err(DnsError::plugin(format!(
-                "fallback primary '{}' is not an executor",
-                cfg.primary
-            )));
-        }
-
-        let secondary = registry.get_plugin(cfg.secondary.as_str()).ok_or_else(|| {
-            DnsError::plugin(format!("fallback secondary '{}' not found", cfg.secondary))
-        })?;
-        if !matches!(secondary.plugin_type, PluginType::Executor) {
-            return Err(DnsError::plugin(format!(
-                "fallback secondary '{}' is not an executor",
-                cfg.secondary
-            )));
-        }
+        let primary = registry.get_executor_dependency(
+            &plugin_config.tag,
+            "args.primary",
+            cfg.primary.as_str(),
+        )?;
+        let secondary = registry.get_executor_dependency(
+            &plugin_config.tag,
+            "args.secondary",
+            cfg.secondary.as_str(),
+        )?;
 
         Ok(UninitializedPlugin::Executor(Box::new(FallbackExecutor {
             tag: plugin_config.tag.clone(),
             primary_tag: cfg.primary.clone(),
             secondary_tag: cfg.secondary.clone(),
-            primary: primary.to_executor(),
-            secondary: secondary.to_executor(),
+            primary,
+            secondary,
             threshold: Duration::from_millis(if cfg.threshold == 0 {
                 500
             } else {

@@ -13,7 +13,7 @@
 //!
 //! All plugins are registered via factories and instantiated from config.
 
-mod dependency;
+pub(crate) mod dependency;
 pub mod executor;
 pub mod matcher;
 pub mod provider;
@@ -102,6 +102,7 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
 
 pub struct FactoryRegistration {
     pub plugin_type: &'static str,
+    pub module_path: &'static str,
     pub constructor: fn() -> Box<dyn PluginFactory>,
 }
 
@@ -113,6 +114,7 @@ macro_rules! register_plugin_factory {
         inventory::submit! {
             $crate::plugin::FactoryRegistration {
                 plugin_type: $plugin_type,
+                module_path: module_path!(),
                 constructor: || -> Box<dyn $crate::plugin::PluginFactory> {
                     Box::new($factory_ctor)
                 },
@@ -132,13 +134,33 @@ fn register_factories_from_inventory(registry: &mut PluginRegistry) -> Result<()
             )));
         }
 
-        registry.register_factory(registration.plugin_type, (registration.constructor)());
+        registry.register_factory(
+            registration.plugin_type,
+            dependency_kind_from_module_path(registration.module_path),
+            (registration.constructor)(),
+        );
     }
 
     Ok(())
 }
 
-#[derive(Debug)]
+fn dependency_kind_from_module_path(module_path: &str) -> dependency::DependencyKind {
+    if module_path.contains("::plugin::server::") {
+        return dependency::DependencyKind::Server;
+    }
+    if module_path.contains("::plugin::executor::") {
+        return dependency::DependencyKind::Executor;
+    }
+    if module_path.contains("::plugin::matcher::") {
+        return dependency::DependencyKind::Matcher;
+    }
+    if module_path.contains("::plugin::provider::") {
+        return dependency::DependencyKind::Provider;
+    }
+    dependency::DependencyKind::Unknown
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginType {
     Server,
     Executor,
@@ -214,24 +236,15 @@ pub trait Plugin: Debug + Send + Sync + 'static {
 /// Plugin factory trait for creating plugin instances from configuration
 pub trait PluginFactory: Debug + Send + Sync + 'static {
     /// # Step 1
-    /// Validate plugin-specific configuration
-    ///
-    /// Each plugin factory can validate its own configuration format.
-    /// Default implementation does nothing (assumes valid).
-    fn validate_config(&self, _plugin_config: &PluginConfig) -> Result<()> {
-        Ok(())
-    }
-
-    /// # Step 2
-    /// Get plugin dependencies from configuration
-    ///
-    /// Returns a list of plugin tags that this plugin depends on.
-    /// Default implementation returns empty (no dependencies).
-    fn get_dependencies(&self, _plugin_config: &PluginConfig) -> Vec<String> {
+    /// Get structured dependency specs used by startup graph validation.
+    fn get_dependency_specs(
+        &self,
+        _plugin_config: &PluginConfig,
+    ) -> Vec<dependency::DependencySpec> {
         vec![]
     }
 
-    /// # Step 3
+    /// # Step 2
     /// Create a new uninitialized plugin instance from configuration
     ///
     /// # Arguments
@@ -264,6 +277,9 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
 pub struct PluginInfo {
     /// Plugin instance tag (unique identifier)
     pub tag: String,
+
+    /// Concrete plugin type string from configuration (e.g. "forward")
+    pub plugin_name: String,
 
     pub plugin_type: PluginType,
 

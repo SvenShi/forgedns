@@ -19,6 +19,7 @@ use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{RequestHandle, RequestMeta, Server};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
@@ -370,44 +371,11 @@ register_plugin_factory!("tcp_server", TcpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for TcpServerFactory {
-    /// Validate TCP server configuration
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        use std::net::SocketAddr;
-        use std::str::FromStr;
-
-        // Parse and validate TCP-specific configuration
-        let tcp_config = match plugin_config.args.clone() {
-            Some(args) => serde_yml::from_value::<TcpServerConfig>(args).map_err(|e| {
-                DnsError::plugin(format!("TCP Server config parsing failed: {}", e))
-            })?,
-            None => {
-                return Err(DnsError::plugin(
-                    "TCP Server must configure 'listen' and 'entry' in config file",
-                ));
-            }
-        };
-
-        // Validate listen address format
-        if SocketAddr::from_str(&tcp_config.listen).is_err() {
-            return Err(DnsError::plugin(format!(
-                "Invalid listen address: {}",
-                tcp_config.listen
-            )));
-        }
-
-        // Validate entry is not empty
-        if tcp_config.entry.is_empty() {
-            return Err(DnsError::plugin("TCP Server 'entry' field cannot be empty"));
-        }
-
-        Ok(())
-    }
-
     /// Get dependencies (the entry executor plugin)
-    fn get_dependencies(&self, plugin_config: &PluginConfig) -> Vec<String> {
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         if let Some(args) = &plugin_config.args {
             if let Ok(config) = serde_yml::from_value::<TcpServerConfig>(args.clone()) {
-                return vec![config.entry];
+                return vec![DependencySpec::executor("args.entry", config.entry)];
             }
         }
         vec![]
@@ -426,13 +394,12 @@ impl PluginFactory for TcpServerFactory {
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse TCP Server config: {}", e)))?;
 
-        // Look up the entry plugin using the registry
-        let entry = registry.get_plugin(&tcp_config.entry).ok_or_else(|| {
-            DnsError::plugin(format!(
-                "TCP Server [{}] entry plugin [{}] not found",
-                plugin_config.tag, tcp_config.entry
-            ))
-        })?;
+        // Resolve and type-check the entry executor using contextual diagnostics.
+        let entry_executor = registry.get_executor_dependency(
+            &plugin_config.tag,
+            "args.entry",
+            &tcp_config.entry,
+        )?;
 
         // Load TLS configuration if cert and key are provided
         let tls_acceptor = match load_tls_config(&tcp_config.cert, &tcp_config.key) {
@@ -449,7 +416,7 @@ impl PluginFactory for TcpServerFactory {
                 tag: plugin_config.tag.clone(),
                 listen: tcp_config.listen,
                 request_handle: Arc::new(RequestHandle {
-                    entry_executor: entry.to_executor().clone(),
+                    entry_executor,
                     registry,
                 }),
                 tls_acceptor,

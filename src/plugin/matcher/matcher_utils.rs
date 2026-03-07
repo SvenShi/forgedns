@@ -8,8 +8,8 @@
 use crate::core::dns_utils::parse_named_response_code;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
+use crate::plugin::PluginRegistry;
 use crate::plugin::provider::Provider;
-use crate::plugin::{PluginRegistry, PluginType};
 use ahash::AHashSet;
 use hickory_proto::rr::{DNSClass, RecordType};
 use serde_yml::Value;
@@ -240,26 +240,14 @@ pub(crate) fn resolve_provider_tags(
     tags: &[String],
     matcher_name: &str,
     matcher_tag: &str,
-) -> Vec<Arc<dyn Provider>> {
+) -> DnsResult<Vec<Arc<dyn Provider>>> {
     let mut providers = Vec::with_capacity(tags.len());
-    for tag in tags {
-        let Some(plugin) = registry.get_plugin(tag) else {
-            panic!(
-                "{} matcher '{}' depends on missing provider '{}'",
-                matcher_name, matcher_tag, tag
-            );
-        };
-        if !matches!(plugin.plugin_type, PluginType::Provider) {
-            panic!(
-                "{} matcher '{}' dependency '{}' is not provider",
-                matcher_name, matcher_tag, tag
-            );
-        }
-        // `to_provider()` returns a shared runtime handle managed by registry;
-        // cloning Arc here is cheap and keeps dependency ownership explicit.
-        providers.push(plugin.to_provider());
+    for (idx, tag) in tags.iter().enumerate() {
+        let field = format!("{}.provider_tags[{}]", matcher_name, idx);
+        let provider = registry.get_provider_dependency(matcher_tag, &field, tag)?;
+        providers.push(provider);
     }
-    providers
+    Ok(providers)
 }
 
 fn parse_rule_list_value(value: Value) -> DnsResult<Vec<String>> {

@@ -164,12 +164,6 @@ pub struct HostsFactory;
 register_plugin_factory!("hosts", HostsFactory {});
 
 impl PluginFactory for HostsFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let cfg = parse_config(plugin_config.args.clone())?;
-        let _ = build_rules(&cfg)?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,

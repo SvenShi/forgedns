@@ -315,11 +315,6 @@ fn parse_dual_selector_config(args: Option<serde_yml::Value>) -> Result<(bool, u
 }
 
 impl PluginFactory for DualSelectorFactory {
-    fn validate_config(&self, plugin_config: &PluginConfig) -> Result<()> {
-        let _ = parse_dual_selector_config(plugin_config.args.clone())?;
-        Ok(())
-    }
-
     fn create(
         &self,
         plugin_config: &PluginConfig,
