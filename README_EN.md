@@ -190,43 +190,37 @@ Without those constraints, performance work tends to decay as the project grows.
 
 ## Architecture At A Glance
 
-```text
-                    ┌──────────────────────────────┐
-                    │         👤 Client/App         │
-                    └──────────────┬───────────────┘
-                                   │
-                                   v
-                    ┌──────────────────────────────┐
-                    │ 🌐 Server Plugins            │
-                    │ UDP / TCP / DoT / DoQ / DoH │
-                    └──────────────┬───────────────┘
-                                   │
-                                   v
-                    ┌──────────────────────────────┐
-                    │ 📦 DnsContext                │
-                    │ request / response / attrs   │
-                    └──────────────┬───────────────┘
-                                   │
-                                   v
-        ┌───────────────────────────────────────────────────────────────┐
-        │ 🧠 Sequence Policy Pipeline                                   │
-        │                                                               │
-        │  🔎 Matcher   -> decide when rules apply                      │
-        │  ⚙️ Executor  -> forward / cache / rewrite / fallback / etc. │
-        │  📚 Provider  -> reusable domain/ip data                      │
-        └───────────────┬───────────────────────────────┬───────────────┘
-                        │                               │
-                        v                               v
-          ┌──────────────────────────┐     ┌──────────────────────────┐
-          │ 🔁 Upstream Resolver     │     │ 🛰️ System Integrations   │
-          │ UDP/TCP/DoT/DoQ/DoH      │     │ ipset / nftset / MT      │
-          └──────────────┬───────────┘     └──────────────┬───────────┘
-                         │                                │
-                         └──────────────┬─────────────────┘
-                                        v
-                           ┌──────────────────────────┐
-                           │ ✅ Final DNS Response     │
-                           └──────────────────────────┘
+```mermaid
+flowchart TB
+
+A[👤 Client / App]
+
+B[🌐 Server Plugins<br/>UDP / TCP / DoT / DoQ / DoH]
+
+C[📦 DnsContext<br/>request / response / attrs]
+
+subgraph D[🧠 Sequence Policy Pipeline]
+    D1[🔎 Matcher<br/>decide when rules apply]
+    D2[⚙️ Executor<br/>forward / cache / rewrite / fallback]
+    D3[📚 Provider<br/>reusable domain/ip data]
+    
+    D1 --> D2
+    D3 --> D2
+end
+
+E[🔁 Upstream Resolver<br/>UDP / TCP / DoT / DoQ / DoH]
+
+F[🛰️ System Integrations<br/>ipset / nftset / MT]
+
+G[✅ Final DNS Response]
+
+A --> B
+B --> C
+C --> D
+D --> E
+D --> F
+E --> G
+F --> G
 ```
 
 A request typically flows like this:
