@@ -42,7 +42,7 @@ ahash = "0.8.12"
 smallvec = "1.15.1"
 mikrotik-rs = "0.5.1"
 
-hotpath =  "0.13.0"
+hotpath =  "0.14.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 neli = "0.7.4"
