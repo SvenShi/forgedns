@@ -25,6 +25,7 @@ use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TokioRuntime};
 use rustls::pki_types::ServerName;
 use socket2::{Domain, Protocol, Socket, Type};
+use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
@@ -363,6 +364,46 @@ pub fn connect_socket(
     Ok(socket.into())
 }
 
+async fn connect_tcp_socket(socket: Socket, socket_addr: SocketAddr) -> Result<TcpStream> {
+    match socket.connect(&socket_addr.into()) {
+        Ok(()) => {}
+        Err(e) if is_connect_in_progress(&e) => {}
+        Err(e) => return Err(e.into()),
+    }
+
+    let std_stream: std::net::TcpStream = socket.into();
+    let stream = TcpStream::from_std(std_stream)?;
+
+    // Ensure the async connect has completed before the stream is used by SOCKS/TLS layers.
+    stream.writable().await?;
+    if let Some(err) = stream.take_error()? {
+        return Err(err.into());
+    }
+
+    Ok(stream)
+}
+
+fn is_connect_in_progress(err: &std::io::Error) -> bool {
+    if err.kind() == ErrorKind::WouldBlock {
+        return true;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return err.raw_os_error() == Some(115);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return err.raw_os_error() == Some(36);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        false
+    }
+}
+
 /// Create and configure a TCP stream for DNS communication
 ///
 /// Creates a non-blocking TCP socket with TCP_NODELAY enabled and optional
@@ -434,12 +475,7 @@ pub async fn connect_stream(
             socket.bind_device(Some(device.as_bytes()))?;
         }
 
-        // Connect to SOCKS5 proxy (non-blocking)
-        socket.connect(&socks5.socket_addr.into());
-
-        // Convert to tokio TcpStream
-        let std_stream: std::net::TcpStream = socket.into();
-        let proxy_stream = TcpStream::from_std(std_stream)?;
+        let proxy_stream = connect_tcp_socket(socket, socks5.socket_addr).await?;
 
         // Establish SOCKS5 connection through proxy
         use fast_socks5::util::target_addr::TargetAddr;
@@ -457,13 +493,8 @@ pub async fn connect_stream(
             None
         };
 
-        let config = if auth.is_some() {
-            fast_socks5::client::Config::default()
-        } else {
-            let mut config = fast_socks5::client::Config::default();
-            config.set_skip_auth(true);
-            config
-        };
+        // Standard SOCKS5 servers still require method negotiation for "no auth".
+        let config = fast_socks5::client::Config::default();
 
         // Create SOCKS5 stream
         let mut socks5_stream = Socks5Stream::use_stream(proxy_stream, auth, config).await?;
@@ -518,13 +549,7 @@ pub async fn connect_stream(
             socket.bind_device(Some(device.as_bytes()))?;
         }
 
-        // Initiate TCP connection (non-blocking, will complete asynchronously)
-        socket.connect(&socket_addr.into());
-
-        let std_stream: std::net::TcpStream = socket.into();
-        let stream = TcpStream::from_std(std_stream)?;
-
-        Ok(stream)
+        connect_tcp_socket(socket, socket_addr).await
     }
 }
 
@@ -534,6 +559,8 @@ mod tests {
     use async_trait::async_trait;
     use hickory_proto::op::Message;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[derive(Debug)]
     struct MockConnection {
@@ -648,5 +675,176 @@ mod tests {
         let uri = build_doh_request_uri(&connection_info);
 
         assert_eq!(uri, "https://dns.example.test:8443/dns-query?dns=");
+    }
+
+    #[tokio::test]
+    async fn test_connect_stream_performs_standard_socks5_handshake_without_auth() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let proxy_addr = listener.local_addr().expect("listener should have addr");
+
+        let proxy = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("proxy should accept");
+
+            let mut greeting = [0u8; 3];
+            stream
+                .read_exact(&mut greeting)
+                .await
+                .expect("proxy should read greeting");
+            assert_eq!(greeting, [0x05, 0x01, 0x00]);
+
+            stream
+                .write_all(&[0x05, 0x00])
+                .await
+                .expect("proxy should accept no-auth");
+
+            let mut request_header = [0u8; 4];
+            stream
+                .read_exact(&mut request_header)
+                .await
+                .expect("proxy should read request header");
+            assert_eq!(request_header, [0x05, 0x01, 0x00, 0x01]);
+
+            let mut request_target = [0u8; 6];
+            stream
+                .read_exact(&mut request_target)
+                .await
+                .expect("proxy should read target");
+            assert_eq!(request_target, [8, 8, 8, 8, 0x01, 0xBB]);
+
+            stream
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x1F, 0x90])
+                .await
+                .expect("proxy should send success reply");
+        });
+
+        let _stream = connect_stream(
+            Some(IpAddr::from([8, 8, 8, 8])),
+            "dns.google".to_string(),
+            443,
+            None,
+            None,
+            Some(Socks5Opt {
+                username: None,
+                password: None,
+                socket_addr: proxy_addr,
+            }),
+        )
+        .await
+        .expect("SOCKS5 tunnel should be established");
+
+        proxy.await.expect("proxy task should complete");
+    }
+
+    #[tokio::test]
+    async fn test_connect_stream_performs_standard_socks5_handshake_with_password_auth() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let proxy_addr = listener.local_addr().expect("listener should have addr");
+        let username = "demo-user".to_string();
+        let password = "demo-pass".to_string();
+
+        let proxy_username = username.clone();
+        let proxy_password = password.clone();
+        let proxy = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("proxy should accept");
+
+            let mut greeting = [0u8; 4];
+            stream
+                .read_exact(&mut greeting)
+                .await
+                .expect("proxy should read greeting");
+            assert_eq!(greeting, [0x05, 0x02, 0x00, 0x02]);
+
+            stream
+                .write_all(&[0x05, 0x02])
+                .await
+                .expect("proxy should request password auth");
+
+            let mut auth_header = [0u8; 2];
+            stream
+                .read_exact(&mut auth_header)
+                .await
+                .expect("proxy should read auth header");
+            assert_eq!(auth_header, [0x01, proxy_username.len() as u8]);
+
+            let mut auth_username = vec![0u8; proxy_username.len()];
+            stream
+                .read_exact(&mut auth_username)
+                .await
+                .expect("proxy should read username");
+            assert_eq!(auth_username, proxy_username.as_bytes());
+
+            let mut pass_len = [0u8; 1];
+            stream
+                .read_exact(&mut pass_len)
+                .await
+                .expect("proxy should read password length");
+            assert_eq!(pass_len, [proxy_password.len() as u8]);
+
+            let mut auth_password = vec![0u8; proxy_password.len()];
+            stream
+                .read_exact(&mut auth_password)
+                .await
+                .expect("proxy should read password");
+            assert_eq!(auth_password, proxy_password.as_bytes());
+
+            stream
+                .write_all(&[0x01, 0x00])
+                .await
+                .expect("proxy should accept credentials");
+
+            let mut request_header = [0u8; 4];
+            stream
+                .read_exact(&mut request_header)
+                .await
+                .expect("proxy should read request header");
+            assert_eq!(request_header, [0x05, 0x01, 0x00, 0x03]);
+
+            let mut domain_len = [0u8; 1];
+            stream
+                .read_exact(&mut domain_len)
+                .await
+                .expect("proxy should read domain length");
+            assert_eq!(domain_len, [10]);
+
+            let mut domain = vec![0u8; domain_len[0] as usize];
+            stream
+                .read_exact(&mut domain)
+                .await
+                .expect("proxy should read domain");
+            assert_eq!(domain, b"dns.google");
+
+            let mut port = [0u8; 2];
+            stream
+                .read_exact(&mut port)
+                .await
+                .expect("proxy should read port");
+            assert_eq!(port, [0x01, 0xBB]);
+
+            stream
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x1F, 0x90])
+                .await
+                .expect("proxy should send success reply");
+        });
+
+        let _stream = connect_stream(
+            None,
+            "dns.google".to_string(),
+            443,
+            None,
+            None,
+            Some(Socks5Opt {
+                username: Some(username),
+                password: Some(password),
+                socket_addr: proxy_addr,
+            }),
+        )
+        .await
+        .expect("SOCKS5 tunnel should be established");
+
+        proxy.await.expect("proxy task should complete");
     }
 }
