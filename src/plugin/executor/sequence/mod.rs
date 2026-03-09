@@ -219,3 +219,20 @@ impl PluginFactory for SequenceFactory {
         })))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_sequence_ref_and_control_flow_dependency() {
+        assert!(parse_sequence_ref("$abc").is_ok());
+        assert!(parse_sequence_ref("abc").is_ok());
+
+        assert_eq!(parse_control_flow_dependency("accept"), None);
+        assert_eq!(
+            parse_control_flow_dependency("jump $next"),
+            Some("next".to_string())
+        );
+    }
+}

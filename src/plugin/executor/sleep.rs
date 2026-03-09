@@ -104,3 +104,51 @@ impl PluginFactory for SleepFactory {
         })))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::executor::ExecStep;
+    use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+
+    #[test]
+    fn test_sleep_factory_quick_setup_validation() {
+        let factory = SleepFactory;
+        assert!(factory.quick_setup("sleep", None, test_registry()).is_err());
+        assert!(
+            factory
+                .quick_setup("sleep", Some("abc".to_string()), test_registry())
+                .is_err()
+        );
+        assert!(
+            factory
+                .quick_setup("sleep", Some("10".to_string()), test_registry())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_sleep_factory_create_rejects_invalid_config_type() {
+        let factory = SleepFactory;
+        let cfg = plugin_config(
+            "sleep",
+            "sleep",
+            Some(serde_yml::Value::String("bad".into())),
+        );
+        assert!(factory.create(&cfg, test_registry()).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sleep_execute_zero_duration_returns_next() {
+        let plugin = SleepExecutor {
+            tag: "sleep".to_string(),
+            duration: Duration::from_millis(0),
+        };
+        let mut ctx = test_context();
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("sleep execute should succeed");
+        assert!(matches!(step, ExecStep::Next));
+    }
+}

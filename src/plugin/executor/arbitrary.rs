@@ -296,3 +296,83 @@ fn parse_name(raw: &str) -> std::result::Result<Name, String> {
 fn normalize_name(name: &Name) -> String {
     crate::core::context::DnsContext::normalize_dns_name(name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::ExecFlowState;
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_registry;
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::{Name, RecordType};
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_parse_zone_line_rejects_short_record() {
+        let err = parse_zone_line("example.com.").expect_err("short zone line should fail");
+        assert!(err.contains("at least 3 fields"));
+    }
+
+    fn make_context(name: &str, qtype: RecordType) -> DnsContext {
+        let mut request = Message::new();
+        request.add_query(Query::query(Name::from_ascii(name).unwrap(), qtype));
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_arbitrary_execute_returns_matching_type_records() {
+        let cfg = ArbitraryConfig {
+            rules: vec![
+                "example.com. 60 IN A 1.1.1.1".to_string(),
+                "example.com. 60 IN AAAA ::1".to_string(),
+            ],
+            files: vec![],
+        };
+        let plugin = Arbitrary {
+            tag: "arbitrary".to_string(),
+            records: build_records(&cfg).expect("records should parse"),
+        };
+
+        let mut ctx = make_context("example.com.", RecordType::A);
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Next));
+        let response = ctx.response.expect("response should exist");
+        assert_eq!(response.answers().len(), 1);
+        assert_eq!(response.answers()[0].record_type(), RecordType::A);
+    }
+
+    #[tokio::test]
+    async fn test_arbitrary_execute_any_query_returns_all_records() {
+        let cfg = ArbitraryConfig {
+            rules: vec![
+                "example.com. 60 IN A 1.1.1.1".to_string(),
+                "example.com. 60 IN AAAA ::1".to_string(),
+            ],
+            files: vec![],
+        };
+        let plugin = Arbitrary {
+            tag: "arbitrary".to_string(),
+            records: build_records(&cfg).expect("records should parse"),
+        };
+
+        let mut ctx = make_context("example.com.", RecordType::ANY);
+        plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let response = ctx.response.expect("response should exist");
+        assert_eq!(response.answers().len(), 2);
+    }
+}

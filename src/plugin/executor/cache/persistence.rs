@@ -223,3 +223,82 @@ pub(super) async fn load_cache_from_file(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_entry() -> PersistedCacheEntry {
+        PersistedCacheEntry {
+            domain: "WWW.Example.COM.".to_string(),
+            record_type: u16::from(RecordType::AAAA),
+            dns_class: u16::from(DNSClass::IN),
+            do_bit: true,
+            cd_bit: false,
+            ecs_family: Some(2),
+            ecs_source_prefix: Some(56),
+            ecs_scope_prefix: Some(64),
+            ecs_network: Some(vec![0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0]),
+            resp_bytes: vec![0, 1, 2],
+            cache_age_ms: 10,
+            last_access_age_ms: 5,
+            ttl: 60,
+            remaining_ttl_ms: 30_000,
+        }
+    }
+
+    #[test]
+    fn test_parse_persisted_entries_returns_none_for_invalid_bytes() {
+        let parsed = parse_persisted_entries(b"not a valid cache dump");
+
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn test_to_cache_key_normalizes_domain_and_preserves_ecs_when_enabled() {
+        let entry = make_entry();
+
+        let cache_key = to_cache_key(&entry, true).expect("cache key should be built");
+
+        assert_eq!(cache_key.domain, "www.example.com");
+        assert_eq!(cache_key.record_type, RecordType::AAAA);
+        assert_eq!(cache_key.dns_class, DNSClass::IN);
+        assert!(cache_key.do_bit);
+        assert!(!cache_key.cd_bit);
+        let ecs = cache_key.ecs_scope.expect("ecs should be present");
+        assert_eq!(ecs.family, 2);
+        assert_eq!(ecs.source_prefix, 56);
+        assert_eq!(ecs.scope_prefix, 64);
+        assert_eq!(ecs.network_len, 8);
+        assert_eq!(&ecs.network[..8], &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_to_cache_key_drops_partial_ecs_metadata() {
+        let mut entry = make_entry();
+        entry.ecs_network = None;
+
+        let cache_key = to_cache_key(&entry, true);
+
+        assert_eq!(cache_key, None);
+    }
+
+    #[test]
+    fn test_to_cache_key_discards_empty_normalized_domain() {
+        let mut entry = make_entry();
+        entry.domain = "   ".to_string();
+
+        let cache_key = to_cache_key(&entry, false);
+
+        assert_eq!(cache_key, None);
+    }
+
+    #[test]
+    fn test_to_cache_key_omits_ecs_when_runtime_keying_is_disabled() {
+        let entry = make_entry();
+
+        let cache_key = to_cache_key(&entry, false).expect("cache key should be built");
+
+        assert_eq!(cache_key.ecs_scope, None);
+    }
+}

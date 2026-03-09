@@ -403,3 +403,39 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
         Ok(arc)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::upstream::ConnectionType;
+
+    #[test]
+    fn test_builder_new_marks_dot_connections_as_tls_enabled() {
+        let mut connection_info = ConnectionInfo::with_addr("tls://dns.example.com:853")
+            .expect("connection info should parse");
+        connection_info.timeout = Duration::from_secs(9);
+        connection_info.insecure_skip_verify = true;
+
+        let builder = TcpConnectionBuilder::new(&connection_info);
+
+        assert_eq!(connection_info.connection_type, ConnectionType::DoT);
+        assert!(builder.tls_enabled);
+        assert_eq!(builder.port, 853);
+        assert_eq!(builder.timeout, Duration::from_secs(9));
+        assert_eq!(builder.server_name, "dns.example.com");
+        assert!(builder.insecure_skip_verify);
+    }
+
+    #[tokio::test]
+    async fn test_query_returns_error_when_connection_is_closed() {
+        let (sender, _receiver) = unbounded_channel();
+        let connection = TcpConnection::new(7, sender, Duration::from_millis(10));
+        connection.close();
+
+        let result = connection.query(Message::new()).await;
+
+        assert!(result.is_err());
+        assert_eq!(connection.using_count(), 0);
+        assert!(!connection.available());
+    }
+}

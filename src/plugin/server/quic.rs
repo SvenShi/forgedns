@@ -411,3 +411,16 @@ impl PluginFactory for QuicServerFactory {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::{plugin_config, test_registry};
+
+    #[test]
+    fn test_quic_factory_requires_args() {
+        let factory = QuicServerFactory {};
+        let cfg = plugin_config("quic", "quic_server", None);
+        assert!(factory.create(&cfg, test_registry()).is_err());
+    }
+}

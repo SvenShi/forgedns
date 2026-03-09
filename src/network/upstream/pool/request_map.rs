@@ -149,3 +149,70 @@ impl RequestMap {
         self.size.load(Ordering::Relaxed) == 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::oneshot;
+
+    fn make_message(id: u16) -> Message {
+        let mut message = Message::new();
+        message.set_id(id);
+        message
+    }
+
+    #[test]
+    fn test_store_returns_retrievable_sender_and_updates_size() {
+        let map = RequestMap::new();
+        let (tx, rx) = oneshot::channel();
+
+        let id = map.store(tx);
+
+        assert_eq!(map.size(), 1);
+        let sender = map.take(id).expect("stored sender should be retrievable");
+        assert_eq!(map.size(), 0);
+        assert!(sender.send(make_message(7)).is_ok());
+        let received = rx.blocking_recv().expect("receiver should get the message");
+        assert_eq!(received.id(), 7);
+    }
+
+    #[test]
+    fn test_take_missing_id_returns_none_without_changing_size() {
+        let map = RequestMap::new();
+
+        assert!(map.take(42).is_none());
+        assert_eq!(map.size(), 0);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_take_twice_only_returns_sender_once() {
+        let map = RequestMap::new();
+        let (tx, _rx) = oneshot::channel();
+        let id = map.store(tx);
+
+        assert!(map.take(id).is_some());
+        assert!(map.take(id).is_none());
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_store_after_take_keeps_map_usable() {
+        let map = RequestMap::new();
+        let (tx1, _rx1) = oneshot::channel();
+        let id1 = map.store(tx1);
+        let _ = map.take(id1);
+
+        let (tx2, rx2) = oneshot::channel();
+        let id2 = map.store(tx2);
+        let sender = map.take(id2).expect("second sender should be retrievable");
+
+        assert!(sender.send(make_message(9)).is_ok());
+        assert_eq!(
+            rx2.blocking_recv()
+                .expect("receiver should get the second message")
+                .id(),
+            9
+        );
+    }
+}

@@ -252,3 +252,56 @@ fn extract_tls_server_name(connection: &quinn::Connection) -> Option<String> {
         .and_then(|data| data.server_name)
         .map(|name| name.to_ascii_lowercase())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustls::ServerConfig;
+    use rustls::server::{ClientHello, ResolvesServerCert};
+    use rustls::sign::CertifiedKey;
+    use std::fmt::{Debug, Formatter};
+
+    struct RejectingResolver;
+
+    impl Debug for RejectingResolver {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.write_str("RejectingResolver")
+        }
+    }
+
+    impl ResolvesServerCert for RejectingResolver {
+        fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+            None
+        }
+    }
+
+    fn dummy_server_config() -> ServerConfig {
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(RejectingResolver))
+    }
+
+    #[tokio::test]
+    async fn test_run_server_reports_startup_error_for_invalid_address() {
+        let dispatcher = Arc::new(HttpDispatcher::new());
+        let server_config = dummy_server_config();
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (startup_tx, startup_rx) = oneshot::channel();
+
+        run_server(
+            "invalid-addr".to_string(),
+            dispatcher,
+            server_config,
+            None,
+            None,
+            shutdown_rx,
+            Some(startup_tx),
+        )
+        .await;
+
+        let startup = startup_rx
+            .await
+            .expect("startup sender should not be dropped");
+        assert!(startup.is_err());
+    }
+}

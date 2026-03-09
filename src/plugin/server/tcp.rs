@@ -427,3 +427,168 @@ impl PluginFactory for TcpServerFactory {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::DnsContext;
+    use crate::core::dns_utils::build_response_from_request;
+    use crate::core::error::Result;
+    use crate::plugin::Plugin;
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use async_trait::async_trait;
+    use hickory_proto::op::{Message, Query, ResponseCode};
+    use hickory_proto::rr::{Name, RecordType};
+    use serde_yml::from_str;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::duplex;
+    use tokio::time::{Duration, timeout};
+
+    fn make_request(id: u16) -> Message {
+        let mut message = Message::new();
+        message.set_id(id);
+        message.add_query(Query::query(
+            Name::from_ascii("example.com.").expect("query name should be valid"),
+            RecordType::A,
+        ));
+        message
+    }
+
+    fn make_request_handle(executor: Arc<dyn Executor>) -> Arc<RequestHandle> {
+        Arc::new(RequestHandle {
+            entry_executor: executor,
+            registry: test_registry(),
+        })
+    }
+
+    #[derive(Debug, Default, Clone, PartialEq, Eq)]
+    struct ObservedMeta {
+        server_name: Option<String>,
+        qname: Option<String>,
+    }
+
+    #[derive(Debug)]
+    struct RespondAndCaptureExecutor {
+        observed: Arc<Mutex<Option<ObservedMeta>>>,
+    }
+
+    #[async_trait]
+    impl Plugin for RespondAndCaptureExecutor {
+        fn tag(&self) -> &str {
+            "respond_and_capture"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for RespondAndCaptureExecutor {
+        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+            let observed = ObservedMeta {
+                server_name: context
+                    .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
+                    .cloned(),
+                qname: context.request.query().map(|query| query.name().to_utf8()),
+            };
+            self.observed
+                .lock()
+                .expect("capture lock should not be poisoned")
+                .replace(observed);
+            context.response = Some(build_response_from_request(
+                &context.request,
+                ResponseCode::Refused,
+            ));
+            Ok(ExecStep::Stop)
+        }
+    }
+
+    #[test]
+    fn test_tcp_factory_requires_args() {
+        let factory = TcpServerFactory {};
+        let cfg = plugin_config("tcp", "tcp_server", None);
+        assert!(factory.create(&cfg, test_registry()).is_err());
+    }
+
+    #[test]
+    fn test_build_tcp_listener_rejects_invalid_address() {
+        let listener = build_tcp_listener("not-an-address", Duration::from_secs(5));
+
+        assert!(listener.is_err());
+    }
+
+    #[test]
+    fn test_tcp_factory_reports_entry_dependency() {
+        let factory = TcpServerFactory {};
+        let args = from_str(
+            r#"
+entry: forward_main
+listen: 127.0.0.1:53
+"#,
+        )
+        .expect("yaml should parse");
+        let cfg = plugin_config("tcp", "tcp_server", Some(args));
+
+        let deps = factory.get_dependency_specs(&cfg);
+
+        assert_eq!(
+            deps,
+            vec![DependencySpec::executor("args.entry", "forward_main")]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_dns_stream_returns_framed_response_and_forwards_meta() {
+        let observed = Arc::new(Mutex::new(None));
+        let executor = Arc::new(RespondAndCaptureExecutor {
+            observed: observed.clone(),
+        });
+        let request_handle = make_request_handle(executor);
+        let (client, server) = duplex(4096);
+        let server_task = tokio::spawn(handle_dns_stream(
+            server,
+            SocketAddr::from(([127, 0, 0, 1], 5400)),
+            request_handle,
+            Some("dot.example".to_string()),
+        ));
+
+        let transport = TcpTransport::new(client);
+        let (mut reader, mut writer) = transport.into_split();
+        let request = make_request(12);
+
+        writer
+            .write_message(&request)
+            .await
+            .expect("request write should succeed");
+        let response = reader
+            .read_message()
+            .await
+            .expect("response read should succeed");
+
+        assert_eq!(response.id(), 12);
+        assert_eq!(response.response_code(), ResponseCode::Refused);
+        assert_eq!(
+            observed
+                .lock()
+                .expect("capture lock should not be poisoned")
+                .clone(),
+            Some(ObservedMeta {
+                server_name: Some("dot.example".to_string()),
+                qname: Some("example.com.".to_string()),
+            })
+        );
+
+        drop(reader);
+        drop(writer);
+        timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("server task should shut down after client close")
+            .expect("server task should not panic");
+    }
+}

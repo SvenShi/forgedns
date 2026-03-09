@@ -161,3 +161,281 @@ impl RequestHandle {
         build_response_from_request(request, rcode)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::error::{DnsError, Result};
+    use crate::plugin::test_utils::test_registry;
+    use async_trait::async_trait;
+    use hickory_proto::op::Query;
+    use hickory_proto::rr::{Name, RecordType};
+    use std::sync::Mutex;
+
+    fn make_request(id: u16, qname: &str) -> Message {
+        let mut request = Message::new();
+        request.set_id(id);
+        request.add_query(Query::query(
+            Name::from_ascii(qname).expect("query name should be valid"),
+            RecordType::A,
+        ));
+        request
+    }
+
+    fn make_request_handle(executor: Arc<dyn Executor>) -> RequestHandle {
+        RequestHandle {
+            entry_executor: executor,
+            registry: test_registry(),
+        }
+    }
+
+    #[derive(Debug)]
+    struct FallthroughExecutor;
+
+    #[async_trait]
+    impl Plugin for FallthroughExecutor {
+        fn tag(&self) -> &str {
+            "fallthrough"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for FallthroughExecutor {
+        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
+            Ok(ExecStep::Next)
+        }
+    }
+
+    #[derive(Debug)]
+    struct StopWithResponseExecutor;
+
+    #[async_trait]
+    impl Plugin for StopWithResponseExecutor {
+        fn tag(&self) -> &str {
+            "stop_with_response"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for StopWithResponseExecutor {
+        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+            context.response = Some(build_response_from_request(
+                &context.request,
+                ResponseCode::Refused,
+            ));
+            Ok(ExecStep::Stop)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ErrorExecutor;
+
+    #[async_trait]
+    impl Plugin for ErrorExecutor {
+        fn tag(&self) -> &str {
+            "error"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for ErrorExecutor {
+        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
+            Err(DnsError::plugin("execute failed"))
+        }
+    }
+
+    #[derive(Debug, Default, Clone, PartialEq, Eq)]
+    struct ObservedMeta {
+        server_name: Option<String>,
+        url_path: Option<String>,
+    }
+
+    #[derive(Debug)]
+    struct CaptureMetaExecutor {
+        observed: Arc<Mutex<Option<ObservedMeta>>>,
+    }
+
+    #[async_trait]
+    impl Plugin for CaptureMetaExecutor {
+        fn tag(&self) -> &str {
+            "capture_meta"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for CaptureMetaExecutor {
+        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+            let observed = ObservedMeta {
+                server_name: context
+                    .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
+                    .cloned(),
+                url_path: context
+                    .get_attr::<String>(DnsContext::ATTR_URL_PATH)
+                    .cloned(),
+            };
+            self.observed
+                .lock()
+                .expect("meta capture lock should not be poisoned")
+                .replace(observed);
+            Ok(ExecStep::Next)
+        }
+    }
+
+    #[derive(Debug)]
+    struct PostResponseExecutor;
+
+    #[async_trait]
+    impl Plugin for PostResponseExecutor {
+        fn tag(&self) -> &str {
+            "post_response"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for PostResponseExecutor {
+        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
+            Ok(ExecStep::NextWithPost(None))
+        }
+
+        async fn post_execute(
+            &self,
+            context: &mut DnsContext,
+            _state: Option<crate::plugin::executor::ExecState>,
+        ) -> crate::plugin::executor::ExecResult {
+            context.response = Some(build_response_from_request(
+                &context.request,
+                ResponseCode::NXDomain,
+            ));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_returns_completed_exit_with_default_noerror_response() {
+        let request_handle = make_request_handle(Arc::new(FallthroughExecutor));
+        let request = make_request(7, "example.com.");
+
+        let result = request_handle
+            .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5300)))
+            .await;
+
+        assert_eq!(result.exit, RequestExit::Completed);
+        assert_eq!(result.response.id(), 7);
+        assert_eq!(result.response.response_code(), ResponseCode::NoError);
+        assert_eq!(result.response.queries().len(), 1);
+        assert!(result.response.answers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_returns_controlled_exit_when_executor_stops() {
+        let request_handle = make_request_handle(Arc::new(StopWithResponseExecutor));
+        let request = make_request(9, "example.com.");
+
+        let result = request_handle
+            .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5301)))
+            .await;
+
+        assert_eq!(result.exit, RequestExit::Controlled);
+        assert_eq!(result.response.id(), 9);
+        assert_eq!(result.response.response_code(), ResponseCode::Refused);
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_returns_failed_exit_and_servfail_on_execute_error() {
+        let request_handle = make_request_handle(Arc::new(ErrorExecutor));
+        let request = make_request(11, "example.com.");
+
+        let result = request_handle
+            .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5302)))
+            .await;
+
+        assert_eq!(result.exit, RequestExit::Failed);
+        assert_eq!(result.response.id(), 11);
+        assert_eq!(result.response.response_code(), ResponseCode::ServFail);
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_with_meta_applies_server_name_and_url_path() {
+        let observed = Arc::new(Mutex::new(None));
+        let request_handle = make_request_handle(Arc::new(CaptureMetaExecutor {
+            observed: observed.clone(),
+        }));
+        let request = make_request(13, "example.com.");
+
+        let _result = request_handle
+            .handle_request_with_meta(
+                request,
+                SocketAddr::from(([127, 0, 0, 1], 5303)),
+                RequestMeta {
+                    server_name: Some("dns.example.test".to_string()),
+                    url_path: Some("/dns-query".to_string()),
+                },
+            )
+            .await;
+
+        assert_eq!(
+            observed
+                .lock()
+                .expect("meta capture lock should not be poisoned")
+                .clone(),
+            Some(ObservedMeta {
+                server_name: Some("dns.example.test".to_string()),
+                url_path: Some("/dns-query".to_string()),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_runs_post_callback_and_uses_post_response() {
+        let request_handle = make_request_handle(Arc::new(PostResponseExecutor));
+        let request = make_request(15, "example.com.");
+
+        let result = request_handle
+            .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5304)))
+            .await;
+
+        assert_eq!(result.exit, RequestExit::Completed);
+        assert_eq!(result.response.id(), 15);
+        assert_eq!(result.response.response_code(), ResponseCode::NXDomain);
+    }
+}

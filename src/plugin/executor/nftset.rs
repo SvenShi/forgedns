@@ -610,3 +610,13 @@ const NFTA_DATA_VALUE: u16 = 1;
 
 #[cfg(target_os = "linux")]
 const NFT_SET_ELEM_INTERVAL_END: u32 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_config_rejects_empty_table_or_set_name() {
+        assert!(parse_config(Some(serde_yml::Value::String("bad".into()))).is_err());
+    }
+}

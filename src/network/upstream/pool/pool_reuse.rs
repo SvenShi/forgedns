@@ -284,3 +284,218 @@ impl<C: Connection> ReusePool<C> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::error::{DnsError, Result};
+    use hickory_proto::op::Message;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    #[derive(Debug)]
+    struct MockConnection {
+        available: AtomicBool,
+        using_count: AtomicU16,
+        last_used: AtomicU64,
+        close_calls: AtomicUsize,
+        query_calls: AtomicUsize,
+    }
+
+    impl MockConnection {
+        fn new(available: bool, using_count: u16, last_used: u64) -> Self {
+            Self {
+                available: AtomicBool::new(available),
+                using_count: AtomicU16::new(using_count),
+                last_used: AtomicU64::new(last_used),
+                close_calls: AtomicUsize::new(0),
+                query_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn close_calls(&self) -> usize {
+            self.close_calls.load(Ordering::Relaxed)
+        }
+
+        fn query_calls(&self) -> usize {
+            self.query_calls.load(Ordering::Relaxed)
+        }
+    }
+
+    #[async_trait]
+    impl Connection for MockConnection {
+        fn close(&self) {
+            self.close_calls.fetch_add(1, Ordering::Relaxed);
+            self.available.store(false, Ordering::Relaxed);
+        }
+
+        async fn query(&self, request: Message) -> Result<Message> {
+            self.query_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(request)
+        }
+
+        fn using_count(&self) -> u16 {
+            self.using_count.load(Ordering::Relaxed)
+        }
+
+        fn available(&self) -> bool {
+            self.available.load(Ordering::Relaxed)
+        }
+
+        fn last_used(&self) -> u64 {
+            self.last_used.load(Ordering::Relaxed)
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockBuilder {
+        planned: Mutex<VecDeque<Result<Arc<MockConnection>>>>,
+    }
+
+    impl MockBuilder {
+        fn new(planned: Vec<Result<Arc<MockConnection>>>) -> Self {
+            Self {
+                planned: Mutex::new(planned.into()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ConnectionBuilder<MockConnection> for MockBuilder {
+        async fn create_connection(&self, _conn_id: u16) -> Result<Arc<MockConnection>> {
+            self.planned
+                .lock()
+                .expect("builder plan lock should not be poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err(DnsError::runtime("no planned connection")))
+        }
+    }
+
+    fn make_pool(
+        min_size: usize,
+        max_size: usize,
+        idle_secs: u64,
+        builder: MockBuilder,
+    ) -> ReusePool<MockConnection> {
+        ReusePool {
+            connections: ArrayQueue::new(max_size.max(1)),
+            active_count: AtomicUsize::new(0),
+            max_size,
+            min_size,
+            max_idle: Duration::from_secs(idle_secs),
+            connection_builder: Box::new(builder),
+            next_id: AtomicU16::new(1),
+            release_notified: Notify::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_reuses_available_connection_from_queue() {
+        let pool = make_pool(0, 2, 10, MockBuilder::new(vec![]));
+        let conn = Arc::new(MockConnection::new(true, 0, 0));
+        pool.connections
+            .push(conn.clone())
+            .expect("queue should accept connection");
+        pool.active_count.store(1, Ordering::Relaxed);
+
+        let selected = pool
+            .get()
+            .await
+            .expect("get should reuse queued connection");
+
+        assert!(Arc::ptr_eq(&selected, &conn));
+        assert_eq!(pool.active_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_closes_unavailable_connection_and_expands_replacement() {
+        let replacement = Arc::new(MockConnection::new(true, 0, 0));
+        let pool = make_pool(0, 2, 10, MockBuilder::new(vec![Ok(replacement.clone())]));
+        let stale = Arc::new(MockConnection::new(false, 0, 0));
+        pool.connections
+            .push(stale.clone())
+            .expect("queue should accept stale connection");
+        pool.active_count.store(1, Ordering::Relaxed);
+
+        let selected = pool
+            .get()
+            .await
+            .expect("get should expand a replacement connection");
+
+        assert!(Arc::ptr_eq(&selected, &replacement));
+        assert_eq!(stale.close_calls(), 1);
+        assert_eq!(pool.active_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_release_closes_unavailable_connection_instead_of_requeueing() {
+        let pool = make_pool(0, 2, 10, MockBuilder::new(vec![]));
+        let conn = Arc::new(MockConnection::new(false, 0, 0));
+        pool.active_count.store(1, Ordering::Relaxed);
+
+        pool.release(conn.clone());
+
+        assert_eq!(conn.close_calls(), 1);
+        assert_eq!(pool.connections.len(), 0);
+        assert_eq!(pool.active_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_maintain_drops_idle_and_invalid_connections() {
+        let pool = make_pool(0, 4, 0, MockBuilder::new(vec![]));
+        let idle = Arc::new(MockConnection::new(true, 0, 0));
+        let invalid = Arc::new(MockConnection::new(false, 0, 0));
+        pool.connections
+            .push(idle.clone())
+            .expect("queue should accept idle connection");
+        pool.connections
+            .push(invalid.clone())
+            .expect("queue should accept invalid connection");
+        pool.active_count.store(2, Ordering::Relaxed);
+
+        pool.maintain().await;
+
+        assert_eq!(idle.close_calls(), 1);
+        assert_eq!(invalid.close_calls(), 1);
+        assert_eq!(pool.connections.len(), 0);
+        assert_eq!(pool.active_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_maintain_reuses_idle_connection_to_preserve_min_size() {
+        let pool = make_pool(1, 1, 0, MockBuilder::new(vec![]));
+        let conn = Arc::new(MockConnection::new(true, 0, 0));
+        pool.connections
+            .push(conn.clone())
+            .expect("queue should accept connection");
+        pool.active_count.store(1, Ordering::Relaxed);
+
+        pool.maintain().await;
+
+        assert_eq!(conn.close_calls(), 0);
+        assert_eq!(pool.connections.len(), 1);
+        assert_eq!(pool.active_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_query_releases_connection_back_to_pool_after_success() {
+        let pool = make_pool(0, 1, 10, MockBuilder::new(vec![]));
+        let conn = Arc::new(MockConnection::new(true, 0, 0));
+        pool.connections
+            .push(conn.clone())
+            .expect("queue should accept connection");
+        pool.active_count.store(1, Ordering::Relaxed);
+        let mut request = Message::new();
+        request.set_id(21);
+
+        let response = pool
+            .query(request)
+            .await
+            .expect("query should return the mock response");
+
+        assert_eq!(response.id(), 21);
+        assert_eq!(conn.query_calls(), 1);
+        assert_eq!(pool.connections.len(), 1);
+    }
+}

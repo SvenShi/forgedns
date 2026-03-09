@@ -75,3 +75,16 @@ impl Matcher for TrueMatcher {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::test_registry;
+
+    #[test]
+    fn test_true_factory_rejects_non_empty_param() {
+        let factory = TrueMatcherFactory {};
+        let result = factory.quick_setup("tag", Some("unexpected".to_string()), test_registry());
+        assert!(result.is_err());
+    }
+}

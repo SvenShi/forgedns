@@ -397,3 +397,89 @@ impl RuleIndex {
 fn normalize_name(raw: &str) -> String {
     raw.trim().trim_end_matches('.').to_ascii_lowercase()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_registry;
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::{DNSClass, Name, RecordType};
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_parse_hosts_line_validation() {
+        assert!(parse_hosts_line("").is_err());
+        assert!(parse_hosts_line("full:example.com").is_err());
+        assert!(parse_hosts_line("full:example.com 1.1.1.1").is_ok());
+    }
+
+    fn make_context(name: &str, qtype: RecordType) -> DnsContext {
+        let mut request = Message::new();
+        let mut query = Query::query(Name::from_ascii(name).unwrap(), qtype);
+        query.set_query_class(DNSClass::IN);
+        request.add_query(query);
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hosts_execute_matches_and_returns_static_answer() {
+        let cfg = HostsConfig {
+            entries: vec!["full:example.com 1.1.1.1 ::1".to_string()],
+            files: vec![],
+        };
+        let (rules, index) = build_rules(&cfg).expect("rules should parse");
+        let plugin = HostsExecutor {
+            tag: "hosts".to_string(),
+            rules,
+            index,
+        };
+
+        let mut a_ctx = make_context("example.com.", RecordType::A);
+        let step = plugin
+            .execute(&mut a_ctx)
+            .await
+            .expect("execute should work");
+        assert!(matches!(step, ExecStep::Next));
+        let a_resp = a_ctx.response.expect("response should exist");
+        assert_eq!(a_resp.answers().len(), 1);
+        assert_eq!(a_resp.answers()[0].record_type(), RecordType::A);
+
+        let mut aaaa_ctx = make_context("example.com.", RecordType::AAAA);
+        plugin
+            .execute(&mut aaaa_ctx)
+            .await
+            .expect("execute should work");
+        let aaaa_resp = aaaa_ctx.response.expect("response should exist");
+        assert_eq!(aaaa_resp.answers().len(), 1);
+        assert_eq!(aaaa_resp.answers()[0].record_type(), RecordType::AAAA);
+    }
+
+    #[tokio::test]
+    async fn test_hosts_execute_no_match_keeps_response_empty() {
+        let cfg = HostsConfig {
+            entries: vec!["full:example.com 1.1.1.1".to_string()],
+            files: vec![],
+        };
+        let (rules, index) = build_rules(&cfg).expect("rules should parse");
+        let plugin = HostsExecutor {
+            tag: "hosts".to_string(),
+            rules,
+            index,
+        };
+
+        let mut ctx = make_context("other.com.", RecordType::A);
+        plugin.execute(&mut ctx).await.expect("execute should work");
+        assert!(ctx.response.is_none());
+    }
+}

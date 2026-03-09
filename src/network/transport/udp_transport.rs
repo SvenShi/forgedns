@@ -115,3 +115,62 @@ fn encode_message_with_max_payload(msg: &Message, max_payload: u16) -> Result<Ve
         .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
     Ok(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_proto::op::Query;
+    use hickory_proto::rr::rdata::A;
+    use hickory_proto::rr::{Name, RData, Record, RecordType};
+    use std::net::Ipv4Addr;
+
+    fn make_message(id: u16) -> Message {
+        let mut message = Message::new();
+        message.set_id(id);
+        message.add_query(Query::query(
+            Name::from_ascii("example.com.").expect("query name should be valid"),
+            RecordType::A,
+        ));
+        message
+    }
+
+    #[test]
+    fn test_encode_message_with_max_payload_round_trips_simple_message() {
+        let message = make_message(9);
+
+        let bytes = encode_message_with_max_payload(&message, 128)
+            .expect("message encoding should succeed");
+        let decoded =
+            Message::from_bytes(&bytes).expect("encoded message should decode successfully");
+
+        assert_eq!(decoded.id(), 9);
+        assert_eq!(
+            decoded
+                .query()
+                .expect("query should exist")
+                .name()
+                .to_utf8(),
+            "example.com."
+        );
+    }
+
+    #[test]
+    fn test_encode_message_with_small_payload_cap_sets_truncation_with_rfc_minimum() {
+        let mut message = make_message(15);
+        for octet in 1..=40 {
+            message.add_answer(Record::from_rdata(
+                Name::from_ascii("example.com.").expect("answer name should be valid"),
+                300,
+                RData::A(A::from(Ipv4Addr::new(192, 0, 2, octet))),
+            ));
+        }
+
+        let bytes = encode_message_with_max_payload(&message, 1)
+            .expect("message encoding should succeed");
+        let decoded =
+            Message::from_bytes(&bytes).expect("encoded message should decode successfully");
+
+        assert!(bytes.len() <= 512);
+        assert!(decoded.truncated());
+    }
+}

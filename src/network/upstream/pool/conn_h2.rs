@@ -215,3 +215,29 @@ async fn recv(response_future: ResponseFuture) -> Result<Bytes> {
         Ok(response_bytes.freeze())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_builder_new_uses_https_request_uri_and_flags() {
+        let mut connection_info = ConnectionInfo::with_addr("https://dns.example.com/dns-query")
+            .expect("connection info should parse");
+        connection_info.insecure_skip_verify = true;
+        connection_info.so_mark = Some(42);
+        connection_info.bind_to_device = Some("utun9".to_string());
+
+        let builder = H2ConnectionBuilder::new(&connection_info);
+
+        assert_eq!(builder.port, 443);
+        assert_eq!(builder.server_name, "dns.example.com");
+        assert_eq!(
+            builder.request_uri,
+            "https://dns.example.com/dns-query?dns="
+        );
+        assert!(builder.insecure_skip_verify);
+        assert_eq!(builder.so_mark, Some(42));
+        assert_eq!(builder.bind_to_device.as_deref(), Some("utun9"));
+    }
+}

@@ -407,3 +407,15 @@ const IPSET_ATTR_IPADDR_IPV6: u16 = 2;
 
 #[cfg(target_os = "linux")]
 const IPSET_FLAG_EXIST: u32 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_config_rejects_invalid_masks() {
+        assert!(validate_masks(33, 32).is_err());
+        assert!(validate_masks(24, 129).is_err());
+        assert!(validate_masks(24, 32).is_ok());
+    }
+}

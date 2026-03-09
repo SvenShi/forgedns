@@ -239,3 +239,90 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 fn parse_ptr_name(name: &Name) -> Option<IpAddr> {
     name.parse_arpa_name().ok().map(|net| net.addr())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_registry;
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::rdata::A;
+    use hickory_proto::rr::{Name, RData, Record};
+    use std::net::{Ipv4Addr, SocketAddr};
+    use tokio::sync::watch;
+
+    #[test]
+    fn test_parse_ptr_name_ipv4_and_invalid() {
+        let valid = Name::from_ascii("1.0.0.127.in-addr.arpa.").unwrap();
+        assert_eq!(
+            parse_ptr_name(&valid),
+            Some(IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)))
+        );
+
+        let invalid = Name::from_ascii("example.com.").unwrap();
+        assert!(parse_ptr_name(&invalid).is_none());
+    }
+
+    fn make_context(name: &str, qtype: RecordType) -> DnsContext {
+        let mut request = Message::new();
+        request.add_query(Query::query(Name::from_ascii(name).unwrap(), qtype));
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reverse_lookup_post_execute_caches_and_serves_ptr() {
+        let plugin = ReverseLookup {
+            tag: "reverse_lookup".to_string(),
+            cache: TtlCache::with_capacity(64),
+            size: 64,
+            ttl: 120,
+            handle_ptr: true,
+            cleanup_started: AtomicBool::new(false),
+            shutdown_tx: watch::channel(false).0,
+        };
+
+        let mut a_ctx = make_context("www.example.com.", RecordType::A);
+        let mut response = Message::new();
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("www.example.com.").unwrap(),
+            300,
+            RData::A(A(Ipv4Addr::new(8, 8, 4, 4))),
+        ));
+        a_ctx.response = Some(response);
+
+        plugin
+            .post_execute(&mut a_ctx, None)
+            .await
+            .expect("post_execute should succeed");
+        assert_eq!(
+            a_ctx
+                .response
+                .as_ref()
+                .expect("response should exist")
+                .answers()[0]
+                .ttl(),
+            120
+        );
+
+        let mut ptr_ctx = make_context("4.4.8.8.in-addr.arpa.", RecordType::PTR);
+        let step = plugin
+            .execute(&mut ptr_ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Stop));
+
+        let ptr_resp = ptr_ctx.response.expect("PTR response should be returned");
+        assert_eq!(ptr_resp.answers().len(), 1);
+        assert_eq!(ptr_resp.answers()[0].record_type(), RecordType::PTR);
+    }
+}

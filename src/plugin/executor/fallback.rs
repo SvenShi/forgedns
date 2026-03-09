@@ -306,3 +306,105 @@ async fn run_executor(
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::test_context;
+    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use async_trait::async_trait;
+
+    #[test]
+    fn test_fallback_factory_requires_args() {
+        let factory = FallbackFactory;
+        let cfg = plugin_config("fb", "fallback", None);
+        assert!(factory.create(&cfg, test_registry()).is_err());
+    }
+
+    #[derive(Debug)]
+    struct StubExecutor {
+        tag: String,
+        should_fail: bool,
+        produce_response: bool,
+    }
+
+    #[async_trait]
+    impl Plugin for StubExecutor {
+        fn tag(&self) -> &str {
+            &self.tag
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for StubExecutor {
+        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+            if self.should_fail {
+                return Err(DnsError::plugin("stub failed"));
+            }
+            if self.produce_response {
+                context.response = Some(hickory_proto::op::Message::new());
+            }
+            Ok(ExecStep::Next)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_executor_reports_success_and_errors() {
+        let success = run_executor(
+            Arc::new(StubExecutor {
+                tag: "ok".to_string(),
+                should_fail: false,
+                produce_response: true,
+            }),
+            test_context(),
+            "primary",
+        )
+        .await;
+        assert!(success.context.is_some());
+        assert!(success.error.is_none());
+
+        let no_response = run_executor(
+            Arc::new(StubExecutor {
+                tag: "noresp".to_string(),
+                should_fail: false,
+                produce_response: false,
+            }),
+            test_context(),
+            "secondary",
+        )
+        .await;
+        assert!(no_response.context.is_none());
+        assert!(
+            no_response
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("without response"))
+        );
+
+        let failed = run_executor(
+            Arc::new(StubExecutor {
+                tag: "err".to_string(),
+                should_fail: true,
+                produce_response: false,
+            }),
+            test_context(),
+            "primary",
+        )
+        .await;
+        assert!(failed.context.is_none());
+        assert!(
+            failed
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("stub failed"))
+        );
+    }
+}

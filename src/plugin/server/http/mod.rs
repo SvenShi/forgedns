@@ -436,3 +436,109 @@ pub fn extract_client_ip(
     }
     tcp_src
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use http::HeaderMap;
+    use serde_yml::from_str;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn test_http_factory_requires_args() {
+        let factory = HttpServerFactory {};
+        let cfg = plugin_config("http", "http_server", None);
+        assert!(factory.create(&cfg, test_registry()).is_err());
+    }
+
+    #[test]
+    fn test_http_factory_reports_all_executor_dependencies() {
+        let factory = HttpServerFactory {};
+        let args = from_str(
+            r#"
+entries:
+  - path: /dns-query
+    exec: exec_a
+  - path: /dns-alt
+    exec: exec_b
+listen: 127.0.0.1:443
+"#,
+        )
+        .expect("yaml should parse");
+        let cfg = plugin_config("http", "http_server", Some(args));
+
+        let deps = factory.get_dependency_specs(&cfg);
+
+        assert_eq!(deps.len(), 2);
+        assert_eq!(
+            deps[0],
+            DependencySpec::executor("args.entries[0].exec", "exec_a")
+        );
+        assert_eq!(
+            deps[1],
+            DependencySpec::executor("args.entries[1].exec", "exec_b")
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_prefers_socket_addr_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-real-ip",
+            "198.51.100.10:8443".parse().expect("header should parse"),
+        );
+        let src = SocketAddr::from(([127, 0, 0, 1], 443));
+
+        let client = extract_client_ip(&headers, &Some("x-real-ip".to_string()), src);
+
+        assert_eq!(client, SocketAddr::from(([198, 51, 100, 10], 8443)));
+    }
+
+    #[test]
+    fn test_extract_client_ip_uses_ip_only_header_with_tcp_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-real-ip",
+            "198.51.100.11".parse().expect("header should parse"),
+        );
+        let src = SocketAddr::from(([127, 0, 0, 1], 443));
+
+        let client = extract_client_ip(&headers, &Some("x-real-ip".to_string()), src);
+
+        assert_eq!(
+            client,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 11)), 443)
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_uses_first_forwarded_for_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.10, 198.51.100.20"
+                .parse()
+                .expect("header should parse"),
+        );
+        let src = SocketAddr::from(([127, 0, 0, 1], 443));
+
+        let client = extract_client_ip(&headers, &Some("x-forwarded-for".to_string()), src);
+
+        assert_eq!(client, SocketAddr::from(([203, 0, 113, 10], 443)));
+    }
+
+    #[test]
+    fn test_extract_client_ip_falls_back_to_tcp_source_on_invalid_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-real-ip",
+            "not-an-ip".parse().expect("header should parse"),
+        );
+        let src = SocketAddr::from(([127, 0, 0, 1], 443));
+
+        let client = extract_client_ip(&headers, &Some("x-real-ip".to_string()), src);
+
+        assert_eq!(client, src);
+    }
+}

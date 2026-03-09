@@ -75,3 +75,26 @@ impl PluginFactory for DropRespFactory {
         })))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::executor::ExecStep;
+    use crate::plugin::test_utils::test_context;
+
+    #[tokio::test]
+    async fn test_execute_clears_response() {
+        let plugin = DropResp {
+            tag: "drop_resp".to_string(),
+        };
+        let mut ctx = test_context();
+        ctx.response = Some(hickory_proto::op::Message::new());
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Next));
+        assert!(ctx.response.is_none());
+    }
+}

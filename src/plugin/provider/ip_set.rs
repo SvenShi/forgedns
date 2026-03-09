@@ -286,8 +286,18 @@ fn normalize_rule_line(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
-    use std::time::Instant;
+    use crate::plugin::provider::provider_utils::for_each_nonempty_rule_text;
+
+    fn load_rules_text(matcher: &mut IpMatcher, source_name: &str, content: &str) -> DnsResult<()> {
+        for_each_nonempty_rule_text(content, |raw, line_no| {
+            let rule = normalize_rule_line(raw);
+            if rule.is_empty() {
+                return Ok(());
+            }
+            let source = format!("file '{}', line {}", source_name, line_no);
+            matcher.add_ip_rule(rule, &source)
+        })
+    }
 
     #[test]
     fn test_ipv4_and_ipv6_match() {
@@ -323,11 +333,8 @@ mod tests {
 
     #[test]
     fn test_file_line_error_has_line_number() {
-        let path = std::env::temp_dir().join("forgedns-ip-set-test.txt");
-        std::fs::write(&path, "1.1.1.1\n2001::1/200\n").unwrap();
-
         let mut m = IpMatcher::default();
-        let err = m.load_file(path.to_str().unwrap()).unwrap_err();
+        let err = load_rules_text(&mut m, "inline-ip-test", "1.1.1.1\n2001::1/200\n").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("line 2"),
@@ -344,80 +351,13 @@ mod tests {
 
     #[test]
     fn test_inline_comment_in_file() {
-        let path = std::env::temp_dir().join("forgedns-ip-set-comment-test.txt");
-        std::fs::write(&path, "1.1.1.1 # test\n# ignore\n\n").unwrap();
-
         let mut m = IpMatcher::default();
-        m.load_file(path.to_str().unwrap()).unwrap();
+        load_rules_text(
+            &mut m,
+            "inline-ip-comment-test",
+            "1.1.1.1 # test\n# ignore\n\n",
+        )
+        .unwrap();
         assert!(m.contains_ip("1.1.1.1".parse().unwrap()));
-    }
-
-    #[test]
-    #[ignore]
-    fn benchmark_ip_set_million_rules() {
-        let rule_count = std::env::var("FORGEDNS_IP_BENCH_RULES")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1_000_000);
-        let query_count = std::env::var("FORGEDNS_IP_BENCH_QUERIES")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(500_000);
-
-        let build_start = Instant::now();
-        let mut matcher = IpMatcher::default();
-        for i in 0..rule_count {
-            let ip = Ipv4Addr::from((i as u32) << 8);
-            let rule = format!("{}/24", ip);
-            matcher.add_ip_rule(&rule, "bench").unwrap();
-        }
-        matcher.add_ip_rule("2001:db8::/32", "bench").unwrap();
-        let build_elapsed = build_start.elapsed();
-
-        let mut queries = Vec::with_capacity(query_count);
-        for i in 0..query_count {
-            if i % 4 == 0 {
-                let n = (i % rule_count) as u32;
-                queries.push(IpAddr::V4(Ipv4Addr::from((n << 8) | 88)));
-            } else if i % 4 == 1 {
-                queries.push(IpAddr::V4(Ipv4Addr::from(
-                    0xC000_0000u32.wrapping_add(i as u32),
-                )));
-            } else if i % 4 == 2 {
-                queries.push(IpAddr::V6("2001:db8::1234".parse().unwrap()));
-            } else {
-                queries.push(IpAddr::V6("2001:db9::1".parse().unwrap()));
-            }
-        }
-
-        let warmup_start = Instant::now();
-        let mut warmup_hits = 0usize;
-        for ip in &queries {
-            if matcher.contains_ip(*ip) {
-                warmup_hits += 1;
-            }
-        }
-        let warmup_elapsed = warmup_start.elapsed();
-
-        let start = Instant::now();
-        let mut hits = 0usize;
-        for ip in &queries {
-            if matcher.contains_ip(*ip) {
-                hits += 1;
-            }
-        }
-        let elapsed = start.elapsed();
-        let qps = (query_count as f64) / elapsed.as_secs_f64();
-        println!(
-            "ip_set bench: rules={}, queries={}, hits={}, warmup_hits={}, build={:.3}s, warmup={:.3}s, elapsed={:.3}s, qps={:.2}",
-            rule_count,
-            query_count,
-            hits,
-            warmup_hits,
-            build_elapsed.as_secs_f64(),
-            warmup_elapsed.as_secs_f64(),
-            elapsed.as_secs_f64(),
-            qps
-        );
     }
 }

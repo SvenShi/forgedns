@@ -186,3 +186,80 @@ fn parse_name(args: Option<serde_yml::Value>) -> Option<String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_context;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn test_parse_name_trims_and_filters_empty() {
+        assert_eq!(parse_name(None), None);
+        assert_eq!(
+            parse_name(Some(serde_yml::Value::String(" a ".into()))),
+            Some("a".into())
+        );
+        assert_eq!(
+            parse_name(Some(serde_yml::Value::String("   ".into()))),
+            None
+        );
+    }
+
+    fn make_collector() -> MetricsCollector {
+        MetricsCollector {
+            tag: "metrics".to_string(),
+            name: "default".to_string(),
+            query_total: AtomicU64::new(0),
+            err_total: AtomicU64::new(0),
+            inflight: AtomicU64::new(0),
+            latency_count: AtomicU64::new(0),
+            latency_sum_ms: AtomicU64::new(0),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_metrics_collector_records_error_path() {
+        let plugin = make_collector();
+        let mut ctx = test_context();
+
+        let step = plugin.execute(&mut ctx).await.expect("execute should work");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+        assert_eq!(plugin.query_total.load(Ordering::Relaxed), 1);
+        assert_eq!(plugin.inflight.load(Ordering::Relaxed), 1);
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post execute should work");
+
+        assert_eq!(plugin.inflight.load(Ordering::Relaxed), 0);
+        assert_eq!(plugin.err_total.load(Ordering::Relaxed), 1);
+        assert_eq!(plugin.latency_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_collector_records_success_latency() {
+        let plugin = make_collector();
+        let mut ctx = test_context();
+        ctx.response = Some(hickory_proto::op::Message::new());
+
+        let step = plugin.execute(&mut ctx).await.expect("execute should work");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post execute should work");
+
+        assert_eq!(plugin.err_total.load(Ordering::Relaxed), 0);
+        assert_eq!(plugin.latency_count.load(Ordering::Relaxed), 1);
+    }
+}

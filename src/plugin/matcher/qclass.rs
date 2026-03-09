@@ -88,3 +88,49 @@ impl Matcher for QclassMatcher {
             .any(|q| self.qclasses.contains(&u16::from(q.query_class())))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::{DnsContext, ExecFlowState};
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::{DNSClass, Name, RecordType};
+    use std::net::SocketAddr;
+
+    fn make_context(qclass: DNSClass) -> DnsContext {
+        let mut request = Message::new();
+        let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), RecordType::A);
+        query.set_query_class(qclass);
+        request.add_query(query);
+
+        DnsContext {
+            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: Arc::new(PluginRegistry::new()),
+        }
+    }
+
+    #[test]
+    fn test_build_qclass_matcher_rejects_empty_rules() {
+        assert!(build_qclass_matcher("qclass".to_string(), vec![]).is_err());
+    }
+
+    #[test]
+    fn test_qclass_matcher_checks_query_class() {
+        let matcher = QclassMatcher {
+            tag: "qclass".to_string(),
+            qclasses: [u16::from(DNSClass::CH)].into_iter().collect(),
+        };
+
+        let mut in_ctx = make_context(DNSClass::IN);
+        assert!(!matcher.is_match(&mut in_ctx));
+
+        let mut ch_ctx = make_context(DNSClass::CH);
+        assert!(matcher.is_match(&mut ch_ctx));
+    }
+}

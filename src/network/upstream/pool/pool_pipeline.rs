@@ -226,32 +226,34 @@ impl<C: Connection> PipelinePool<C> {
             return Ok(());
         }
 
-        // Lock-free atomic update with RCU pattern
-        let added_count = self
-            .connections
-            .rcu(|old_conns| {
-                let current_len = old_conns.len();
-                if current_len >= self.max_size {
-                    return old_conns.clone();
-                }
+        // Lock-free atomic update with RCU pattern. arc-swap returns the previous
+        // value from `rcu`, so track the number of inserted connections explicitly.
+        let inserted_count = AtomicUsize::new(0);
+        self.connections.rcu(|old_conns| {
+            let current_len = old_conns.len();
+            if current_len >= self.max_size {
+                inserted_count.store(0, Ordering::Relaxed);
+                return old_conns.clone();
+            }
 
-                let space = self.max_size - current_len;
-                let to_add = created.len().min(space);
+            let space = self.max_size - current_len;
+            let to_add = created.len().min(space);
+            inserted_count.store(to_add, Ordering::Relaxed);
 
-                let mut new_vec = Vec::with_capacity(current_len + to_add);
-                new_vec.extend_from_slice(&old_conns);
-                new_vec.extend(created.iter().take(to_add).cloned());
+            let mut new_vec = Vec::with_capacity(current_len + to_add);
+            new_vec.extend_from_slice(&old_conns);
+            new_vec.extend(created.iter().take(to_add).cloned());
 
-                debug!(
-                    "Pipeline pool expanded: +{} connections (total={}/{})",
-                    to_add,
-                    new_vec.len(),
-                    self.max_size
-                );
+            debug!(
+                "Pipeline pool expanded: +{} connections (total={}/{})",
+                to_add,
+                new_vec.len(),
+                self.max_size
+            );
 
-                Arc::new(new_vec)
-            })
-            .len();
+            Arc::new(new_vec)
+        });
+        let added_count = inserted_count.load(Ordering::Relaxed);
 
         // Close any leftover connections
         if created.len() > added_count {
@@ -260,5 +262,199 @@ impl<C: Connection> PipelinePool<C> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    #[derive(Debug)]
+    struct MockConnection {
+        available: AtomicBool,
+        using_count: AtomicU16,
+        last_used: AtomicU64,
+        close_calls: AtomicUsize,
+    }
+
+    impl MockConnection {
+        fn new(available: bool, using_count: u16, last_used: u64) -> Self {
+            Self {
+                available: AtomicBool::new(available),
+                using_count: AtomicU16::new(using_count),
+                last_used: AtomicU64::new(last_used),
+                close_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn close_calls(&self) -> usize {
+            self.close_calls.load(Ordering::Relaxed)
+        }
+    }
+
+    #[async_trait]
+    impl Connection for MockConnection {
+        fn close(&self) {
+            self.close_calls.fetch_add(1, Ordering::Relaxed);
+            self.available.store(false, Ordering::Relaxed);
+        }
+
+        async fn query(&self, request: Message) -> Result<Message> {
+            Ok(request)
+        }
+
+        fn using_count(&self) -> u16 {
+            self.using_count.load(Ordering::Relaxed)
+        }
+
+        fn available(&self) -> bool {
+            self.available.load(Ordering::Relaxed)
+        }
+
+        fn last_used(&self) -> u64 {
+            self.last_used.load(Ordering::Relaxed)
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockBuilder {
+        planned: Mutex<VecDeque<Result<Arc<MockConnection>>>>,
+    }
+
+    impl MockBuilder {
+        fn new(planned: Vec<Result<Arc<MockConnection>>>) -> Self {
+            Self {
+                planned: Mutex::new(planned.into()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ConnectionBuilder<MockConnection> for MockBuilder {
+        async fn create_connection(&self, _conn_id: u16) -> Result<Arc<MockConnection>> {
+            self.planned
+                .lock()
+                .expect("builder plan lock should not be poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err(DnsError::runtime("no planned connection")))
+        }
+    }
+
+    fn make_pool(
+        min_size: usize,
+        max_size: usize,
+        max_load: u16,
+        idle_secs: u64,
+        builder: MockBuilder,
+        initial_connections: Vec<Arc<MockConnection>>,
+    ) -> PipelinePool<MockConnection> {
+        PipelinePool {
+            index: AtomicUsize::new(0),
+            connections: ArcSwap::from_pointee(initial_connections),
+            max_size,
+            min_size,
+            max_load,
+            max_idle: Duration::from_secs(idle_secs),
+            connection_builder: Box::new(builder),
+            next_id: AtomicU16::new(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_uses_round_robin_across_connections() {
+        let first = Arc::new(MockConnection::new(true, 0, 0));
+        let second = Arc::new(MockConnection::new(true, 0, 0));
+        let pool = make_pool(
+            0,
+            2,
+            4,
+            10,
+            MockBuilder::new(vec![]),
+            vec![first.clone(), second.clone()],
+        );
+
+        let selected_first = pool.get().await.expect("first get should succeed");
+        let selected_second = pool.get().await.expect("second get should succeed");
+
+        assert!(Arc::ptr_eq(&selected_first, &first));
+        assert!(Arc::ptr_eq(&selected_second, &second));
+    }
+
+    #[tokio::test]
+    async fn test_get_expands_when_pool_is_empty() {
+        let created = Arc::new(MockConnection::new(true, 0, 0));
+        let pool = make_pool(
+            0,
+            1,
+            4,
+            10,
+            MockBuilder::new(vec![Ok(created.clone())]),
+            vec![],
+        );
+
+        let selected = tokio::time::timeout(Duration::from_millis(100), pool.get())
+            .await
+            .expect("get should not hang on empty-pool expansion")
+            .expect("get should expand an empty pool");
+
+        assert!(Arc::ptr_eq(&selected, &created));
+        assert_eq!(pool.connections.load().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_skips_saturated_connections_and_uses_expanded_one() {
+        let saturated_a = Arc::new(MockConnection::new(true, 2, 0));
+        let saturated_b = Arc::new(MockConnection::new(true, 2, 0));
+        let created = Arc::new(MockConnection::new(true, 0, 0));
+        let pool = make_pool(
+            0,
+            3,
+            2,
+            10,
+            MockBuilder::new(vec![Ok(created.clone())]),
+            vec![saturated_a, saturated_b],
+        );
+
+        let selected = tokio::time::timeout(Duration::from_millis(100), pool.get())
+            .await
+            .expect("get should not hang when expanding under saturation")
+            .expect("get should expand when all connections are saturated");
+
+        assert!(Arc::ptr_eq(&selected, &created));
+        assert_eq!(pool.connections.load().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_maintain_drops_idle_and_invalid_connections() {
+        let idle = Arc::new(MockConnection::new(true, 0, 0));
+        let invalid = Arc::new(MockConnection::new(false, 0, 0));
+        let pool = make_pool(
+            0,
+            4,
+            4,
+            0,
+            MockBuilder::new(vec![]),
+            vec![idle.clone(), invalid.clone()],
+        );
+
+        pool.maintain().await;
+
+        assert_eq!(idle.close_calls(), 1);
+        assert_eq!(invalid.close_calls(), 1);
+        assert!(pool.connections.load().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_maintain_reuses_idle_connection_to_preserve_min_size() {
+        let conn = Arc::new(MockConnection::new(true, 0, 0));
+        let pool = make_pool(1, 1, 4, 0, MockBuilder::new(vec![]), vec![conn.clone()]);
+
+        pool.maintain().await;
+
+        assert_eq!(conn.close_calls(), 0);
+        assert_eq!(pool.connections.load().len(), 1);
     }
 }

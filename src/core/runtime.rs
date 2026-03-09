@@ -32,3 +32,29 @@ pub struct Options {
     #[clap(short, long)]
     pub log_level: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_options_parse_uses_default_config_path() {
+        let args = ["forgedns"];
+
+        let options = Options::parse_from(args);
+
+        assert_eq!(options.config, PathBuf::from("config.yaml"));
+        assert_eq!(options.log_level, None);
+    }
+
+    #[test]
+    fn test_options_parse_accepts_explicit_config_and_log_level() {
+        let args = ["forgedns", "-c", "custom.yaml", "-l", "debug"];
+
+        let options = Options::parse_from(args);
+
+        assert_eq!(options.config, PathBuf::from("custom.yaml"));
+        assert_eq!(options.log_level.as_deref(), Some("debug"));
+    }
+}

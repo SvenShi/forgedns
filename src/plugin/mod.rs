@@ -20,6 +20,9 @@ pub mod provider;
 pub mod registry;
 pub mod server;
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 use crate::config::types::{Config, PluginConfig};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
@@ -359,5 +362,38 @@ impl PluginInfo {
     /// Get reference to underlying Plugin trait object
     pub fn as_plugin(&self) -> &dyn Plugin {
         self.plugin_holder.as_plugin()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dependency_kind_from_module_path_for_all_registered_plugins() {
+        let mut server_count = 0usize;
+        let mut executor_count = 0usize;
+        let mut matcher_count = 0usize;
+        let mut provider_count = 0usize;
+
+        for registration in inventory::iter::<FactoryRegistration> {
+            match dependency_kind_from_module_path(registration.module_path) {
+                dependency::DependencyKind::Server => server_count += 1,
+                dependency::DependencyKind::Executor => executor_count += 1,
+                dependency::DependencyKind::Matcher => matcher_count += 1,
+                dependency::DependencyKind::Provider => provider_count += 1,
+                dependency::DependencyKind::Any | dependency::DependencyKind::Unknown => {
+                    panic!(
+                        "plugin type '{}' from '{}' resolved to unsupported kind",
+                        registration.plugin_type, registration.module_path
+                    )
+                }
+            }
+        }
+
+        assert!(server_count > 0, "server plugins should be registered");
+        assert!(executor_count > 0, "executor plugins should be registered");
+        assert!(matcher_count > 0, "matcher plugins should be registered");
+        assert!(provider_count > 0, "provider plugins should be registered");
     }
 }

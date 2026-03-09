@@ -236,3 +236,126 @@ fn split_tokens(raw: &str) -> Vec<&str> {
         .filter(|s| !s.is_empty())
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_registry;
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::rdata::opt::ClientSubnet;
+    use hickory_proto::rr::{Name, RecordType};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_parse_codes_from_value_validation() {
+        assert!(parse_codes_from_value(Some(serde_yml::Value::String("x".into()))).is_err());
+        assert!(
+            parse_codes_from_value(Some(serde_yml::from_str("codes: [8, 15]").unwrap())).is_ok()
+        );
+    }
+
+    fn make_context() -> DnsContext {
+        let mut request = Message::new();
+        request.add_query(Query::query(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+        ));
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    fn add_ecs(message: &mut Message, ip: Ipv4Addr, mask: u8) {
+        let opt = ensure_opt_record(message);
+        opt.insert(EdnsOption::Subnet(ClientSubnet::new(
+            IpAddr::V4(ip),
+            mask,
+            0,
+        )));
+    }
+
+    fn count_code(message: &Message, code: u16) -> usize {
+        let mut total = 0usize;
+        for record in message.additionals() {
+            let RData::OPT(opt) = record.data() else {
+                continue;
+            };
+            for (_, option) in opt.as_ref() {
+                if u16::from(EdnsCode::from(option)) == code {
+                    total += 1;
+                }
+            }
+        }
+        total
+    }
+
+    #[tokio::test]
+    async fn test_forward_edns0opt_moves_selected_request_options_to_response() {
+        let plugin = ForwardEdns0Opt {
+            tag: "forward_opt".to_string(),
+            code_set: [8u16].into_iter().collect(),
+        };
+        let mut ctx = make_context();
+        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        ctx.response = Some(Message::new());
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+        assert_eq!(
+            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forward_edns0opt_post_execute_deduplicates_existing_code() {
+        let plugin = ForwardEdns0Opt {
+            tag: "forward_opt".to_string(),
+            code_set: [8u16].into_iter().collect(),
+        };
+        let mut ctx = make_context();
+        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        let mut response = Message::new();
+        add_ecs(&mut response, Ipv4Addr::new(2, 2, 2, 2), 24);
+        ctx.response = Some(response);
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+        assert_eq!(
+            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            1
+        );
+    }
+}

@@ -130,6 +130,7 @@ impl Matcher for RespIpMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::matcher::Matcher;
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::rdata::A;
     use hickory_proto::rr::{Name, RData, Record, RecordType};
@@ -174,5 +175,29 @@ mod tests {
         ctx.response = Some(response);
 
         assert!(!matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_resp_ip_matcher_matches_a_record_and_requires_response() {
+        let matcher = RespIpMatcher {
+            tag: "resp_ip".into(),
+            ip_rules: parse_ip_prefix_matcher("resp_ip", &["8.8.8.0/24".into()]).unwrap(),
+            ip_set_tags: vec![],
+            ip_sets: vec![],
+            registry: Arc::new(PluginRegistry::new()),
+        };
+
+        let mut no_response_ctx = make_context();
+        assert!(!matcher.is_match(&mut no_response_ctx));
+
+        let mut hit_ctx = make_context();
+        let mut response = Message::new();
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            60,
+            RData::A(A(Ipv4Addr::new(8, 8, 8, 8))),
+        ));
+        hit_ctx.response = Some(response);
+        assert!(matcher.is_match(&mut hit_ctx));
     }
 }

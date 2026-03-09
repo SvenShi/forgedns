@@ -93,15 +93,18 @@ impl Matcher for QtypeMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::matcher::Matcher;
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::{DNSClass, Name, RecordType};
     use std::net::SocketAddr;
 
-    fn make_context(qtype: RecordType) -> DnsContext {
+    fn make_context(qtypes: &[RecordType]) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), qtype);
-        query.set_query_class(DNSClass::IN);
-        request.add_query(query);
+        for qtype in qtypes {
+            let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), *qtype);
+            query.set_query_class(DNSClass::IN);
+            request.add_query(query);
+        }
 
         DnsContext {
             src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
@@ -121,7 +124,22 @@ mod tests {
             tag: "qtype".into(),
             qtypes: [u16::from(RecordType::AAAA)].into_iter().collect(),
         };
-        let mut ctx = make_context(RecordType::A);
+        let mut ctx = make_context(&[RecordType::A]);
         assert!(!matcher.is_match(&mut ctx));
+    }
+
+    #[test]
+    fn test_build_qtype_matcher_rejects_empty_rules() {
+        assert!(build_qtype_matcher("qtype".to_string(), vec![]).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_qtype_matcher_matches_when_any_query_type_matches() {
+        let matcher = QtypeMatcher {
+            tag: "qtype".into(),
+            qtypes: [u16::from(RecordType::AAAA)].into_iter().collect(),
+        };
+        let mut ctx = make_context(&[RecordType::A, RecordType::AAAA]);
+        assert!(matcher.is_match(&mut ctx));
     }
 }

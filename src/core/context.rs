@@ -207,6 +207,15 @@ impl DnsContext {
     }
 
     /// Normalize DNS name for domain-rule matching.
+    ///
+    /// # Examples
+    /// ```
+    /// use forgedns::core::context::DnsContext;
+    /// use hickory_proto::rr::Name;
+    ///
+    /// let name = Name::from_ascii("WWW.Example.COM.").unwrap();
+    /// assert_eq!(DnsContext::normalize_dns_name(&name), "www.example.com");
+    /// ```
     pub fn normalize_dns_name(name: &Name) -> String {
         let mut s = name.to_lowercase().to_utf8();
         if s.ends_with('.') {
@@ -233,5 +242,55 @@ impl DnsContext {
             normalized_name,
             label_ranges_rev,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::PluginRegistry;
+    use hickory_proto::op::Query;
+    use hickory_proto::rr::RecordType;
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::Arc;
+
+    fn make_context() -> DnsContext {
+        let mut request = Message::new();
+        request.add_query(Query::query(
+            Name::from_ascii("WWW.Example.COM.").unwrap(),
+            RecordType::A,
+        ));
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: AHashMap::new(),
+            query_view: None,
+            registry: Arc::new(PluginRegistry::new()),
+        }
+    }
+
+    #[test]
+    fn test_query_view_normalization_and_labels() {
+        let mut ctx = make_context();
+        let view = ctx.query_view().expect("query view should exist");
+        assert_eq!(view.normalized_name(), "www.example.com");
+        assert_eq!(view.labels_rev().as_slice(), ["com", "example", "www"]);
+    }
+
+    #[test]
+    fn test_set_first_query_name_invalidates_view() {
+        let mut ctx = make_context();
+        let _ = ctx.query_view();
+        assert!(ctx.query_view.is_some());
+
+        assert!(ctx.set_first_query_name(Name::from_ascii("api.example.com.").unwrap()));
+        assert!(ctx.query_view.is_none());
+        assert_eq!(
+            ctx.query_view().unwrap().normalized_name(),
+            "api.example.com"
+        );
     }
 }

@@ -103,3 +103,35 @@ impl Matcher for MarkMatcher {
         !context.marks.is_disjoint(&self.marks)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::test_context;
+
+    #[test]
+    fn test_parse_mark_values_validation() {
+        assert!(parse_mark_values(&[]).is_err());
+        assert!(parse_mark_values(&["abc".to_string()]).is_err());
+
+        let parsed = parse_mark_values(&["1".to_string(), " 2 ".to_string()])
+            .expect("numeric marks should parse");
+        assert!(parsed.contains("1"));
+        assert!(parsed.contains("2"));
+    }
+
+    #[test]
+    fn test_mark_matcher_checks_mark_intersection() {
+        let matcher = MarkMatcher {
+            tag: "mark".to_string(),
+            marks: ["1".to_string(), "2".to_string()].into_iter().collect(),
+        };
+
+        let mut ctx = test_context();
+        ctx.marks.insert("3".to_string());
+        assert!(!matcher.is_match(&mut ctx));
+
+        ctx.marks.insert("1".to_string());
+        assert!(matcher.is_match(&mut ctx));
+    }
+}

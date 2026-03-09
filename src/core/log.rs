@@ -116,3 +116,27 @@ where
         writeln!(writer)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing_subscriber::fmt::format;
+
+    #[test]
+    fn test_civil_from_days_converts_unix_epoch() {
+        let date = civil_from_days(0);
+
+        assert_eq!(date, (1970, 1, 1));
+    }
+
+    #[test]
+    fn test_write_utc_iso8601_formats_expected_timestamp() {
+        let mut output = String::new();
+        let mut writer = format::Writer::new(&mut output);
+
+        write_utc_iso8601(&mut writer, 86_400 + 3661, 234)
+            .expect("timestamp formatting should succeed");
+
+        assert_eq!(output, "1970-01-02T01:01:01.234Z");
+    }
+}

@@ -362,9 +362,11 @@ where
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{Name, RecordType};
-    use std::net::SocketAddr;
+    use crate::plugin::matcher::Matcher;
+    use hickory_proto::op::{Message, Query, ResponseCode};
+    use hickory_proto::rr::rdata::A;
+    use hickory_proto::rr::{Name, RData, Record, RecordType};
+    use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
@@ -383,6 +385,17 @@ mod tests {
             query_view: None,
             registry: Arc::new(PluginRegistry::new()),
         }
+    }
+
+    fn add_response_with_ip_and_rcode(ctx: &mut DnsContext, ip: Ipv4Addr, rcode: ResponseCode) {
+        let mut response = Message::new();
+        response.set_response_code(rcode);
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("www.example.com.").unwrap(),
+            60,
+            RData::A(A(ip)),
+        ));
+        ctx.response = Some(response);
     }
 
     #[tokio::test]
@@ -405,5 +418,98 @@ mod tests {
         };
         let mut ctx = make_context();
         assert!(matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_string_exp_supports_multiple_sources_and_operations() {
+        let mut ctx = make_context();
+        ctx.set_attr(DnsContext::ATTR_SERVER_NAME, "dns.example.com".to_string());
+        ctx.set_attr(DnsContext::ATTR_URL_PATH, "/dns-query".to_string());
+        add_response_with_ip_and_rcode(&mut ctx, Ipv4Addr::new(8, 8, 8, 8), ResponseCode::NoError);
+
+        let qtype_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("qtype eq 1").unwrap(),
+            env_cache: None,
+        };
+        assert!(qtype_matcher.is_match(&mut ctx));
+
+        let qclass_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("qclass eq 1").unwrap(),
+            env_cache: None,
+        };
+        assert!(qclass_matcher.is_match(&mut ctx));
+
+        let client_ip_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("client_ip prefix 127.0.0.").unwrap(),
+            env_cache: None,
+        };
+        assert!(client_ip_matcher.is_match(&mut ctx));
+
+        let rcode_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("rcode eq 0").unwrap(),
+            env_cache: None,
+        };
+        assert!(rcode_matcher.is_match(&mut ctx));
+
+        let resp_ip_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("resp_ip contains 8.8.8").unwrap(),
+            env_cache: None,
+        };
+        assert!(resp_ip_matcher.is_match(&mut ctx));
+
+        let server_name_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("server_name suffix example.com").unwrap(),
+            env_cache: None,
+        };
+        assert!(server_name_matcher.is_match(&mut ctx));
+
+        let url_path_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("url_path prefix /dns").unwrap(),
+            env_cache: None,
+        };
+        assert!(url_path_matcher.is_match(&mut ctx));
+
+        let mark_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("mark contains 1").unwrap(),
+            env_cache: None,
+        };
+        assert!(mark_matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_string_exp_supports_zl_and_env_cache() {
+        let mut ctx = make_context();
+
+        let zl_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("url_path zl").unwrap(),
+            env_cache: None,
+        };
+        assert!(zl_matcher.is_match(&mut ctx));
+
+        let env_matcher = StringExpMatcher {
+            tag: "string_exp".into(),
+            expression: parse_string_expression("$UNIT_TEST_ENV eq expected").unwrap(),
+            env_cache: Some("expected".to_string()),
+        };
+        assert!(env_matcher.is_match(&mut ctx));
+    }
+
+    #[test]
+    fn test_parse_string_expression_validation_errors() {
+        assert!(parse_string_expression("").is_err());
+        assert!(parse_string_expression("qname").is_err());
+        assert!(parse_string_expression("unsupported eq v").is_err());
+        assert!(parse_string_expression("qname unsupported value").is_err());
+        assert!(parse_string_expression("qname regexp (").is_err());
+        assert!(parse_string_expression("qname zl not_allowed").is_err());
     }
 }

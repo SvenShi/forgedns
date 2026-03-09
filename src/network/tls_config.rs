@@ -239,3 +239,29 @@ impl ServerCertVerifier for NoCertVerification {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_tls_config_option_validation() {
+        assert!(load_tls_config(&None, &None).is_none());
+        assert!(
+            load_tls_config(&Some("cert.pem".into()), &None)
+                .expect("should return error")
+                .is_err()
+        );
+        assert!(
+            load_tls_config(&None, &Some("key.pem".into()))
+                .expect("should return error")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_insecure_client_config_enables_early_data() {
+        let cfg = insecure_client_config();
+        assert!(cfg.enable_early_data);
+    }
+}

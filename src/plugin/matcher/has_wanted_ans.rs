@@ -107,3 +107,52 @@ impl Matcher for HasWantedAnsMatcher {
             .any(|rr| wanted.contains(&u16::from(rr.record_type())))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::{test_context, test_registry};
+    use hickory_proto::op::Query;
+    use hickory_proto::rr::rdata::A;
+    use hickory_proto::rr::{Name, RData, Record, RecordType};
+
+    #[test]
+    fn test_has_wanted_ans_quick_setup_rejects_param() {
+        let factory = HasWantedAnsFactory {};
+        assert!(
+            factory
+                .quick_setup(
+                    "has_wanted_ans",
+                    Some("unexpected".to_string()),
+                    test_registry(),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_has_wanted_ans_matches_answer_type_against_query() {
+        let matcher = HasWantedAnsMatcher {
+            tag: "wanted".to_string(),
+        };
+        let mut ctx = test_context();
+        ctx.request.queries_mut().clear();
+        ctx.request.add_query(Query::query(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+        ));
+
+        let mut response = hickory_proto::op::Message::new();
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            60,
+            RData::A(A::new(1, 1, 1, 1)),
+        ));
+        ctx.response = Some(response);
+
+        assert!(matcher.is_match(&mut ctx));
+
+        ctx.response = Some(hickory_proto::op::Message::new());
+        assert!(!matcher.is_match(&mut ctx));
+    }
+}

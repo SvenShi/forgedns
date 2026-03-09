@@ -111,16 +111,19 @@ impl AppClock {
     }
 }
 
-#[tokio::test]
-async fn test() {
+#[tokio::test(start_paused = true)]
+async fn test_elapsed_millis_advances_with_runtime_time() {
     AppClock::start();
+    tokio::task::yield_now().await;
 
-    for _ in 0..5 {
-        println!("ms = {}", AppClock::elapsed_millis());
-        println!("dur = {:?}", AppClock::elapsed());
-        println!("now = {:?}", AppClock::now());
-        println!("now_precise = {:?}", AppClock::now_precise());
+    let initial = AppClock::elapsed_millis();
+    let initial_now = AppClock::now();
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    tokio::time::sleep(Duration::from_millis(35)).await;
+    tokio::task::yield_now().await;
+
+    let advanced = AppClock::elapsed_millis();
+    assert!(advanced >= initial.saturating_add(DEFAULT_CLOCK_TICK_MS * 2));
+    assert!(AppClock::elapsed() >= Duration::from_millis(advanced));
+    assert!(AppClock::now() >= initial_now);
 }

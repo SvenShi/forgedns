@@ -285,3 +285,16 @@ impl PluginFactory for UdpServerFactory {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::{plugin_config, test_registry};
+
+    #[test]
+    fn test_udp_factory_requires_args() {
+        let factory = UdpServerFactory {};
+        let cfg = plugin_config("udp", "udp_server", None);
+        assert!(factory.create(&cfg, test_registry()).is_err());
+    }
+}

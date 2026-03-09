@@ -295,3 +295,192 @@ async fn handle_http_stream<S>(
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::DnsContext;
+    use crate::core::dns_utils::build_response_from_request;
+    use crate::core::error::Result;
+    use crate::plugin::Plugin;
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::server::RequestHandle;
+    use crate::plugin::server::http::http_dispatcher::DnsPostHandler;
+    use crate::plugin::test_utils::test_registry;
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use hickory_proto::op::{Message, Query, ResponseCode};
+    use hickory_proto::rr::{Name, RecordType};
+    use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+    use http::Request;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::duplex;
+    use tokio::time::{Duration, timeout};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ObservedRequest {
+        src_addr: SocketAddr,
+        server_name: Option<String>,
+        url_path: Option<String>,
+    }
+
+    #[derive(Debug)]
+    struct CaptureAndRespondExecutor {
+        observed: Arc<Mutex<Option<ObservedRequest>>>,
+    }
+
+    #[async_trait]
+    impl Plugin for CaptureAndRespondExecutor {
+        fn tag(&self) -> &str {
+            "capture_and_respond"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for CaptureAndRespondExecutor {
+        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+            self.observed
+                .lock()
+                .expect("capture lock should not be poisoned")
+                .replace(ObservedRequest {
+                    src_addr: context.src_addr,
+                    server_name: context
+                        .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
+                        .cloned(),
+                    url_path: context
+                        .get_attr::<String>(DnsContext::ATTR_URL_PATH)
+                        .cloned(),
+                });
+            context.response = Some(build_response_from_request(
+                &context.request,
+                ResponseCode::NoError,
+            ));
+            Ok(ExecStep::Stop)
+        }
+    }
+
+    fn make_request_handle(observed: Arc<Mutex<Option<ObservedRequest>>>) -> Arc<RequestHandle> {
+        Arc::new(RequestHandle {
+            entry_executor: Arc::new(CaptureAndRespondExecutor { observed }),
+            registry: test_registry(),
+        })
+    }
+
+    fn make_dns_query(id: u16) -> Message {
+        let mut message = Message::new();
+        message.set_id(id);
+        message.add_query(Query::query(
+            Name::from_ascii("example.com.").expect("query name should be valid"),
+            RecordType::A,
+        ));
+        message
+    }
+
+    #[tokio::test]
+    async fn test_handle_http_stream_processes_post_request_and_forwards_meta() {
+        let observed = Arc::new(Mutex::new(None));
+        let request_handle = make_request_handle(observed.clone());
+        let mut dispatcher = HttpDispatcher::new();
+        dispatcher.register_route(
+            http::Method::POST,
+            "/dns-query".to_string(),
+            Box::new(DnsPostHandler::new(request_handle)),
+        );
+        let dispatcher = Arc::new(dispatcher);
+        let (client, server) = duplex(16 * 1024);
+        let server_task = tokio::spawn(handle_http_stream(
+            server,
+            SocketAddr::from(([127, 0, 0, 1], 443)),
+            dispatcher,
+            Arc::new(Some("x-real-ip".to_string())),
+            Some("resolver.example".to_string()),
+        ));
+
+        let (mut sender, connection) = h2::client::handshake(client)
+            .await
+            .expect("client handshake should succeed");
+        let client_task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let dns_query = make_dns_query(55);
+        let dns_bytes = dns_query
+            .to_bytes()
+            .expect("dns query should serialize successfully");
+        let request = Request::builder()
+            .method("POST")
+            .uri("/dns-query")
+            .header("x-real-ip", "198.51.100.77")
+            .body(())
+            .expect("http request should build");
+
+        let (response_future, mut send_stream) = sender
+            .send_request(request, false)
+            .expect("send_request should succeed");
+        send_stream
+            .send_data(Bytes::from(dns_bytes), true)
+            .expect("request body send should succeed");
+
+        let response = response_future
+            .await
+            .expect("response future should resolve");
+        let mut body = response.into_body();
+        let mut response_bytes = Vec::new();
+        while let Some(chunk) = body.data().await {
+            let chunk = chunk.expect("response chunk should be readable");
+            response_bytes.extend_from_slice(&chunk);
+            let _ = body.flow_control().release_capacity(chunk.len());
+        }
+        let dns_response = Message::from_bytes(&response_bytes)
+            .expect("response bytes should decode as DNS message");
+
+        assert_eq!(dns_response.id(), 55);
+        assert_eq!(dns_response.response_code(), ResponseCode::NoError);
+        assert_eq!(
+            observed
+                .lock()
+                .expect("capture lock should not be poisoned")
+                .clone(),
+            Some(ObservedRequest {
+                src_addr: SocketAddr::from(([198, 51, 100, 77], 443)),
+                server_name: Some("resolver.example".to_string()),
+                url_path: Some("/dns-query".to_string()),
+            })
+        );
+
+        drop(sender);
+        client_task.abort();
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_server_reports_startup_error_for_invalid_address() {
+        let dispatcher = Arc::new(HttpDispatcher::new());
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (startup_tx, startup_rx) = oneshot::channel();
+
+        run_server(
+            "invalid-addr".to_string(),
+            dispatcher,
+            None,
+            None,
+            None,
+            shutdown_rx,
+            Some(startup_tx),
+        )
+        .await;
+
+        let startup = timeout(Duration::from_secs(1), startup_rx)
+            .await
+            .expect("startup channel should resolve")
+            .expect("startup sender should not be dropped");
+        assert!(startup.is_err());
+    }
+}

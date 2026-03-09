@@ -132,3 +132,118 @@ pub(super) fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Opt
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::test_registry;
+    use hickory_proto::op::{Edns, Message, Query};
+    use hickory_proto::rr::{Name, RecordType, rdata::opt::EdnsOption};
+    use std::net::SocketAddr;
+
+    fn make_context(name: &str) -> DnsContext {
+        let mut request = Message::new();
+        request.add_query(Query::query(
+            Name::from_ascii(name).expect("query name should be valid"),
+            RecordType::A,
+        ));
+        DnsContext {
+            src_addr: SocketAddr::from(([127, 0, 0, 1], 5300)),
+            request,
+            response: None,
+            exec_flow_state: crate::core::context::ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    #[test]
+    fn test_normalize_domain_key_trims_lowercases_and_strips_dot() {
+        let normalized = normalize_domain_key("  WWW.Example.COM.  ");
+
+        assert_eq!(normalized, "www.example.com");
+    }
+
+    #[test]
+    fn test_write_truncated_prefix_masks_partial_byte() {
+        let mut out = [0u8; 16];
+
+        let network_len = write_truncated_prefix(&[0b1111_0000, 0b1010_1010], 12, &mut out);
+
+        assert_eq!(network_len, 2);
+        assert_eq!(out[0], 0b1111_0000);
+        assert_eq!(out[1], 0b1010_0000);
+    }
+
+    #[test]
+    fn test_build_ecs_scope_digest_clamps_prefix_and_truncates_network() {
+        let subnet = ClientSubnet::new(IpAddr::from([192, 0, 2, 129]), 40, 48);
+
+        let digest = build_ecs_scope_digest(&subnet);
+
+        assert_eq!(digest.family, 1);
+        assert_eq!(digest.source_prefix, 32);
+        assert_eq!(digest.scope_prefix, 32);
+        assert_eq!(digest.network_len, 4);
+        assert_eq!(&digest.network[..4], &[192, 0, 2, 129]);
+    }
+
+    #[test]
+    fn test_build_cache_key_uses_normalized_query_and_flags() {
+        let mut context = make_context("WWW.Example.COM.");
+        context.request.set_checking_disabled(true);
+        let mut edns = Edns::new();
+        edns.set_dnssec_ok(true);
+        context.request.set_edns(edns);
+
+        let cache_key = build_cache_key(&mut context, false).expect("cache key should exist");
+
+        assert_eq!(cache_key.domain, "www.example.com");
+        assert_eq!(cache_key.record_type, RecordType::A);
+        assert!(cache_key.do_bit);
+        assert!(cache_key.cd_bit);
+        assert_eq!(cache_key.ecs_scope, None);
+    }
+
+    #[test]
+    fn test_build_cache_key_includes_ecs_when_enabled() {
+        let mut context = make_context("example.com.");
+        let mut edns = Edns::new();
+        edns.options_mut()
+            .insert(EdnsOption::Subnet(ClientSubnet::new(
+                IpAddr::from([203, 0, 113, 199]),
+                20,
+                24,
+            )));
+        context.request.set_edns(edns);
+
+        let cache_key = build_cache_key(&mut context, true).expect("cache key should exist");
+
+        let ecs = cache_key.ecs_scope.expect("ecs should be present");
+        assert_eq!(ecs.family, 1);
+        assert_eq!(ecs.source_prefix, 20);
+        assert_eq!(ecs.scope_prefix, 24);
+        assert_eq!(ecs.network_len, 3);
+        assert_eq!(&ecs.network[..3], &[203, 0, 112]);
+    }
+
+    #[test]
+    fn test_build_cache_key_returns_none_without_query() {
+        let mut context = DnsContext {
+            src_addr: SocketAddr::from(([127, 0, 0, 1], 5300)),
+            request: Message::new(),
+            response: None,
+            exec_flow_state: crate::core::context::ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        };
+
+        let cache_key = build_cache_key(&mut context, true);
+
+        assert_eq!(cache_key, None);
+    }
+}

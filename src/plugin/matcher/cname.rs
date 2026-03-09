@@ -154,9 +154,11 @@ impl Matcher for CnameMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::matcher::Matcher;
     use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::CNAME;
+    use hickory_proto::rr::rdata::{A, CNAME};
     use hickory_proto::rr::{Name, RData, Record, RecordType};
+    use std::net::Ipv4Addr;
     use std::net::SocketAddr;
 
     fn make_context() -> DnsContext {
@@ -237,5 +239,35 @@ mod tests {
         ));
         ctx.response = Some(response);
         assert!(matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_cname_matcher_ignores_non_cname_or_missing_response() {
+        let matcher = CnameMatcher {
+            tag: "cname".into(),
+            cname_rules: {
+                let mut rules = DomainRuleMatcher::default();
+                rules.add_expression("target.example.com", "test").unwrap();
+                rules.finalize().unwrap();
+                rules
+            },
+            domain_set_tags: vec![],
+            domain_sets: vec![],
+            domain_sets_has_trie_rules: false,
+            registry: Arc::new(PluginRegistry::new()),
+        };
+
+        let mut no_response = make_context();
+        assert!(!matcher.is_match(&mut no_response));
+
+        let mut non_cname_response = make_context();
+        let mut response = Message::new();
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            60,
+            RData::A(A(Ipv4Addr::new(1, 1, 1, 1))),
+        ));
+        non_cname_response.response = Some(response);
+        assert!(!matcher.is_match(&mut non_cname_response));
     }
 }

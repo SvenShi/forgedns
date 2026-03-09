@@ -116,3 +116,47 @@ impl Matcher for EnvMatcher {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::test_context;
+
+    #[test]
+    fn test_parse_env_args_validation() {
+        assert!(parse_env_args(vec![]).is_err());
+        assert!(parse_env_args(vec![" ".to_string()]).is_err());
+        assert!(parse_env_args(vec!["KEY".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn test_env_matcher_uses_cached_state() {
+        let mut ctx = test_context();
+        let exists_matcher = EnvMatcher {
+            tag: "env".to_string(),
+            key: "K".to_string(),
+            value: None,
+            cached_exists: true,
+            cached_value: Some("v".to_string()),
+        };
+        assert!(exists_matcher.is_match(&mut ctx));
+
+        let value_matcher = EnvMatcher {
+            tag: "env".to_string(),
+            key: "K".to_string(),
+            value: Some("v".to_string()),
+            cached_exists: true,
+            cached_value: Some("v".to_string()),
+        };
+        assert!(value_matcher.is_match(&mut ctx));
+
+        let miss_matcher = EnvMatcher {
+            tag: "env".to_string(),
+            key: "K".to_string(),
+            value: Some("x".to_string()),
+            cached_exists: true,
+            cached_value: Some("v".to_string()),
+        };
+        assert!(!miss_matcher.is_match(&mut ctx));
+    }
+}

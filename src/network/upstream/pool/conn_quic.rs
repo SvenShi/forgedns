@@ -273,3 +273,29 @@ impl ConnectionBuilder<QuicConnection> for QuicConnectionBuilder {
         Ok(quic_conn)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::upstream::ConnectionType;
+
+    #[test]
+    fn test_builder_new_copies_quic_connection_fields() {
+        let mut connection_info = ConnectionInfo::with_addr("quic://dns.example.com")
+            .expect("connection info should parse");
+        connection_info.timeout = std::time::Duration::from_secs(3);
+        connection_info.insecure_skip_verify = true;
+        connection_info.so_mark = Some(9);
+        connection_info.bind_to_device = Some("wg0".to_string());
+
+        let builder = QuicConnectionBuilder::new(&connection_info);
+
+        assert_eq!(connection_info.connection_type, ConnectionType::DoQ);
+        assert_eq!(builder.port, 853);
+        assert_eq!(builder.timeout, std::time::Duration::from_secs(3));
+        assert_eq!(builder.server_name, "dns.example.com");
+        assert!(builder.insecure_skip_verify);
+        assert_eq!(builder.so_mark, Some(9));
+        assert_eq!(builder.bind_to_device.as_deref(), Some("wg0"));
+    }
+}

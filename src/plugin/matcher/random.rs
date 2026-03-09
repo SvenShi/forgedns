@@ -104,3 +104,37 @@ impl Matcher for RandomMatcher {
         rand::random::<f64>() < self.probability
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::test_context;
+
+    #[test]
+    fn test_parse_probability_validation() {
+        assert!(parse_probability(vec![]).is_err());
+        assert!(parse_probability(vec!["0.5".to_string(), "0.2".to_string()]).is_err());
+        assert!(parse_probability(vec!["-0.1".to_string()]).is_err());
+        assert!(parse_probability(vec!["1.1".to_string()]).is_err());
+
+        let parsed = parse_probability(vec!["0.25".to_string()]).expect("valid probability");
+        assert_eq!(parsed, 0.25);
+    }
+
+    #[test]
+    fn test_random_matcher_boundary_probability_is_deterministic() {
+        let mut ctx = test_context();
+
+        let always_false = RandomMatcher {
+            tag: "random".to_string(),
+            probability: 0.0,
+        };
+        assert!(!always_false.is_match(&mut ctx));
+
+        let always_true = RandomMatcher {
+            tag: "random".to_string(),
+            probability: 1.0,
+        };
+        assert!(always_true.is_match(&mut ctx));
+    }
+}

@@ -207,10 +207,10 @@ impl MikrotikConfigArgs {
 mod api;
 mod manager;
 
-use self::api::{MikrotikApi, MikrotikRsClient, RouterRoute};
+use self::api::{MikrotikApi, MikrotikRsClient};
 use self::manager::{
-    ManagerCommand, ObservedAddr, PersistentReloadConfig, RouteCommentCodec, RouteEntry,
-    RouteFamily, RouteKey, RouteManager, RouteManagerConfig, RouteManagerRuntime, SyncState,
+    ManagerCommand, ObservedAddr, PersistentReloadConfig, RouteManager, RouteManagerConfig,
+    RouteManagerRuntime,
 };
 
 #[derive(Debug)]
@@ -587,6 +587,43 @@ fn parse_persistent_route_files(files: Option<Vec<String>>) -> Result<Vec<String
     Ok(out)
 }
 
+fn load_persistent_ips_from_content(
+    source_prefix: &str,
+    content: &str,
+    gateway4_enabled: bool,
+    gateway6_enabled: bool,
+) -> Result<(AHashSet<String>, usize, usize)> {
+    let mut out = AHashSet::new();
+    let mut ignored_by_gateway = 0usize;
+    let mut ignored_default_route = 0usize;
+
+    for (line_no, line) in content.lines().enumerate() {
+        let token = line.split('#').next().unwrap_or_default().trim();
+        if token.is_empty() {
+            continue;
+        }
+
+        let source = format!("{source_prefix} line {}", line_no + 1);
+        let cidr = parse_persistent_ip_item(token, source.as_str())?;
+        if is_default_route_cidr(cidr.as_str()) {
+            ignored_default_route = ignored_default_route.saturating_add(1);
+            continue;
+        }
+        if !is_persistent_ip_family_enabled(
+            cidr.as_str(),
+            gateway4_enabled,
+            gateway6_enabled,
+            source.as_str(),
+        )? {
+            ignored_by_gateway = ignored_by_gateway.saturating_add(1);
+            continue;
+        }
+        out.insert(cidr);
+    }
+
+    Ok((out, ignored_by_gateway, ignored_default_route))
+}
+
 pub(super) fn load_persistent_ips_from_files(
     files: &[String],
     gateway4_enabled: bool,
@@ -602,30 +639,17 @@ pub(super) fn load_persistent_ips_from_files(
                 "mikrotik failed to read persistent route file '{file}': {e}"
             ))
         })?;
-
-        for (line_no, line) in content.lines().enumerate() {
-            let token = line.split('#').next().unwrap_or_default().trim();
-            if token.is_empty() {
-                continue;
-            }
-
-            let source = format!("persistent_route.files[{index}] line {}", line_no + 1);
-            let cidr = parse_persistent_ip_item(token, source.as_str())?;
-            if is_default_route_cidr(cidr.as_str()) {
-                ignored_default_route = ignored_default_route.saturating_add(1);
-                continue;
-            }
-            if !is_persistent_ip_family_enabled(
-                cidr.as_str(),
+        let source_prefix = format!("persistent_route.files[{index}]");
+        let (loaded, ignored_by_gateway_delta, ignored_default_delta) =
+            load_persistent_ips_from_content(
+                source_prefix.as_str(),
+                &content,
                 gateway4_enabled,
                 gateway6_enabled,
-                source.as_str(),
-            )? {
-                ignored_by_gateway = ignored_by_gateway.saturating_add(1);
-                continue;
-            }
-            out.insert(cidr);
-        }
+            )?;
+        out.extend(loaded);
+        ignored_by_gateway = ignored_by_gateway.saturating_add(ignored_by_gateway_delta);
+        ignored_default_route = ignored_default_route.saturating_add(ignored_default_delta);
     }
 
     Ok((out, ignored_by_gateway, ignored_default_route))
@@ -646,30 +670,17 @@ pub(super) async fn load_persistent_ips_from_files_async(
                 "mikrotik failed to read persistent route file '{file}': {e}"
             ))
         })?;
-
-        for (line_no, line) in content.lines().enumerate() {
-            let token = line.split('#').next().unwrap_or_default().trim();
-            if token.is_empty() {
-                continue;
-            }
-
-            let source = format!("persistent_route.files[{index}] line {}", line_no + 1);
-            let cidr = parse_persistent_ip_item(token, source.as_str())?;
-            if is_default_route_cidr(cidr.as_str()) {
-                ignored_default_route = ignored_default_route.saturating_add(1);
-                continue;
-            }
-            if !is_persistent_ip_family_enabled(
-                cidr.as_str(),
+        let source_prefix = format!("persistent_route.files[{index}]");
+        let (loaded, ignored_by_gateway_delta, ignored_default_delta) =
+            load_persistent_ips_from_content(
+                source_prefix.as_str(),
+                &content,
                 gateway4_enabled,
                 gateway6_enabled,
-                source.as_str(),
-            )? {
-                ignored_by_gateway = ignored_by_gateway.saturating_add(1);
-                continue;
-            }
-            out.insert(cidr);
-        }
+            )?;
+        out.extend(loaded);
+        ignored_by_gateway = ignored_by_gateway.saturating_add(ignored_by_gateway_delta);
+        ignored_default_route = ignored_default_route.saturating_add(ignored_default_delta);
     }
 
     Ok((out, ignored_by_gateway, ignored_default_route))
@@ -773,13 +784,15 @@ mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
     use crate::plugin::PluginRegistry;
+    use crate::plugin::executor::mikrotik::api::RouterRoute;
+    use crate::plugin::executor::mikrotik::manager::{
+        RouteCommentCodec, RouteEntry, RouteFamily, RouteKey, SyncState,
+    };
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::rdata::{A, AAAA};
     use hickory_proto::rr::{Name, RData, Record};
-    use std::fs;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::str::FromStr;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[derive(Debug, Default)]
     struct MockApiState {
@@ -1059,6 +1072,16 @@ mod tests {
         }
     }
 
+    async fn yield_until(description: &str, mut predicate: impl FnMut() -> bool) {
+        for _ in 0..64 {
+            if predicate() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("condition not met after yielding: {description}");
+    }
+
     #[test]
     fn config_validation_requires_fields() {
         let cfg = serde_yml::from_str::<serde_yml::Value>(
@@ -1200,45 +1223,25 @@ persistent_route:
     }
 
     #[test]
-    fn config_validation_loads_persistent_route_file() {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("forgedns_mikrotik_persistent_{ts}.txt"));
-        fs::write(
-            &path,
+    fn persistent_route_file_content_is_loaded_and_normalized() {
+        let files = parse_persistent_route_files(Some(vec!["persistent.txt".to_string()])).unwrap();
+        let (loaded, ignored_by_gateway, ignored_default_route) = load_persistent_ips_from_content(
+            "persistent_route.files[0]",
             r#"
 # comments are ignored
 1.1.1.1
 2001:db8::1/128
 "#,
+            true,
+            true,
         )
         .unwrap();
 
-        let cfg = serde_yml::from_str::<serde_yml::Value>(&format!(
-            r#"
-address: "1.1.1.1:8728"
-username: "user"
-password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
-gateway6: "fe80::2%ether1"
-comment_prefix: "forgedns"
-persistent_route:
-  files:
-    - "{}"
-"#,
-            path.display()
-        ))
-        .unwrap();
-
-        let parsed = parse_plugin_config(Some(cfg), false).unwrap();
-        assert!(parsed.persistent_ips.contains("1.1.1.1/32"));
-        assert!(parsed.persistent_ips.contains("2001:db8::1/128"));
-        assert_eq!(parsed.persistent_files.len(), 1);
-
-        let _ = fs::remove_file(path);
+        assert_eq!(files, vec!["persistent.txt".to_string()]);
+        assert!(loaded.contains("1.1.1.1/32"));
+        assert!(loaded.contains("2001:db8::1/128"));
+        assert_eq!(ignored_by_gateway, 0);
+        assert_eq!(ignored_default_route, 0);
     }
 
     #[test]
@@ -1833,7 +1836,10 @@ persistent_route:
             aaaa_record(Ipv6Addr::LOCALHOST, 300),
         ]));
         executor.post_execute(&mut ctx, None).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        yield_until("ipv6 route upsert", || {
+            api.state.lock().unwrap().upsert_v6 >= 1
+        })
+        .await;
 
         let state = api.state.lock().unwrap();
         assert_eq!(state.upsert_v4, 0);
@@ -1890,8 +1896,10 @@ persistent_route:
             300,
         )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
-
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        yield_until("background manager route creation", || {
+            api.route_count() > 0
+        })
+        .await;
         assert!(api.route_count() > 0);
         let _ = executor.destroy().await;
     }
@@ -1914,7 +1922,10 @@ persistent_route:
             300,
         )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        yield_until("dynamic route creation before shutdown", || {
+            api.route_count() > 0
+        })
+        .await;
         assert!(api.route_count() > 0);
 
         let _ = executor.destroy().await;

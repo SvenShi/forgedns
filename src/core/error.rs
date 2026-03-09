@@ -133,3 +133,54 @@ impl From<ConfigError> for DnsError {
 
 /// Convenient type alias for Results using DnsError
 pub type Result<T> = std::result::Result<T, DnsError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::ConfigError;
+
+    #[test]
+    fn test_helper_constructors_return_expected_variants() {
+        assert!(matches!(
+            DnsError::config("bad config"),
+            DnsError::Config(_)
+        ));
+        assert!(matches!(
+            DnsError::plugin("bad plugin"),
+            DnsError::Plugin(_)
+        ));
+        assert!(matches!(
+            DnsError::runtime("bad runtime"),
+            DnsError::Runtime(_)
+        ));
+        assert!(matches!(
+            DnsError::dependency("bad dependency"),
+            DnsError::Dependency(_)
+        ));
+        assert!(matches!(
+            DnsError::protocol("bad protocol"),
+            DnsError::Protocol(_)
+        ));
+    }
+
+    #[test]
+    fn test_from_string_and_str_create_generic_error() {
+        assert!(matches!(
+            DnsError::from("plain error"),
+            DnsError::Generic(message) if message == "plain error"
+        ));
+        assert!(matches!(
+            DnsError::from(String::from("owned error")),
+            DnsError::Generic(message) if message == "owned error"
+        ));
+    }
+
+    #[test]
+    fn test_from_config_error_maps_to_config_variant() {
+        let error = DnsError::from(ConfigError::EmptyPluginTag);
+
+        assert!(
+            matches!(error, DnsError::Config(message) if message == "Plugin tag cannot be empty")
+        );
+    }
+}

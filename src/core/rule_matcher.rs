@@ -687,3 +687,74 @@ fn mask_v6_bits(bits: u128, prefix_len: u8) -> u128 {
         bits & (u128::MAX << (128 - prefix_len as u32))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ip_prefix_matcher_matches_masked_ipv4_prefix() {
+        let mut matcher = IpPrefixMatcher::default();
+        matcher
+            .add_rule("192.0.2.99/24")
+            .expect("rule should be accepted");
+
+        assert!(matcher.contains_ip(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))));
+        assert!(!matcher.contains_ip(IpAddr::V4(Ipv4Addr::new(192, 0, 3, 1))));
+    }
+
+    #[test]
+    fn test_ip_prefix_matcher_ignores_redundant_more_specific_rule() {
+        let mut matcher = IpPrefixMatcher::default();
+        matcher
+            .add_rule("2001:db8::/32")
+            .expect("broad rule should be accepted");
+        matcher
+            .add_rule("2001:db8:1::/48")
+            .expect("specific rule should be accepted");
+
+        assert_eq!(matcher.v6_rule_count(), 1);
+    }
+
+    #[test]
+    fn test_split_domain_rule_expression_defaults_to_domain_kind() {
+        let (kind, value) = split_domain_rule_expression("example.com");
+
+        assert_eq!(kind, DomainRuleKind::Domain);
+        assert_eq!(value, "example.com");
+    }
+
+    #[test]
+    fn test_normalize_domain_cow_trims_lowercases_and_strips_dot() {
+        let normalized = normalize_domain_cow("  WWW.Example.COM.  ");
+
+        assert_eq!(normalized.as_ref(), "www.example.com");
+    }
+
+    #[test]
+    fn test_domain_rule_matcher_matches_suffix_rule_after_finalize() {
+        let mut matcher = DomainRuleMatcher::default();
+        matcher
+            .add_expression("domain:example.com", "test source")
+            .expect("expression should be accepted");
+        matcher.finalize().expect("finalize should succeed");
+        let mut labels = SmallVec::<[&str; 8]>::new();
+        split_labels_rev("www.example.com", &mut labels);
+
+        let matched = matcher.is_match_normalized("www.example.com", &labels);
+
+        assert!(matched);
+    }
+
+    #[test]
+    fn test_domain_rule_matcher_rejects_empty_regexp_expression() {
+        let mut matcher = DomainRuleMatcher::default();
+
+        let result = matcher.add_expression("regexp:   ", "rule.txt:8");
+
+        assert_eq!(
+            result,
+            Err("invalid empty regexp expression in rule.txt:8".to_string())
+        );
+    }
+}

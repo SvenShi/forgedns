@@ -92,6 +92,7 @@ impl Matcher for RcodeMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::matcher::Matcher;
     use hickory_proto::op::{Message, Query, ResponseCode};
     use hickory_proto::rr::{Name, RecordType};
     use std::net::SocketAddr;
@@ -128,5 +129,22 @@ mod tests {
         ctx.response = Some(response);
 
         assert!(!matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_rcode_matcher_matches_expected_code_and_requires_response() {
+        let matcher = RcodeMatcher {
+            tag: "rcode".into(),
+            rcodes: [u16::from(ResponseCode::ServFail)].into_iter().collect(),
+        };
+
+        let mut no_response_ctx = make_context();
+        assert!(!matcher.is_match(&mut no_response_ctx));
+
+        let mut match_ctx = make_context();
+        let mut response = Message::new();
+        response.set_response_code(ResponseCode::ServFail);
+        match_ctx.response = Some(response);
+        assert!(matcher.is_match(&mut match_ctx));
     }
 }

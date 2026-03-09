@@ -366,7 +366,7 @@ pub struct ConnectionInfo {
     pub socks5: Option<Socks5Opt>,
 
     /// Bootstrap resolver for dynamic hostname resolution with TTL caching
-    pub bootstrap: Option<Arc<Bootstrap>>,
+    bootstrap: Option<Arc<Bootstrap>>,
 
     /// DoH request path (e.g., `/dns-query`), empty for non-HTTP protocols
     pub path: String,
@@ -1162,7 +1162,7 @@ impl<C: Connection> ConnectionBuilder<C> for DummyConnectionBuilder {
 /// - `None` if parsing fails or hostname resolution fails
 ///
 /// # Examples
-/// ```
+/// ```text
 /// // Without auth
 /// parse_socks5_opt("127.0.0.1:1080")
 /// parse_socks5_opt("proxy.example.com:1080")
@@ -1171,7 +1171,10 @@ impl<C: Connection> ConnectionBuilder<C> for DummyConnectionBuilder {
 /// parse_socks5_opt("user:pass@127.0.0.1:1080")
 /// parse_socks5_opt("user:pass@proxy.example.com:1080")
 /// ```
-fn parse_socks5_opt(socks5_str: &str) -> Option<Socks5Opt> {
+fn parse_socks5_opt_with_resolver<F>(socks5_str: &str, mut resolve_host: F) -> Option<Socks5Opt>
+where
+    F: FnMut(&str) -> Result<IpAddr>,
+{
     // Split by '@' to separate auth from host:port
     let (username, password, host_port) = if let Some(at_pos) = socks5_str.rfind('@') {
         // Format: username:password@host:port
@@ -1226,7 +1229,7 @@ fn parse_socks5_opt(socks5_str: &str) -> Option<Socks5Opt> {
         ip
     } else {
         // It's a hostname, resolve it
-        match try_lookup_server_name(host) {
+        match resolve_host(host) {
             Ok(ip) => ip,
             Err(e) => {
                 warn!("Failed to resolve SOCKS5 hostname '{}': {}", host, e);
@@ -1240,6 +1243,10 @@ fn parse_socks5_opt(socks5_str: &str) -> Option<Socks5Opt> {
         password,
         socket_addr: SocketAddr::new(ip_addr, port),
     })
+}
+
+fn parse_socks5_opt(socks5_str: &str) -> Option<Socks5Opt> {
+    parse_socks5_opt_with_resolver(socks5_str, try_lookup_server_name)
 }
 
 #[cfg(test)]
@@ -1425,19 +1432,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_socks5_opt_hostname_localhost() {
-        // Test hostname resolution (localhost should always work)
-        let result = parse_socks5_opt("localhost:1080");
+    fn test_parse_socks5_opt_hostname_uses_resolver() {
+        let result = parse_socks5_opt_with_resolver("localhost:1080", |host| {
+            assert_eq!(host, "localhost");
+            Ok(IpAddr::from_str("127.0.0.1").unwrap())
+        });
         assert!(result.is_some());
 
         let opt = result.unwrap();
         assert!(opt.username.is_none());
         assert!(opt.password.is_none());
         assert_eq!(opt.socket_addr.port(), 1080);
-        // localhost can resolve to either 127.0.0.1 or ::1
-        assert!(
-            opt.socket_addr.ip() == IpAddr::from_str("127.0.0.1").unwrap()
-                || opt.socket_addr.ip() == IpAddr::from_str("::1").unwrap()
-        );
+        assert_eq!(opt.socket_addr.ip(), IpAddr::from_str("127.0.0.1").unwrap());
     }
 }

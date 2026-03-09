@@ -333,3 +333,65 @@ fn mask_ip(ip: IpAddr, mask4: u8, mask6: u8) -> Option<IpAddr> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::ExecFlowState;
+    use crate::plugin::test_utils::test_registry;
+    use ahash::AHashMap;
+    use hickory_proto::op::Message;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn make_context(ip: Ipv4Addr) -> DnsContext {
+        DnsContext {
+            src_addr: SocketAddr::from((ip, 5300)),
+            request: Message::new(),
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: AHashMap::new(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    #[test]
+    fn test_parse_quick_setup_validation() {
+        assert!(parse_quick_setup(None).is_ok());
+        let invalid = parse_quick_setup(Some("0".to_string())).expect("parse should succeed");
+        assert!(validate_cfg(&invalid).is_err());
+        let valid = parse_quick_setup(Some("10".to_string())).expect("parse should succeed");
+        assert!(validate_cfg(&valid).is_ok());
+    }
+
+    #[test]
+    fn test_rate_limiter_consumes_tokens_and_blocks_when_exhausted() {
+        let limiter = RateLimiter {
+            tag: "rl".to_string(),
+            qps: 1.0,
+            burst: 1.0,
+            mask4: 32,
+            mask6: 128,
+            buckets: TtlCache::with_capacity(16),
+            cleanup_started: AtomicBool::new(false),
+            cleanup_stop: Mutex::new(None),
+            cleanup_handle: Mutex::new(None),
+        };
+
+        let mut ctx = make_context(Ipv4Addr::new(10, 0, 0, 1));
+        assert!(limiter.is_match(&mut ctx));
+        assert!(!limiter.is_match(&mut ctx));
+    }
+
+    #[test]
+    fn test_mask_ip_respects_ipv4_and_ipv6_masks() {
+        let v4 = mask_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 10, 99)), 24, 64)
+            .expect("mask should return value");
+        assert_eq!(v4, IpAddr::V4(Ipv4Addr::new(192, 168, 10, 0)));
+
+        let v6 = mask_ip(IpAddr::V6("2001:db8:abcd:1234::1".parse().unwrap()), 24, 64)
+            .expect("mask should return value");
+        assert_eq!(v6, "2001:db8:abcd:1234::".parse::<IpAddr>().unwrap());
+    }
+}

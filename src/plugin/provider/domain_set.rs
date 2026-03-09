@@ -327,8 +327,19 @@ impl PluginFactory for DomainSetFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::provider::provider_utils::for_each_nonempty_rule_text;
     use std::net::IpAddr;
-    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+    fn load_rules_text(
+        matcher: &mut DomainMatcher,
+        source_name: &str,
+        content: &str,
+    ) -> DnsResult<()> {
+        for_each_nonempty_rule_text(content, |raw, line_no| {
+            let source = format!("file '{}', line {}", source_name, line_no);
+            matcher.add_exp(raw, &source)
+        })
+    }
 
     #[test]
     fn test_domain_match_priority() {
@@ -360,15 +371,9 @@ mod tests {
 
     #[test]
     fn test_file_line_error_has_line_number() {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("forgedns-domain-set-{}.txt", ts));
-        std::fs::write(&path, "google.com\nregexp:[bad\n").unwrap();
-
         let mut m = DomainMatcher::default();
-        let err = m.load_file(path.to_str().unwrap()).unwrap_err();
+        let err =
+            load_rules_text(&mut m, "inline-domain-test", "google.com\nregexp:[bad\n").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("line 2"),
@@ -438,76 +443,5 @@ mod tests {
         assert!(ds.contains_domain("local.example"));
         assert!(!ds.contains_domain("none.example"));
         assert!(shared.contains_domain("shared.example"));
-    }
-
-    #[test]
-    #[ignore]
-    fn benchmark_domain_set_million_rules() {
-        let rule_count = std::env::var("FORGEDNS_BENCH_RULES")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1_000_000);
-        let query_count = std::env::var("FORGEDNS_BENCH_QUERIES")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(500_000);
-
-        let build_start = Instant::now();
-        let mut matcher = DomainMatcher::default();
-        for i in 0..rule_count {
-            let exp = format!("domain:d{}.bench.test", i);
-            matcher.add_exp(&exp, "bench").unwrap();
-        }
-        matcher.add_exp("full:exact.bench.test", "bench").unwrap();
-        matcher.add_exp("keyword:adtrack", "bench").unwrap();
-        matcher
-            .add_exp("regexp:^edge[0-9]+\\.bench\\.test$", "bench")
-            .unwrap();
-        matcher.finalize().unwrap();
-        let build_elapsed = build_start.elapsed();
-
-        let mut queries = Vec::with_capacity(query_count);
-        for i in 0..query_count {
-            if i % 4 == 0 {
-                queries.push(format!("www.d{}.bench.test", i % rule_count));
-            } else if i % 4 == 1 {
-                queries.push("exact.bench.test.".to_string());
-            } else if i % 4 == 2 {
-                queries.push(format!("edge{}.bench.test", i));
-            } else {
-                queries.push(format!("miss{}.example.org", i));
-            }
-        }
-
-        let warmup_start = Instant::now();
-        let mut warmup_hits = 0usize;
-        for q in &queries {
-            if matcher.contains(q) {
-                warmup_hits += 1;
-            }
-        }
-        let warmup_elapsed = warmup_start.elapsed();
-
-        let start = Instant::now();
-        let mut hits = 0usize;
-        for q in &queries {
-            if matcher.contains(q) {
-                hits += 1;
-            }
-        }
-        let elapsed = start.elapsed();
-
-        let qps = (query_count as f64) / elapsed.as_secs_f64();
-        println!(
-            "domain_set bench: rules={}, queries={}, hits={}, warmup_hits={}, build={:.3}s, warmup={:.3}s, elapsed={:.3}s, qps={:.2}",
-            rule_count,
-            query_count,
-            hits,
-            warmup_hits,
-            build_elapsed.as_secs_f64(),
-            warmup_elapsed.as_secs_f64(),
-            elapsed.as_secs_f64(),
-            qps
-        );
     }
 }

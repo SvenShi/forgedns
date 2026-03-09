@@ -148,19 +148,33 @@ impl Matcher for QnameMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::matcher::Matcher;
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::{DNSClass, Name, RecordType};
     use std::net::SocketAddr;
 
-    fn make_context() -> DnsContext {
+    fn make_context(name: &str) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Query::query(Name::from_ascii("www.example.com.").unwrap(), RecordType::A);
+        let mut query = Query::query(Name::from_ascii(name).unwrap(), RecordType::A);
         query.set_query_class(DNSClass::IN);
         request.add_query(query);
 
         DnsContext {
             src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: Arc::new(PluginRegistry::new()),
+        }
+    }
+
+    fn make_context_without_query() -> DnsContext {
+        DnsContext {
+            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+            request: Message::new(),
             response: None,
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
@@ -185,7 +199,7 @@ mod tests {
             domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
-        let mut ctx = make_context();
+        let mut ctx = make_context("www.example.com.");
         assert!(matcher.is_match(&mut ctx));
     }
 
@@ -210,7 +224,37 @@ mod tests {
             domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
-        let mut ctx = make_context();
+        let mut ctx = make_context("www.example.com.");
         assert!(matcher.is_match(&mut ctx));
+    }
+
+    #[test]
+    fn test_build_qname_matcher_rejects_empty_rule_and_set_tag() {
+        let result =
+            build_qname_matcher("qname".to_string(), vec![], Arc::new(PluginRegistry::new()));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_qname_matcher_returns_false_when_query_mismatch_or_missing() {
+        let matcher = QnameMatcher {
+            tag: "qname".into(),
+            domains: {
+                let mut rules = DomainRuleMatcher::default();
+                rules.add_expression("example.com", "test").unwrap();
+                rules.finalize().unwrap();
+                rules
+            },
+            domain_set_tags: vec![],
+            domain_sets: vec![],
+            domain_sets_has_trie_rules: false,
+            registry: Arc::new(PluginRegistry::new()),
+        };
+
+        let mut mismatch = make_context("www.other.com.");
+        assert!(!matcher.is_match(&mut mismatch));
+
+        let mut no_query = make_context_without_query();
+        assert!(!matcher.is_match(&mut no_query));
     }
 }

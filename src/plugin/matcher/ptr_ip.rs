@@ -146,6 +146,7 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::matcher::Matcher;
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::{Name, RecordType};
     use std::net::SocketAddr;
@@ -177,5 +178,50 @@ mod tests {
         };
 
         assert!(matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_ptr_ip_matcher_rejects_non_ptr_or_invalid_ptr_name() {
+        let matcher = PtrIpMatcher {
+            tag: "ptr_ip".into(),
+            ip_rules: parse_ip_prefix_matcher("ptr_ip", &["192.168.0.0/16".into()]).unwrap(),
+            ip_set_tags: vec![],
+            ip_sets: vec![],
+            registry: Arc::new(PluginRegistry::new()),
+        };
+
+        let mut non_ptr_request = Message::new();
+        non_ptr_request.add_query(Query::query(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+        ));
+        let mut non_ptr_ctx = DnsContext {
+            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+            request: non_ptr_request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: Arc::new(PluginRegistry::new()),
+        };
+        assert!(!matcher.is_match(&mut non_ptr_ctx));
+
+        let mut invalid_ptr_request = Message::new();
+        invalid_ptr_request.add_query(Query::query(
+            Name::from_ascii("bad.ptr.example.com.").unwrap(),
+            RecordType::PTR,
+        ));
+        let mut invalid_ptr_ctx = DnsContext {
+            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+            request: invalid_ptr_request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: Arc::new(PluginRegistry::new()),
+        };
+        assert!(!matcher.is_match(&mut invalid_ptr_ctx));
     }
 }

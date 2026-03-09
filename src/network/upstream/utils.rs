@@ -527,3 +527,126 @@ pub async fn connect_stream(
         Ok(stream)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use hickory_proto::op::Message;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+    #[derive(Debug)]
+    struct MockConnection {
+        closed: AtomicBool,
+        close_calls: AtomicUsize,
+    }
+
+    impl MockConnection {
+        fn new() -> Self {
+            Self {
+                closed: AtomicBool::new(false),
+                close_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn close_calls(&self) -> usize {
+            self.close_calls.load(Ordering::Relaxed)
+        }
+    }
+
+    #[async_trait]
+    impl Connection for MockConnection {
+        fn close(&self) {
+            self.close_calls.fetch_add(1, Ordering::Relaxed);
+            self.closed.store(true, Ordering::Relaxed);
+        }
+
+        async fn query(&self, request: Message) -> Result<Message> {
+            Ok(request)
+        }
+
+        fn using_count(&self) -> u16 {
+            0
+        }
+
+        fn available(&self) -> bool {
+            !self.closed.load(Ordering::Relaxed)
+        }
+
+        fn last_used(&self) -> u64 {
+            AtomicU64::new(0).load(Ordering::Relaxed)
+        }
+    }
+
+    #[test]
+    fn test_close_conns_closes_every_connection_once() {
+        let first = Arc::new(MockConnection::new());
+        let second = Arc::new(MockConnection::new());
+        let conns = vec![first.clone(), second.clone()];
+
+        close_conns(&conns);
+
+        assert_eq!(first.close_calls(), 1);
+        assert_eq!(second.close_calls(), 1);
+    }
+
+    #[test]
+    fn test_build_dns_get_request_sets_uri_method_and_headers() {
+        let request = build_dns_get_request(
+            "https://dns.example.test/dns-query?dns=".to_string(),
+            vec![0, 1, 2, 3],
+            Version::HTTP_2,
+        );
+
+        assert_eq!(request.method(), Method::GET);
+        assert_eq!(request.version(), Version::HTTP_2);
+        assert_eq!(
+            request.uri().to_string(),
+            "https://dns.example.test/dns-query?dns=AAECAw"
+        );
+        assert_eq!(request.headers()[header::CONTENT_TYPE], DNS_HEADER_VALUE);
+    }
+
+    #[test]
+    fn test_get_cap_buf_with_context_len_uses_content_length_header() {
+        let mut response = Response::builder()
+            .header(CONTENT_LENGTH, "128")
+            .body(())
+            .expect("response should build");
+
+        let buf = get_cap_buf_with_context_len(&mut response);
+
+        assert_eq!(buf.capacity(), 128);
+    }
+
+    #[test]
+    fn test_get_cap_buf_with_context_len_uses_default_capacity_without_header() {
+        let mut response = Response::builder().body(()).expect("response should build");
+
+        let buf = get_cap_buf_with_context_len(&mut response);
+
+        assert_eq!(buf.capacity(), 4096);
+    }
+
+    #[test]
+    fn test_build_doh_request_uri_omits_default_https_port() {
+        let mut connection_info = ConnectionInfo::with_addr("https://dns.example.test/dns-query")
+            .expect("connection info should parse");
+        connection_info.port = 443;
+
+        let uri = build_doh_request_uri(&connection_info);
+
+        assert_eq!(uri, "https://dns.example.test/dns-query?dns=");
+    }
+
+    #[test]
+    fn test_build_doh_request_uri_includes_custom_port() {
+        let mut connection_info = ConnectionInfo::with_addr("https://dns.example.test/dns-query")
+            .expect("connection info should parse");
+        connection_info.port = 8443;
+
+        let uri = build_doh_request_uri(&connection_info);
+
+        assert_eq!(uri, "https://dns.example.test:8443/dns-query?dns=");
+    }
+}

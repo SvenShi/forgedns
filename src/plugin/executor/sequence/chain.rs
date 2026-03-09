@@ -470,3 +470,331 @@ fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<String>> {
 
     Ok(marks)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::ExecFlowState;
+    use crate::plugin::Plugin;
+    use crate::plugin::executor::ExecResult;
+    use ahash::AHashMap;
+    use async_trait::async_trait;
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::{Name, RecordType};
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::Mutex;
+
+    #[derive(Debug, Clone, Copy)]
+    enum StubBehavior {
+        Next,
+        NextWithPost,
+        Error(&'static str),
+    }
+
+    #[derive(Debug)]
+    struct StubExecutor {
+        tag: &'static str,
+        behavior: StubBehavior,
+        execute_log: Option<&'static str>,
+        post_log: Option<&'static str>,
+        next_flow_state: Option<ExecFlowState>,
+        log: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl StubExecutor {
+        fn new(
+            tag: &'static str,
+            behavior: StubBehavior,
+            execute_log: Option<&'static str>,
+            post_log: Option<&'static str>,
+            next_flow_state: Option<ExecFlowState>,
+            log: Arc<Mutex<Vec<&'static str>>>,
+        ) -> Self {
+            Self {
+                tag,
+                behavior,
+                execute_log,
+                post_log,
+                next_flow_state,
+                log,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Plugin for StubExecutor {
+        fn tag(&self) -> &str {
+            self.tag
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for StubExecutor {
+        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+            if let Some(label) = self.execute_log {
+                self.log.lock().unwrap().push(label);
+            }
+            if let Some(state) = self.next_flow_state {
+                context.exec_flow_state = state;
+            }
+
+            match self.behavior {
+                StubBehavior::Next => Ok(ExecStep::Next),
+                StubBehavior::NextWithPost => Ok(ExecStep::NextWithPost(None)),
+                StubBehavior::Error(message) => Err(DnsError::plugin(message)),
+            }
+        }
+
+        async fn post_execute(
+            &self,
+            _context: &mut DnsContext,
+            _state: Option<ExecState>,
+        ) -> ExecResult {
+            if let Some(label) = self.post_log {
+                self.log.lock().unwrap().push(label);
+            }
+            Ok(())
+        }
+    }
+
+    fn make_context() -> DnsContext {
+        let mut request = Message::new();
+        request.set_id(42);
+        request.add_query(Query::query(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+        ));
+
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: AHashMap::new(),
+            query_view: None,
+            registry: Arc::new(PluginRegistry::new()),
+        }
+    }
+
+    fn executor_instruction(executor: Arc<dyn Executor>) -> Instruction {
+        Instruction {
+            matchers: Vec::new(),
+            op: OpCode::Executor(executor),
+        }
+    }
+
+    fn builtin_instruction(op: BuiltinOp) -> Instruction {
+        Instruction {
+            matchers: Vec::new(),
+            op: OpCode::Builtin(op),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_executes_post_callbacks_in_lifo_order() {
+        // Arrange
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let first: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "first",
+            StubBehavior::NextWithPost,
+            None,
+            Some("post:first"),
+            None,
+            log.clone(),
+        ));
+        let second: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "second",
+            StubBehavior::NextWithPost,
+            None,
+            Some("post:second"),
+            None,
+            log.clone(),
+        ));
+        let program = Arc::new(ChainProgram {
+            instructions: vec![executor_instruction(first), executor_instruction(second)],
+        });
+        let mut context = make_context();
+
+        // Act
+        program.run(&mut context).await.unwrap();
+
+        // Assert
+        assert_eq!(
+            log.lock().unwrap().clone(),
+            vec!["post:second", "post:first"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_bubbles_execute_error_after_running_deferred_posts() {
+        // Arrange
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let deferred: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "deferred",
+            StubBehavior::NextWithPost,
+            None,
+            Some("post:deferred"),
+            None,
+            log.clone(),
+        ));
+        let failing: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "failing",
+            StubBehavior::Error("boom"),
+            None,
+            None,
+            None,
+            log.clone(),
+        ));
+        let program = Arc::new(ChainProgram {
+            instructions: vec![
+                executor_instruction(deferred),
+                executor_instruction(failing),
+            ],
+        });
+        let mut context = make_context();
+
+        // Act
+        let error = program.run(&mut context).await.unwrap_err();
+
+        // Assert
+        assert!(matches!(error, DnsError::Plugin(message) if message == "boom"));
+        assert_eq!(log.lock().unwrap().clone(), vec!["post:deferred"]);
+    }
+
+    #[tokio::test]
+    async fn test_run_reject_sets_response_and_breaks_flow() {
+        // Arrange
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let skipped: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "skipped",
+            StubBehavior::Next,
+            Some("execute:skipped"),
+            None,
+            None,
+            log.clone(),
+        ));
+        let program = Arc::new(ChainProgram {
+            instructions: vec![
+                builtin_instruction(BuiltinOp::Reject(ResponseCode::ServFail)),
+                executor_instruction(skipped),
+            ],
+        });
+        let mut context = make_context();
+
+        // Act
+        program.run(&mut context).await.unwrap();
+
+        // Assert
+        let response = context.response.expect("reject should build a response");
+        assert_eq!(response.id(), 42);
+        assert_eq!(response.response_code(), ResponseCode::ServFail);
+        assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_accept_breaks_flow_without_building_response() {
+        // Arrange
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let skipped: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "skipped",
+            StubBehavior::Next,
+            Some("execute:skipped"),
+            None,
+            None,
+            log.clone(),
+        ));
+        let program = Arc::new(ChainProgram {
+            instructions: vec![
+                builtin_instruction(BuiltinOp::Accept),
+                executor_instruction(skipped),
+            ],
+        });
+        let mut context = make_context();
+
+        // Act
+        program.run(&mut context).await.unwrap();
+
+        // Assert
+        assert!(context.response.is_none());
+        assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_return_stops_without_breaking_flow() {
+        // Arrange
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let skipped: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "skipped",
+            StubBehavior::Next,
+            Some("execute:skipped"),
+            None,
+            None,
+            log.clone(),
+        ));
+        let program = Arc::new(ChainProgram {
+            instructions: vec![
+                builtin_instruction(BuiltinOp::Return),
+                executor_instruction(skipped),
+            ],
+        });
+        let mut context = make_context();
+
+        // Act
+        program.run(&mut context).await.unwrap();
+
+        // Assert
+        assert!(context.response.is_none());
+        assert_eq!(context.exec_flow_state, ExecFlowState::Running);
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_jump_resets_reached_tail_and_continues_parent_program() {
+        // Arrange
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let jumped: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "jumped",
+            StubBehavior::Next,
+            Some("execute:jumped"),
+            None,
+            Some(ExecFlowState::ReachedTail),
+            log.clone(),
+        ));
+        let after_jump: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "after_jump",
+            StubBehavior::Next,
+            Some("execute:after_jump"),
+            None,
+            None,
+            log.clone(),
+        ));
+        let program = Arc::new(ChainProgram {
+            instructions: vec![
+                builtin_instruction(BuiltinOp::Jump(jumped)),
+                executor_instruction(after_jump),
+            ],
+        });
+        let mut context = make_context();
+
+        // Act
+        program.run(&mut context).await.unwrap();
+
+        // Assert
+        assert_eq!(
+            log.lock().unwrap().clone(),
+            vec!["execute:jumped", "execute:after_jump"]
+        );
+        assert_eq!(context.exec_flow_state, ExecFlowState::Running);
+    }
+}

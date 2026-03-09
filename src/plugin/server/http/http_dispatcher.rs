@@ -301,3 +301,323 @@ fn msg_to_response(dns_response: Message) -> Response<Bytes> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::DnsContext;
+    use crate::core::dns_utils::build_response_from_request;
+    use crate::core::error::Result;
+    use crate::plugin::Plugin;
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_registry;
+    use async_trait::async_trait;
+    use hickory_proto::op::{Query, ResponseCode};
+    use hickory_proto::rr::{Name, RecordType};
+    use std::sync::Mutex;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ObservedRequest {
+        query_name: String,
+        query_id: u16,
+        server_name: Option<String>,
+        url_path: Option<String>,
+    }
+
+    #[derive(Debug)]
+    struct RecordingExecutor {
+        observed: Arc<Mutex<Option<ObservedRequest>>>,
+        response_code: ResponseCode,
+    }
+
+    #[async_trait]
+    impl Plugin for RecordingExecutor {
+        fn tag(&self) -> &str {
+            "recording_executor"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for RecordingExecutor {
+        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+            let query_name = context
+                .query_view()
+                .expect("request should contain one query")
+                .normalized_name()
+                .to_string();
+            let observed = ObservedRequest {
+                query_name,
+                query_id: context.request.id(),
+                server_name: context
+                    .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
+                    .cloned(),
+                url_path: context
+                    .get_attr::<String>(DnsContext::ATTR_URL_PATH)
+                    .cloned(),
+            };
+            self.observed
+                .lock()
+                .expect("request observation lock should not be poisoned")
+                .replace(observed);
+            context.response = Some(build_response_from_request(
+                &context.request,
+                self.response_code,
+            ));
+            Ok(ExecStep::Next)
+        }
+    }
+
+    fn make_request_handle(
+        response_code: ResponseCode,
+    ) -> (Arc<RequestHandle>, Arc<Mutex<Option<ObservedRequest>>>) {
+        let observed = Arc::new(Mutex::new(None));
+        let executor = Arc::new(RecordingExecutor {
+            observed: observed.clone(),
+            response_code,
+        });
+        (
+            Arc::new(RequestHandle {
+                entry_executor: executor,
+                registry: test_registry(),
+            }),
+            observed,
+        )
+    }
+
+    fn make_dns_query(id: u16, qname: &str) -> Message {
+        let mut request = Message::new();
+        request.set_id(id);
+        request.add_query(Query::query(
+            Name::from_ascii(qname).expect("query name should be valid"),
+            RecordType::A,
+        ));
+        request
+    }
+
+    fn encode_query(message: &Message) -> String {
+        URL_SAFE_NO_PAD.encode(
+            message
+                .to_bytes()
+                .expect("DNS query should serialize successfully"),
+        )
+    }
+
+    fn decode_response(response: &Response<Bytes>) -> Message {
+        Message::from_bytes(response.body()).expect("HTTP body should contain DNS wire format")
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_returns_not_found_for_unregistered_route() {
+        let dispatcher = HttpDispatcher::new();
+
+        let response = dispatcher
+            .handle_request(
+                Method::GET,
+                "/missing".to_string(),
+                None,
+                Bytes::new(),
+                SocketAddr::from(([127, 0, 0, 1], 5400)),
+                None,
+            )
+            .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.body().as_ref(), b"404 Not Found");
+    }
+
+    #[tokio::test]
+    async fn test_dns_get_handler_returns_bad_request_when_dns_param_is_missing() {
+        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let mut dispatcher = HttpDispatcher::new();
+        dispatcher.register_route(
+            Method::GET,
+            "/dns-query".to_string(),
+            Box::new(DnsGetHandler::new(request_handle)),
+        );
+
+        let response = dispatcher
+            .handle_request(
+                Method::GET,
+                "/dns-query".to_string(),
+                Some("foo=bar".to_string()),
+                Bytes::new(),
+                SocketAddr::from(([127, 0, 0, 1], 5401)),
+                Some("dns.example.test".to_string()),
+            )
+            .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.body().as_ref(),
+            b"400 Bad Request: Invalid DNS query"
+        );
+        assert!(
+            observed
+                .lock()
+                .expect("request observation lock should not be poisoned")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dns_get_handler_processes_valid_query_and_forwards_meta() {
+        let (request_handle, observed) = make_request_handle(ResponseCode::Refused);
+        let mut dispatcher = HttpDispatcher::new();
+        dispatcher.register_route(
+            Method::GET,
+            "/dns-query".to_string(),
+            Box::new(DnsGetHandler::new(request_handle)),
+        );
+        let query = make_dns_query(31, "www.example.test.");
+        let encoded_query = encode_query(&query);
+
+        let response = dispatcher
+            .handle_request(
+                Method::GET,
+                "/dns-query".to_string(),
+                Some(format!("foo=bar&dns={encoded_query}")),
+                Bytes::new(),
+                SocketAddr::from(([127, 0, 0, 1], 5402)),
+                Some("dns.example.test".to_string()),
+            )
+            .await;
+
+        let dns_response = decode_response(&response);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["Content-Type"],
+            "application/dns-message"
+        );
+        assert_eq!(response.headers()["Cache-Control"], "max-age=300");
+        assert_eq!(dns_response.id(), 31);
+        assert_eq!(dns_response.response_code(), ResponseCode::Refused);
+        assert_eq!(
+            observed
+                .lock()
+                .expect("request observation lock should not be poisoned")
+                .clone(),
+            Some(ObservedRequest {
+                query_name: "www.example.test".to_string(),
+                query_id: 31,
+                server_name: Some("dns.example.test".to_string()),
+                url_path: Some("/dns-query".to_string()),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dns_post_handler_returns_payload_too_large_for_oversized_body() {
+        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let mut dispatcher = HttpDispatcher::new();
+        dispatcher.register_route(
+            Method::POST,
+            "/dns-query".to_string(),
+            Box::new(DnsPostHandler::new(request_handle)),
+        );
+
+        let response = dispatcher
+            .handle_request(
+                Method::POST,
+                "/dns-query".to_string(),
+                None,
+                Bytes::from(vec![0u8; 65536]),
+                SocketAddr::from(([127, 0, 0, 1], 5403)),
+                Some("dns.example.test".to_string()),
+            )
+            .await;
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.body().as_ref(), b"413 Payload Too Large");
+        assert!(
+            observed
+                .lock()
+                .expect("request observation lock should not be poisoned")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dns_post_handler_returns_bad_request_for_invalid_dns_body() {
+        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let mut dispatcher = HttpDispatcher::new();
+        dispatcher.register_route(
+            Method::POST,
+            "/dns-query".to_string(),
+            Box::new(DnsPostHandler::new(request_handle)),
+        );
+
+        let response = dispatcher
+            .handle_request(
+                Method::POST,
+                "/dns-query".to_string(),
+                None,
+                Bytes::from_static(b"not-a-dns-message"),
+                SocketAddr::from(([127, 0, 0, 1], 5404)),
+                Some("dns.example.test".to_string()),
+            )
+            .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.body().as_ref(),
+            b"400 Bad Request: Invalid DNS message"
+        );
+        assert!(
+            observed
+                .lock()
+                .expect("request observation lock should not be poisoned")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dns_post_handler_processes_valid_body_and_forwards_meta() {
+        let (request_handle, observed) = make_request_handle(ResponseCode::NXDomain);
+        let mut dispatcher = HttpDispatcher::new();
+        dispatcher.register_route(
+            Method::POST,
+            "/dns-query".to_string(),
+            Box::new(DnsPostHandler::new(request_handle)),
+        );
+        let query = make_dns_query(41, "api.example.test.");
+        let query_bytes = query
+            .to_bytes()
+            .expect("DNS query should serialize successfully");
+
+        let response = dispatcher
+            .handle_request(
+                Method::POST,
+                "/dns-query".to_string(),
+                None,
+                Bytes::from(query_bytes),
+                SocketAddr::from(([127, 0, 0, 1], 5405)),
+                Some("dns.example.test".to_string()),
+            )
+            .await;
+
+        let dns_response = decode_response(&response);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(dns_response.id(), 41);
+        assert_eq!(dns_response.response_code(), ResponseCode::NXDomain);
+        assert_eq!(
+            observed
+                .lock()
+                .expect("request observation lock should not be poisoned")
+                .clone(),
+            Some(ObservedRequest {
+                query_name: "api.example.test".to_string(),
+                query_id: 41,
+                server_name: Some("dns.example.test".to_string()),
+                url_path: Some("/dns-query".to_string()),
+            })
+        );
+    }
+}

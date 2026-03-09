@@ -11,16 +11,11 @@
 //! - Plugin-based architecture for extensibility
 //! - Graceful shutdown handling
 
+use forgedns::core::error::{DnsError, Result};
+use forgedns::{config, core, plugin};
 use tokio::sync::oneshot;
 use tokio::{runtime, signal};
 use tracing::{error, info};
-
-mod config;
-mod core;
-mod network;
-mod plugin;
-
-use core::error::{DnsError, Result};
 
 /// Application entry point
 fn main() -> Result<()> {

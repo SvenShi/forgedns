@@ -278,3 +278,137 @@ fn unmap_ip(ip: IpAddr) -> IpAddr {
             .unwrap_or(IpAddr::V6(v6)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_registry;
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::{Name, RecordType};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_parse_handler_from_value_validation() {
+        assert!(parse_handler_from_value("ecs", None).is_ok());
+        assert!(
+            parse_handler_from_value("ecs", Some(serde_yml::from_str("mask4: 64").unwrap()),)
+                .is_err()
+        );
+    }
+
+    fn make_context(qclass: DNSClass) -> DnsContext {
+        let mut request = Message::new();
+        let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), RecordType::A);
+        query.set_query_class(qclass);
+        request.add_query(query);
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::new(10, 1, 1, 9), 5353)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    fn add_ecs_option(message: &mut Message, ip: IpAddr, mask: u8) {
+        let opt = ensure_opt_record(message);
+        opt.insert(EdnsOption::Subnet(ClientSubnet::new(ip, mask, 0)));
+    }
+
+    #[tokio::test]
+    async fn test_ecs_handler_send_inserts_request_ecs_and_strips_response_ecs() {
+        let plugin = EcsHandler {
+            tag: "ecs".to_string(),
+            forward: false,
+            send: true,
+            preset: None,
+            mask4: 24,
+            mask6: 48,
+        };
+        let mut ctx = make_context(DNSClass::IN);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+        assert!(request_has_ecs(&ctx.request));
+
+        let mut response = Message::new();
+        add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
+        ctx.response = Some(response);
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+        assert!(
+            !request_has_ecs(ctx.response.as_ref().expect("response should exist")),
+            "response ECS should be stripped when not forwarded from client"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ecs_handler_forward_keeps_client_and_response_ecs() {
+        let plugin = EcsHandler {
+            tag: "ecs".to_string(),
+            forward: true,
+            send: false,
+            preset: None,
+            mask4: 24,
+            mask6: 48,
+        };
+        let mut ctx = make_context(DNSClass::IN);
+        add_ecs_option(&mut ctx.request, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+        assert!(request_has_ecs(&ctx.request));
+
+        let mut response = Message::new();
+        add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
+        ctx.response = Some(response);
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+        assert!(request_has_ecs(
+            ctx.response.as_ref().expect("response should exist")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_ecs_handler_strips_client_ecs_when_forward_disabled() {
+        let plugin = EcsHandler {
+            tag: "ecs".to_string(),
+            forward: false,
+            send: false,
+            preset: None,
+            mask4: 24,
+            mask6: 48,
+        };
+        let mut ctx = make_context(DNSClass::IN);
+        add_ecs_option(&mut ctx.request, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
+
+        plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(!request_has_ecs(&ctx.request));
+    }
+}

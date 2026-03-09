@@ -123,9 +123,10 @@ impl Matcher for ClientIpMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::matcher::Matcher;
     use hickory_proto::op::{Message, Query};
     use hickory_proto::rr::{DNSClass, Name, RecordType};
-    use std::net::SocketAddr;
+    use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
@@ -156,5 +157,30 @@ mod tests {
         };
         let mut ctx = make_context();
         assert!(!matcher.is_match(&mut ctx));
+    }
+
+    #[test]
+    fn test_build_client_ip_matcher_rejects_empty_rules_and_set_tags() {
+        let result = build_client_ip_matcher(
+            "client_ip".to_string(),
+            vec![],
+            Arc::new(PluginRegistry::new()),
+        );
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_client_ip_matcher_matches_allowed_prefix() {
+        let matcher = ClientIpMatcher {
+            tag: "client_ip".into(),
+            client_ip_rules: parse_ip_prefix_matcher("client_ip", &["192.168.0.0/16".into()])
+                .unwrap(),
+            ip_set_tags: vec![],
+            ip_sets: vec![],
+            registry: Arc::new(PluginRegistry::new()),
+        };
+        let mut ctx = make_context();
+        ctx.src_addr = SocketAddr::from((Ipv4Addr::new(192, 168, 2, 9), 5353));
+        assert!(matcher.is_match(&mut ctx));
     }
 }

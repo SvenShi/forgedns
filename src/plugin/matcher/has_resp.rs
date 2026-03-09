@@ -75,3 +75,30 @@ impl Matcher for HasRespMatcher {
         context.response.is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::test_utils::{test_context, test_registry};
+
+    #[test]
+    fn test_has_resp_quick_setup_rejects_param() {
+        let factory = HasRespFactory {};
+        assert!(
+            factory
+                .quick_setup("has_resp", Some("unexpected".to_string()), test_registry(),)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_has_resp_matcher_checks_response_presence() {
+        let matcher = HasRespMatcher {
+            tag: "has_resp".to_string(),
+        };
+        let mut ctx = test_context();
+        assert!(!matcher.is_match(&mut ctx));
+        ctx.response = Some(hickory_proto::op::Message::new());
+        assert!(matcher.is_match(&mut ctx));
+    }
+}

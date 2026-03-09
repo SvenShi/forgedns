@@ -300,3 +300,28 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
         Ok(arc)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::upstream::ConnectionType;
+
+    #[test]
+    fn test_builder_new_copies_connection_info_fields() {
+        let mut connection_info =
+            ConnectionInfo::with_addr("udp://1.1.1.1:5300").expect("connection info should parse");
+        connection_info.timeout = Duration::from_secs(7);
+        connection_info.so_mark = Some(100);
+        connection_info.bind_to_device = Some("en0".to_string());
+
+        let builder = UdpConnectionBuilder::new(&connection_info);
+
+        assert_eq!(connection_info.connection_type, ConnectionType::UDP);
+        assert_eq!(builder.remote_ip, connection_info.remote_ip);
+        assert_eq!(builder.port, 5300);
+        assert_eq!(builder.timeout, Duration::from_secs(7));
+        assert_eq!(builder.server_name, "1.1.1.1");
+        assert_eq!(builder.so_mark, Some(100));
+        assert_eq!(builder.bind_to_device.as_deref(), Some("en0"));
+    }
+}

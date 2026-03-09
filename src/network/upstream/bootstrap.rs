@@ -295,3 +295,50 @@ impl Bootstrap {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_new_builds_ipv4_query_by_default() {
+        let bootstrap = Bootstrap::new("1.1.1.1:53", "example.com.", None)
+            .expect("bootstrap should be created");
+
+        let query = bootstrap
+            .message
+            .query()
+            .expect("query should be pre-built");
+
+        assert_eq!(bootstrap.domain, "example.com.");
+        assert_eq!(query.query_type(), RecordType::A);
+        assert_eq!(query.name().to_utf8(), "example.com.");
+    }
+
+    #[tokio::test]
+    async fn test_new_builds_ipv6_query_when_requested() {
+        let bootstrap = Bootstrap::new("8.8.8.8:53", "example.com.", Some(6))
+            .expect("bootstrap should be created");
+
+        let query = bootstrap
+            .message
+            .query()
+            .expect("query should be pre-built");
+
+        assert_eq!(query.query_type(), RecordType::AAAA);
+    }
+
+    #[tokio::test]
+    async fn test_new_rejects_invalid_target_domain() {
+        let result = Bootstrap::new("1.1.1.1:53", "not a domain", None);
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_new_rejects_invalid_bootstrap_server() {
+        let result = Bootstrap::new("udp://127.0.0.1:notaport", "example.com.", None);
+
+        assert!(result.is_err());
+    }
+}

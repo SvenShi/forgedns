@@ -211,3 +211,96 @@ fn split_ips(ips: Vec<IpAddr>) -> (Vec<std::net::Ipv4Addr>, Vec<std::net::Ipv6Ad
 
     (ipv4, ipv6)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::ExecFlowState;
+    use crate::plugin::executor::ExecStep;
+    use crate::plugin::test_utils::test_registry;
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::{DNSClass, Name};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    fn make_context(qtype: RecordType) -> DnsContext {
+        let mut request = Message::new();
+        let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), qtype);
+        query.set_query_class(DNSClass::IN);
+        request.add_query(query);
+
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    #[test]
+    fn test_parse_ip_tokens_validation() {
+        assert!(parse_ip_tokens(vec![]).is_ok());
+        assert!(parse_ip_tokens(vec!["invalid".to_string()]).is_err());
+        assert!(parse_ip_tokens(vec!["1.1.1.1".to_string()]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_black_hole_execute_generates_a_answers() {
+        let plugin = BlackHole {
+            tag: "bh".to_string(),
+            ipv4: vec![Ipv4Addr::new(1, 1, 1, 1)],
+            ipv6: vec![],
+        };
+        let mut ctx = make_context(RecordType::A);
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Next));
+        let resp = ctx.response.expect("response should exist");
+        assert_eq!(resp.answers().len(), 1);
+        assert_eq!(resp.answers()[0].record_type(), RecordType::A);
+    }
+
+    #[tokio::test]
+    async fn test_black_hole_execute_generates_aaaa_answers() {
+        let plugin = BlackHole {
+            tag: "bh".to_string(),
+            ipv4: vec![],
+            ipv6: vec![Ipv6Addr::LOCALHOST],
+        };
+        let mut ctx = make_context(RecordType::AAAA);
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Next));
+        let resp = ctx.response.expect("response should exist");
+        assert_eq!(resp.answers().len(), 1);
+        assert_eq!(resp.answers()[0].record_type(), RecordType::AAAA);
+    }
+
+    #[tokio::test]
+    async fn test_black_hole_execute_skips_multi_question_request() {
+        let plugin = BlackHole {
+            tag: "bh".to_string(),
+            ipv4: vec![Ipv4Addr::new(1, 1, 1, 1)],
+            ipv6: vec![],
+        };
+        let mut ctx = make_context(RecordType::A);
+        ctx.request.add_query(Query::query(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+        ));
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Next));
+        assert!(ctx.response.is_none());
+    }
+}

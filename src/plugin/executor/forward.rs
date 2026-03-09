@@ -811,7 +811,7 @@ upstreams:
         assert!(context.response.is_some());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn concurrent_prefers_noerror_over_early_servfail() {
         let forwarder = ConcurrentForwarder {
             tag: "forward-test".to_string(),
@@ -841,7 +841,7 @@ upstreams:
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn concurrent_returns_last_non_preferred_rcode_when_no_preferred_response() {
         let forwarder = ConcurrentForwarder {
             tag: "forward-test".to_string(),

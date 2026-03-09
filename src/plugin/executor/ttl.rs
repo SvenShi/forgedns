@@ -206,3 +206,84 @@ fn parse_policy_from_expr(raw: &str) -> Result<TtlPolicy> {
         max: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::executor::ExecStep;
+    use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+    use hickory_proto::rr::rdata::{A, OPT};
+    use hickory_proto::rr::{Name, RData, Record};
+
+    #[test]
+    fn test_parse_policy_from_expr_supports_fix_and_range() {
+        let fixed = parse_policy_from_expr("300").expect("fixed ttl should parse");
+        assert_eq!(fixed.apply(10), 300);
+
+        let range = parse_policy_from_expr("100-200").expect("range ttl should parse");
+        assert_eq!(range.apply(10), 100);
+        assert_eq!(range.apply(150), 150);
+        assert_eq!(range.apply(500), 200);
+    }
+
+    #[tokio::test]
+    async fn test_execute_rewrites_ttl_but_keeps_opt_ttl() {
+        let plugin = TtlExecutor {
+            tag: "ttl_test".to_string(),
+            policy: TtlPolicy {
+                fix: Some(60),
+                min: None,
+                max: None,
+            },
+        };
+
+        let mut response = hickory_proto::op::Message::new();
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            120,
+            RData::A(A::new(1, 1, 1, 1)),
+        ));
+        response.add_name_server(Record::from_rdata(
+            Name::from_ascii("ns.example.com.").unwrap(),
+            30,
+            RData::A(A::new(2, 2, 2, 2)),
+        ));
+        response.add_additional(Record::from_rdata(
+            Name::from_ascii("extra.example.com.").unwrap(),
+            45,
+            RData::A(A::new(3, 3, 3, 3)),
+        ));
+        response.add_additional(Record::from_rdata(
+            Name::root(),
+            0,
+            RData::OPT(OPT::default()),
+        ));
+
+        let mut ctx = test_context();
+        ctx.response = Some(response);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("ttl execute should work");
+        assert!(matches!(step, ExecStep::Next));
+
+        let updated = ctx.response.expect("response should remain present");
+        assert_eq!(updated.answers()[0].ttl(), 60);
+        assert_eq!(updated.name_servers()[0].ttl(), 60);
+        assert_eq!(updated.additionals()[0].ttl(), 60);
+        assert_eq!(
+            updated.additionals()[1].ttl(),
+            0,
+            "OPT ttl should not change"
+        );
+    }
+
+    #[test]
+    fn test_factory_create_rejects_empty_args() {
+        let factory = TtlFactory;
+        let cfg = plugin_config("ttl", "ttl", None);
+        let result = factory.create(&cfg, test_registry());
+        assert!(result.is_err());
+    }
+}

@@ -120,3 +120,40 @@ fn parse_msg_from_value(args: Option<serde_yml::Value>) -> Option<String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_context;
+    use serde_yml::Value;
+
+    #[test]
+    fn test_parse_msg_from_value_supports_string_and_struct() {
+        let msg = parse_msg_from_value(Some(Value::String(" hello ".to_string())));
+        assert_eq!(msg.as_deref(), Some("hello"));
+
+        let msg = parse_msg_from_value(Some(serde_yml::from_str("msg: custom").unwrap()));
+        assert_eq!(msg.as_deref(), Some("custom"));
+
+        let msg = parse_msg_from_value(Some(Value::String("   ".to_string())));
+        assert!(msg.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_debug_print_execute_returns_next_without_mutation() {
+        let plugin = DebugPrint {
+            tag: "debug".to_string(),
+            msg: "m".to_string(),
+        };
+        let mut ctx = test_context();
+        let original_request = ctx.request.clone();
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Next));
+        assert_eq!(ctx.request, original_request);
+    }
+}

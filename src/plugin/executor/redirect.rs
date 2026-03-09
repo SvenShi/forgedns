@@ -403,3 +403,98 @@ fn normalize_name(raw: &str) -> String {
 fn _query_name(query: &Query) -> &Name {
     query.name()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::test_utils::test_registry;
+    use hickory_proto::op::Message;
+    use hickory_proto::rr::rdata::A;
+    use hickory_proto::rr::{RData, RecordType};
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_parse_redirect_rule_validation() {
+        assert!(parse_redirect_rule("bad_rule").is_err());
+        assert!(parse_redirect_rule("full:example.com target.example.com").is_ok());
+    }
+
+    fn make_context(name: &str) -> DnsContext {
+        let mut request = Message::new();
+        let mut query = Query::query(Name::from_ascii(name).unwrap(), RecordType::A);
+        query.set_query_class(DNSClass::IN);
+        request.add_query(query);
+        DnsContext {
+            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            response: None,
+            exec_flow_state: ExecFlowState::Running,
+            marks: Default::default(),
+            attributes: Default::default(),
+            query_view: None,
+            registry: test_registry(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_redirect_execute_and_post_execute_full_flow() {
+        let rules = vec![parse_redirect_rule("full:example.com target.example.com").unwrap()];
+        let index = build_rule_index(&rules).expect("rule index should build");
+        let plugin = RedirectExecutor {
+            tag: "redirect".to_string(),
+            rules,
+            index,
+        };
+
+        let mut ctx = make_context("example.com.");
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+        assert_eq!(
+            ctx.request
+                .query()
+                .expect("query should exist")
+                .name()
+                .to_utf8(),
+            "target.example.com."
+        );
+
+        let mut response = Message::new();
+        response.add_query(Query::query(
+            Name::from_ascii("target.example.com.").unwrap(),
+            RecordType::A,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("target.example.com.").unwrap(),
+            60,
+            RData::A(A::new(1, 1, 1, 1)),
+        ));
+        ctx.response = Some(response);
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post execute should succeed");
+
+        assert_eq!(
+            ctx.request
+                .query()
+                .expect("query should exist")
+                .name()
+                .to_utf8(),
+            "example.com."
+        );
+
+        let response = ctx.response.expect("response should exist");
+        assert_eq!(response.queries()[0].name().to_utf8(), "example.com.");
+        assert_eq!(response.answers().len(), 2);
+        assert_eq!(response.answers()[0].record_type(), RecordType::CNAME);
+    }
+}

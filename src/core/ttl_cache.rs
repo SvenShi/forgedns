@@ -246,3 +246,115 @@ where
         entries
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_insert_get_and_remove_if_expired() {
+        let cache = TtlCache::with_capacity(4);
+        cache.insert_or_update("k", 1u32, 100, 200);
+
+        let hit = cache
+            .get_fresh_cloned(&"k", 150, 0)
+            .expect("entry should exist");
+        assert_eq!(hit.value, 1);
+
+        assert!(cache.remove_if_expired(&"k", 250));
+        assert!(cache.get_fresh_cloned(&"k", 260, 0).is_none());
+    }
+
+    #[test]
+    fn test_remove_expired_batch_and_sample_last_access() {
+        let cache = TtlCache::with_capacity(8);
+        cache.insert_or_update_with_meta("a", 1u32, 10, 20, 11);
+        cache.insert_or_update_with_meta("b", 2u32, 10, 200, 12);
+        cache.insert_or_update_with_meta("c", 3u32, 10, 15, 13);
+
+        let removed = cache.remove_expired_batch(30, 10);
+        assert_eq!(removed, 2);
+        assert_eq!(cache.len(), 1);
+
+        let sample = cache.sample_last_access(10);
+        assert_eq!(sample.len(), 1);
+        assert_eq!(sample[0].0, "b");
+    }
+
+    #[test]
+    fn test_get_fresh_cloned_refreshes_last_access_after_touch_interval() {
+        // Arrange
+        let cache = TtlCache::with_capacity(4);
+        cache.insert_or_update_with_meta("k", 1u32, 10, 100, 10);
+
+        // Act
+        let hit = cache
+            .get_fresh_cloned(&"k", 25, 10)
+            .expect("entry should exist");
+        let (_, stored) = cache
+            .iter_entries_cloned()
+            .into_iter()
+            .next()
+            .expect("entry should remain cached");
+
+        // Assert
+        assert_eq!(hit.last_access_ms, 10);
+        assert_eq!(stored.last_access_ms, 25);
+    }
+
+    #[test]
+    fn test_get_fresh_cloned_does_not_refresh_last_access_before_touch_interval() {
+        // Arrange
+        let cache = TtlCache::with_capacity(4);
+        cache.insert_or_update_with_meta("k", 1u32, 10, 100, 10);
+
+        // Act
+        let _ = cache
+            .get_fresh_cloned(&"k", 15, 10)
+            .expect("entry should exist");
+        let (_, stored) = cache
+            .iter_entries_cloned()
+            .into_iter()
+            .next()
+            .expect("entry should remain cached");
+
+        // Assert
+        assert_eq!(stored.last_access_ms, 10);
+    }
+
+    #[test]
+    fn test_get_fresh_cloned_removes_expired_entry() {
+        // Arrange
+        let cache = TtlCache::with_capacity(4);
+        cache.insert_or_update_with_meta("k", 1u32, 10, 20, 10);
+
+        // Act
+        let hit = cache.get_fresh_cloned(&"k", 20, 10);
+
+        // Assert
+        assert!(hit.is_none());
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_insert_or_update_replaces_existing_entry_without_growing_cache() {
+        // Arrange
+        let cache = TtlCache::with_capacity(4);
+        cache.insert_or_update_with_meta("k", 1u32, 10, 20, 11);
+
+        // Act
+        cache.insert_or_update_with_meta("k", 2u32, 30, 40, 31);
+        let (_, stored) = cache
+            .iter_entries_cloned()
+            .into_iter()
+            .next()
+            .expect("entry should exist");
+
+        // Assert
+        assert_eq!(cache.len(), 1);
+        assert_eq!(stored.value, 2);
+        assert_eq!(stored.cache_time_ms, 30);
+        assert_eq!(stored.expire_at_ms, 40);
+        assert_eq!(stored.last_access_ms, 31);
+    }
+}

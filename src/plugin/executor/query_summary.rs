@@ -157,3 +157,57 @@ fn parse_msg(args: Option<serde_yml::Value>) -> Option<String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::executor::ExecStep;
+    use crate::plugin::test_utils::test_context;
+    use hickory_proto::op::Message;
+
+    #[test]
+    fn test_parse_msg_trims_and_filters_empty() {
+        assert_eq!(parse_msg(None), None);
+        assert_eq!(
+            parse_msg(Some(serde_yml::Value::String(" hi ".into()))),
+            Some("hi".into())
+        );
+        assert_eq!(
+            parse_msg(Some(serde_yml::Value::String("   ".into()))),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_summary_execute_returns_next_with_post() {
+        let plugin = QuerySummary {
+            tag: "summary".to_string(),
+            msg: "m".to_string(),
+        };
+        let mut ctx = test_context();
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::NextWithPost(_)));
+    }
+
+    #[tokio::test]
+    async fn test_query_summary_post_execute_accepts_missing_or_invalid_state() {
+        let plugin = QuerySummary {
+            tag: "summary".to_string(),
+            msg: "m".to_string(),
+        };
+        let mut ctx = test_context();
+        ctx.response = Some(Message::new());
+
+        plugin
+            .post_execute(&mut ctx, None)
+            .await
+            .expect("post_execute without state should succeed");
+        plugin
+            .post_execute(&mut ctx, Some(Box::new("invalid".to_string())))
+            .await
+            .expect("post_execute with invalid state should succeed");
+    }
+}

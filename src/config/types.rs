@@ -121,3 +121,52 @@ pub struct PluginConfig {
     /// Plugin-specific arguments (parsed by plugin factory)
     pub args: Option<Value>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plugin(tag: &str, plugin_type: &str) -> PluginConfig {
+        PluginConfig {
+            tag: tag.to_string(),
+            plugin_type: plugin_type.to_string(),
+            args: None,
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_duplicate_plugin_tags() {
+        let config = Config {
+            log: LogConfig::default(),
+            plugins: vec![plugin("dup", "debug_print"), plugin("dup", "ttl")],
+        };
+
+        let err = config
+            .validate()
+            .expect_err("should reject duplicate plugin tags");
+        assert!(matches!(err, ConfigError::DuplicatePluginTag { .. }));
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_plugin_type() {
+        let config = Config {
+            log: LogConfig::default(),
+            plugins: vec![plugin("test", "")],
+        };
+
+        let err = config
+            .validate()
+            .expect_err("should reject empty plugin type");
+        assert!(matches!(err, ConfigError::EmptyPluginType));
+    }
+
+    #[test]
+    fn test_validate_accepts_basic_valid_config() {
+        let config = Config {
+            log: LogConfig::default(),
+            plugins: vec![plugin("ok", "debug_print")],
+        };
+
+        assert!(config.validate().is_ok());
+    }
+}

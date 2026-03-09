@@ -282,3 +282,31 @@ fn split_rule_tokens(raw: &str) -> Vec<String> {
         .map(str::to_string)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_quick_setup_rules_validation() {
+        assert!(parse_quick_setup_rules(None).is_err());
+        assert!(parse_quick_setup_rules(Some("   ".to_string())).is_err());
+        let rules =
+            parse_quick_setup_rules(Some("a, b c".to_string())).expect("rules should parse");
+        assert_eq!(rules, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_split_rule_sources_classification() {
+        let (inline, tags, files) = split_rule_sources(vec![
+            "a.com".to_string(),
+            "$set_a".to_string(),
+            "&/tmp/rules.txt".to_string(),
+            "  ".to_string(),
+        ]);
+
+        assert_eq!(inline, vec!["a.com"]);
+        assert_eq!(tags, vec!["set_a"]);
+        assert_eq!(files, vec!["/tmp/rules.txt"]);
+    }
+}
