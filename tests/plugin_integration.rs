@@ -148,6 +148,49 @@ plugins:
 }
 
 #[tokio::test]
+async fn test_sequence_supports_single_match_string_dependency_and_execution() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: allow_all
+    type: _true
+  - tag: seq
+    type: sequence
+    args:
+      - matches: $allow_all
+        exec: mark 100
+      - exec: reject SERVFAIL
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config).await?;
+
+    let sequence = registry
+        .get_plugin("seq")
+        .expect("sequence plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
+    assert!(context.marks.contains("100"));
+    assert_eq!(
+        context
+            .response
+            .as_ref()
+            .expect("reject should set a response")
+            .response_code(),
+        ResponseCode::ServFail
+    );
+
+    registry.destroy_plugins().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_plugin_system_init_reports_missing_dependency_with_field_context() -> Result<()> {
     let yaml = r#"
 log:
@@ -158,6 +201,32 @@ plugins:
     args:
       - matches:
           - $missing_matcher
+        exec: debug_print integration message
+"#;
+
+    let config = parse_config(yaml)?;
+    let err = plugin::init(config)
+        .await
+        .expect_err("missing dependency should fail plugin init");
+    let msg = err.to_string();
+
+    assert!(msg.contains("plugin 'seq'"));
+    assert!(msg.contains("args[0].matches[0]"));
+    assert!(msg.contains("missing plugin 'missing_matcher'"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_plugin_system_init_reports_single_match_dependency_with_field_context() -> Result<()>
+{
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: seq
+    type: sequence
+    args:
+      - matches: $missing_matcher
         exec: debug_print integration message
 "#;
 

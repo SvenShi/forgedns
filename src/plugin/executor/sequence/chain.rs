@@ -252,10 +252,11 @@ impl ChainBuilder {
         let mut matchers = Vec::new();
         if let Some(matcher_exprs) = &rule.matches {
             for (match_index, matcher_raw) in matcher_exprs.iter().enumerate() {
+                let field = format!("args[{}].matches[{}]", node_index, match_index);
                 let (reverse, matcher_expr) = parse_matcher_expr(matcher_raw)?;
                 matchers.push(MatcherRef {
                     matcher: self
-                        .resolve_matcher_ref(matcher_expr, node_index, match_index)
+                        .resolve_matcher_ref(matcher_expr, node_index, match_index, &field)
                         .await?,
                     reverse,
                 });
@@ -365,12 +366,12 @@ impl ChainBuilder {
         expr: &str,
         node_index: usize,
         match_index: usize,
+        field: &str,
     ) -> Result<Arc<dyn Matcher>> {
         match parse_sequence_ref(expr)? {
             SequenceRef::PluginTag(tag) => {
-                let field = format!("args[{}].matches[{}]", node_index, match_index);
                 self.registry
-                    .get_matcher_dependency(&self.sequence_tag, &field, &tag)
+                    .get_matcher_dependency(&self.sequence_tag, field, &tag)
             }
             SequenceRef::QuickSetup { plugin_type, param } => {
                 // Generate deterministic synthetic runtime tag for quick-setup matcher.

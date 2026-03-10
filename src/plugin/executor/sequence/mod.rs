@@ -13,7 +13,7 @@ use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
@@ -57,10 +57,33 @@ pub(super) fn parse_sequence_ref(raw: &str) -> DnsResult<SequenceRef> {
     })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawRuleMatchers {
+    Single(String),
+    Many(Vec<String>),
+}
+
+impl RawRuleMatchers {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(expr) => vec![expr],
+            Self::Many(exprs) => exprs,
+        }
+    }
+}
+
+fn deserialize_rule_matches<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<RawRuleMatchers>::deserialize(deserializer)?.map(RawRuleMatchers::into_vec))
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Rule {
-    #[serde(default)]
-    matches: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_rule_matches")]
+    pub(super) matches: Option<Vec<String>>,
     exec: Option<String>,
 }
 
@@ -233,6 +256,35 @@ mod tests {
         assert_eq!(
             parse_control_flow_dependency("jump $next"),
             Some("next".to_string())
+        );
+    }
+
+    #[test]
+    fn test_rule_deserialize_supports_match_string_and_matches_sequence() {
+        let single = serde_yml::from_str::<Rule>(
+            r#"
+matches: "$allow_all"
+exec: accept
+"#,
+        )
+        .expect("single matches string should deserialize");
+        assert_eq!(
+            single.matches.expect("matches field should exist"),
+            vec!["$allow_all".to_string()]
+        );
+
+        let multi = serde_yml::from_str::<Rule>(
+            r#"
+matches:
+  - "_true"
+  - "qtype A"
+exec: reject SERVFAIL
+"#,
+        )
+        .expect("matches sequence should deserialize");
+        assert_eq!(
+            multi.matches.expect("matches field should exist"),
+            vec!["_true".to_string(), "qtype A".to_string()]
         );
     }
 }
