@@ -728,7 +728,7 @@ impl RouteManager {
                     gateway,
                     distance: self.cfg.distance,
                     domains,
-                    comment_domain: String::new(),
+                    comment_domain: "persistent".to_string(),
                     domain_expiries,
                     ref_count: 1,
                     expires_at_unix: PERSISTENT_EXPIRES_AT_UNIX,

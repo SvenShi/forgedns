@@ -13,8 +13,8 @@
 
 use forgedns::core::error::{DnsError, Result};
 use forgedns::{config, core, plugin};
+use tokio::runtime;
 use tokio::sync::oneshot;
-use tokio::{runtime, signal};
 use tracing::{error, info};
 
 /// Application entry point
@@ -37,20 +37,114 @@ fn init_runtime() -> Result<()> {
     tokio_runtime.block_on(run_async_main())
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ShutdownSignal {
+    #[cfg(unix)]
+    SigInt,
+    #[cfg(unix)]
+    SigTerm,
+    #[cfg(unix)]
+    SigQuit,
+    #[cfg(any(windows, not(any(unix, windows))))]
+    CtrlC,
+    #[cfg(windows)]
+    CtrlBreak,
+    #[cfg(windows)]
+    CtrlClose,
+    #[cfg(windows)]
+    CtrlShutdown,
+    #[cfg(windows)]
+    CtrlLogoff,
+}
+
+impl ShutdownSignal {
+    const fn as_str(self) -> &'static str {
+        match self {
+            #[cfg(unix)]
+            ShutdownSignal::SigInt => "SIGINT",
+            #[cfg(unix)]
+            ShutdownSignal::SigTerm => "SIGTERM",
+            #[cfg(unix)]
+            ShutdownSignal::SigQuit => "SIGQUIT",
+            #[cfg(any(windows, not(any(unix, windows))))]
+            ShutdownSignal::CtrlC => "CTRL_C",
+            #[cfg(windows)]
+            ShutdownSignal::CtrlBreak => "CTRL_BREAK",
+            #[cfg(windows)]
+            ShutdownSignal::CtrlClose => "CTRL_CLOSE",
+            #[cfg(windows)]
+            ShutdownSignal::CtrlShutdown => "CTRL_SHUTDOWN",
+            #[cfg(windows)]
+            ShutdownSignal::CtrlLogoff => "CTRL_LOGOFF",
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> Result<ShutdownSignal> {
+    use tokio::signal::unix::{SignalKind, signal as unix_signal};
+
+    let mut sigint = unix_signal(SignalKind::interrupt())
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for SIGINT: {err}")))?;
+    let mut sigterm = unix_signal(SignalKind::terminate())
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for SIGTERM: {err}")))?;
+    let mut sigquit = unix_signal(SignalKind::quit())
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for SIGQUIT: {err}")))?;
+
+    tokio::select! {
+        _ = sigint.recv() => Ok(ShutdownSignal::SigInt),
+        _ = sigterm.recv() => Ok(ShutdownSignal::SigTerm),
+        _ = sigquit.recv() => Ok(ShutdownSignal::SigQuit),
+    }
+}
+
+#[cfg(windows)]
+async fn wait_for_shutdown_signal() -> Result<ShutdownSignal> {
+    use tokio::signal::windows::{
+        ctrl_break, ctrl_c as windows_ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown,
+    };
+
+    let mut ctrl_c = windows_ctrl_c()
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for CTRL_C: {err}")))?;
+    let mut ctrl_break = ctrl_break()
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for CTRL_BREAK: {err}")))?;
+    let mut ctrl_close = ctrl_close()
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for CTRL_CLOSE: {err}")))?;
+    let mut ctrl_shutdown = ctrl_shutdown()
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for CTRL_SHUTDOWN: {err}")))?;
+    let mut ctrl_logoff = ctrl_logoff()
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for CTRL_LOGOFF: {err}")))?;
+
+    tokio::select! {
+        _ = ctrl_c.recv() => Ok(ShutdownSignal::CtrlC),
+        _ = ctrl_break.recv() => Ok(ShutdownSignal::CtrlBreak),
+        _ = ctrl_close.recv() => Ok(ShutdownSignal::CtrlClose),
+        _ = ctrl_shutdown.recv() => Ok(ShutdownSignal::CtrlShutdown),
+        _ = ctrl_logoff.recv() => Ok(ShutdownSignal::CtrlLogoff),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn wait_for_shutdown_signal() -> Result<ShutdownSignal> {
+    tokio::signal::ctrl_c()
+        .await
+        .map_err(|err| DnsError::runtime(format!("Failed to listen for Ctrl+C: {err}")))?;
+    Ok(ShutdownSignal::CtrlC)
+}
+
 /// Main async runtime loop
 ///
 /// Sets up signal handlers and spawns the application task.
-/// Waits for Ctrl+C signal for graceful shutdown.
+/// Waits for an OS shutdown signal for graceful shutdown.
 #[hotpath::main(percentiles =[50,70,90])]
 async fn run_async_main() -> Result<()> {
     // Create shutdown channel for graceful termination
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<Result<ShutdownSignal>>();
 
-    // Spawn signal handler task for Ctrl+C
+    // Spawn signal handler task before initialization so early SIGTERM/SIGINT
+    // requests from systemd or an interactive terminal are not missed.
     tokio::spawn(async move {
-        signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
-        info!("Received Ctrl+C signal, initiating graceful shutdown");
-        let _ = shutdown_tx.send(());
+        let _ = shutdown_tx.send(wait_for_shutdown_signal().await);
     });
 
     // Initialize and run the DNS server application
@@ -108,9 +202,21 @@ async fn run_async_main() -> Result<()> {
     };
 
     // Wait for shutdown signal
-    shutdown_rx.await.ok();
-    info!("Destroying plugins for shutdown");
+    let shutdown_signal = shutdown_rx
+        .await
+        .map_err(|_| DnsError::runtime("Shutdown signal task exited unexpectedly"))??;
+    info!(
+        signal = shutdown_signal.as_str(),
+        "Received shutdown signal, initiating graceful shutdown"
+    );
+    info!(
+        signal = shutdown_signal.as_str(),
+        "Destroying plugins for shutdown"
+    );
     registry.destroy_plugins().await;
-    info!("Graceful shutdown complete");
+    info!(
+        signal = shutdown_signal.as_str(),
+        "Graceful shutdown complete"
+    );
     Ok(())
 }
