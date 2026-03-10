@@ -855,7 +855,7 @@ mod tests {
             comment
                 .split(';')
                 .filter_map(|token| token.split_once('='))
-                .any(|(k, v)| k.trim() == "plugin" && v.trim() == plugin_tag)
+                .any(|(k, v)| k.trim() == "pg" && v.trim() == plugin_tag)
         }
 
         fn seed_route(&self, route: RouterRoute) {
@@ -1349,12 +1349,15 @@ persistent_route:
     #[test]
     fn comment_codec_roundtrip() {
         let key = RouteKey::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), "tbl".to_string());
+        let mut domains = AHashSet::new();
+        domains.insert("example.com".to_string());
         let route = RouteEntry {
             key: key.clone(),
             family: RouteFamily::Ipv4,
             gateway: "172.16.1.2".to_string(),
             distance: DEFAULT_ROUTE_DISTANCE,
-            domains: AHashSet::new(),
+            domains,
+            comment_domain: "example.com".to_string(),
             domain_expiries: AHashMap::new(),
             ref_count: 1,
             expires_at_unix: 1000,
@@ -1365,11 +1368,17 @@ persistent_route:
         };
         let prefix = "forgedns";
         let comment = RouteCommentCodec::encode(prefix, "mk_tag", &route);
-        let decoded = RouteCommentCodec::decode(prefix, "mk_tag", &comment)
-            .unwrap()
-            .unwrap();
+        assert_eq!(
+            comment,
+            "forgedns;pg=mk_tag;dm=example.com;exp=1000;seen=900"
+        );
+        let decoded =
+            RouteCommentCodec::decode(prefix, "mk_tag", route.family, "1.1.1.1/32", &comment)
+                .unwrap()
+                .unwrap();
         assert_eq!(decoded.ip, key.ip);
         assert_eq!(decoded.family, RouteFamily::Ipv4);
+        assert_eq!(decoded.comment_domain, "example.com");
         assert_eq!(decoded.expires_at_unix, 1000);
         assert_eq!(decoded.last_refresh_unix, 900);
     }
@@ -1422,6 +1431,7 @@ persistent_route:
         assert_eq!(route.ref_count, 2);
         assert!(route.domains.contains("a.com"));
         assert!(route.domains.contains("b.com"));
+        assert_eq!(route.comment_domain, "a.com");
     }
 
     #[tokio::test]
@@ -1724,6 +1734,7 @@ persistent_route:
             gateway: cfg.gateway4.clone().unwrap(),
             distance: cfg.distance,
             domains: AHashSet::new(),
+            comment_domain: "recover.example".to_string(),
             domain_expiries: AHashMap::new(),
             ref_count: 0,
             expires_at_unix: 1,
@@ -1787,8 +1798,7 @@ persistent_route:
                 .expect("expected observed route to exist");
             route.gateway = Some("10.0.0.1".to_string());
             route.distance = Some(1);
-            route.comment =
-                Some("forgedns;plugin=mk;af=ipv4;ip=8.8.4.4;exp=1;seen=1;v=1".to_string());
+            route.comment = Some("forgedns;pg=mk;dm=wrong.example;exp=1;seen=1".to_string());
         }
 
         manager.reconcile().await.unwrap();
@@ -1803,7 +1813,7 @@ persistent_route:
         assert_eq!(repaired.distance, Some(DEFAULT_ROUTE_DISTANCE));
         let comment = repaired.comment.as_deref().unwrap_or_default();
         assert!(
-            comment.contains("plugin=mk") && comment.contains("ip=8.8.4.4"),
+            comment.contains("pg=mk") && comment.contains("dm=drift.com"),
             "managed route comment should be rewritten to expected metadata"
         );
         assert!(
@@ -1829,9 +1839,7 @@ persistent_route:
             routing_table: cfg.routing_table.clone(),
             gateway: cfg.gateway4.clone(),
             distance: Some(cfg.distance),
-            comment: Some(
-                "forgedns;plugin=other;af=ipv4;ip=4.4.4.4;exp=999999;seen=1;v=1".to_string(),
-            ),
+            comment: Some("forgedns;pg=other;dm=foreign.example;exp=999999;seen=1".to_string()),
         });
 
         let mut manager = RouteManager::new(api.clone(), cfg);
@@ -1843,6 +1851,7 @@ persistent_route:
                 gateway: "172.16.1.2".to_string(),
                 distance,
                 domains: AHashSet::new(),
+                comment_domain: String::new(),
                 domain_expiries: AHashMap::new(),
                 ref_count: 0,
                 expires_at_unix: 1,
@@ -2040,9 +2049,7 @@ persistent_route:
             routing_table: "forgedns_dynamic".to_string(),
             gateway: Some("172.16.1.2".to_string()),
             distance: Some(DEFAULT_ROUTE_DISTANCE),
-            comment: Some(
-                "forgedns;plugin=other;af=ipv4;ip=203.0.113.8;exp=999999;seen=1;v=1".to_string(),
-            ),
+            comment: Some("forgedns;pg=other;dm=foreign.example;exp=999999;seen=1".to_string()),
         });
         api.seed_route(RouterRoute {
             id: "*302".to_string(),
@@ -2051,7 +2058,7 @@ persistent_route:
             routing_table: "forgedns_dynamic".to_string(),
             gateway: Some("172.16.1.2".to_string()),
             distance: Some(DEFAULT_ROUTE_DISTANCE),
-            comment: Some("other;plugin=other".to_string()),
+            comment: Some("other;pg=other".to_string()),
         });
 
         manager.shutdown(true).await.unwrap();

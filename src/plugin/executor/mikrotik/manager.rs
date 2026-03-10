@@ -11,7 +11,6 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use ahash::{AHashMap, AHashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
@@ -30,16 +29,10 @@ const RECONCILE_INTERVAL_SECS: u64 = 180;
 const PERSISTENT_RELOAD_INTERVAL_SECS: u64 = 60;
 const SHUTDOWN_TIMEOUT_SECS: u64 = 8;
 
-const COMMENT_FIELD_PLUGIN: &str = "plugin";
-const COMMENT_FIELD_AF: &str = "af";
-const COMMENT_FIELD_IP: &str = "ip";
+const COMMENT_FIELD_PLUGIN: &str = "pg";
+const COMMENT_FIELD_DOMAIN: &str = "dm";
 const COMMENT_FIELD_EXP: &str = "exp";
 const COMMENT_FIELD_SEEN: &str = "seen";
-const COMMENT_FIELD_VERSION: &str = "v";
-
-const COMMENT_VALUE_AF_V4: &str = "ipv4";
-const COMMENT_VALUE_AF_V6: &str = "ipv6";
-const COMMENT_FORMAT_VERSION: u8 = 1;
 static START_UNIX_SECS: OnceLock<u64> = OnceLock::new();
 
 #[derive(Debug, Clone)]
@@ -94,14 +87,6 @@ impl RouteFamily {
         match self {
             Self::Ipv4 => prefix <= 32,
             Self::Ipv6 => prefix <= 128,
-        }
-    }
-
-    #[inline]
-    fn as_comment_value(self) -> &'static str {
-        match self {
-            Self::Ipv4 => COMMENT_VALUE_AF_V4,
-            Self::Ipv6 => COMMENT_VALUE_AF_V6,
         }
     }
 }
@@ -195,6 +180,8 @@ pub(super) struct RouteEntry {
     pub(super) distance: u8,
     /// Domain set currently referencing this route.
     pub(super) domains: AHashSet<String>,
+    /// Comment `dm` field, using the first observed active domain when available.
+    pub(super) comment_domain: String,
     /// Per-domain expiry timestamps for ref-count and max-exp calculations.
     pub(super) domain_expiries: AHashMap<String, u64>,
     /// Current reference count from `domains`.
@@ -211,10 +198,11 @@ pub(super) struct RouteEntry {
     pub(super) sync_state: SyncState,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(super) struct RouteCommentMeta {
     pub(super) family: RouteFamily,
     pub(super) ip: IpAddr,
+    pub(super) comment_domain: String,
     pub(super) expires_at_unix: u64,
     pub(super) last_refresh_unix: u64,
 }
@@ -234,13 +222,9 @@ impl RouteCommentCodec {
         out.push('=');
         out.push_str(plugin_tag);
         out.push(';');
-        out.push_str(COMMENT_FIELD_AF);
+        out.push_str(COMMENT_FIELD_DOMAIN);
         out.push('=');
-        out.push_str(route.family.as_comment_value());
-        out.push(';');
-        out.push_str(COMMENT_FIELD_IP);
-        out.push('=');
-        out.push_str(&route.key.ip.to_string());
+        out.push_str(&route.comment_domain);
         out.push(';');
         out.push_str(COMMENT_FIELD_EXP);
         out.push('=');
@@ -249,16 +233,14 @@ impl RouteCommentCodec {
         out.push_str(COMMENT_FIELD_SEEN);
         out.push('=');
         out.push_str(&route.last_refresh_unix.to_string());
-        out.push(';');
-        out.push_str(COMMENT_FIELD_VERSION);
-        out.push('=');
-        out.push_str(&COMMENT_FORMAT_VERSION.to_string());
         out
     }
 
     pub(super) fn decode(
         prefix: &str,
         plugin_tag: &str,
+        family: RouteFamily,
+        dst_address: &str,
         comment: &str,
     ) -> Result<Option<RouteCommentMeta>> {
         // Prefix and plugin-tag checks provide cheap ownership filtering.
@@ -286,29 +268,12 @@ impl RouteCommentCodec {
             return Ok(None);
         }
 
-        let family = match kv.get(COMMENT_FIELD_AF).map(String::as_str) {
-            Some(COMMENT_VALUE_AF_V4) => RouteFamily::Ipv4,
-            Some(COMMENT_VALUE_AF_V6) => RouteFamily::Ipv6,
-            Some(other) => {
-                return Err(DnsError::plugin(format!(
-                    "mikrotik comment decode failed: unsupported af '{other}'"
-                )));
-            }
-            None => {
-                return Err(DnsError::plugin(
-                    "mikrotik comment decode failed: missing af field",
-                ));
-            }
-        };
-
-        let ip_raw = kv
-            .get(COMMENT_FIELD_IP)
-            .ok_or_else(|| DnsError::plugin("mikrotik comment decode failed: missing ip field"))?;
-        let ip = IpAddr::from_str(ip_raw).map_err(|e| {
+        let (ip, _prefix) = parse_dst_address(dst_address).ok_or_else(|| {
             DnsError::plugin(format!(
-                "mikrotik comment decode failed: invalid ip '{ip_raw}': {e}"
+                "mikrotik comment decode failed: invalid dst-address '{dst_address}'"
             ))
         })?;
+
         if RouteFamily::from_ip(ip) != family {
             return Err(DnsError::plugin(format!(
                 "mikrotik comment decode failed: af/ip mismatch af={:?} ip={}",
@@ -316,6 +281,10 @@ impl RouteCommentCodec {
             )));
         }
 
+        let comment_domain = kv
+            .get(COMMENT_FIELD_DOMAIN)
+            .ok_or_else(|| DnsError::plugin("mikrotik comment decode failed: missing dm field"))?
+            .to_string();
         let expires_at_unix = kv
             .get(COMMENT_FIELD_EXP)
             .ok_or_else(|| DnsError::plugin("mikrotik comment decode failed: missing exp field"))?
@@ -331,22 +300,10 @@ impl RouteCommentCodec {
                 DnsError::plugin(format!("mikrotik comment decode failed: invalid seen: {e}"))
             })?;
 
-        let version = kv
-            .get(COMMENT_FIELD_VERSION)
-            .ok_or_else(|| DnsError::plugin("mikrotik comment decode failed: missing v field"))?
-            .parse::<u8>()
-            .map_err(|e| {
-                DnsError::plugin(format!("mikrotik comment decode failed: invalid v: {e}"))
-            })?;
-        if version != COMMENT_FORMAT_VERSION {
-            return Err(DnsError::plugin(format!(
-                "mikrotik comment decode failed: unsupported v '{version}'"
-            )));
-        }
-
         Ok(Some(RouteCommentMeta {
             family,
             ip,
+            comment_domain,
             expires_at_unix,
             last_refresh_unix,
         }))
@@ -771,6 +728,7 @@ impl RouteManager {
                     gateway,
                     distance: self.cfg.distance,
                     domains,
+                    comment_domain: String::new(),
                     domain_expiries,
                     ref_count: 1,
                     expires_at_unix: PERSISTENT_EXPIRES_AT_UNIX,
@@ -898,6 +856,12 @@ impl RouteManager {
         let key = RouteKey::new(ip, self.cfg.routing_table.clone());
         if let Some(entry) = self.routes.get_mut(&key) {
             let inserted = entry.domains.insert(domain.to_string());
+            if inserted
+                && domain != PERSISTENT_ANCHOR_DOMAIN
+                && (entry.ref_count == 0 || entry.comment_domain.is_empty())
+            {
+                entry.comment_domain = domain.to_string();
+            }
             if inserted {
                 entry.ref_count = entry.ref_count.saturating_add(1);
             }
@@ -939,6 +903,7 @@ impl RouteManager {
                 gateway,
                 distance: self.cfg.distance,
                 domains,
+                comment_domain: domain.to_string(),
                 domain_expiries,
                 ref_count: 1,
                 expires_at_unix: expires_at,
@@ -964,6 +929,9 @@ impl RouteManager {
         entry.domain_expiries.remove(domain);
         entry.ref_count = entry.ref_count.saturating_sub(1);
         entry.last_refresh_unix = now;
+        if entry.comment_domain == domain || entry.comment_domain.is_empty() {
+            entry.comment_domain = select_comment_domain(&entry.domains);
+        }
 
         if entry.ref_count == 0 {
             entry.expires_at_unix = now;
@@ -1129,6 +1097,8 @@ impl RouteManager {
             let meta = match RouteCommentCodec::decode(
                 &self.cfg.comment_prefix,
                 &self.cfg.plugin_tag,
+                route.family,
+                &route.dst_address,
                 comment,
             ) {
                 Ok(Some(meta)) => meta,
@@ -1162,6 +1132,7 @@ impl RouteManager {
             if let Some(existing) = self.routes.get_mut(&key) {
                 existing.router_id = Some(route.id.clone());
                 if existing.ref_count == 0 {
+                    existing.comment_domain = meta.comment_domain.clone();
                     existing.expires_at_unix = meta.expires_at_unix;
                     existing.last_refresh_unix = meta.last_refresh_unix;
                     existing.sync_state = if meta.expires_at_unix <= now {
@@ -1209,6 +1180,7 @@ impl RouteManager {
                 gateway,
                 distance: self.cfg.distance,
                 domains: AHashSet::new(),
+                comment_domain: meta.comment_domain,
                 domain_expiries: AHashMap::new(),
                 ref_count: 0,
                 expires_at_unix: meta.expires_at_unix,
@@ -1350,7 +1322,7 @@ fn validation_route_key(family: RouteFamily, table: &str, nonce: u128) -> RouteK
     RouteKey::new(ip, table.to_string())
 }
 
-fn validation_comment(prefix: &str, plugin_tag: &str, family: RouteFamily, nonce: u128) -> String {
+fn validation_comment(prefix: &str, plugin_tag: &str, _family: RouteFamily, nonce: u128) -> String {
     let mut out = String::new();
     if !prefix.is_empty() {
         out.push_str(prefix);
@@ -1358,11 +1330,19 @@ fn validation_comment(prefix: &str, plugin_tag: &str, family: RouteFamily, nonce
     }
     out.push_str("plugin=");
     out.push_str(plugin_tag);
-    out.push_str(";kind=gateway-check;af=");
-    out.push_str(family.as_comment_value());
+    out.push_str(";kind=gateway-check");
     out.push_str(";nonce=");
     out.push_str(&nonce.to_string());
     out
+}
+
+fn select_comment_domain(domains: &AHashSet<String>) -> String {
+    domains
+        .iter()
+        .filter(|domain| domain.as_str() != PERSISTENT_ANCHOR_DOMAIN)
+        .min()
+        .cloned()
+        .unwrap_or_default()
 }
 
 async fn run_manager_worker(

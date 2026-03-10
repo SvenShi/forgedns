@@ -20,7 +20,7 @@ const ROUTE_TABLE_FIELD: &str = "routing-table";
 const ROUTE_GATEWAY_FIELD: &str = "gateway";
 const ROUTE_DISTANCE_FIELD: &str = "distance";
 const ROUTE_COMMENT_FIELD: &str = "comment";
-const COMMENT_FIELD_PLUGIN: &str = "plugin";
+const COMMENT_FIELD_PLUGIN: &str = "pg";
 
 const COMMAND_SYSTEM_IDENTITY_PRINT: &str = "/system/identity/print";
 
