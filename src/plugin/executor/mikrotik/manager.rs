@@ -10,7 +10,7 @@ use super::api::MikrotikApi;
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use ahash::{AHashMap, AHashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -56,6 +56,8 @@ pub(super) struct RouteManagerConfig {
     pub(super) persistent_ips: AHashSet<String>,
     /// Comment prefix that marks managed routes.
     pub(super) comment_prefix: String,
+    /// Route distance written to RouterOS.
+    pub(super) distance: u8,
     /// Minimum TTL clamp in seconds.
     pub(super) min_ttl: u32,
     /// Maximum TTL clamp in seconds.
@@ -189,6 +191,8 @@ pub(super) struct RouteEntry {
     pub(super) family: RouteFamily,
     /// Gateway string written to RouterOS.
     pub(super) gateway: String,
+    /// Route distance written to RouterOS.
+    pub(super) distance: u8,
     /// Domain set currently referencing this route.
     pub(super) domains: AHashSet<String>,
     /// Per-domain expiry timestamps for ref-count and max-exp calculations.
@@ -595,13 +599,19 @@ impl RouteManager {
 
         // One-time bootstrap:
         // 1) transport healthcheck
-        // 2) seed persistent routes
-        // 3) reconcile local state from RouterOS
+        // 2) validate configured gateways against RouterOS
+        // 3) seed persistent routes
+        // 4) reconcile local state from RouterOS
         self.api.healthcheck().await?;
+        self.validate_gateways().await?;
         self.ensure_persistent_routes(unix_now());
         self.reconcile_from_router().await?;
         self.initialized = true;
         Ok(())
+    }
+
+    pub(super) async fn initialize_on_startup(&mut self) -> Result<()> {
+        self.ensure_initialized().await
     }
 
     #[inline]
@@ -618,6 +628,50 @@ impl RouteManager {
             RouteFamily::Ipv4 => self.cfg.gateway4.as_deref(),
             RouteFamily::Ipv6 => self.cfg.gateway6.as_deref(),
         }
+    }
+
+    async fn validate_gateways(&self) -> Result<()> {
+        if let Some(gateway) = self.cfg.gateway4.as_deref() {
+            let nonce = validation_nonce();
+            let key =
+                validation_route_key(RouteFamily::Ipv4, self.cfg.routing_table.as_str(), nonce);
+            let comment = validation_comment(
+                self.cfg.comment_prefix.as_str(),
+                self.cfg.plugin_tag.as_str(),
+                RouteFamily::Ipv4,
+                nonce,
+            );
+            self.api
+                .validate_route_config(&key, gateway, self.cfg.distance, &comment)
+                .await
+                .map_err(|e| {
+                    DnsError::plugin(format!(
+                        "mikrotik gateway4 validation failed for '{gateway}': {e}"
+                    ))
+                })?;
+        }
+
+        if let Some(gateway) = self.cfg.gateway6.as_deref() {
+            let nonce = validation_nonce();
+            let key =
+                validation_route_key(RouteFamily::Ipv6, self.cfg.routing_table.as_str(), nonce);
+            let comment = validation_comment(
+                self.cfg.comment_prefix.as_str(),
+                self.cfg.plugin_tag.as_str(),
+                RouteFamily::Ipv6,
+                nonce,
+            );
+            self.api
+                .validate_route_config(&key, gateway, self.cfg.distance, &comment)
+                .await
+                .map_err(|e| {
+                    DnsError::plugin(format!(
+                        "mikrotik gateway6 validation failed for '{gateway}': {e}"
+                    ))
+                })?;
+        }
+
+        Ok(())
     }
 
     fn ensure_persistent_routes(&mut self, now: u64) {
@@ -675,13 +729,23 @@ impl RouteManager {
                     entry.expires_at_unix = PERSISTENT_EXPIRES_AT_UNIX;
                     changed = true;
                 }
+                if entry.gateway != gateway {
+                    entry.gateway = gateway.clone();
+                    changed = true;
+                }
+                if entry.distance != self.cfg.distance {
+                    entry.distance = self.cfg.distance;
+                    changed = true;
+                }
 
                 if entry.router_id.is_none() {
                     if !matches!(entry.sync_state, SyncState::PendingCreate) {
                         entry.sync_state = SyncState::PendingCreate;
                         changed = true;
                     }
-                } else if matches!(entry.sync_state, SyncState::PendingDelete) {
+                } else if matches!(entry.sync_state, SyncState::PendingDelete)
+                    || (changed && matches!(entry.sync_state, SyncState::Synced))
+                {
                     entry.sync_state = SyncState::Dirty;
                     changed = true;
                 }
@@ -705,6 +769,7 @@ impl RouteManager {
                     key,
                     family,
                     gateway,
+                    distance: self.cfg.distance,
                     domains,
                     domain_expiries,
                     ref_count: 1,
@@ -872,6 +937,7 @@ impl RouteManager {
                 key: key.clone(),
                 family,
                 gateway,
+                distance: self.cfg.distance,
                 domains,
                 domain_expiries,
                 ref_count: 1,
@@ -993,6 +1059,7 @@ impl RouteManager {
                         .upsert_host_route(
                             &entry_snapshot.key,
                             &entry_snapshot.gateway,
+                            entry_snapshot.distance,
                             &comment,
                             &self.cfg.comment_prefix,
                             &self.cfg.plugin_tag,
@@ -1103,17 +1170,19 @@ impl RouteManager {
                         SyncState::Synced
                     };
                     let gateway_drift = route.gateway.as_deref() != Some(existing.gateway.as_str());
+                    let distance_drift = route.distance != Some(existing.distance);
                     let expected_comment = RouteCommentCodec::encode(
                         &self.cfg.comment_prefix,
                         &self.cfg.plugin_tag,
                         existing,
                     );
                     let comment_drift = route.comment.as_deref() != Some(expected_comment.as_str());
-                    if gateway_drift || comment_drift {
+                    if gateway_drift || distance_drift || comment_drift {
                         existing.sync_state = SyncState::Dirty;
                     }
                 } else {
                     let gateway_drift = route.gateway.as_deref() != Some(existing.gateway.as_str());
+                    let distance_drift = route.distance != Some(existing.distance);
                     let expected_comment = RouteCommentCodec::encode(
                         &self.cfg.comment_prefix,
                         &self.cfg.plugin_tag,
@@ -1121,6 +1190,7 @@ impl RouteManager {
                     );
                     let comment_drift = route.comment.as_deref() != Some(expected_comment.as_str());
                     if gateway_drift
+                        || distance_drift
                         || comment_drift
                         || matches!(existing.sync_state, SyncState::PendingCreate)
                     {
@@ -1137,6 +1207,7 @@ impl RouteManager {
                 key: key.clone(),
                 family,
                 gateway,
+                distance: self.cfg.distance,
                 domains: AHashSet::new(),
                 domain_expiries: AHashMap::new(),
                 ref_count: 0,
@@ -1152,13 +1223,14 @@ impl RouteManager {
             };
             if !matches!(entry.sync_state, SyncState::PendingDelete) {
                 let gateway_drift = route.gateway.as_deref() != Some(entry.gateway.as_str());
+                let distance_drift = route.distance != Some(entry.distance);
                 let expected_comment = RouteCommentCodec::encode(
                     &self.cfg.comment_prefix,
                     &self.cfg.plugin_tag,
                     &entry,
                 );
                 let comment_drift = route.comment.as_deref() != Some(expected_comment.as_str());
-                if gateway_drift || comment_drift {
+                if gateway_drift || distance_drift || comment_drift {
                     entry.sync_state = SyncState::Dirty;
                 }
             }
@@ -1226,45 +1298,71 @@ impl RouteManager {
             return Ok(());
         }
         self.ensure_initialized().await?;
-        let now = unix_now();
-
-        let keys = self.routes.keys().cloned().collect::<Vec<_>>();
-        for key in keys {
-            if let Some(entry) = self.routes.get_mut(&key) {
-                if entry.domains.contains(PERSISTENT_ANCHOR_DOMAIN) {
-                    // Keep persistent routes on cleanup; drop transient refs only.
-                    entry
-                        .domains
-                        .retain(|domain| domain == PERSISTENT_ANCHOR_DOMAIN);
-                    entry
-                        .domain_expiries
-                        .retain(|domain, _| domain == PERSISTENT_ANCHOR_DOMAIN);
-                    entry.domain_expiries.insert(
-                        PERSISTENT_ANCHOR_DOMAIN.to_string(),
-                        PERSISTENT_EXPIRES_AT_UNIX,
-                    );
-                    entry.ref_count = 1;
-                    entry.expires_at_unix = PERSISTENT_EXPIRES_AT_UNIX;
-                    entry.last_refresh_unix = now;
-                    if entry.router_id.is_none() {
-                        entry.sync_state = SyncState::PendingCreate;
-                    } else if matches!(entry.sync_state, SyncState::PendingDelete) {
-                        entry.sync_state = SyncState::Dirty;
-                    }
-                    continue;
-                }
-                // Normal dynamic route: mark for deletion.
-                entry.ref_count = 0;
-                entry.domains.clear();
-                entry.domain_expiries.clear();
-                entry.sync_state = SyncState::PendingDelete;
+        let routes = self
+            .api
+            .list_managed_routes(&self.cfg.routing_table)
+            .await?;
+        for route in routes {
+            if comment_matches_prefix(route.comment.as_deref(), &self.cfg.comment_prefix) {
+                self.api.delete_route_by_id(&route.id, route.family).await?;
             }
         }
-
-        self.sync_routes(now).await?;
+        self.routes.clear();
         self.domain_bindings.clear();
         Ok(())
     }
+}
+
+fn comment_matches_prefix(comment: Option<&str>, prefix: &str) -> bool {
+    let Some(comment) = comment else {
+        return false;
+    };
+    if prefix.is_empty() {
+        return true;
+    }
+    comment.starts_with(prefix) && comment.as_bytes().get(prefix.len()) == Some(&b';')
+}
+
+fn validation_nonce() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
+fn validation_route_key(family: RouteFamily, table: &str, nonce: u128) -> RouteKey {
+    let ip = match family {
+        RouteFamily::Ipv4 => {
+            let third = ((nonce >> 8) & 0xff) as u8;
+            let fourth = match (nonce & 0xff) as u8 {
+                0 => 1,
+                value => value,
+            };
+            IpAddr::V4(Ipv4Addr::new(198, 18, third, fourth))
+        }
+        RouteFamily::Ipv6 => {
+            let seg5 = ((nonce >> 32) & 0xffff) as u16;
+            let seg6 = ((nonce >> 16) & 0xffff) as u16;
+            let seg7 = (nonce & 0xffff) as u16;
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, seg5, seg6, seg7, 1))
+        }
+    };
+    RouteKey::new(ip, table.to_string())
+}
+
+fn validation_comment(prefix: &str, plugin_tag: &str, family: RouteFamily, nonce: u128) -> String {
+    let mut out = String::new();
+    if !prefix.is_empty() {
+        out.push_str(prefix);
+        out.push(';');
+    }
+    out.push_str("plugin=");
+    out.push_str(plugin_tag);
+    out.push_str(";kind=gateway-check;af=");
+    out.push_str(family.as_comment_value());
+    out.push_str(";nonce=");
+    out.push_str(&nonce.to_string());
+    out
 }
 
 async fn run_manager_worker(

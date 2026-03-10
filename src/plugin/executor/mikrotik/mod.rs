@@ -54,6 +54,8 @@ const DEFAULT_MIN_TTL: u32 = 60;
 const DEFAULT_MAX_TTL: u32 = 3600;
 const DEFAULT_ASYNC_MODE: bool = true;
 const DEFAULT_CLEANUP_ON_SHUTDOWN: bool = true;
+const DEFAULT_ROUTE_DISTANCE: u8 = 100;
+const DEFAULT_COMMENT_PREFIX: &str = "fdns";
 const SYNC_OBSERVE_TIMEOUT_SECS: u64 = 8;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -74,7 +76,10 @@ struct MikrotikConfigArgs {
     /// IPv6 gateway value for managed IPv6 routes.
     gateway6: Option<String>,
     /// Prefix used in RouterOS route comments to mark ForgeDNS-managed routes.
+    /// Defaults to `fdns` when omitted.
     comment_prefix: Option<String>,
+    /// Route distance written to RouterOS for managed routes.
+    distance: Option<u8>,
     /// Always-present routes that should not expire with DNS TTL.
     persistent_route: Option<PersistentRouteArgs>,
     /// Minimum effective TTL clamp (seconds) for observed records.
@@ -119,6 +124,8 @@ struct MikrotikConfig {
     persistent_files: Vec<String>,
     /// Managed route comment prefix.
     comment_prefix: String,
+    /// Route distance written to RouterOS.
+    distance: u8,
     /// Minimum effective TTL clamp in seconds.
     min_ttl: u32,
     /// Maximum effective TTL clamp in seconds.
@@ -135,8 +142,10 @@ impl MikrotikConfigArgs {
         let username = required_non_empty(self.username, "username")?;
         let password = required_non_empty(self.password, "password")?;
         let routing_table = required_non_empty(self.routing_table, "routing_table")?;
-        let comment_prefix = required_non_empty(self.comment_prefix, "comment_prefix")?;
+        let comment_prefix = optional_non_empty(self.comment_prefix)
+            .unwrap_or_else(|| DEFAULT_COMMENT_PREFIX.to_string());
         validate_comment_token("comment_prefix", &comment_prefix)?;
+        let distance = self.distance.unwrap_or(DEFAULT_ROUTE_DISTANCE);
 
         let gateway4 = optional_non_empty(self.gateway4);
         let gateway6 = optional_non_empty(self.gateway6);
@@ -194,6 +203,7 @@ impl MikrotikConfigArgs {
             persistent_inline_ips: parsed_persistent.inline_ips,
             persistent_files: parsed_persistent.files,
             comment_prefix,
+            distance,
             min_ttl,
             max_ttl,
             fixed_ttl,
@@ -231,6 +241,10 @@ impl Plugin for MikrotikExecutor {
     async fn init(&mut self) -> Result<()> {
         if self.manager.is_none() || self.command_tx.is_some() {
             return Ok(());
+        }
+
+        if let Some(manager) = self.manager.as_mut() {
+            manager.initialize_on_startup().await?;
         }
 
         let Some(manager) = self.manager.take() else {
@@ -389,6 +403,7 @@ impl PluginFactory for MikrotikFactory {
             gateway6: config.gateway6.clone(),
             persistent_ips: config.persistent_ips.clone(),
             comment_prefix: config.comment_prefix.clone(),
+            distance: config.distance,
             min_ttl: config.min_ttl,
             max_ttl: config.max_ttl,
             fixed_ttl: config.fixed_ttl,
@@ -800,6 +815,8 @@ mod tests {
         next_id: u64,
         fail_next_upsert: bool,
         fail_healthcheck: bool,
+        fail_gateway_validation: bool,
+        gateway_validation_calls: u64,
         upsert_v4: u64,
         upsert_v6: u64,
         update_ops: u64,
@@ -897,6 +914,7 @@ mod tests {
             &self,
             key: &RouteKey,
             gateway: &str,
+            distance: u8,
             comment: &str,
             comment_prefix: &str,
             plugin_tag: &str,
@@ -915,6 +933,7 @@ mod tests {
                     return Err(DnsError::plugin("mock upsert foreign route conflict"));
                 }
                 existing.gateway = Some(gateway.to_string());
+                existing.distance = Some(distance);
                 existing.comment = Some(comment.to_string());
                 let id = existing.id.clone();
                 state.update_ops = state.update_ops.saturating_add(1);
@@ -936,10 +955,29 @@ mod tests {
                     dst_address: key.dst_address(),
                     routing_table: key.table.clone(),
                     gateway: Some(gateway.to_string()),
+                    distance: Some(distance),
                     comment: Some(comment.to_string()),
                 },
             );
             Ok(id)
+        }
+
+        async fn validate_route_config(
+            &self,
+            _key: &RouteKey,
+            _gateway: &str,
+            _distance: u8,
+            _comment: &str,
+        ) -> Result<()> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| DnsError::plugin("mock api lock poisoned"))?;
+            state.gateway_validation_calls = state.gateway_validation_calls.saturating_add(1);
+            if state.fail_gateway_validation {
+                return Err(DnsError::plugin("mock gateway validation failure"));
+            }
+            Ok(())
         }
 
         async fn delete_route_by_id(&self, id: &str, _family: RouteFamily) -> Result<()> {
@@ -978,6 +1016,7 @@ mod tests {
             gateway6: Some("fe80::2%ether1".to_string()),
             persistent_ips: AHashSet::new(),
             comment_prefix: "forgedns".to_string(),
+            distance: DEFAULT_ROUTE_DISTANCE,
             min_ttl: DEFAULT_MIN_TTL,
             max_ttl: DEFAULT_MAX_TTL,
             fixed_ttl: None,
@@ -1047,6 +1086,7 @@ mod tests {
             persistent_inline_ips: AHashSet::new(),
             persistent_files: Vec::new(),
             comment_prefix: "forgedns".to_string(),
+            distance: DEFAULT_ROUTE_DISTANCE,
             min_ttl: DEFAULT_MIN_TTL,
             max_ttl: DEFAULT_MAX_TTL,
             fixed_ttl: None,
@@ -1059,6 +1099,7 @@ mod tests {
             gateway6: config.gateway6.clone(),
             persistent_ips: config.persistent_ips.clone(),
             comment_prefix: config.comment_prefix.clone(),
+            distance: config.distance,
             min_ttl: config.min_ttl,
             max_ttl: config.max_ttl,
             fixed_ttl: config.fixed_ttl,
@@ -1115,6 +1156,23 @@ max_ttl: 60
         .unwrap();
         let err = parse_plugin_config(Some(cfg), false).unwrap_err();
         assert!(err.to_string().contains("min_ttl"));
+    }
+
+    #[test]
+    fn config_validation_defaults_comment_prefix_and_distance() {
+        let cfg = serde_yml::from_str::<serde_yml::Value>(
+            r#"
+address: "1.1.1.1:8728"
+username: "user"
+password: "pass"
+routing_table: "forgedns_dynamic"
+gateway4: "172.16.1.2"
+"#,
+        )
+        .unwrap();
+        let parsed = parse_plugin_config(Some(cfg), false).unwrap();
+        assert_eq!(parsed.comment_prefix, DEFAULT_COMMENT_PREFIX);
+        assert_eq!(parsed.distance, DEFAULT_ROUTE_DISTANCE);
     }
 
     #[test]
@@ -1295,6 +1353,7 @@ persistent_route:
             key: key.clone(),
             family: RouteFamily::Ipv4,
             gateway: "172.16.1.2".to_string(),
+            distance: DEFAULT_ROUTE_DISTANCE,
             domains: AHashSet::new(),
             domain_expiries: AHashMap::new(),
             ref_count: 1,
@@ -1339,6 +1398,7 @@ persistent_route:
         assert_eq!(manager.routes.len(), 1);
         let route = manager.routes.values().next().unwrap();
         assert_eq!(route.ref_count, 1);
+        assert_eq!(route.distance, DEFAULT_ROUTE_DISTANCE);
     }
 
     #[tokio::test]
@@ -1662,6 +1722,7 @@ persistent_route:
             key: key.clone(),
             family: RouteFamily::Ipv4,
             gateway: cfg.gateway4.clone().unwrap(),
+            distance: cfg.distance,
             domains: AHashSet::new(),
             domain_expiries: AHashMap::new(),
             ref_count: 0,
@@ -1680,6 +1741,7 @@ persistent_route:
             dst_address: key.dst_address(),
             routing_table: cfg.routing_table.clone(),
             gateway: cfg.gateway4.clone(),
+            distance: Some(cfg.distance),
             comment: Some(comment),
         });
 
@@ -1724,6 +1786,7 @@ persistent_route:
                 .find(|route| route.dst_address == "8.8.4.4/32")
                 .expect("expected observed route to exist");
             route.gateway = Some("10.0.0.1".to_string());
+            route.distance = Some(1);
             route.comment =
                 Some("forgedns;plugin=mk;af=ipv4;ip=8.8.4.4;exp=1;seen=1;v=1".to_string());
         }
@@ -1737,6 +1800,7 @@ persistent_route:
             .find(|route| route.dst_address == "8.8.4.4/32")
             .expect("expected observed route to remain");
         assert_eq!(repaired.gateway.as_deref(), Some("172.16.1.2"));
+        assert_eq!(repaired.distance, Some(DEFAULT_ROUTE_DISTANCE));
         let comment = repaired.comment.as_deref().unwrap_or_default();
         assert!(
             comment.contains("plugin=mk") && comment.contains("ip=8.8.4.4"),
@@ -1752,6 +1816,7 @@ persistent_route:
     async fn pending_delete_fallback_does_not_delete_foreign_route() {
         let api = Arc::new(MockMikrotikApi::default());
         let cfg = default_cfg("mk");
+        let distance = cfg.distance;
         let key = RouteKey::new(
             IpAddr::V4(Ipv4Addr::new(4, 4, 4, 4)),
             cfg.routing_table.clone(),
@@ -1763,6 +1828,7 @@ persistent_route:
             dst_address: key.dst_address(),
             routing_table: cfg.routing_table.clone(),
             gateway: cfg.gateway4.clone(),
+            distance: Some(cfg.distance),
             comment: Some(
                 "forgedns;plugin=other;af=ipv4;ip=4.4.4.4;exp=999999;seen=1;v=1".to_string(),
             ),
@@ -1775,6 +1841,7 @@ persistent_route:
                 key,
                 family: RouteFamily::Ipv4,
                 gateway: "172.16.1.2".to_string(),
+                distance,
                 domains: AHashSet::new(),
                 domain_expiries: AHashMap::new(),
                 ref_count: 0,
@@ -1816,6 +1883,30 @@ persistent_route:
         let mut ctx = make_context();
         executor.post_execute(&mut ctx, None).await.unwrap();
         let _ = executor.destroy().await;
+    }
+
+    #[tokio::test]
+    async fn init_fails_when_gateway_validation_fails() {
+        let api = Arc::new(MockMikrotikApi::default());
+        {
+            let mut state = api.state.lock().unwrap();
+            state.fail_gateway_validation = true;
+        }
+        let mut executor = build_executor_for_test(
+            "mk",
+            true,
+            false,
+            Some("172.16.1.2"),
+            None,
+            api.clone() as Arc<dyn MikrotikApi>,
+        );
+        let err = executor.init().await.unwrap_err();
+        assert!(err.to_string().contains("gateway4 validation failed"));
+        assert_eq!(
+            api.state.lock().unwrap().gateway_validation_calls,
+            1,
+            "startup should validate the configured gateway before running"
+        );
     }
 
     #[tokio::test]
@@ -1934,22 +2025,48 @@ persistent_route:
     }
 
     #[tokio::test]
-    async fn shutdown_cleanup_keeps_persistent_routes() {
+    async fn shutdown_cleanup_removes_all_prefix_routes() {
         let api = Arc::new(MockMikrotikApi::default());
         let mut cfg = default_cfg("mk");
         cfg.persistent_ips.insert("203.0.113.7/32".to_string());
         let mut manager = RouteManager::new(api.clone(), cfg);
 
         manager.sweep().await.unwrap();
+
+        api.seed_route(RouterRoute {
+            id: "*301".to_string(),
+            family: RouteFamily::Ipv4,
+            dst_address: "203.0.113.8/32".to_string(),
+            routing_table: "forgedns_dynamic".to_string(),
+            gateway: Some("172.16.1.2".to_string()),
+            distance: Some(DEFAULT_ROUTE_DISTANCE),
+            comment: Some(
+                "forgedns;plugin=other;af=ipv4;ip=203.0.113.8;exp=999999;seen=1;v=1".to_string(),
+            ),
+        });
+        api.seed_route(RouterRoute {
+            id: "*302".to_string(),
+            family: RouteFamily::Ipv4,
+            dst_address: "203.0.113.9/32".to_string(),
+            routing_table: "forgedns_dynamic".to_string(),
+            gateway: Some("172.16.1.2".to_string()),
+            distance: Some(DEFAULT_ROUTE_DISTANCE),
+            comment: Some("other;plugin=other".to_string()),
+        });
+
         manager.shutdown(true).await.unwrap();
 
         let state = api.state.lock().unwrap();
         assert!(
-            state
-                .routes
-                .values()
-                .any(|route| route.dst_address == "203.0.113.7/32"),
-            "persistent route should remain after cleanup"
+            !state.routes.values().any(|route| route
+                .comment
+                .as_deref()
+                .is_some_and(|comment| comment.starts_with("forgedns;"))),
+            "cleanup should remove every route whose comment matches the configured prefix"
+        );
+        assert!(
+            state.routes.values().any(|route| route.id == "*302"),
+            "routes with a different comment prefix should be kept"
         );
     }
 }

@@ -18,6 +18,7 @@ const ROUTER_ID_FIELD: &str = ".id";
 const ROUTE_DST_FIELD: &str = "dst-address";
 const ROUTE_TABLE_FIELD: &str = "routing-table";
 const ROUTE_GATEWAY_FIELD: &str = "gateway";
+const ROUTE_DISTANCE_FIELD: &str = "distance";
 const ROUTE_COMMENT_FIELD: &str = "comment";
 const COMMENT_FIELD_PLUGIN: &str = "plugin";
 
@@ -49,6 +50,8 @@ pub(super) struct RouterRoute {
     pub(super) routing_table: String,
     /// Optional gateway string from RouterOS.
     pub(super) gateway: Option<String>,
+    /// Optional route distance from RouterOS.
+    pub(super) distance: Option<u8>,
     /// Optional comment field from RouterOS.
     pub(super) comment: Option<String>,
 }
@@ -69,10 +72,19 @@ pub(super) trait MikrotikApi: Debug + Send + Sync {
         &self,
         key: &RouteKey,
         gateway: &str,
+        distance: u8,
         comment: &str,
         comment_prefix: &str,
         plugin_tag: &str,
     ) -> Result<String>;
+    /// Validate that configured table/gateway/distance can be accepted by RouterOS.
+    async fn validate_route_config(
+        &self,
+        key: &RouteKey,
+        gateway: &str,
+        distance: u8,
+        comment: &str,
+    ) -> Result<()>;
     /// Delete route by internal id.
     async fn delete_route_by_id(&self, id: &str, family: RouteFamily) -> Result<()>;
     /// Lightweight command that verifies RouterOS API availability.
@@ -307,6 +319,16 @@ fn parse_router_route_from_reply(
         .map(str::to_string)
         .unwrap_or_default();
     let gateway = reply.get(ROUTE_GATEWAY_FIELD).map(str::to_string);
+    let distance = reply
+        .get(ROUTE_DISTANCE_FIELD)
+        .map(|raw| {
+            raw.parse::<u8>().map_err(|e| {
+                DnsError::plugin(format!(
+                    "mikrotik {action} response has invalid '{ROUTE_DISTANCE_FIELD}' value '{raw}': {e}"
+                ))
+            })
+        })
+        .transpose()?;
     let comment = reply.get(ROUTE_COMMENT_FIELD).map(str::to_string);
 
     Ok(RouterRoute {
@@ -315,6 +337,7 @@ fn parse_router_route_from_reply(
         dst_address,
         routing_table,
         gateway,
+        distance,
         comment,
     })
 }
@@ -417,28 +440,34 @@ impl MikrotikApi for MikrotikRsClient {
         &self,
         key: &RouteKey,
         gateway: &str,
+        distance: u8,
         comment: &str,
         comment_prefix: &str,
         plugin_tag: &str,
     ) -> Result<String> {
         // Upsert strategy:
         // 1) find existing by key
-        // 2) update only changed fields (gateway/comment)
+        // 2) update only changed fields (gateway/distance/comment)
         // 3) otherwise add and then resolve id by re-query
         if let Some(existing) = self.find_route(key, comment_prefix, plugin_tag).await? {
             let gateway_changed = existing.gateway.as_deref() != Some(gateway);
+            let distance_changed = existing.distance != Some(distance);
             let comment_changed = existing.comment.as_deref() != Some(comment);
-            if gateway_changed || comment_changed {
+            if gateway_changed || distance_changed || comment_changed {
+                let distance_str = distance.to_string();
                 let mut set_builder = CommandBuilder::new()
                     .command(route_command(key.family(), RouteOp::Set))
                     .attribute(ROUTER_ID_FIELD, Some(existing.id.as_str()));
                 if gateway_changed {
                     set_builder = set_builder.attribute(ROUTE_GATEWAY_FIELD, Some(gateway));
                 }
+                if distance_changed {
+                    set_builder =
+                        set_builder.attribute(ROUTE_DISTANCE_FIELD, Some(distance_str.as_str()));
+                }
                 if comment_changed {
                     set_builder = set_builder.attribute(ROUTE_COMMENT_FIELD, Some(comment));
                 }
-                set_builder = set_builder.attribute("disabled", Some("no"));
                 let _ = self
                     .send_rows("set host route", set_builder.build())
                     .await?;
@@ -446,13 +475,14 @@ impl MikrotikApi for MikrotikRsClient {
             return Ok(existing.id);
         }
 
+        let distance_str = distance.to_string();
         let add = CommandBuilder::new()
             .command(route_command(key.family(), RouteOp::Add))
             .attribute(ROUTE_DST_FIELD, Some(&key.dst_address()))
             .attribute(ROUTE_TABLE_FIELD, Some(&key.table))
             .attribute(ROUTE_GATEWAY_FIELD, Some(gateway))
+            .attribute(ROUTE_DISTANCE_FIELD, Some(distance_str.as_str()))
             .attribute(ROUTE_COMMENT_FIELD, Some(comment))
-            .attribute("disabled", Some("no"))
             .build();
         let _ = self.send_rows("add host route", add).await?;
 
@@ -466,6 +496,37 @@ impl MikrotikApi for MikrotikRsClient {
                 })?
         };
         Ok(created.id)
+    }
+
+    async fn validate_route_config(
+        &self,
+        key: &RouteKey,
+        gateway: &str,
+        distance: u8,
+        comment: &str,
+    ) -> Result<()> {
+        let distance_str = distance.to_string();
+        let add = CommandBuilder::new()
+            .command(route_command(key.family(), RouteOp::Add))
+            .attribute(ROUTE_DST_FIELD, Some(&key.dst_address()))
+            .attribute(ROUTE_TABLE_FIELD, Some(&key.table))
+            .attribute(ROUTE_GATEWAY_FIELD, Some(gateway))
+            .attribute(ROUTE_DISTANCE_FIELD, Some(distance_str.as_str()))
+            .attribute(ROUTE_COMMENT_FIELD, Some(comment))
+            .attribute("disabled", Some("yes"))
+            .build();
+        let _ = self.send_rows("validate route config", add).await?;
+
+        let route = self
+            .find_route_by_exact_comment(key, comment)
+            .await?
+            .ok_or_else(|| {
+                DnsError::plugin(
+                    "mikrotik validate route config succeeded but temporary route id not found",
+                )
+            })?;
+        self.delete_route_by_id(&route.id, route.family).await?;
+        Ok(())
     }
 
     async fn delete_route_by_id(&self, id: &str, family: RouteFamily) -> Result<()> {

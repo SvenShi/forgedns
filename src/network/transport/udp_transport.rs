@@ -165,8 +165,8 @@ mod tests {
             ));
         }
 
-        let bytes = encode_message_with_max_payload(&message, 1)
-            .expect("message encoding should succeed");
+        let bytes =
+            encode_message_with_max_payload(&message, 1).expect("message encoding should succeed");
         let decoded =
             Message::from_bytes(&bytes).expect("encoded message should decode successfully");
 

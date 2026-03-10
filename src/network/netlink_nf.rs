@@ -32,7 +32,6 @@ fn push_u16_ne(buf: &mut Vec<u8>, v: u16) {
     buf.extend_from_slice(&v.to_ne_bytes());
 }
 
-
 /// Mutable netfilter netlink socket.
 pub struct NfNetlinkSocket {
     socket: NlSocketHandle,
