@@ -460,14 +460,14 @@ impl RouteManagerRuntime {
                     {
                         Ok((file_ips, ignored_by_gateway, ignored_default_route)) => {
                             if ignored_by_gateway > 0 {
-                                warn!(
+                                debug!(
                                     plugin = %maintain_tag,
                                     ignored = ignored_by_gateway,
                                     "mikrotik persistent file reload ignored entries without corresponding gateway family"
                                 );
                             }
                             if ignored_default_route > 0 {
-                                warn!(
+                                debug!(
                                     plugin = %maintain_tag,
                                     ignored = ignored_default_route,
                                     "mikrotik persistent file reload ignored default-route entries (/0)"
@@ -1420,7 +1420,7 @@ async fn run_manager_worker(
                         "mikrotik periodic reconcile failed"
                     );
                 } else {
-                    info!(plugin = %tag, "mikrotik reconcile completed");
+                    debug!(plugin = %tag, "mikrotik reconcile completed");
                 }
             }
             ManagerCommand::Shutdown { cleanup, done } => {
