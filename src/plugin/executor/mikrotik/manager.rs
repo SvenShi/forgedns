@@ -16,7 +16,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 const ROUTE_DEFAULT_V4: &str = "0.0.0.0/0";
 const ROUTE_DEFAULT_V6: &str = "::/0";
