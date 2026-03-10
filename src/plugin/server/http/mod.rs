@@ -24,7 +24,7 @@ use crate::core::error::{DnsError, Result};
 use crate::network::tls_config::load_tls_config;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
-use crate::plugin::server::{RequestHandle, Server};
+use crate::plugin::server::{RequestHandle, Server, normalize_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -48,9 +48,10 @@ pub struct HttpServerConfig {
     /// - Requests are routed by HTTP method and path via `HttpDispatcher`.
     entries: Vec<Entry>,
 
-    /// HTTP listen address in `ip:port` format (e.g., "0.0.0.0:443").
+    /// HTTP listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:443", ":443").
     ///
-    /// - Must be a valid `SocketAddr` string or validation will fail.
+    /// - `:port` binds on `0.0.0.0:port`.
+    /// - Must be a valid listen address or validation will fail.
     /// - When TLS is configured, server runs HTTPS (HTTP/2) and optional HTTP/3.
     listen: String,
 
@@ -298,6 +299,12 @@ impl PluginFactory for HttpServerFactory {
                 .ok_or_else(|| DnsError::plugin("HTTP Server requires configuration arguments"))?,
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse HTTP Server config: {}", e)))?;
+        let listen = normalize_listen_addr(&http_config.listen).map_err(|e| {
+            DnsError::plugin(format!(
+                "Invalid HTTP listen address '{}': {}",
+                http_config.listen, e
+            ))
+        })?;
 
         // Create HTTP dispatcher for routing requests
         let mut dispatcher = HttpDispatcher::new();
@@ -349,7 +356,7 @@ impl PluginFactory for HttpServerFactory {
             HttpServer {
                 tag: plugin_config.tag.clone(),
                 entries: http_config.entries,
-                listen: http_config.listen,
+                listen,
                 src_ip_header: http_config.src_ip_header,
                 dispatcher: Arc::new(dispatcher),
                 server_config,

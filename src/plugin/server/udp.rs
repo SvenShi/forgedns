@@ -13,16 +13,13 @@ use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::server::{RequestHandle, Server};
+use crate::plugin::server::{RequestHandle, Server, normalize_listen_addr, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, Type};
-use std::io::Error;
-use std::net::SocketAddr;
 use std::net::UdpSocket as StdUdpSocket;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::net::UdpSocket;
@@ -39,9 +36,10 @@ pub struct UdpServerConfig {
     /// - All UDP-based DNS queries will be forwarded to this executor.
     entry: String,
 
-    /// UDP listen address in `ip:port` format (e.g., "0.0.0.0:53").
+    /// UDP listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:53", ":53").
     ///
-    /// - Must be a valid `SocketAddr` string or validation will fail.
+    /// - `:port` binds on `0.0.0.0:port`.
+    /// - Must be a valid listen address or validation will fail.
     /// - Ensure the port is not occupied by other UDP listeners.
     listen: String,
 }
@@ -214,12 +212,7 @@ async fn run_server(
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
 pub fn build_udp_socket(addr: &str) -> Result<StdUdpSocket> {
-    let addr = SocketAddr::from_str(addr).map_err(|e| {
-        Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("Invalid address {}: {}", addr, e),
-        )
-    })?;
+    let addr = parse_listen_addr(addr)?;
 
     let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
 
@@ -263,6 +256,12 @@ impl PluginFactory for UdpServerFactory {
                 .ok_or_else(|| DnsError::plugin("UDP Server requires configuration arguments"))?,
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse UDP Server config: {}", e)))?;
+        let listen = normalize_listen_addr(&udp_config.listen).map_err(|e| {
+            DnsError::plugin(format!(
+                "Invalid UDP listen address '{}': {}",
+                udp_config.listen, e
+            ))
+        })?;
 
         // Resolve and type-check the entry executor using contextual diagnostics.
         let entry_executor = registry.get_executor_dependency(
@@ -274,7 +273,7 @@ impl PluginFactory for UdpServerFactory {
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             UdpServer {
                 tag: plugin_config.tag.clone(),
-                listen: udp_config.listen,
+                listen,
                 request_handle: Arc::new(RequestHandle {
                     entry_executor,
                     registry,
@@ -290,11 +289,23 @@ impl PluginFactory for UdpServerFactory {
 mod tests {
     use super::*;
     use crate::plugin::test_utils::{plugin_config, test_registry};
+    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn test_udp_factory_requires_args() {
         let factory = UdpServerFactory {};
         let cfg = plugin_config("udp", "udp_server", None);
         assert!(factory.create(&cfg, test_registry()).is_err());
+    }
+
+    #[test]
+    fn test_build_udp_socket_accepts_port_only_shorthand() {
+        let socket = build_udp_socket(":0").expect("port-only shorthand should bind");
+        let addr = socket
+            .local_addr()
+            .expect("socket should expose local address");
+
+        assert_eq!(addr.ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_ne!(addr.port(), 0);
     }
 }

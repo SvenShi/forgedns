@@ -4,11 +4,14 @@
  */
 use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::dns_utils::build_response_from_request;
+use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
 use crate::plugin::{Plugin, PluginRegistry};
 use ahash::AHashMap;
 use hickory_proto::op::{Message, ResponseCode};
+use std::io::Error;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{Level, debug, event_enabled, warn};
 
@@ -19,6 +22,40 @@ pub mod udp;
 
 pub trait Server: Plugin {
     fn run(&self);
+}
+
+/// Parse a server listen address.
+///
+/// Besides standard `SocketAddr` inputs, this also accepts `:port` shorthand
+/// and expands it to `0.0.0.0:port`.
+pub(crate) fn parse_listen_addr(listen: &str) -> Result<SocketAddr> {
+    let listen = listen.trim();
+
+    if let Ok(addr) = SocketAddr::from_str(listen) {
+        return Ok(addr);
+    }
+
+    if let Some(port) = listen.strip_prefix(':') {
+        let port = port.parse::<u16>().map_err(|e| {
+            DnsError::Io(Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Invalid listen address {}: {}", listen, e),
+            ))
+        })?;
+        return Ok(SocketAddr::from(([0, 0, 0, 0], port)));
+    }
+
+    Err(DnsError::Io(Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "Invalid listen address {}: expected ip:port, [ipv6]:port, or :port",
+            listen
+        ),
+    )))
+}
+
+pub(crate) fn normalize_listen_addr(listen: &str) -> Result<String> {
+    Ok(parse_listen_addr(listen)?.to_string())
 }
 
 #[derive(Debug)]
@@ -171,6 +208,27 @@ mod tests {
     use hickory_proto::op::Query;
     use hickory_proto::rr::{Name, RecordType};
     use std::sync::Mutex;
+
+    #[test]
+    fn test_parse_listen_addr_accepts_port_only_shorthand() {
+        let addr = parse_listen_addr(":5337").expect("port-only shorthand should parse");
+
+        assert_eq!(addr, SocketAddr::from(([0, 0, 0, 0], 5337)));
+    }
+
+    #[test]
+    fn test_normalize_listen_addr_expands_port_only_shorthand() {
+        let addr = normalize_listen_addr(":5337").expect("port-only shorthand should normalize");
+
+        assert_eq!(addr, "0.0.0.0:5337");
+    }
+
+    #[test]
+    fn test_parse_listen_addr_rejects_invalid_port_only_shorthand() {
+        let err = parse_listen_addr(":not-a-port").unwrap_err();
+
+        assert!(err.to_string().contains("Invalid listen address"));
+    }
 
     fn make_request(id: u16, qname: &str) -> Message {
         let mut request = Message::new();

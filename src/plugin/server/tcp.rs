@@ -20,16 +20,16 @@ use crate::core::error::{DnsError, Result};
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::server::{RequestHandle, RequestMeta, Server};
+use crate::plugin::server::{
+    RequestHandle, RequestMeta, Server, normalize_listen_addr, parse_listen_addr,
+};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
-use std::io::Error;
 use std::net::SocketAddr;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -49,10 +49,11 @@ pub struct TcpServerConfig {
     /// - All TCP/TLS DNS queries will be forwarded to this executor.
     entry: String,
 
-    /// TCP listen address in `ip:port` format.
+    /// TCP listen address in `ip:port` or `:port` format.
     ///
-    /// - Example: "0.0.0.0:53" (DNS over TCP), "0.0.0.0:853" (DNS over TLS/DoT)
-    /// - Must be a valid `SocketAddr` string or validation will fail.
+    /// - Example: "0.0.0.0:53" (DNS over TCP), ":853" (DNS over TLS/DoT)
+    /// - `:port` binds on `0.0.0.0:port`.
+    /// - Must be a valid listen address or validation will fail.
     listen: String,
 
     /// Path to TLS certificate file (PEM format, optional).
@@ -340,12 +341,7 @@ async fn handle_dns_stream<S>(
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
 pub fn build_tcp_listener(addr: &str, idle_timeout: Duration) -> Result<TcpListener> {
-    let addr = SocketAddr::from_str(addr).map_err(|e| {
-        Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("Invalid address {}: {}", addr, e),
-        )
-    })?;
+    let addr = parse_listen_addr(addr)?;
 
     let sock = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
 
@@ -393,6 +389,12 @@ impl PluginFactory for TcpServerFactory {
                 .ok_or_else(|| DnsError::plugin("TCP Server requires configuration arguments"))?,
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse TCP Server config: {}", e)))?;
+        let listen = normalize_listen_addr(&tcp_config.listen).map_err(|e| {
+            DnsError::plugin(format!(
+                "Invalid TCP listen address '{}': {}",
+                tcp_config.listen, e
+            ))
+        })?;
 
         // Resolve and type-check the entry executor using contextual diagnostics.
         let entry_executor = registry.get_executor_dependency(
@@ -414,7 +416,7 @@ impl PluginFactory for TcpServerFactory {
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             TcpServer {
                 tag: plugin_config.tag.clone(),
-                listen: tcp_config.listen,
+                listen,
                 request_handle: Arc::new(RequestHandle {
                     entry_executor,
                     registry,
@@ -441,6 +443,7 @@ mod tests {
     use hickory_proto::op::{Message, Query, ResponseCode};
     use hickory_proto::rr::{Name, RecordType};
     use serde_yml::from_str;
+    use std::net::{IpAddr, Ipv4Addr};
     use std::sync::{Arc, Mutex};
     use tokio::io::duplex;
     use tokio::time::{Duration, timeout};
@@ -521,6 +524,18 @@ mod tests {
         let listener = build_tcp_listener("not-an-address", Duration::from_secs(5));
 
         assert!(listener.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_build_tcp_listener_accepts_port_only_shorthand() {
+        let listener = build_tcp_listener(":0", Duration::from_secs(5))
+            .expect("port-only shorthand should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should expose local address");
+
+        assert_eq!(addr.ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_ne!(addr.port(), 0);
     }
 
     #[test]

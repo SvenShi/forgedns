@@ -16,7 +16,7 @@ use crate::network::transport::quic_transport::{
     QuicTransport, QuicTransportReader, QuicTransportWriter,
 };
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::server::{RequestHandle, RequestMeta, Server, udp};
+use crate::plugin::server::{RequestHandle, RequestMeta, Server, normalize_listen_addr, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -38,9 +38,10 @@ pub struct QuicServerConfig {
     /// - All DoQ (DNS over QUIC) queries will be forwarded to this executor.
     entry: String,
 
-    /// QUIC listen address in `ip:port` format (e.g., "0.0.0.0:853").
+    /// QUIC listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:853", ":853").
     ///
-    /// - Must be a valid `SocketAddr` string or validation will fail.
+    /// - `:port` binds on `0.0.0.0:port`.
+    /// - Must be a valid listen address or validation will fail.
     /// - QUIC runs over UDP; ensure the port is not occupied by UDP listeners.
     listen: String,
 
@@ -377,6 +378,12 @@ impl PluginFactory for QuicServerFactory {
                 .ok_or_else(|| DnsError::plugin("QUIC Server requires configuration arguments"))?,
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse QUIC Server config: {}", e)))?;
+        let listen = normalize_listen_addr(&quic_config.listen).map_err(|e| {
+            DnsError::plugin(format!(
+                "Invalid QUIC listen address '{}': {}",
+                quic_config.listen, e
+            ))
+        })?;
 
         // Resolve and type-check the entry executor using contextual diagnostics.
         let entry_executor = registry.get_executor_dependency(
@@ -398,7 +405,7 @@ impl PluginFactory for QuicServerFactory {
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             QuicServer {
                 tag: plugin_config.tag.clone(),
-                listen: quic_config.listen,
+                listen,
                 server_config,
                 idle_timeout: quic_config.idle_timeout,
                 request_handle: Arc::new(RequestHandle {
