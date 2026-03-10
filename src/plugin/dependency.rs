@@ -76,6 +76,19 @@ impl DependencySpec {
         Self::with_kind(field, target_tag, DependencyKind::Executor)
     }
 
+    pub fn executor_type(
+        field: impl Into<String>,
+        target_tag: impl Into<String>,
+        expected_plugin_type: impl Into<String>,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            target_tag: target_tag.into(),
+            expected_kind: DependencyKind::Executor,
+            expected_plugin_type: Some(expected_plugin_type.into()),
+        }
+    }
+
     pub fn matcher(field: impl Into<String>, target_tag: impl Into<String>) -> Self {
         Self::with_kind(field, target_tag, DependencyKind::Matcher)
     }

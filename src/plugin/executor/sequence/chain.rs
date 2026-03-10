@@ -7,7 +7,9 @@ use crate::core::dns_utils::{build_response_from_request, parse_named_response_c
 use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
-use crate::plugin::executor::sequence::{SequenceRef, parse_sequence_ref};
+use crate::plugin::executor::sequence::{
+    SequenceRef, parse_control_flow_sequence_tag, parse_sequence_ref,
+};
 use crate::plugin::executor::{ExecState, ExecStep, Executor, execute_with_post};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
@@ -306,23 +308,13 @@ impl ChainBuilder {
         arg: Option<&str>,
         node_index: usize,
     ) -> Result<Arc<dyn Executor>> {
-        // `jump/goto` only accept plugin tag references (`$tag`) to avoid
-        // nested quick-setup ambiguity and lifecycle complexity.
         let raw =
             arg.ok_or_else(|| DnsError::plugin(format!("{} requires sequence tag argument", op)))?;
-        let tag = match parse_sequence_ref(raw)? {
-            SequenceRef::PluginTag(tag) => tag,
-            SequenceRef::QuickSetup { .. } => {
-                return Err(DnsError::plugin(format!(
-                    "{} target must be plugin tag reference ($tag), quick setup syntax is not supported",
-                    op
-                )));
-            }
-        };
+        let tag = parse_control_flow_sequence_tag(op, raw)?;
 
         let field = format!("args[{}].exec", node_index);
         self.registry
-            .get_executor_dependency(&self.sequence_tag, &field, &tag)
+            .get_executor_dependency_of_type(&self.sequence_tag, &field, &tag, "sequence")
     }
 
     async fn resolve_executor_ref(

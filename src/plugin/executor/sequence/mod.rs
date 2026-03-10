@@ -57,6 +57,23 @@ pub(super) fn parse_sequence_ref(raw: &str) -> DnsResult<SequenceRef> {
     })
 }
 
+pub(super) fn parse_control_flow_sequence_tag(op: &str, raw: &str) -> DnsResult<String> {
+    let tag = raw.trim();
+    if tag.is_empty() {
+        return Err(DnsError::plugin(format!(
+            "{} requires sequence tag argument",
+            op
+        )));
+    }
+    if tag.starts_with('$') {
+        return Err(DnsError::plugin(format!(
+            "{} target must be sequence tag without '$' prefix",
+            op
+        )));
+    }
+    Ok(tag.to_string())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum RawRuleMatchers {
@@ -163,7 +180,7 @@ fn parse_control_flow_dependency(exec: &str) -> Option<String> {
         return None;
     }
     if op == "jump" || op == "goto" {
-        if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(arg) {
+        if let Ok(tag) = parse_control_flow_sequence_tag(op, arg) {
             return Some(tag);
         }
     }
@@ -200,7 +217,7 @@ impl PluginFactory for SequenceFactory {
             if let Some(exec) = rule.exec {
                 let field = format!("args[{}].exec", rule_idx);
                 if let Some(tag) = parse_control_flow_dependency(&exec) {
-                    result.push(DependencySpec::executor(field, tag));
+                    result.push(DependencySpec::executor_type(field, tag, "sequence"));
                 } else if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&exec) {
                     result.push(DependencySpec::executor(field, tag));
                 }
@@ -230,6 +247,9 @@ impl PluginFactory for SequenceFactory {
             if rule.exec.is_none() && rule.matches.is_none() {
                 return Err(DnsError::plugin("sequence rule cannot be empty"));
             }
+            if let Some(exec) = &rule.exec {
+                validate_control_flow_syntax(exec)?;
+            }
         }
 
         Ok(UninitializedPlugin::Executor(Box::new(Sequence {
@@ -243,6 +263,21 @@ impl PluginFactory for SequenceFactory {
     }
 }
 
+fn validate_control_flow_syntax(exec: &str) -> DnsResult<()> {
+    let mut split = exec.trim().splitn(2, char::is_whitespace);
+    let Some(op) = split.next() else {
+        return Ok(());
+    };
+
+    if op != "jump" && op != "goto" {
+        return Ok(());
+    }
+
+    let arg = split.next().unwrap_or_default();
+    parse_control_flow_sequence_tag(op, arg)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,8 +289,19 @@ mod tests {
 
         assert_eq!(parse_control_flow_dependency("accept"), None);
         assert_eq!(
-            parse_control_flow_dependency("jump $next"),
+            parse_control_flow_dependency("jump next"),
             Some("next".to_string())
+        );
+        assert_eq!(parse_control_flow_dependency("jump $next"), None);
+        assert_eq!(
+            parse_control_flow_sequence_tag("jump", "next").unwrap(),
+            "next"
+        );
+        assert!(
+            parse_control_flow_sequence_tag("jump", "$next")
+                .unwrap_err()
+                .to_string()
+                .contains("without '$' prefix")
         );
     }
 

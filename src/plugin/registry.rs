@@ -262,6 +262,34 @@ impl PluginRegistry {
         Ok(plugin.to_executor())
     }
 
+    pub fn get_executor_dependency_of_type(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+        expected_plugin_type: &str,
+    ) -> Result<Arc<dyn Executor>> {
+        let plugin = self.get_required_plugin(source_tag, field, target_tag)?;
+        if plugin.plugin_type != PluginType::Executor {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' field '{}' expects executor plugin type '{}', but '{}' is {} (type '{}')",
+                source_tag,
+                field,
+                expected_plugin_type,
+                target_tag,
+                Self::plugin_kind_name(plugin.plugin_type),
+                plugin.plugin_name
+            )));
+        }
+        if plugin.plugin_name != expected_plugin_type {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' field '{}' expects executor plugin type '{}', but '{}' has type '{}'",
+                source_tag, field, expected_plugin_type, target_tag, plugin.plugin_name
+            )));
+        }
+        Ok(plugin.to_executor())
+    }
+
     pub fn get_matcher_dependency(
         &self,
         source_tag: &str,

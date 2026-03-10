@@ -446,11 +446,11 @@ plugins:
   - tag: seq_a
     type: sequence
     args:
-      - exec: jump $seq_b
+      - exec: jump seq_b
   - tag: seq_b
     type: sequence
     args:
-      - exec: jump $seq_a
+      - exec: jump seq_a
 "#;
 
     let config = parse_config(yaml)?;
@@ -462,5 +462,59 @@ plugins:
     assert!(msg.contains("Circular dependency detected"));
     assert!(msg.contains("seq_a"));
     assert!(msg.contains("seq_b"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_plugin_system_init_rejects_dollar_prefixed_jump_target() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: seq_a
+    type: sequence
+    args:
+      - exec: jump $seq_b
+  - tag: seq_b
+    type: sequence
+"#;
+
+    let config = parse_config(yaml)?;
+    let err = plugin::init(config)
+        .await
+        .expect_err("dollar-prefixed jump target should fail plugin init");
+    let msg = err.to_string();
+
+    assert!(msg.contains("jump target must be sequence tag without '$' prefix"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_plugin_system_init_reports_jump_target_must_be_sequence() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: debug
+    type: debug_print
+  - tag: seq
+    type: sequence
+    args:
+      - exec: jump debug
+"#;
+
+    let config = parse_config(yaml)?;
+    let err = plugin::init(config)
+        .await
+        .expect_err("jump target should require sequence plugin");
+    let msg = err.to_string();
+
+    assert!(msg.contains("plugin 'seq'"));
+    assert!(msg.contains("args[0].exec"));
+    assert!(
+        msg.contains("plugin type 'sequence'") || msg.contains("executor plugin type 'sequence'")
+    );
+    assert!(msg.contains("'debug'"));
+    assert!(msg.contains("debug_print"));
     Ok(())
 }
