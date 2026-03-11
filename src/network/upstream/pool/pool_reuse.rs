@@ -5,8 +5,9 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
+use crate::core::task_center;
 use crate::network::upstream::pool::{
-    Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
+    Connection, ConnectionBuilder, ConnectionPool, ManagedMaintenanceTask, start_maintenance,
 };
 use crate::network::upstream::utils::close_conns;
 use async_trait::async_trait;
@@ -14,6 +15,7 @@ use crossbeam_queue::ArrayQueue;
 use hickory_proto::op::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -42,6 +44,8 @@ pub struct ReusePool<C: Connection> {
     next_id: AtomicU16,
     /// Notify waiting threads when a connection becomes available
     release_notified: Notify,
+    /// Background maintenance task registered in task center.
+    maintenance_task_id: Mutex<Option<u64>>,
 }
 
 #[async_trait]
@@ -156,9 +160,10 @@ impl<C: Connection> ReusePool<C> {
             active_count: AtomicUsize::new(0),
             next_id: AtomicU16::new(1),
             release_notified: Notify::new(),
+            maintenance_task_id: Mutex::new(None),
         });
 
-        start_maintenance(pool.clone());
+        start_maintenance(&pool);
 
         if min_size > 0 {
             let arc = pool.clone();
@@ -285,6 +290,29 @@ impl<C: Connection> ReusePool<C> {
     }
 }
 
+impl<C: Connection> ManagedMaintenanceTask for ReusePool<C> {
+    fn maintenance_task_id(&self) -> &Mutex<Option<u64>> {
+        &self.maintenance_task_id
+    }
+
+    fn maintenance_task_name(&self) -> String {
+        "upstream_reuse_pool:maintenance".to_string()
+    }
+}
+
+impl<C: Connection> Drop for ReusePool<C> {
+    fn drop(&mut self) {
+        let task_id = self
+            .maintenance_task_id
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        if let Some(task_id) = task_id {
+            task_center::stop_task_detached(task_id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +415,7 @@ mod tests {
             connection_builder: Box::new(builder),
             next_id: AtomicU16::new(1),
             release_notified: Notify::new(),
+            maintenance_task_id: Mutex::new(None),
         }
     }
 

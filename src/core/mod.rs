@@ -27,6 +27,7 @@ pub mod context;
 pub mod dns_utils;
 pub mod error;
 pub mod rule_matcher;
+pub mod task_center;
 pub mod ttl_cache;
 
 mod log;

@@ -214,6 +214,7 @@ async fn run_async_main() -> Result<()> {
         "Destroying plugins for shutdown"
     );
     registry.destroy_plugins().await;
+    core::task_center::stop_all().await;
     info!(
         signal = shutdown_signal.as_str(),
         "Graceful shutdown complete"

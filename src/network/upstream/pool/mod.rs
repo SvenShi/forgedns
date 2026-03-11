@@ -46,10 +46,14 @@ pub(crate) mod pool_pipeline;
 pub(crate) mod pool_reuse;
 
 use crate::core::error::Result;
+use crate::core::task_center;
 use async_trait::async_trait;
 use hickory_proto::op::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::Weak;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::task::yield_now;
 
@@ -123,6 +127,12 @@ pub trait ConnectionPool<C: Connection>: Send + Sync + Debug + 'static {
     async fn maintain(&self);
 }
 
+/// Pools that own a periodic maintenance task managed by the global task center.
+pub trait ManagedMaintenanceTask {
+    fn maintenance_task_id(&self) -> &Mutex<Option<u64>>;
+    fn maintenance_task_name(&self) -> String;
+}
+
 /// Maintenance interval for pool cleanup
 const MAINTENANCE_DURATION: Duration = Duration::from_secs(10);
 
@@ -131,14 +141,36 @@ const MAINTENANCE_DURATION: Duration = Duration::from_secs(10);
 /// Periodically calls `maintain()` to clean up idle/dead connections.
 /// The task runs for the lifetime of the pool.
 #[inline]
-fn start_maintenance<C: Connection>(pool: Arc<dyn ConnectionPool<C>>) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(MAINTENANCE_DURATION).await;
+fn start_maintenance<C, P>(pool: &Arc<P>)
+where
+    C: Connection,
+    P: ConnectionPool<C> + ManagedMaintenanceTask + 'static,
+{
+    let weak_pool: Weak<P> = Arc::downgrade(pool);
+    let task_id_slot = Arc::new(AtomicU64::new(0));
+    let task_id_slot_task = task_id_slot.clone();
+    let task_name = pool.maintenance_task_name();
+    let task_id = task_center::spawn_fixed(task_name, MAINTENANCE_DURATION, move || {
+        let weak_pool = weak_pool.clone();
+        let task_id_slot_task = task_id_slot_task.clone();
+        async move {
+            let Some(pool) = weak_pool.upgrade() else {
+                let task_id = task_id_slot_task.load(Ordering::Acquire);
+                if task_id != 0 {
+                    task_center::stop_task_detached(task_id);
+                }
+                return;
+            };
+
             // Perform maintenance (awaiting ensures fairness and proper error handling)
             pool.maintain().await;
             // Yield to allow other tasks to run
             yield_now().await;
         }
     });
+    task_id_slot.store(task_id, Ordering::Release);
+    *pool
+        .maintenance_task_id()
+        .lock()
+        .expect("maintenance_task_id poisoned") = Some(task_id);
 }

@@ -23,6 +23,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::{build_response_from_request, rr_to_ip};
 use crate::core::error::{DnsError, Result};
+use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -36,7 +37,6 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::watch;
 
 const DEFAULT_SIZE: usize = 65_535;
 const DEFAULT_TTL: u32 = 7_200;
@@ -66,7 +66,7 @@ struct ReverseLookup {
     ttl: u32,
     handle_ptr: bool,
     cleanup_started: AtomicBool,
-    shutdown_tx: watch::Sender<bool>,
+    cleanup_task_id: Option<u64>,
 }
 
 #[async_trait]
@@ -82,43 +82,39 @@ impl Plugin for ReverseLookup {
 
         let cache = self.cache.clone();
         let size = self.size;
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(interval) => {}
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_ok() && *shutdown_rx.borrow() {
-                            break;
-                        }
-                        continue;
+        self.cleanup_task_id = Some(task_center::spawn_fixed(
+            format!("reverse_lookup:{}:cleanup", self.tag),
+            Duration::from_secs(CLEANUP_INTERVAL_SECS),
+            move || {
+                let cache = cache.clone();
+                async move {
+                    let now = AppClock::elapsed_millis();
+
+                    while cache.remove_expired_batch(now, EVICTION_BATCH) > 0 {}
+
+                    if cache.len() <= size {
+                        return;
+                    }
+                    let overflow = cache.len().saturating_sub(size).min(EVICTION_BATCH);
+                    if overflow == 0 {
+                        return;
+                    }
+
+                    let mut keys: Vec<(IpAddr, u64)> = cache.sample_last_access(overflow);
+                    keys.sort_unstable_by_key(|(_, last_access_ms)| *last_access_ms);
+                    for (key, _) in keys.into_iter().take(overflow) {
+                        let _ = cache.remove(&key);
                     }
                 }
-                let now = AppClock::elapsed_millis();
-
-                while cache.remove_expired_batch(now, EVICTION_BATCH) > 0 {}
-
-                if cache.len() <= size {
-                    continue;
-                }
-                let overflow = cache.len().saturating_sub(size).min(EVICTION_BATCH);
-                if overflow == 0 {
-                    continue;
-                }
-
-                let mut keys: Vec<(IpAddr, u64)> = cache.sample_last_access(overflow);
-                keys.sort_unstable_by_key(|(_, last_access_ms)| *last_access_ms);
-                for (key, _) in keys.into_iter().take(overflow) {
-                    let _ = cache.remove(&key);
-                }
-            }
-        });
+            },
+        ));
         Ok(())
     }
 
     async fn destroy(&self) -> Result<()> {
-        let _ = self.shutdown_tx.send(true);
+        if let Some(task_id) = self.cleanup_task_id {
+            task_center::stop_task(task_id).await;
+        }
         self.cleanup_started.store(false, Ordering::Relaxed);
         Ok(())
     }
@@ -221,7 +217,7 @@ impl PluginFactory for ReverseLookupFactory {
             ttl,
             handle_ptr: cfg.handle_ptr.unwrap_or(false),
             cleanup_started: AtomicBool::new(false),
-            shutdown_tx: watch::channel(false).0,
+            cleanup_task_id: None,
         })))
     }
 }
@@ -250,7 +246,6 @@ mod tests {
     use hickory_proto::rr::rdata::A;
     use hickory_proto::rr::{Name, RData, Record};
     use std::net::{Ipv4Addr, SocketAddr};
-    use tokio::sync::watch;
 
     #[test]
     fn test_parse_ptr_name_ipv4_and_invalid() {
@@ -288,7 +283,7 @@ mod tests {
             ttl: 120,
             handle_ptr: true,
             cleanup_started: AtomicBool::new(false),
-            shutdown_tx: watch::channel(false).0,
+            cleanup_task_id: None,
         };
 
         let mut a_ctx = make_context("www.example.com.", RecordType::A);

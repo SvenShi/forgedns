@@ -9,6 +9,7 @@
 use super::api::MikrotikApi;
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::core::task_center;
 use ahash::{AHashMap, AHashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, OnceLock};
@@ -352,9 +353,9 @@ pub(super) struct PersistentReloadConfig {
 pub(super) struct RouteManagerRuntime {
     tx: mpsc::Sender<ManagerCommand>,
     worker_handle: Option<JoinHandle<()>>,
-    sweep_handle: Option<JoinHandle<()>>,
-    reconcile_handle: Option<JoinHandle<()>>,
-    persistent_reload_handle: Option<JoinHandle<()>>,
+    sweep_task_id: Option<u64>,
+    reconcile_task_id: Option<u64>,
+    persistent_reload_task_id: Option<u64>,
 }
 
 impl RouteManagerRuntime {
@@ -371,104 +372,111 @@ impl RouteManagerRuntime {
         }));
 
         let sweep_tx = tx.clone();
-        let sweep_handle = Some(tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
-            ticker.tick().await;
-            loop {
-                ticker.tick().await;
-                if sweep_tx.send(ManagerCommand::Sweep).await.is_err() {
-                    break;
+        let sweep_task_id = Some(task_center::spawn_fixed(
+            format!("mikrotik:{}:sweep", tag),
+            Duration::from_secs(SWEEP_INTERVAL_SECS),
+            move || {
+                let sweep_tx = sweep_tx.clone();
+                async move {
+                    let _ = sweep_tx.send(ManagerCommand::Sweep).await;
                 }
-            }
-        }));
+            },
+        ));
 
         let reconcile_tx = tx.clone();
-        let reconcile_handle = Some(tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(RECONCILE_INTERVAL_SECS));
-            ticker.tick().await;
-            loop {
-                ticker.tick().await;
-                if reconcile_tx.send(ManagerCommand::Reconcile).await.is_err() {
-                    break;
+        let reconcile_task_id = Some(task_center::spawn_fixed(
+            format!("mikrotik:{}:reconcile", tag),
+            Duration::from_secs(RECONCILE_INTERVAL_SECS),
+            move || {
+                let reconcile_tx = reconcile_tx.clone();
+                async move {
+                    let _ = reconcile_tx.send(ManagerCommand::Reconcile).await;
                 }
-            }
-        }));
+            },
+        ));
 
-        let persistent_reload_handle = persistent_reload.and_then(|reload_cfg| {
+        let persistent_reload_task_id = persistent_reload.and_then(|reload_cfg| {
             if reload_cfg.initial_ips.is_empty() && reload_cfg.files.is_empty() {
                 return None;
             }
 
             let maintain_tx = tx.clone();
             let maintain_tag = tag.clone();
-            Some(tokio::spawn(async move {
-                let mut ticker =
-                    tokio::time::interval(Duration::from_secs(PERSISTENT_RELOAD_INTERVAL_SECS));
-                let mut last_loaded_ips = reload_cfg.initial_ips;
-                ticker.tick().await;
-                loop {
-                    ticker.tick().await;
-                    match super::load_persistent_ips_from_files_async(
-                        reload_cfg.files.as_slice(),
-                        reload_cfg.gateway4_enabled,
-                        reload_cfg.gateway6_enabled,
-                    )
-                    .await
-                    {
-                        Ok((file_ips, ignored_by_gateway, ignored_default_route)) => {
-                            if ignored_by_gateway > 0 {
-                                debug!(
-                                    plugin = %maintain_tag,
-                                    ignored = ignored_by_gateway,
-                                    "mikrotik persistent file reload ignored entries without corresponding gateway family"
-                                );
-                            }
-                            if ignored_default_route > 0 {
-                                debug!(
-                                    plugin = %maintain_tag,
-                                    ignored = ignored_default_route,
-                                    "mikrotik persistent file reload ignored default-route entries (/0)"
-                                );
-                            }
+            let last_loaded_ips = Arc::new(tokio::sync::Mutex::new(reload_cfg.initial_ips.clone()));
+            Some(task_center::spawn_fixed(
+                format!("mikrotik:{}:persistent_reload", maintain_tag),
+                Duration::from_secs(PERSISTENT_RELOAD_INTERVAL_SECS),
+                move || {
+                    let maintain_tx = maintain_tx.clone();
+                    let maintain_tag = maintain_tag.clone();
+                    let last_loaded_ips = last_loaded_ips.clone();
+                    let reload_cfg = reload_cfg.clone();
+                    async move {
+                        match super::load_persistent_ips_from_files_async(
+                            reload_cfg.files.as_slice(),
+                            reload_cfg.gateway4_enabled,
+                            reload_cfg.gateway6_enabled,
+                        )
+                        .await
+                        {
+                            Ok((file_ips, ignored_by_gateway, ignored_default_route)) => {
+                                if ignored_by_gateway > 0 {
+                                    debug!(
+                                        plugin = %maintain_tag,
+                                        ignored = ignored_by_gateway,
+                                        "mikrotik persistent file reload ignored entries without corresponding gateway family"
+                                    );
+                                }
+                                if ignored_default_route > 0 {
+                                    debug!(
+                                        plugin = %maintain_tag,
+                                        ignored = ignored_default_route,
+                                        "mikrotik persistent file reload ignored default-route entries (/0)"
+                                    );
+                                }
 
-                            let mut desired_ips = reload_cfg.inline_ips.clone();
-                            desired_ips.extend(file_ips);
+                                let mut desired_ips = reload_cfg.inline_ips.clone();
+                                desired_ips.extend(file_ips);
 
-                            if desired_ips != last_loaded_ips {
-                                last_loaded_ips = desired_ips.clone();
-                                if maintain_tx
-                                    .send(ManagerCommand::UpdatePersistentIps { ips: desired_ips })
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
+                                let mut last_loaded_guard = last_loaded_ips.lock().await;
+                                if desired_ips != *last_loaded_guard {
+                                    *last_loaded_guard = desired_ips.clone();
+                                    if maintain_tx
+                                        .send(ManagerCommand::UpdatePersistentIps {
+                                            ips: desired_ips,
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+
+                                // Dedicated tick keeps persistent routes self-healed
+                                // without requiring new DNS observations.
+                                if maintain_tx.send(ManagerCommand::Reconcile).await.is_err() {
+                                    return;
                                 }
                             }
-
-                            // Dedicated tick keeps persistent routes self-healed
-                            // without requiring new DNS observations.
-                            if maintain_tx.send(ManagerCommand::Reconcile).await.is_err() {
-                                break;
+                            Err(e) => {
+                                warn!(
+                                    plugin = %maintain_tag,
+                                    err = %e,
+                                    "mikrotik persistent file reload failed"
+                                );
                             }
                         }
-                        Err(e) => {
-                            warn!(
-                                plugin = %maintain_tag,
-                                err = %e,
-                                "mikrotik persistent file reload failed"
-                            );
-                        }
                     }
-                }
-            }))
+                },
+            ))
         });
 
         Self {
             tx,
             worker_handle,
-            sweep_handle,
-            reconcile_handle,
-            persistent_reload_handle,
+            sweep_task_id,
+            reconcile_task_id,
+            persistent_reload_task_id,
         }
     }
 
@@ -503,17 +511,14 @@ impl RouteManagerRuntime {
                     .is_ok();
         }
 
-        if let Some(handle) = self.sweep_handle.take() {
-            handle.abort();
-            let _ = handle.await;
+        if let Some(task_id) = self.sweep_task_id.take() {
+            task_center::stop_task(task_id).await;
         }
-        if let Some(handle) = self.reconcile_handle.take() {
-            handle.abort();
-            let _ = handle.await;
+        if let Some(task_id) = self.reconcile_task_id.take() {
+            task_center::stop_task(task_id).await;
         }
-        if let Some(handle) = self.persistent_reload_handle.take() {
-            handle.abort();
-            let _ = handle.await;
+        if let Some(task_id) = self.persistent_reload_task_id.take() {
+            task_center::stop_task(task_id).await;
         }
         if let Some(handle) = self.worker_handle.take() {
             if shutdown_acked {

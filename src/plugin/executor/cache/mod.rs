@@ -13,6 +13,7 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -23,10 +24,10 @@ use hickory_proto::rr::{RData, RecordType};
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::{OnceCell, watch};
-use tokio::time::sleep;
+use tokio::sync::OnceCell;
 use tracing::{Level, debug, event_enabled, warn};
 
 mod key;
@@ -145,8 +146,11 @@ pub struct Cache {
     /// Number of cache entry updates since last dump.
     updated_keys: Arc<AtomicU64>,
 
-    /// Shutdown signal for background cache tasks.
-    shutdown_tx: watch::Sender<bool>,
+    /// Periodic dump task id, if dump persistence is enabled.
+    dump_task_id: Mutex<Option<u64>>,
+
+    /// Periodic cleanup task id.
+    cleanup_task_id: Mutex<Option<u64>>,
 }
 
 impl Cache {
@@ -164,113 +168,98 @@ impl Cache {
         dump_path: String,
         dump_interval: u64,
         updated_keys: Arc<AtomicU64>,
-        mut shutdown_rx: watch::Receiver<bool>,
-    ) {
-        tokio::spawn(async move {
-            let interval = Duration::from_secs(dump_interval);
-            loop {
-                tokio::select! {
-                    _ = sleep(interval) => {}
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_ok() && *shutdown_rx.borrow() {
-                            break;
+    ) -> u64 {
+        task_center::spawn_fixed(
+            format!("cache:{}:dump", self.tag),
+            Duration::from_secs(dump_interval),
+            move || {
+                let cache_map = cache_map.clone();
+                let dump_path = dump_path.clone();
+                let updated_keys = updated_keys.clone();
+                async move {
+                    let changed = updated_keys.swap(0, Ordering::Relaxed);
+                    if changed < MINIMUM_CHANGES_TO_DUMP {
+                        // Keep sparse updates accumulated so low-write workloads still persist
+                        // eventually without triggering dump every interval.
+                        if changed > 0 {
+                            updated_keys.fetch_add(changed, Ordering::Relaxed);
                         }
-                        continue;
+                        return;
+                    }
+                    if let Err(e) = dump_cache_to_file(&cache_map, &dump_path).await {
+                        warn!("Failed to dump cache to {}: {}", dump_path, e);
                     }
                 }
-                let changed = updated_keys.swap(0, Ordering::Relaxed);
-                if changed < MINIMUM_CHANGES_TO_DUMP {
-                    // Keep sparse updates accumulated so low-write workloads still persist
-                    // eventually without triggering dump every interval.
-                    if changed > 0 {
-                        updated_keys.fetch_add(changed, Ordering::Relaxed);
-                    }
-                    continue;
-                }
-                if let Err(e) = dump_cache_to_file(&cache_map, &dump_path).await {
-                    warn!("Failed to dump cache to {}: {}", dump_path, e);
-                }
-            }
-        });
+            },
+        )
     }
 
-    fn spawn_cleanup_task(
-        &self,
-        cache_map: CacheMap,
-        cache_size: usize,
-        mut shutdown_rx: watch::Receiver<bool>,
-    ) {
-        tokio::spawn(async move {
-            let cleanup_interval = Duration::from_secs(DEFAULT_CLEANUP_INTERVAL);
-            loop {
-                tokio::select! {
-                    _ = sleep(cleanup_interval) => {}
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_ok() && *shutdown_rx.borrow() {
+    fn spawn_cleanup_task(&self, cache_map: CacheMap, cache_size: usize) -> u64 {
+        task_center::spawn_fixed(
+            format!("cache:{}:cleanup", self.tag),
+            Duration::from_secs(DEFAULT_CLEANUP_INTERVAL),
+            move || {
+                let cache_map = cache_map.clone();
+                async move {
+                    let now = AppClock::elapsed_millis();
+                    let mut expired_removed = 0usize;
+                    for _ in 0..EXPIRED_SWEEP_ROUNDS {
+                        let removed = cache_map.remove_expired_batch(now, EXPIRED_SWEEP_BATCH);
+                        if removed == 0 {
                             break;
                         }
-                        continue;
+                        expired_removed += removed;
+                    }
+
+                    if expired_removed > 0 {
+                        debug!("Cleaned {} expired cache entries", expired_removed);
+                    }
+
+                    let current_size = cache_map.len();
+                    let high_watermark = cache_size
+                        .saturating_mul(EVICT_HIGH_WATERMARK_PERCENT)
+                        .saturating_div(100)
+                        .max(1);
+                    if current_size <= high_watermark {
+                        return;
+                    }
+
+                    let low_watermark = cache_size
+                        .saturating_mul(EVICT_LOW_WATERMARK_PERCENT)
+                        .saturating_div(100)
+                        .max(1);
+                    let target_size = low_watermark.min(current_size);
+                    let mut evict_target = current_size.saturating_sub(target_size);
+                    evict_target = evict_target.min(EVICTION_MAX_BATCH);
+
+                    let sample_cap = current_size.min(EVICTION_SAMPLE_SIZE);
+                    let mut sample = cache_map.sample_last_access(sample_cap);
+
+                    if sample.is_empty() || evict_target == 0 {
+                        return;
+                    }
+
+                    // Approximate LRU: sort sampled keys by last-access and evict oldest subset.
+                    sample.sort_unstable_by_key(|(_, last)| *last);
+
+                    let mut evicted = 0usize;
+                    for (key, _) in sample.into_iter().take(evict_target) {
+                        if cache_map.remove(&key) {
+                            evicted += 1;
+                        }
+                    }
+
+                    if evicted > 0 {
+                        warn!(
+                            "LRU eviction: removed {} items, cache size {} -> {}",
+                            evicted,
+                            current_size,
+                            cache_map.len()
+                        );
                     }
                 }
-
-                let now = AppClock::elapsed_millis();
-                let mut expired_removed = 0usize;
-                for _ in 0..EXPIRED_SWEEP_ROUNDS {
-                    let removed = cache_map.remove_expired_batch(now, EXPIRED_SWEEP_BATCH);
-                    if removed == 0 {
-                        break;
-                    }
-                    expired_removed += removed;
-                }
-
-                if expired_removed > 0 {
-                    debug!("Cleaned {} expired cache entries", expired_removed);
-                }
-
-                let current_size = cache_map.len();
-                let high_watermark = cache_size
-                    .saturating_mul(EVICT_HIGH_WATERMARK_PERCENT)
-                    .saturating_div(100)
-                    .max(1);
-                if current_size <= high_watermark {
-                    continue;
-                }
-
-                let low_watermark = cache_size
-                    .saturating_mul(EVICT_LOW_WATERMARK_PERCENT)
-                    .saturating_div(100)
-                    .max(1);
-                let target_size = low_watermark.min(current_size);
-                let mut evict_target = current_size.saturating_sub(target_size);
-                evict_target = evict_target.min(EVICTION_MAX_BATCH);
-
-                let sample_cap = current_size.min(EVICTION_SAMPLE_SIZE);
-                let mut sample = cache_map.sample_last_access(sample_cap);
-
-                if sample.is_empty() || evict_target == 0 {
-                    continue;
-                }
-
-                // Approximate LRU: sort sampled keys by last-access and evict oldest subset.
-                sample.sort_unstable_by_key(|(_, last)| *last);
-
-                let mut evicted = 0usize;
-                for (key, _) in sample.into_iter().take(evict_target) {
-                    if cache_map.remove(&key) {
-                        evicted += 1;
-                    }
-                }
-
-                if evicted > 0 {
-                    warn!(
-                        "LRU eviction: removed {} items, cache size {} -> {}",
-                        evicted,
-                        current_size,
-                        cache_map.len()
-                    );
-                }
-            }
-        });
+            },
+        )
     }
 
     #[inline]
@@ -473,21 +462,41 @@ impl Plugin for Cache {
         if let Some(dump_file) = &self.config.dump_file {
             self.spawn_load_task(cache_map.clone(), dump_file.clone(), self.ecs_in_key);
             let dump_interval = self.config.dump_interval.unwrap_or(DEFAULT_DUMP_INTERVAL);
-            self.spawn_dump_task(
+            let task_id = self.spawn_dump_task(
                 cache_map.clone(),
                 dump_file.clone(),
                 dump_interval,
                 self.updated_keys.clone(),
-                self.shutdown_tx.subscribe(),
             );
+            *self.dump_task_id.lock().expect("dump_task_id poisoned") = Some(task_id);
         }
 
-        self.spawn_cleanup_task(cache_map, self.cache_size, self.shutdown_tx.subscribe());
+        let cleanup_task_id = self.spawn_cleanup_task(cache_map, self.cache_size);
+        *self
+            .cleanup_task_id
+            .lock()
+            .expect("cleanup_task_id poisoned") = Some(cleanup_task_id);
         Ok(())
     }
 
     async fn destroy(&self) -> Result<()> {
-        let _ = self.shutdown_tx.send(true);
+        let dump_task_id = self
+            .dump_task_id
+            .lock()
+            .expect("dump_task_id poisoned")
+            .take();
+        let cleanup_task_id = self
+            .cleanup_task_id
+            .lock()
+            .expect("cleanup_task_id poisoned")
+            .take();
+
+        if let Some(task_id) = dump_task_id {
+            task_center::stop_task(task_id).await;
+        }
+        if let Some(task_id) = cleanup_task_id {
+            task_center::stop_task(task_id).await;
+        }
         if let Some(dump_file) = &self.config.dump_file
             && let Some(cache_map) = self.cache_map.get()
             && let Err(e) = dump_cache_to_file(cache_map, dump_file).await
@@ -642,7 +651,8 @@ impl PluginFactory for CacheFactory {
             cache_size: cache_config.size.unwrap_or(DEFAULT_CACHE_SIZE),
             config: cache_config,
             updated_keys: Arc::new(AtomicU64::new(0)),
-            shutdown_tx: watch::channel(false).0,
+            dump_task_id: Mutex::new(None),
+            cleanup_task_id: Mutex::new(None),
         })))
     }
 }
@@ -677,7 +687,8 @@ mod tests {
             config,
             updated_keys: Arc::new(AtomicU64::new(0)),
             cache_size,
-            shutdown_tx: watch::channel(false).0,
+            dump_task_id: Mutex::new(None),
+            cleanup_task_id: Mutex::new(None),
         }
     }
 

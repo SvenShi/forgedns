@@ -5,8 +5,9 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::core::task_center;
 use crate::network::upstream::pool::{
-    Connection, ConnectionBuilder, ConnectionPool, start_maintenance,
+    Connection, ConnectionBuilder, ConnectionPool, ManagedMaintenanceTask, start_maintenance,
 };
 use crate::network::upstream::utils::close_conns;
 use arc_swap::ArcSwap;
@@ -16,6 +17,7 @@ use futures::stream::FuturesUnordered;
 use hickory_proto::op::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::task::yield_now;
@@ -39,6 +41,8 @@ pub struct PipelinePool<C: Connection> {
     connection_builder: Box<dyn ConnectionBuilder<C>>,
     /// The Next connection id
     next_id: AtomicU16,
+    /// Background maintenance task registered in task center.
+    maintenance_task_id: Mutex<Option<u64>>,
 }
 
 #[async_trait]
@@ -127,8 +131,9 @@ impl<C: Connection> PipelinePool<C> {
             max_idle: Duration::from_secs(idle_time),
             connection_builder,
             next_id: AtomicU16::new(0),
+            maintenance_task_id: Mutex::new(None),
         });
-        start_maintenance(pool.clone());
+        start_maintenance(&pool);
         if min_size > 0 {
             let arc = pool.clone();
             // Fire-and-forget async expand to prefill pool
@@ -265,6 +270,29 @@ impl<C: Connection> PipelinePool<C> {
     }
 }
 
+impl<C: Connection> ManagedMaintenanceTask for PipelinePool<C> {
+    fn maintenance_task_id(&self) -> &Mutex<Option<u64>> {
+        &self.maintenance_task_id
+    }
+
+    fn maintenance_task_name(&self) -> String {
+        "upstream_pipeline_pool:maintenance".to_string()
+    }
+}
+
+impl<C: Connection> Drop for PipelinePool<C> {
+    fn drop(&mut self) {
+        let task_id = self
+            .maintenance_task_id
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        if let Some(task_id) = task_id {
+            task_center::stop_task_detached(task_id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +388,7 @@ mod tests {
             max_idle: Duration::from_secs(idle_secs),
             connection_builder: Box::new(builder),
             next_id: AtomicU16::new(1),
+            maintenance_task_id: Mutex::new(None),
         }
     }
 

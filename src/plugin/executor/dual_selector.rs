@@ -18,6 +18,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::build_response_from_request;
 use crate::core::error::{DnsError, Result};
+use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -29,7 +30,6 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::watch;
 
 const CLEANUP_INTERVAL_SECS: u64 = 30;
 const DEFAULT_CACHE_ENABLED: bool = true;
@@ -58,7 +58,7 @@ struct DualSelector {
     cache_enabled: bool,
     cache_ttl_ms: u64,
     cleanup_started: AtomicBool,
-    shutdown_tx: watch::Sender<bool>,
+    cleanup_task_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -102,28 +102,24 @@ impl Plugin for DualSelector {
         }
 
         let cache = self.cache.clone();
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(interval) => {}
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_ok() && *shutdown_rx.borrow() {
-                            break;
-                        }
-                        continue;
-                    }
+        self.cleanup_task_id = Some(task_center::spawn_fixed(
+            format!("dual_selector:{}:cleanup", self.tag),
+            Duration::from_secs(CLEANUP_INTERVAL_SECS),
+            move || {
+                let cache = cache.clone();
+                async move {
+                    let now = AppClock::elapsed_millis();
+                    while cache.remove_expired_batch(now, 256) > 0 {}
                 }
-                let now = AppClock::elapsed_millis();
-                while cache.remove_expired_batch(now, 256) > 0 {}
-            }
-        });
+            },
+        ));
         Ok(())
     }
 
     async fn destroy(&self) -> Result<()> {
-        let _ = self.shutdown_tx.send(true);
+        if let Some(task_id) = self.cleanup_task_id {
+            task_center::stop_task(task_id).await;
+        }
         self.cleanup_started.store(false, Ordering::Relaxed);
         Ok(())
     }
@@ -328,7 +324,7 @@ impl PluginFactory for DualSelectorFactory {
             cache_enabled,
             cache_ttl_ms,
             cleanup_started: AtomicBool::new(false),
-            shutdown_tx: watch::channel(false).0,
+            cleanup_task_id: None,
         })))
     }
 
@@ -345,7 +341,7 @@ impl PluginFactory for DualSelectorFactory {
             cache_enabled: DEFAULT_CACHE_ENABLED,
             cache_ttl_ms: DEFAULT_CACHE_TTL_MS,
             cleanup_started: AtomicBool::new(false),
-            shutdown_tx: watch::channel(false).0,
+            cleanup_task_id: None,
         })))
     }
 }
@@ -386,7 +382,7 @@ mod tests {
             cache_enabled: true,
             cache_ttl_ms: DEFAULT_CACHE_TTL_MS,
             cleanup_started: AtomicBool::new(false),
-            shutdown_tx: watch::channel(false).0,
+            cleanup_task_id: None,
         }
     }
 

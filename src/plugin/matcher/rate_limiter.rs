@@ -25,6 +25,7 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -36,7 +37,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::oneshot;
 
 const DEFAULT_QPS: f64 = 20.0;
 const DEFAULT_BURST: f64 = 40.0;
@@ -72,8 +72,7 @@ struct RateLimiter {
     mask6: u8,
     buckets: TtlCache<IpAddr, Bucket>,
     cleanup_started: AtomicBool,
-    cleanup_stop: Mutex<Option<oneshot::Sender<()>>>,
-    cleanup_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    cleanup_task_id: Mutex<Option<u64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,8 +97,7 @@ impl PluginFactory for RateLimiterFactory {
             mask6: cfg.mask6.unwrap_or(DEFAULT_MASK6),
             buckets: TtlCache::with_capacity(4096),
             cleanup_started: AtomicBool::new(false),
-            cleanup_stop: Mutex::new(None),
-            cleanup_handle: Mutex::new(None),
+            cleanup_task_id: Mutex::new(None),
         })))
     }
 
@@ -120,8 +118,7 @@ impl PluginFactory for RateLimiterFactory {
             mask6: cfg.mask6.unwrap_or(DEFAULT_MASK6),
             buckets: TtlCache::with_capacity(4096),
             cleanup_started: AtomicBool::new(false),
-            cleanup_stop: Mutex::new(None),
-            cleanup_handle: Mutex::new(None),
+            cleanup_task_id: Mutex::new(None),
         })))
     }
 }
@@ -137,42 +134,32 @@ impl Plugin for RateLimiter {
             return Ok(());
         }
 
-        let (stop_tx, mut stop_rx) = oneshot::channel();
-        if let Ok(mut guard) = self.cleanup_stop.lock() {
-            *guard = Some(stop_tx);
-        }
-
         let buckets = self.buckets.clone();
-        let handle = tokio::spawn(async move {
-            let interval = Duration::from_secs(CLEANUP_INTERVAL_SECS);
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(interval) => {
-                        let now = AppClock::elapsed_millis();
-                        while buckets.remove_expired_batch(now, 2048) > 0 {}
-                    }
-                    _ = &mut stop_rx => {
-                        break;
-                    }
+        let task_id = task_center::spawn_fixed(
+            format!("rate_limiter:{}:cleanup", self.tag),
+            Duration::from_secs(CLEANUP_INTERVAL_SECS),
+            move || {
+                let buckets = buckets.clone();
+                async move {
+                    let now = AppClock::elapsed_millis();
+                    while buckets.remove_expired_batch(now, 2048) > 0 {}
                 }
-            }
-        });
-        if let Ok(mut guard) = self.cleanup_handle.lock() {
-            *guard = Some(handle);
+            },
+        );
+        if let Ok(mut guard) = self.cleanup_task_id.lock() {
+            *guard = Some(task_id);
         }
         Ok(())
     }
 
     async fn destroy(&self) -> DnsResult<()> {
-        if let Ok(mut guard) = self.cleanup_stop.lock()
-            && let Some(tx) = guard.take()
-        {
-            let _ = tx.send(());
-        }
-        if let Ok(mut guard) = self.cleanup_handle.lock()
-            && let Some(handle) = guard.take()
-        {
-            handle.abort();
+        let task_id = if let Ok(mut guard) = self.cleanup_task_id.lock() {
+            guard.take()
+        } else {
+            None
+        };
+        if let Some(task_id) = task_id {
+            task_center::stop_task(task_id).await;
         }
         self.cleanup_started.store(false, Ordering::Relaxed);
         Ok(())
@@ -375,8 +362,7 @@ mod tests {
             mask6: 128,
             buckets: TtlCache::with_capacity(16),
             cleanup_started: AtomicBool::new(false),
-            cleanup_stop: Mutex::new(None),
-            cleanup_handle: Mutex::new(None),
+            cleanup_task_id: Mutex::new(None),
         };
 
         let mut ctx = make_context(Ipv4Addr::new(10, 0, 0, 1));
