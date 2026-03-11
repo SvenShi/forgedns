@@ -98,7 +98,10 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     let registry = Arc::new(registry);
 
     // Initialize all plugins (clone Arc to keep a reference)
-    registry.clone().init_plugins(config.plugins).await?;
+    if let Err(err) = registry.clone().init_plugins(config.plugins).await {
+        registry.destroy_plugins().await;
+        return Err(err);
+    }
 
     Ok(registry)
 }

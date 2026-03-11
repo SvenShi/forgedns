@@ -14,7 +14,7 @@
 use crate::config::types::LogConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::log::ForgeDnsLogFormatter;
-use crate::core::runtime::{Options, Runtime};
+use crate::core::runtime::Runtime;
 use clap::Parser;
 use tracing::{info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -33,13 +33,25 @@ pub mod ttl_cache;
 mod log;
 mod runtime;
 
+pub use crate::core::runtime::Options;
+
+/// Parse command-line options for ForgeDNS startup.
+pub fn parse_options() -> Options {
+    Options::parse()
+}
+
 /// Initialize the core runtime system
 ///
 /// Parses command-line options and starts the application clock.
 /// The clock runs in the background to provide high-performance timestamps.
 pub fn init() -> Runtime {
-    let options = Options::parse();
+    init_with_options(parse_options())
+}
 
+/// Initialize the core runtime system from pre-parsed options.
+///
+/// Starts the application clock and stores the parsed options for later use.
+pub fn init_with_options(options: Options) -> Runtime {
     // Start background clock for efficient timestamp generation
     AppClock::start();
 

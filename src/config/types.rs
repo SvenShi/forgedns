@@ -24,6 +24,9 @@ pub enum ConfigError {
     #[error("Plugin type cannot be empty")]
     EmptyPluginType,
 
+    #[error("runtime.worker_threads must be greater than 0")]
+    InvalidRuntimeWorkerThreads,
+
     #[error(
         "Duplicate plugin tag '{tag}' found at plugins[{first_index}] and plugins[{duplicate_index}]"
     )]
@@ -37,6 +40,10 @@ pub enum ConfigError {
 /// Main server configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// Tokio runtime configuration.
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
+
     /// Logging configuration (level, file output)
     #[serde(default)]
     pub log: LogConfig,
@@ -52,6 +59,10 @@ impl Config {
     /// Plugin-specific validation (e.g., listen addresses, upstreams) is delegated
     /// to each PluginFactory during plugin initialization.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if matches!(self.runtime.worker_threads, Some(0)) {
+            return Err(ConfigError::InvalidRuntimeWorkerThreads);
+        }
+
         // Validate log level
         match self.log.level.to_lowercase().as_str() {
             "off" | "trace" | "debug" | "info" | "warn" | "error" => {}
@@ -81,6 +92,28 @@ impl Config {
 
         Ok(())
     }
+}
+
+/// Tokio runtime configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RuntimeConfig {
+    /// Number of Tokio worker threads for the multi-thread runtime.
+    ///
+    /// When omitted, ForgeDNS uses the system's available CPU parallelism.
+    pub worker_threads: Option<usize>,
+}
+
+impl RuntimeConfig {
+    /// Resolve the effective Tokio worker-thread count.
+    pub fn effective_worker_threads(&self) -> usize {
+        self.worker_threads.unwrap_or_else(default_worker_threads)
+    }
+}
+
+fn default_worker_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
 }
 
 /// Logging configuration
@@ -137,6 +170,7 @@ mod tests {
     #[test]
     fn test_validate_rejects_duplicate_plugin_tags() {
         let config = Config {
+            runtime: RuntimeConfig::default(),
             log: LogConfig::default(),
             plugins: vec![plugin("dup", "debug_print"), plugin("dup", "ttl")],
         };
@@ -150,6 +184,7 @@ mod tests {
     #[test]
     fn test_validate_rejects_empty_plugin_type() {
         let config = Config {
+            runtime: RuntimeConfig::default(),
             log: LogConfig::default(),
             plugins: vec![plugin("test", "")],
         };
@@ -163,10 +198,39 @@ mod tests {
     #[test]
     fn test_validate_accepts_basic_valid_config() {
         let config = Config {
+            runtime: RuntimeConfig::default(),
             log: LogConfig::default(),
             plugins: vec![plugin("ok", "debug_print")],
         };
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_runtime_worker_threads() {
+        let config = Config {
+            runtime: RuntimeConfig {
+                worker_threads: Some(0),
+            },
+            log: LogConfig::default(),
+            plugins: vec![plugin("ok", "debug_print")],
+        };
+
+        let err = config
+            .validate()
+            .expect_err("should reject zero runtime worker threads");
+        assert!(matches!(err, ConfigError::InvalidRuntimeWorkerThreads));
+    }
+
+    #[test]
+    fn test_runtime_worker_threads_default_to_available_parallelism() {
+        let expected = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+
+        assert_eq!(
+            RuntimeConfig::default().effective_worker_threads(),
+            expected
+        );
     }
 }

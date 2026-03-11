@@ -11,6 +11,7 @@
 //! - Plugin-based architecture for extensibility
 //! - Graceful shutdown handling
 
+use forgedns::config::types::Config;
 use forgedns::core::error::{DnsError, Result};
 use forgedns::{config, core, plugin};
 use tokio::runtime;
@@ -19,22 +20,35 @@ use tracing::{error, info};
 
 /// Application entry point
 fn main() -> Result<()> {
-    init_runtime()
+    let options = core::parse_options();
+    let config = load_config(&options)?;
+    init_runtime(options, config)
 }
 
 /// Initialize and run the Tokio runtime with multi-threading enabled
 ///
-/// Creates an 8-worker-thread Tokio runtime optimized for DNS server workloads
-fn init_runtime() -> Result<()> {
+/// Uses `runtime.worker_threads` from config, defaulting to available CPU cores.
+fn init_runtime(options: core::Options, config: Config) -> Result<()> {
+    let worker_threads = config.runtime.effective_worker_threads();
     let mut tokio_runtime = runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
         .thread_name("forgedns-worker")
-        .worker_threads(8);
+        .worker_threads(worker_threads);
     let tokio_runtime = tokio_runtime
         .build()
         .map_err(|err| DnsError::runtime(format!("Failed to initialize Tokio runtime: {err}")))?;
-    tokio_runtime.block_on(run_async_main())
+    tokio_runtime.block_on(run_async_main(options, config))
+}
+
+fn load_config(options: &core::Options) -> Result<Config> {
+    config::init(&options.config).map_err(|err| {
+        DnsError::config(format!(
+            "Configuration initialization failed for {}: {}",
+            options.config.display(),
+            err
+        ))
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,31 +151,20 @@ async fn wait_for_shutdown_signal() -> Result<ShutdownSignal> {
 /// Sets up signal handlers and spawns the application task.
 /// Waits for an OS shutdown signal for graceful shutdown.
 #[hotpath::main(percentiles =[50,70,90])]
-async fn run_async_main() -> Result<()> {
+async fn run_async_main(options: core::Options, config: Config) -> Result<()> {
     // Create shutdown channel for graceful termination
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<Result<ShutdownSignal>>();
 
-    // Spawn signal handler task before initialization so early SIGTERM/SIGINT
-    // requests from systemd or an interactive terminal are not missed.
+    // Spawn signal handler before plugin initialization so signals received
+    // after the Tokio runtime is online are still observed during startup.
     tokio::spawn(async move {
         let _ = shutdown_tx.send(wait_for_shutdown_signal().await);
     });
 
     // Initialize and run the DNS server application
-    let mut runtime = core::init();
+    let worker_threads = config.runtime.effective_worker_threads();
+    let mut runtime = core::init_with_options(options);
     let options = runtime.options.clone();
-
-    let config = match config::init(&options.config) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!(
-                "Configuration initialization failed for {}: {}",
-                options.config.display(),
-                e
-            );
-            std::process::exit(1);
-        }
-    };
 
     // Override log level from command line if provided
     let mut log_config = config.log.clone();
@@ -177,6 +180,10 @@ async fn run_async_main() -> Result<()> {
         config = %options.config.display(),
         plugins = config.plugins.len(),
         "Configuration loaded"
+    );
+    info!(
+        tokio_worker_threads = worker_threads,
+        "Tokio runtime configured"
     );
     if let Some(level) = options.log_level {
         info!(
@@ -197,7 +204,7 @@ async fn run_async_main() -> Result<()> {
         }
         Err(e) => {
             error!("Plugin initialization failed: {}", e);
-            std::process::exit(1);
+            return Err(e);
         }
     };
 
