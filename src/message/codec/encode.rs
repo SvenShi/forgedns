@@ -261,7 +261,7 @@ fn encode_record(
     let data = record.data();
     let (class, ttl) = match data {
         RData::OPT(value) => (value.udp_payload_size(), value.raw_ttl()),
-        _ => (1, record.ttl()),
+        _ => (u16::from(record.dns_class()), record.ttl()),
     };
     out.extend_from_slice(&class.to_be_bytes());
     out.extend_from_slice(&ttl.to_be_bytes());

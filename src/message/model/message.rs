@@ -423,6 +423,17 @@ impl Message {
         }
     }
 
+    /// Keep the owned OPT record's extended RCODE aligned with the message header.
+    fn sync_owned_edns_ext_rcode(data: &mut MessageData) {
+        let ext_rcode = (u16::from(data.header.response_code) >> 4) as u8;
+        for record in &mut data.additionals {
+            if let RData::OPT(opt) = record.data_mut() {
+                opt.set_ext_rcode(ext_rcode);
+                break;
+            }
+        }
+    }
+
     #[inline]
     /// Increment the internal revision counter after a mutation.
     fn bump_version(&mut self) {
@@ -592,7 +603,9 @@ impl Message {
     /// Update the decoded DNS response code.
     pub fn set_response_code(&mut self, response_code: ResponseCode) {
         self.bump_version();
-        self.ensure_owned_mut().header.response_code = response_code;
+        let data = self.ensure_owned_mut();
+        data.header.response_code = response_code;
+        Self::sync_owned_edns_ext_rcode(data);
     }
 
     /// Borrow the first decoded question, if present.
@@ -757,6 +770,8 @@ impl Message {
     /// Insert or replace the owned EDNS state.
     pub fn set_edns(&mut self, edns: Edns) {
         self.bump_version();
+        let mut edns = edns;
+        edns.set_ext_rcode((u16::from(self.response_code()) >> 4) as u8);
         if let Some(existing) = self.edns_mut() {
             *existing = edns;
             return;

@@ -50,3 +50,6 @@ neli = "0.7.4"
 [features]
 hotpath = ["hotpath/hotpath"]
 hotpath-alloc = ["hotpath/hotpath-alloc"]
+
+[dev-dependencies]
+hickory-proto = "0.25.2"

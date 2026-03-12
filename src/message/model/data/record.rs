@@ -5,13 +5,15 @@
 
 //! Owned DNS resource records.
 
-use crate::message::model::data::{Name, RData, RecordType};
+use crate::message::model::data::{DNSClass, Name, RData, RecordType};
 
 /// Owned resource record.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Record {
     /// Owner name of the record.
     name: Name,
+    /// Record class.
+    dns_class: DNSClass,
     /// Record TTL in seconds.
     ttl: u32,
     /// Type-specific record payload.
@@ -21,12 +23,32 @@ pub struct Record {
 impl Record {
     /// Construct a record directly from owned RDATA.
     pub fn from_rdata(name: Name, ttl: u32, data: RData) -> Self {
-        Self { name, ttl, data }
+        Self::from_rdata_with_class(name, ttl, DNSClass::IN, data)
+    }
+
+    /// Construct a record directly from owned RDATA and an explicit DNS class.
+    pub fn from_rdata_with_class(name: Name, ttl: u32, dns_class: DNSClass, data: RData) -> Self {
+        Self {
+            name,
+            dns_class,
+            ttl,
+            data,
+        }
     }
 
     /// Return the owner name.
     pub fn name(&self) -> &Name {
         &self.name
+    }
+
+    /// Return the record class.
+    pub fn dns_class(&self) -> DNSClass {
+        self.dns_class
+    }
+
+    /// Update the record class.
+    pub fn set_dns_class(&mut self, dns_class: DNSClass) {
+        self.dns_class = dns_class;
     }
 
     /// Return the TTL in seconds.

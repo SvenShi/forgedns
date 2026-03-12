@@ -76,9 +76,10 @@ fn parse_record(packet: &[u8], offset: usize) -> Result<(Record, usize)> {
         record_meta.rdata_range.end as usize,
     )?;
     Ok((
-        Record::from_rdata(
+        Record::from_rdata_with_class(
             Name::from_wire_ref(&record_meta.name.as_name_ref(packet)),
             record_meta.ttl,
+            DNSClass::from(record_meta.class),
             data,
         ),
         next_offset,
