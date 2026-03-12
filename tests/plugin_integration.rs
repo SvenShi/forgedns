@@ -6,12 +6,12 @@
 use forgedns::config::types::Config;
 use forgedns::core::context::{DnsContext, ExecFlowState};
 use forgedns::core::error::{DnsError, Result};
+use forgedns::message::{Message, Question, ResponseCode};
+use forgedns::message::{Name, RecordType};
 use forgedns::network::transport::udp_transport::UdpTransport;
 use forgedns::plugin;
 use forgedns::plugin::executor::ExecStep;
 use forgedns::plugin::{PluginRegistry, PluginType};
-use hickory_proto::op::{Message, Query, ResponseCode};
-use hickory_proto::rr::{Name, RecordType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -25,21 +25,16 @@ fn parse_config(yaml: &str) -> Result<Config> {
 
 fn make_context(registry: Arc<PluginRegistry>, qname: &str) -> DnsContext {
     let mut request = Message::new();
-    request.add_query(Query::query(
+    request.add_question(Question::new(
         Name::from_ascii(qname).expect("query name should be valid"),
         RecordType::A,
     ));
 
-    DnsContext {
-        src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+    DnsContext::new(
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
         request,
-        response: None,
-        exec_flow_state: ExecFlowState::Running,
-        marks: Default::default(),
-        attributes: Default::default(),
-        query_view: None,
         registry,
-    }
+    )
 }
 
 fn reserve_local_udp_addr() -> Result<SocketAddr> {
@@ -56,7 +51,7 @@ async fn exchange_udp_query(server_addr: SocketAddr, qname: &str) -> Result<Mess
 
     let mut request = Message::new();
     request.set_id(0x1234);
-    request.add_query(Query::query(
+    request.add_question(Question::new(
         Name::from_ascii(qname).expect("query name should be valid"),
         RecordType::A,
     ));
@@ -182,8 +177,8 @@ plugins:
             .response
             .as_ref()
             .expect("reject should set a response")
-            .response_code(),
-        ResponseCode::ServFail
+            .response_code_hint(),
+        Some(ResponseCode::ServFail)
     );
 
     registry.destroy_plugins().await;
@@ -277,8 +272,8 @@ plugins:
             .response
             .as_ref()
             .expect("reject should set a response")
-            .response_code(),
-        ResponseCode::ServFail
+            .response_code_hint(),
+        Some(ResponseCode::ServFail)
     );
 
     registry.destroy_plugins().await;

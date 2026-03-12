@@ -5,6 +5,7 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::message::Message;
 use crate::network::transport::tcp_transport::{
     TcpTransport, TcpTransportReader, TcpTransportWriter,
 };
@@ -13,7 +14,6 @@ use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::{connect_stream, connect_tls};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
 use async_trait::async_trait;
-use hickory_proto::op::Message;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -89,7 +89,7 @@ impl Connection for TcpConnection {
 
         // Register query and get unique ID for request/response matching
         let (tx, rx) = oneshot::channel();
-        let query_id = self.request_map.store(tx);
+        let query_id = self.request_map.store(&request, tx);
 
         trace!(
             conn_id = self.id,
@@ -261,7 +261,7 @@ impl TcpConnection {
                     match res {
                         Ok(msg) => {
                             let id = msg.id();
-                            if let Some(sender) = self.request_map.take(id) {
+                            if let Some(sender) = self.request_map.take_if_matches(&msg) {
                                 let _ = sender.send(msg);
                                 self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
                                 trace!(
@@ -273,7 +273,7 @@ impl TcpConnection {
                                 trace!(
                                     conn_id = self.id,
                                     query_id = id,
-                                    "Discarded DNS response (no matching query or already timed out)"
+                                    "Discarded DNS response (no matching query or fingerprint mismatch)"
                                 );
                             }
                         }

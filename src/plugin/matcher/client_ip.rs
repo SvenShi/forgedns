@@ -123,16 +123,16 @@ impl Matcher for ClientIpMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::message::{DNSClass, Name, RecordType};
+    use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{DNSClass, Name, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), RecordType::A);
-        query.set_query_class(DNSClass::IN);
-        request.add_query(query);
+        let mut query = Question::new(Name::from_ascii("example.com.").unwrap(), RecordType::A);
+        query.set_question_class(DNSClass::IN);
+        request.add_question(query);
 
         DnsContext {
             src_addr: SocketAddr::new("192.168.1.10".parse().unwrap(), 5353),
@@ -141,7 +141,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }

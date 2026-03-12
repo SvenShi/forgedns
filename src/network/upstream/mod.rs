@@ -29,6 +29,7 @@
 //! - Zero-copy DNS message handling where possible
 
 use crate::core::error::{DnsError, Result};
+use crate::message::Message;
 use crate::network::upstream::bootstrap::Bootstrap;
 use crate::network::upstream::pool::conn_h2::{H2Connection, H2ConnectionBuilder};
 use crate::network::upstream::pool::conn_h3::{H3Connection, H3ConnectionBuilder};
@@ -41,7 +42,6 @@ use crate::network::upstream::pool::{Connection, ConnectionBuilder, ConnectionPo
 use crate::network::upstream::utils::try_lookup_server_name;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use hickory_proto::op::Message;
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};

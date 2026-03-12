@@ -10,6 +10,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
+use crate::core::dns_utils::context_response_code;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
@@ -81,10 +82,10 @@ impl Plugin for RcodeMatcher {
 
 impl Matcher for RcodeMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(response) = context.response.as_ref() else {
+        let Some(rcode) = context_response_code(context) else {
             return false;
         };
-        self.rcodes.contains(&u16::from(response.response_code()))
+        self.rcodes.contains(&rcode)
     }
 }
 
@@ -92,14 +93,14 @@ impl Matcher for RcodeMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::message::{Message, Question, ResponseCode};
+    use crate::message::{Name, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query, ResponseCode};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::SocketAddr;
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
@@ -111,7 +112,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
@@ -126,7 +129,7 @@ mod tests {
         let mut ctx = make_context();
         let mut response = Message::new();
         response.set_response_code(ResponseCode::NoError);
-        ctx.response = Some(response);
+        ctx.response = Some(response.into());
 
         assert!(!matcher.is_match(&mut ctx));
     }
@@ -144,7 +147,7 @@ mod tests {
         let mut match_ctx = make_context();
         let mut response = Message::new();
         response.set_response_code(ResponseCode::ServFail);
-        match_ctx.response = Some(response);
+        match_ctx.response = Some(response.into());
         assert!(matcher.is_match(&mut match_ctx));
     }
 }

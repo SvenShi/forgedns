@@ -10,7 +10,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{response_records, rr_to_cname};
+use crate::core::dns_utils::context_response_cnames;
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::{DomainRuleMatcher, split_labels_rev};
 use crate::plugin::dependency::DependencySpec;
@@ -128,24 +128,18 @@ impl Plugin for CnameMatcher {
 
 impl Matcher for CnameMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(response) = context.response.as_ref() else {
-            return false;
-        };
+        context_response_cnames(context).into_iter().any(|cname| {
+            let mut labels = SmallVec::<[&str; 8]>::new();
+            if self.cname_rules.has_trie_rules() || self.domain_sets_has_trie_rules {
+                split_labels_rev(&cname, &mut labels);
+            }
+            if self.cname_rules.is_match_normalized(&cname, &labels) {
+                return true;
+            }
 
-        response_records(response).any(|record| {
-            rr_to_cname(record).is_some_and(|cname| {
-                let mut labels = SmallVec::<[&str; 8]>::new();
-                if self.cname_rules.has_trie_rules() || self.domain_sets_has_trie_rules {
-                    split_labels_rev(&cname, &mut labels);
-                }
-                if self.cname_rules.is_match_normalized(&cname, &labels) {
-                    return true;
-                }
-
-                self.domain_sets
-                    .iter()
-                    .any(|set| set.contains_domain_prepared(&cname, &labels))
-            })
+            self.domain_sets
+                .iter()
+                .any(|set| set.contains_domain_prepared(&cname, &labels))
         })
     }
 }
@@ -154,16 +148,16 @@ impl Matcher for CnameMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::message::rdata::{A, CNAME};
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::{A, CNAME};
-    use hickory_proto::rr::{Name, RData, Record, RecordType};
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
@@ -175,7 +169,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
@@ -203,7 +199,7 @@ mod tests {
             60,
             RData::CNAME(CNAME(Name::from_ascii("target.example.com.").unwrap())),
         ));
-        ctx.response = Some(response);
+        ctx.response = Some(response.into());
 
         assert!(matcher.is_match(&mut ctx));
     }
@@ -237,7 +233,7 @@ mod tests {
             60,
             RData::CNAME(CNAME(Name::from_ascii("target.example.com.").unwrap())),
         ));
-        ctx.response = Some(response);
+        ctx.response = Some(response.into());
         assert!(matcher.is_match(&mut ctx));
     }
 
@@ -267,7 +263,7 @@ mod tests {
             60,
             RData::A(A(Ipv4Addr::new(1, 1, 1, 1))),
         ));
-        non_cname_response.response = Some(response);
+        non_cname_response.response = Some(response.into());
         assert!(!matcher.is_match(&mut non_cname_response));
     }
 }

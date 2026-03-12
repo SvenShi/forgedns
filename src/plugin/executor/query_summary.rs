@@ -18,6 +18,7 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
+use crate::message::RecordType;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -75,14 +76,26 @@ impl Executor for QuerySummary {
             .unwrap_or_else(AppClock::elapsed_millis);
 
         let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
-        let (qname, qtype) = match context.request.query() {
-            Some(q) => (q.name().to_utf8(), format!("{:?}", q.query_type)),
+        let (qname, qtype) = match context.query_view() {
+            Some(view) => (
+                view.normalized_name().to_string(),
+                format!("{:?}", RecordType::from(view.qtype())),
+            ),
             None => ("<none>".to_string(), "<none>".to_string()),
         };
         let rcode = context
             .response
             .as_ref()
-            .map(|r| format!("{:?}", r.response_code()))
+            .and_then(|response| {
+                response
+                    .response_code_hint()
+                    .map(|rcode| format!("{:?}", rcode))
+                    .or_else(|| {
+                        response
+                            .message()
+                            .map(|message| format!("{:?}", message.response_code()))
+                    })
+            })
             .unwrap_or_else(|| "<none>".to_string());
 
         info!(
@@ -161,9 +174,9 @@ fn parse_msg(args: Option<serde_yml::Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::Message;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_context;
-    use hickory_proto::op::Message;
 
     #[test]
     fn test_parse_msg_trims_and_filters_empty() {
@@ -199,7 +212,7 @@ mod tests {
             msg: "m".to_string(),
         };
         let mut ctx = test_context();
-        ctx.response = Some(Message::new());
+        ctx.response = Some(Message::new().into());
 
         plugin
             .post_execute(&mut ctx, None)

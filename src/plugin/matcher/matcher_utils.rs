@@ -8,10 +8,10 @@
 use crate::core::dns_utils::parse_named_response_code;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
+use crate::message::{DNSClass, RecordType};
 use crate::plugin::PluginRegistry;
 use crate::plugin::provider::Provider;
 use ahash::AHashSet;
-use hickory_proto::rr::{DNSClass, RecordType};
 use serde_yml::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -79,6 +79,7 @@ pub(crate) fn parse_ip_prefix_matcher(
             .add_rule(v)
             .map_err(|e| DnsError::plugin(format!("invalid {} rule '{}': {}", field, v, e)))?;
     }
+    matcher.finalize();
     Ok(matcher)
 }
 

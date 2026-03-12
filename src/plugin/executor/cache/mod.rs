@@ -15,12 +15,16 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
+use crate::message::RData;
+use crate::message::{Message, ResponseCode};
+use crate::message::{
+    Packet, ResponsePlan, response_min_answer_ttl, response_negative_ttl_from_soa, response_rcode,
+    rewrite_response_id, rewrite_response_ttls,
+};
 use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::op::{Message, ResponseCode};
-use hickory_proto::rr::{RData, RecordType};
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -105,7 +109,7 @@ type CacheMap = TtlCache<CacheKey, CacheItem>;
 #[allow(dead_code)]
 pub struct CacheItem {
     /// Cached DNS response message.
-    resp: Message,
+    resp: Packet,
 
     /// TTL used for this cached entry (seconds).
     ttl: u32,
@@ -263,24 +267,18 @@ impl Cache {
     }
 
     #[inline]
-    fn update_response_ttl(resp: &mut Message, remaining_ttl: u32) {
-        for record in resp.answers_mut() {
-            record.set_ttl(remaining_ttl);
-        }
-        for record in resp.name_servers_mut() {
-            record.set_ttl(remaining_ttl);
-        }
-        for record in resp.additionals_mut() {
-            if record.record_type() == RecordType::OPT {
-                continue;
-            }
-            record.set_ttl(remaining_ttl);
-        }
+    fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Option<CacheKey> {
+        build_cache_key_internal(context, ecs_in_key)
     }
 
     #[inline]
-    fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Option<CacheKey> {
-        build_cache_key_internal(context, ecs_in_key)
+    fn restore_cached_packet(
+        response: &Packet,
+        request_id: u16,
+        remaining_ttl: u32,
+    ) -> Result<Packet> {
+        let response = rewrite_response_ttls(response, |_| remaining_ttl)?;
+        Ok(rewrite_response_id(&response, request_id))
     }
 
     #[inline]
@@ -298,10 +296,23 @@ impl Cache {
 
         if let Some(item) = cache_map.get_fresh_cloned(&key, now, LAST_ACCESS_TOUCH_INTERVAL_MS) {
             let remaining_ttl = item.expire_at_ms.saturating_sub(now).saturating_div(1000) as u32;
-            let mut resp = item.value.resp;
-            resp.set_id(context.request.id());
-            Self::update_response_ttl(&mut resp, remaining_ttl);
-            context.response = Some(resp);
+            let resp = match Self::restore_cached_packet(
+                &item.value.resp,
+                context.request.id(),
+                remaining_ttl,
+            ) {
+                Ok(resp) => resp,
+                Err(e) => {
+                    warn!("failed to restore cached packet for {}: {}", key.domain, e);
+                    let _ = cache_map.remove(&key);
+                    return (Some(key), false);
+                }
+            };
+            if let Err(e) = context.set_response_packet(resp) {
+                warn!("failed to decode cached packet for {}: {}", key.domain, e);
+                let _ = cache_map.remove(&key);
+                return (Some(key), false);
+            }
 
             debug!(
                 "cache hit: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}",
@@ -355,12 +366,26 @@ impl Cache {
     }
 
     #[inline]
-    fn compute_positive_ttl(&self, response: &Message) -> Option<u32> {
-        if response.response_code() != ResponseCode::NoError || response.answers().is_empty() {
+    fn compute_positive_ttl(&self, response: &ResponsePlan) -> Option<u32> {
+        if let Some(packet) = response.packet() {
+            if response_rcode(packet).ok()? != u16::from(ResponseCode::NoError) {
+                return None;
+            }
+            let ttl = response_min_answer_ttl(packet).ok()??;
+            let ttl = if let Some(max) = self.config.max_positive_ttl {
+                ttl.min(max)
+            } else {
+                ttl
+            };
+            return if ttl == 0 { None } else { Some(ttl) };
+        }
+
+        let message = response.message()?;
+        if message.response_code() != ResponseCode::NoError || message.answers().is_empty() {
             return None;
         }
 
-        let ttl = response.answers().iter().map(|answer| answer.ttl()).min()?;
+        let ttl = message.answers().iter().map(|answer| answer.ttl()).min()?;
         let ttl = if let Some(max) = self.config.max_positive_ttl {
             ttl.min(max)
         } else {
@@ -390,20 +415,45 @@ impl Cache {
     }
 
     #[inline]
-    fn compute_negative_ttl(&self, response: &Message) -> Option<u32> {
+    fn compute_negative_ttl(&self, response: &ResponsePlan) -> Option<u32> {
+        if let Some(packet) = response.packet() {
+            if !self.cache_negative {
+                return None;
+            }
+
+            let rcode = response_rcode(packet).ok()?;
+            let answer_ttl = response_min_answer_ttl(packet).ok()?;
+            let is_nxdomain = rcode == u16::from(ResponseCode::NXDomain);
+            let is_nodata = rcode == u16::from(ResponseCode::NoError) && answer_ttl.is_none();
+
+            if !is_nxdomain && !is_nodata {
+                return None;
+            }
+
+            let mut ttl = if let Some(soa_ttl) = response_negative_ttl_from_soa(packet).ok()? {
+                soa_ttl
+            } else {
+                self.negative_ttl_without_soa
+            };
+
+            ttl = ttl.min(self.max_negative_ttl);
+            return if ttl == 0 { None } else { Some(ttl) };
+        }
+
         if !self.cache_negative {
             return None;
         }
 
-        let rcode = response.response_code();
+        let message = response.message()?;
+        let rcode = message.response_code();
         let is_nxdomain = rcode == ResponseCode::NXDomain;
-        let is_nodata = rcode == ResponseCode::NoError && response.answers().is_empty();
+        let is_nodata = rcode == ResponseCode::NoError && message.answers().is_empty();
 
         if !is_nxdomain && !is_nodata {
             return None;
         }
 
-        let mut ttl = if let Some(soa_ttl) = Self::extract_negative_ttl_from_soa(response) {
+        let mut ttl = if let Some(soa_ttl) = Self::extract_negative_ttl_from_soa(message) {
             soa_ttl
         } else {
             self.negative_ttl_without_soa
@@ -415,7 +465,7 @@ impl Cache {
     }
 
     #[inline]
-    fn compute_cache_ttl(&self, response: &Message) -> Option<u32> {
+    fn compute_cache_ttl(&self, response: &ResponsePlan) -> Option<u32> {
         self.compute_positive_ttl(response)
             .or_else(|| self.compute_negative_ttl(response))
     }
@@ -428,7 +478,7 @@ impl Cache {
 
     #[inline]
     #[hotpath::measure]
-    fn update_cache_entry(&self, cache_map: &CacheMap, key: CacheKey, response: Message, ttl: u32) {
+    fn update_cache_entry(&self, cache_map: &CacheMap, key: CacheKey, response: Packet, ttl: u32) {
         let now = AppClock::elapsed_millis();
         let expire_time = self.compute_expire_time(now, ttl);
         debug!(
@@ -544,13 +594,25 @@ impl Executor for Cache {
             .and_then(|boxed| boxed.downcast::<CacheKey>().ok())
             .map(|boxed| *boxed);
 
-        if let (Some(response), Some(key)) = (&context.response, cache_key) {
-            if response.truncated() {
-                return Ok(());
-            }
+        if let Some(key) = cache_key {
+            if let Some(response) = context.response.as_ref() {
+                if response.truncated() {
+                    return Ok(());
+                }
 
-            if let Some(ttl) = self.compute_cache_ttl(response) {
-                self.update_cache_entry(cache_map, key, response.clone(), ttl);
+                if let Some(ttl) = self.compute_cache_ttl(response) {
+                    let packet = match response.clone().into_packet() {
+                        Ok(packet) => packet,
+                        Err(e) => {
+                            warn!(
+                                "failed to materialize cache response for {}: {}",
+                                key.domain, e
+                            );
+                            return Ok(());
+                        }
+                    };
+                    self.update_cache_entry(cache_map, key, packet, ttl);
+                }
             }
         }
 
@@ -660,11 +722,12 @@ impl PluginFactory for CacheFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::rdata::SOA;
+    use crate::message::rdata::opt::EdnsOption;
+    use crate::message::{Edns, Question};
+    use crate::message::{Name, RData, Record, RecordType};
+    use crate::message::{Packet, rewrite_response_ttls};
     use crate::plugin::PluginRegistry;
-    use hickory_proto::op::{Edns, Query};
-    use hickory_proto::rr::rdata::SOA;
-    use hickory_proto::rr::rdata::opt::EdnsOption;
-    use hickory_proto::rr::{Name, RData, Record};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn test_cache(config: CacheConfig) -> Cache {
@@ -715,14 +778,19 @@ mod tests {
             exec_flow_state: crate::core::context::ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
 
     fn make_request_with_query(name: &str, do_bit: bool, cd_bit: bool) -> Message {
         let mut request = Message::new();
-        request.add_query(Query::query(Name::from_ascii(name).unwrap(), RecordType::A));
+        request.add_question(Question::new(
+            Name::from_ascii(name).unwrap(),
+            RecordType::A,
+        ));
         request.set_checking_disabled(cd_bit);
 
         let mut edns = Edns::new();
@@ -733,9 +801,8 @@ mod tests {
     }
 
     fn add_ecs(request: &mut Message, subnet: &str) {
-        let mut edns = request.extensions().clone().unwrap_or_else(Edns::new);
-        edns.options_mut()
-            .insert(EdnsOption::Subnet(subnet.parse().unwrap()));
+        let mut edns = request.edns().cloned().unwrap_or_else(Edns::new);
+        edns.insert(EdnsOption::Subnet(subnet.parse().unwrap()));
         request.set_edns(edns);
     }
 
@@ -796,23 +863,30 @@ mod tests {
     }
 
     #[test]
-    fn update_response_ttl_skips_opt_record() {
+    fn rewrite_response_ttls_skips_opt_record() {
         let mut response = Message::new();
+        response.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+        ));
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             300,
-            RData::A(hickory_proto::rr::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+            RData::A(crate::message::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
         ));
-        response.add_additional(Record::from_rdata(
-            Name::root(),
-            123,
-            RData::OPT(hickory_proto::rr::rdata::OPT::default()),
-        ));
+        let mut edns = Edns::new();
+        edns.set_udp_payload_size(1232);
+        edns.flags_mut().dnssec_ok = true;
+        response.set_edns(edns);
 
-        Cache::update_response_ttl(&mut response, 42);
+        let packet = Packet::from_vec(response.to_bytes().unwrap());
+        let rewritten = rewrite_response_ttls(&packet, |_| 42).unwrap();
+        let response = Message::from_bytes(rewritten.as_slice()).unwrap();
 
         assert_eq!(response.answers()[0].ttl(), 42);
-        assert_eq!(response.additionals()[0].ttl(), 123);
+        let edns = response.edns().expect("edns should exist");
+        assert_eq!(edns.udp_payload_size(), 1232);
+        assert!(edns.flags().dnssec_ok);
     }
 
     #[test]
@@ -837,7 +911,8 @@ mod tests {
             )),
         ));
 
-        assert_eq!(cache.compute_negative_ttl(&response), Some(20));
+        let response_plan: ResponsePlan = response.into();
+        assert_eq!(cache.compute_negative_ttl(&response_plan), Some(20));
     }
 
     #[test]
@@ -849,7 +924,8 @@ mod tests {
         let mut response = Message::new();
         response.set_response_code(ResponseCode::NXDomain);
 
-        assert_eq!(cache.compute_negative_ttl(&response), Some(45));
+        let response_plan: ResponsePlan = response.into();
+        assert_eq!(cache.compute_negative_ttl(&response_plan), Some(45));
     }
 
     #[test]
@@ -861,7 +937,8 @@ mod tests {
         let mut response = Message::new();
         response.set_response_code(ResponseCode::NXDomain);
 
-        assert_eq!(cache.compute_negative_ttl(&response), None);
+        let response_plan: ResponsePlan = response.into();
+        assert_eq!(cache.compute_negative_ttl(&response_plan), None);
     }
 
     #[test]
@@ -871,7 +948,8 @@ mod tests {
         let mut response = Message::new();
         response.set_response_code(ResponseCode::ServFail);
 
-        assert_eq!(cache.compute_cache_ttl(&response), None);
+        let response_plan: ResponsePlan = response.into();
+        assert_eq!(cache.compute_cache_ttl(&response_plan), None);
     }
 
     #[tokio::test]
@@ -888,12 +966,52 @@ mod tests {
         let mut response = Message::new();
         response.set_response_code(ResponseCode::NoError);
         response.set_truncated(true);
-        context.response = Some(response);
+        context.response = Some(response.into());
 
         cache.post_execute(&mut context, state).await.unwrap();
 
         let cache_map = cache.cache_map.get().unwrap();
         assert_eq!(cache_map.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_sets_outbound_packet_response() {
+        let mut cache = test_cache(default_test_config());
+        let _ = cache.init().await;
+
+        let mut request = make_request_with_query("example.com.", false, false);
+        request.set_id(7);
+        let mut context = make_context(request.clone());
+        let key = Cache::build_cache_key(&mut context, false).unwrap();
+
+        let mut response = Message::new();
+        response.set_response_code(ResponseCode::NoError);
+        response.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            120,
+            RData::A(crate::message::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+        ));
+
+        cache.update_cache_entry(
+            cache.cache_map.get().unwrap(),
+            key,
+            Packet::from_vec(response.to_bytes().unwrap()),
+            120,
+        );
+
+        let (_, hit) = cache.try_cache_hit(&mut context, cache.cache_map.get().unwrap());
+        assert!(hit);
+        let response = context
+            .response
+            .expect("cache hit should set response")
+            .to_message()
+            .expect("response should materialize");
+        assert_eq!(response.id(), 7);
+        assert_eq!(response.answers().len(), 1);
     }
 
     #[test]

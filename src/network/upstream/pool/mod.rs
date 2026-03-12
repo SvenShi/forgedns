@@ -47,8 +47,8 @@ pub(crate) mod pool_reuse;
 
 use crate::core::error::Result;
 use crate::core::task_center;
+use crate::message::Message;
 use async_trait::async_trait;
-use hickory_proto::op::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::Mutex;

@@ -350,7 +350,7 @@ mod tests {
                 return Err(DnsError::plugin("stub failed"));
             }
             if self.produce_response {
-                context.response = Some(hickory_proto::op::Message::new());
+                context.response = Some(crate::message::Message::new().into());
             }
             Ok(ExecStep::Next)
         }

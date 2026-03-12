@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+use crate::core::buffer_pool::ReusableBuffer;
 use crate::core::error::{DnsError, Result};
-use bytes::{Bytes, BytesMut};
-use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use crate::message::Message;
+use crate::message::Packet;
+use crate::message::ResponsePlan;
+use bytes::BytesMut;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 
 /// QUIC connection transport that can accept or open bidirectional streams
@@ -69,21 +71,45 @@ impl QuicTransportWriter {
     /// Write a single DNS message as a length-prefixed frame.
     #[inline]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
-        let body = msg
-            .to_bytes()
-            .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
-        if body.len() > u16::MAX as usize {
+        let mut body = ReusableBuffer::with_capacity(message_buffer_capacity_hint(msg));
+        encode_message_into(msg, body.as_mut_vec())?;
+        let body_len = body.as_slice().len();
+        if body_len > u16::MAX as usize {
             return Err(DnsError::protocol(format!(
                 "DNS message too large for DoQ: {} bytes (max 65535)",
-                body.len()
+                body_len
             )));
         }
-        let len = (body.len() as u16).to_be_bytes();
-
-        // Merge length prefix and body into one write using QUIC chunks
-        let mut chunks = [Bytes::copy_from_slice(&len), Bytes::from(body)];
+        let len_prefix = (body_len as u16).to_be_bytes();
         self.send
-            .write_all_chunks(&mut chunks)
+            .write_all(&len_prefix)
+            .await
+            .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
+        self.send
+            .write_all(body.as_slice())
+            .await
+            .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
+        Ok(())
+    }
+
+    #[inline]
+    pub async fn write_response(&mut self, response: &ResponsePlan) -> Result<()> {
+        let mut body = ReusableBuffer::with_capacity(response_buffer_capacity_hint(response));
+        encode_response_into(response, body.as_mut_vec())?;
+        let body_len = body.as_slice().len();
+        if body_len > u16::MAX as usize {
+            return Err(DnsError::protocol(format!(
+                "DNS message too large for DoQ: {} bytes (max 65535)",
+                body_len
+            )));
+        }
+        let len_prefix = (body_len as u16).to_be_bytes();
+        self.send
+            .write_all(&len_prefix)
+            .await
+            .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
+        self.send
+            .write_all(body.as_slice())
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
         Ok(())
@@ -107,6 +133,11 @@ pub struct QuicTransportReader {
 impl QuicTransportReader {
     #[inline]
     pub async fn read_message(&mut self) -> Result<Message> {
+        self.read_message_with_packet().await.map(|(msg, _)| msg)
+    }
+
+    #[inline]
+    pub async fn read_message_with_packet(&mut self) -> Result<(Message, Packet)> {
         // Read 2-byte length prefix
         let mut len_prefix = [0u8; 2];
         self.recv
@@ -126,7 +157,33 @@ impl QuicTransportReader {
             .read_exact(&mut bytes)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to read QUIC DNS body: {}", e)))?;
-        Message::from_bytes(&bytes)
-            .map_err(|e| DnsError::protocol(format!("Invalid DNS message over QUIC: {}", e)))
+        let packet = Packet::from_vec(bytes.to_vec());
+        let msg = Message::from_packet(packet.clone())
+            .map_err(|e| DnsError::protocol(format!("Invalid DNS message over QUIC: {}", e)))?;
+        Ok((msg, packet))
     }
+}
+
+#[inline]
+fn encode_message_into(message: &Message, body: &mut Vec<u8>) -> Result<()> {
+    message.encode_into(body)
+}
+
+#[inline]
+fn encode_response_into(response: &ResponsePlan, body: &mut Vec<u8>) -> Result<()> {
+    response.encode_into(body)
+}
+
+#[inline]
+fn message_buffer_capacity_hint(message: &Message) -> usize {
+    message
+        .packet()
+        .map(|packet| packet.as_slice().len())
+        .unwrap_or(512)
+        .max(512)
+}
+
+#[inline]
+fn response_buffer_capacity_hint(response: &ResponsePlan) -> usize {
+    response.response_len_hint().unwrap_or(512).max(512)
 }

@@ -23,6 +23,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry, fmt};
 
 pub mod app_clock;
+pub(crate) mod buffer_pool;
 pub mod context;
 pub mod dns_utils;
 pub mod error;

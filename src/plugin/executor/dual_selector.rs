@@ -16,16 +16,18 @@
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::build_response_from_request;
+use crate::core::dns_utils::{
+    build_response_plan_from_request, context_has_answer_type, context_has_response,
+};
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
+use crate::message::RecordType;
+use crate::message::ResponseCode;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::op::ResponseCode;
-use hickory_proto::rr::RecordType;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -128,11 +130,11 @@ impl Plugin for DualSelector {
 #[async_trait]
 impl Executor for DualSelector {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if context.request.queries().len() != 1 {
+        if context.request.question_count() != 1 {
             return Ok(ExecStep::Next);
         }
 
-        let Some(qtype) = context.request.query().map(|q| q.query_type) else {
+        let Some(qtype) = context.request.first_question_type() else {
             return Ok(ExecStep::Next);
         };
         if qtype != RecordType::A && qtype != RecordType::AAAA {
@@ -156,7 +158,7 @@ impl Executor for DualSelector {
         if self.cache_enabled {
             if let Some(preferred_exists) = self.cache_get_preferred_state(&domain) {
                 if preferred_exists {
-                    context.response = Some(build_response_from_request(
+                    context.response = Some(build_response_plan_from_request(
                         &context.request,
                         ResponseCode::NoError,
                     ));
@@ -189,11 +191,8 @@ impl Executor for DualSelector {
 
         match state.mode {
             PostMode::Preferred => {
-                let has_preferred_answer = context.response.as_ref().is_some_and(|resp| {
-                    resp.answers()
-                        .iter()
-                        .any(|rr| rr.record_type() == self.preferred_type)
-                });
+                let has_preferred_answer =
+                    context_has_answer_type(context, &[u16::from(self.preferred_type)]);
                 if has_preferred_answer {
                     self.cache_preferred(&state.domain);
                 }
@@ -215,7 +214,7 @@ impl DualSelector {
         // Probe errors mean preferred-type availability is unknown.
         // Never cache/block in this case to avoid false positive suppression.
         if probe.preferred_error.is_some() {
-            if context.response.is_none() {
+            if !context_has_response(context) {
                 if let Some(err) = probe.original_error {
                     return Err(DnsError::plugin(err));
                 }
@@ -227,7 +226,7 @@ impl DualSelector {
             if self.cache_enabled {
                 self.cache_probe_result(domain, true);
             }
-            context.response = Some(build_response_from_request(
+            context.response = Some(build_response_plan_from_request(
                 &context.request,
                 ResponseCode::NoError,
             ));
@@ -238,7 +237,7 @@ impl DualSelector {
             self.cache_probe_result(domain, false);
         }
 
-        if context.response.is_none() {
+        if !context_has_response(context) {
             if let Some(err) = probe.original_error {
                 return Err(DnsError::plugin(err));
             }
@@ -350,15 +349,16 @@ impl PluginFactory for DualSelectorFactory {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
+    use crate::core::dns_utils::build_response_from_request;
+    use crate::message::rdata::{A, AAAA};
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RData, Record};
     use ahash::{AHashMap, AHashSet};
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::{A, AAAA};
-    use hickory_proto::rr::{Name, RData, Record};
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn make_context(qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             qtype,
         ));
@@ -369,7 +369,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: AHashSet::new(),
             attributes: AHashMap::new(),
+            request_meta: crate::core::context::RequestMeta::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
@@ -387,7 +389,7 @@ mod tests {
     }
 
     fn set_answer(context: &mut DnsContext, qtype: RecordType) {
-        let query = context.request.query().expect("query must exist");
+        let query = context.request.question().expect("question must exist");
         let qname = query.name().clone();
         let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
         match qtype {
@@ -403,12 +405,14 @@ mod tests {
             )),
             _ => {}
         }
-        context.response = Some(response);
+        context.response = Some(response.into());
     }
 
     fn has_answer_of_type(context: &DnsContext, qtype: RecordType) -> bool {
         context.response.as_ref().is_some_and(|response| {
             response
+                .to_message()
+                .expect("response should materialize")
                 .answers()
                 .iter()
                 .any(|answer| answer.record_type() == qtype)

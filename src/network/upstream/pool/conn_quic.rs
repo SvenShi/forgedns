@@ -9,8 +9,8 @@ use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
 use crate::network::upstream::{Connection, ConnectionInfo};
 
+use crate::message::Message;
 use async_trait::async_trait;
-use hickory_proto::op::Message;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;

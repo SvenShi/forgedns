@@ -17,6 +17,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
+use crate::core::context::QueryView;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, normalize_domain_cow, split_labels_rev};
 use crate::plugin::dependency::DependencySpec;
@@ -116,6 +117,11 @@ impl DomainMatcher {
         self.rules.is_match_normalized(domain, labels_rev)
     }
 
+    #[inline]
+    fn contains_query_view(&self, query_view: &QueryView) -> bool {
+        self.rules.is_match_query_view(query_view)
+    }
+
     #[cfg(test)]
     #[inline]
     fn contains(&self, domain: &str) -> bool {
@@ -202,6 +208,21 @@ impl Provider for DomainSet {
             }
         }
         false
+    }
+
+    #[inline]
+    fn contains_query_view(&self, query_view: &QueryView) -> bool {
+        if self.matchers.is_empty() {
+            return false;
+        }
+
+        if self.matchers.len() == 1 {
+            return self.matchers[0].contains_query_view(query_view);
+        }
+
+        self.matchers
+            .iter()
+            .any(|matcher| matcher.contains_query_view(query_view))
     }
 
     #[inline]

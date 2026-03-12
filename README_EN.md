@@ -7,7 +7,7 @@
 ForgeDNS is a high-performance DNS server written in Rust.
 It is being built for users who want DNS to be fast, controllable, and architecturally clean, not just feature-rich.
 
-Inspired by mosdns and built on Tokio plus hickory-dns, ForgeDNS is designed around one idea:
+Inspired by mosdns and built on Tokio plus a self-built wire-first DNS message layer, ForgeDNS is designed around one idea:
 
 **DNS should remain fast even when it becomes your policy engine.**
 

@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
-use crate::core::dns_utils::build_response_from_request;
+use crate::core::dns_utils::build_response_plan_from_request;
 use crate::core::error::{DnsError, Result};
+use crate::message::Packet;
+use crate::message::ResponsePlan;
+use crate::message::{Message, ResponseCode};
 use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
 use crate::plugin::{Plugin, PluginRegistry};
 use ahash::AHashMap;
-use hickory_proto::op::{Message, ResponseCode};
 use std::io::Error;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -63,12 +65,7 @@ pub struct RequestHandle {
     pub entry_executor: Arc<dyn Executor>,
     pub registry: Arc<PluginRegistry>,
 }
-
-#[derive(Debug, Default, Clone)]
-pub struct RequestMeta {
-    pub server_name: Option<String>,
-    pub url_path: Option<String>,
-}
+pub use crate::core::context::RequestMeta;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum RequestExit {
@@ -80,19 +77,51 @@ pub enum RequestExit {
 #[derive(Debug)]
 #[allow(unused)]
 pub struct RequestResult {
-    pub response: Message,
+    pub response: ResponsePlan,
     pub exit: RequestExit,
 }
 
 impl RequestHandle {
     pub async fn handle_request(&self, msg: Message, src_addr: SocketAddr) -> RequestResult {
-        self.handle_request_with_meta(msg, src_addr, RequestMeta::default())
+        self.handle_request_internal(msg, None, src_addr, RequestMeta::default())
             .await
     }
 
     pub async fn handle_request_with_meta(
         &self,
         msg: Message,
+        src_addr: SocketAddr,
+        meta: RequestMeta,
+    ) -> RequestResult {
+        self.handle_request_internal(msg, None, src_addr, meta)
+            .await
+    }
+
+    pub async fn handle_request_with_packet(
+        &self,
+        msg: Message,
+        packet: Packet,
+        src_addr: SocketAddr,
+    ) -> RequestResult {
+        self.handle_request_internal(msg, Some(packet), src_addr, RequestMeta::default())
+            .await
+    }
+
+    pub async fn handle_request_with_packet_meta(
+        &self,
+        msg: Message,
+        packet: Packet,
+        src_addr: SocketAddr,
+        meta: RequestMeta,
+    ) -> RequestResult {
+        self.handle_request_internal(msg, Some(packet), src_addr, meta)
+            .await
+    }
+
+    async fn handle_request_internal(
+        &self,
+        msg: Message,
+        packet: Option<Packet>,
         src_addr: SocketAddr,
         meta: RequestMeta,
     ) -> RequestResult {
@@ -104,9 +133,16 @@ impl RequestHandle {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: AHashMap::new(),
+            request_meta: RequestMeta::default(),
             query_view: None,
+            query_view_version: None,
             registry: self.registry.clone(),
         };
+        if let Some(packet) = packet
+            && context.request.packet().is_none()
+        {
+            context.set_request_packet(packet);
+        }
         self.apply_request_meta(&mut context, meta);
 
         // Log request details only when debug logging is enabled
@@ -114,10 +150,17 @@ impl RequestHandle {
             debug!(
                 "DNS request from {}, queries: {:?}, edns: {:?}, nameservers: {:?}",
                 &src_addr,
-                context.request.queries(),
-                context.request.extensions(),
-                context.request.name_servers()
+                context.request.question_count(),
+                context.request.edns_access().is_some(),
+                context.request.name_servers().len()
             );
+        }
+
+        if context.request.question_count() > 1 {
+            return RequestResult {
+                response: self.build_base_response(&context, ResponseCode::FormErr),
+                exit: RequestExit::Controlled,
+            };
         }
 
         // Execute entry plugin to process the request
@@ -138,8 +181,8 @@ impl RequestHandle {
                 };
                 let response = context
                     .response
-                    .map(Message::from)
-                    .unwrap_or_else(|| self.build_empty_response(&context.request));
+                    .take()
+                    .unwrap_or_else(|| self.build_empty_response(&context));
                 (response, exit)
             }
             Err(e) => {
@@ -150,23 +193,22 @@ impl RequestHandle {
                     context.request.id(),
                     e
                 );
-                (
-                    self.build_servfail_response(&context.request),
-                    RequestExit::Failed,
-                )
+                (self.build_servfail_response(&context), RequestExit::Failed)
             }
         };
 
         // Log response details only when debug logging is enabled
         if event_enabled!(Level::DEBUG) {
+            let response_len = response
+                .response_len_hint()
+                .or_else(|| response.to_bytes().ok().map(|bytes| bytes.len()));
             debug!(
-                "Sending response to {}, exit: {:?}, queries: {:?}, id: {}, edns: {:?}, nameservers: {:?}",
+                "Sending response to {}, exit: {:?}, question_count: {}, id: {}, response_size: {:?}",
                 &src_addr,
                 exit,
-                context.request.queries(),
+                context.request.question_count(),
                 context.request.id(),
-                response.extensions(),
-                response.name_servers()
+                response_len
             );
         }
 
@@ -175,27 +217,25 @@ impl RequestHandle {
 
     #[inline]
     fn apply_request_meta(&self, context: &mut DnsContext, meta: RequestMeta) {
-        if let Some(server_name) = meta.server_name.filter(|value| !value.is_empty()) {
-            context.set_attr(DnsContext::ATTR_SERVER_NAME, server_name);
-        }
-        if let Some(url_path) = meta.url_path.filter(|value| !value.is_empty()) {
-            context.set_attr(DnsContext::ATTR_URL_PATH, url_path);
-        }
+        context.set_request_meta(RequestMeta {
+            server_name: meta.server_name.filter(|value| !value.is_empty()),
+            url_path: meta.url_path.filter(|value| !value.is_empty()),
+        });
     }
 
     #[inline]
-    fn build_empty_response(&self, request: &Message) -> Message {
-        self.build_base_response(request, ResponseCode::NoError)
+    fn build_servfail_response(&self, context: &DnsContext) -> ResponsePlan {
+        self.build_base_response(context, ResponseCode::ServFail)
     }
 
     #[inline]
-    fn build_servfail_response(&self, request: &Message) -> Message {
-        self.build_base_response(request, ResponseCode::ServFail)
+    fn build_empty_response(&self, context: &DnsContext) -> ResponsePlan {
+        self.build_base_response(context, ResponseCode::NoError)
     }
 
     #[inline]
-    fn build_base_response(&self, request: &Message, rcode: ResponseCode) -> Message {
-        build_response_from_request(request, rcode)
+    fn build_base_response(&self, context: &DnsContext, rcode: ResponseCode) -> ResponsePlan {
+        build_response_plan_from_request(&context.request, rcode)
     }
 }
 
@@ -203,10 +243,10 @@ impl RequestHandle {
 mod tests {
     use super::*;
     use crate::core::error::{DnsError, Result};
+    use crate::message::Question;
+    use crate::message::{Name, RecordType};
     use crate::plugin::test_utils::test_registry;
     use async_trait::async_trait;
-    use hickory_proto::op::Query;
-    use hickory_proto::rr::{Name, RecordType};
     use std::sync::Mutex;
 
     #[test]
@@ -233,7 +273,7 @@ mod tests {
     fn make_request(id: u16, qname: &str) -> Message {
         let mut request = Message::new();
         request.set_id(id);
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii(qname).expect("query name should be valid"),
             RecordType::A,
         ));
@@ -293,7 +333,7 @@ mod tests {
     #[async_trait]
     impl Executor for StopWithResponseExecutor {
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-            context.response = Some(build_response_from_request(
+            context.response = Some(build_response_plan_from_request(
                 &context.request,
                 ResponseCode::Refused,
             ));
@@ -356,12 +396,8 @@ mod tests {
     impl Executor for CaptureMetaExecutor {
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
             let observed = ObservedMeta {
-                server_name: context
-                    .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
-                    .cloned(),
-                url_path: context
-                    .get_attr::<String>(DnsContext::ATTR_URL_PATH)
-                    .cloned(),
+                server_name: context.server_name().map(str::to_string),
+                url_path: context.url_path().map(str::to_string),
             };
             self.observed
                 .lock()
@@ -400,7 +436,7 @@ mod tests {
             context: &mut DnsContext,
             _state: Option<crate::plugin::executor::ExecState>,
         ) -> crate::plugin::executor::ExecResult {
-            context.response = Some(build_response_from_request(
+            context.response = Some(build_response_plan_from_request(
                 &context.request,
                 ResponseCode::NXDomain,
             ));
@@ -416,12 +452,16 @@ mod tests {
         let result = request_handle
             .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5300)))
             .await;
+        let response = result
+            .response
+            .to_message()
+            .expect("response should materialize");
 
         assert_eq!(result.exit, RequestExit::Completed);
-        assert_eq!(result.response.id(), 7);
-        assert_eq!(result.response.response_code(), ResponseCode::NoError);
-        assert_eq!(result.response.queries().len(), 1);
-        assert!(result.response.answers().is_empty());
+        assert_eq!(response.id(), 7);
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert_eq!(response.questions().len(), 1);
+        assert!(response.answers().is_empty());
     }
 
     #[tokio::test]
@@ -432,10 +472,14 @@ mod tests {
         let result = request_handle
             .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5301)))
             .await;
+        let response = result
+            .response
+            .to_message()
+            .expect("response should materialize");
 
         assert_eq!(result.exit, RequestExit::Controlled);
-        assert_eq!(result.response.id(), 9);
-        assert_eq!(result.response.response_code(), ResponseCode::Refused);
+        assert_eq!(response.id(), 9);
+        assert_eq!(response.response_code(), ResponseCode::Refused);
     }
 
     #[tokio::test]
@@ -446,10 +490,14 @@ mod tests {
         let result = request_handle
             .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5302)))
             .await;
+        let response = result
+            .response
+            .to_message()
+            .expect("response should materialize");
 
         assert_eq!(result.exit, RequestExit::Failed);
-        assert_eq!(result.response.id(), 11);
-        assert_eq!(result.response.response_code(), ResponseCode::ServFail);
+        assert_eq!(response.id(), 11);
+        assert_eq!(response.response_code(), ResponseCode::ServFail);
     }
 
     #[tokio::test]
@@ -491,9 +539,36 @@ mod tests {
         let result = request_handle
             .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5304)))
             .await;
+        let response = result
+            .response
+            .to_message()
+            .expect("response should materialize");
 
         assert_eq!(result.exit, RequestExit::Completed);
-        assert_eq!(result.response.id(), 15);
-        assert_eq!(result.response.response_code(), ResponseCode::NXDomain);
+        assert_eq!(response.id(), 15);
+        assert_eq!(response.response_code(), ResponseCode::NXDomain);
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_rejects_multi_question_request_before_executor() {
+        let request_handle = make_request_handle(Arc::new(FallthroughExecutor));
+        let mut request = make_request(17, "example.com.");
+        request.add_question(Question::new(
+            Name::from_ascii("second.example.com.").expect("query name should be valid"),
+            RecordType::AAAA,
+        ));
+
+        let result = request_handle
+            .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5305)))
+            .await;
+
+        assert_eq!(result.exit, RequestExit::Controlled);
+        assert_eq!(
+            result
+                .response
+                .response_code_hint()
+                .expect("response should expose rcode"),
+            ResponseCode::FormErr
+        );
     }
 }

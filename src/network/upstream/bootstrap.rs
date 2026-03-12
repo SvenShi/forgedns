@@ -16,9 +16,10 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::message::response_answer_ip_ttls;
+use crate::message::{Message, MessageType, OpCode, Question};
+use crate::message::{Name, RecordType};
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder};
-use hickory_proto::op::{Message, MessageType, OpCode, Query};
-use hickory_proto::rr::{Name, RecordType};
 use rand::random;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -93,7 +94,7 @@ impl Bootstrap {
         message.set_op_code(OpCode::Query);
         message.set_recursion_desired(true);
         // Set query type based on IP version: AAAA for IPv6, A for IPv4
-        message.add_query(Query::query(
+        message.add_question(Question::new(
             parsed_name.clone(),
             match ip_version {
                 Some(6) => RecordType::AAAA,
@@ -244,6 +245,26 @@ impl Bootstrap {
         message.set_id(random());
         match self.upstream.query(message).await {
             Ok(response) => {
+                if let Some(packet) = response.packet()
+                    && let Ok(answer_ttls) = response_answer_ip_ttls(packet)
+                {
+                    for (ip, ttl_seconds) in answer_ttls {
+                        let ttl = ttl_seconds as u64 * 1000;
+                        info!(
+                            domain = %self.domain,
+                            ip = %ip,
+                            ttl_seconds,
+                            "Bootstrap DNS resolution successful"
+                        );
+
+                        let expires_at = AppClock::elapsed_millis() + ttl;
+                        *self.cache.write().await = Some(CacheData { ip, expires_at });
+                        self.state.store(STATE_CACHED, Ordering::Release);
+                        self.query_done.notify_waiters();
+                        return;
+                    }
+                }
+
                 let answers = response.answers();
 
                 // Find the first matching A (IPv4) or AAAA (IPv6) record
@@ -307,11 +328,11 @@ mod tests {
 
         let query = bootstrap
             .message
-            .query()
-            .expect("query should be pre-built");
+            .question()
+            .expect("question should be pre-built");
 
         assert_eq!(bootstrap.domain, "example.com.");
-        assert_eq!(query.query_type(), RecordType::A);
+        assert_eq!(query.question_type(), RecordType::A);
         assert_eq!(query.name().to_utf8(), "example.com.");
     }
 
@@ -322,10 +343,10 @@ mod tests {
 
         let query = bootstrap
             .message
-            .query()
-            .expect("query should be pre-built");
+            .question()
+            .expect("question should be pre-built");
 
-        assert_eq!(query.query_type(), RecordType::AAAA);
+        assert_eq!(query.question_type(), RecordType::AAAA);
     }
 
     #[tokio::test]

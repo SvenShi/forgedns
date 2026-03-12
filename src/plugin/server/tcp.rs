@@ -294,12 +294,12 @@ async fn handle_dns_stream<S>(
     let transport = TcpTransport::new(stream);
     let (mut reader, mut writer) = transport.into_split();
 
-    let (sender, mut receiver) = tokio::sync::mpsc::channel(4096);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<crate::message::ResponsePlan>(4096);
 
     let handle = tokio::spawn(async move {
         loop {
-            if let Some(msg) = receiver.recv().await {
-                if let Err(e) = writer.write_message(&msg).await {
+            if let Some(response) = receiver.recv().await {
+                if let Err(e) = writer.write_response(&response).await {
                     warn!("Failed to write TCP response to {}: {}", src, e);
                 }
             }
@@ -312,11 +312,12 @@ async fn handle_dns_stream<S>(
         let handler = handler.clone();
         let sender = sender.clone();
         let server_name = server_name.clone();
-        match reader.read_message().await {
-            Ok(req_msg) => tokio::spawn(async move {
+        match reader.read_message_with_packet().await {
+            Ok((req_msg, packet)) => tokio::spawn(async move {
                 let response = handler
-                    .handle_request_with_meta(
+                    .handle_request_with_packet_meta(
                         req_msg,
+                        packet,
                         src,
                         RequestMeta {
                             server_name,
@@ -436,12 +437,12 @@ mod tests {
     use crate::core::context::DnsContext;
     use crate::core::dns_utils::build_response_from_request;
     use crate::core::error::Result;
+    use crate::message::{Message, Question, ResponseCode};
+    use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::{plugin_config, test_registry};
     use async_trait::async_trait;
-    use hickory_proto::op::{Message, Query, ResponseCode};
-    use hickory_proto::rr::{Name, RecordType};
     use serde_yml::from_str;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::{Arc, Mutex};
@@ -451,7 +452,7 @@ mod tests {
     fn make_request(id: u16) -> Message {
         let mut message = Message::new();
         message.set_id(id);
-        message.add_query(Query::query(
+        message.add_question(Question::new(
             Name::from_ascii("example.com.").expect("query name should be valid"),
             RecordType::A,
         ));
@@ -495,19 +496,18 @@ mod tests {
     impl Executor for RespondAndCaptureExecutor {
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
             let observed = ObservedMeta {
-                server_name: context
-                    .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
-                    .cloned(),
-                qname: context.request.query().map(|query| query.name().to_utf8()),
+                server_name: context.server_name().map(str::to_string),
+                qname: context
+                    .request
+                    .question()
+                    .map(|question| question.name().to_utf8()),
             };
             self.observed
                 .lock()
                 .expect("capture lock should not be poisoned")
                 .replace(observed);
-            context.response = Some(build_response_from_request(
-                &context.request,
-                ResponseCode::Refused,
-            ));
+            context.response =
+                Some(build_response_from_request(&context.request, ResponseCode::Refused).into());
             Ok(ExecStep::Stop)
         }
     }

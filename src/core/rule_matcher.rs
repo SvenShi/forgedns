@@ -5,173 +5,214 @@
 
 //! Shared high-performance rule matchers used by providers and matchers.
 
+use crate::core::context::QueryView;
 use ahash::{AHashMap, AHashSet};
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::{RegexBuilder, RegexSet, RegexSetBuilder};
 use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr};
 
-const NO_CHILD: u32 = u32::MAX;
+const IPV4_PAGE_SHIFT: u32 = 16;
+const IPV4_PAGE_MASK: u32 = (1 << IPV4_PAGE_SHIFT) - 1;
+const IPV4_PAGE_COUNT: usize = 1 << IPV4_PAGE_SHIFT;
+const IPV4_BITMAP_WORDS: usize = 1 << (IPV4_PAGE_SHIFT - 6);
+const SMALL_IPV4_PAGE_RANGE_THRESHOLD: usize = 16;
+const SMALL_IPV6_LINEAR_THRESHOLD: usize = 8;
+const DENSE_IPV4_PAGE_THRESHOLD: usize = 4096;
 
-#[derive(Debug, Clone, Copy)]
-struct BitTrieNode {
-    terminal: bool,
-    zero: u32,
-    one: u32,
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct Ipv4Range {
+    start: u32,
+    end: u32,
 }
 
-impl Default for BitTrieNode {
-    fn default() -> Self {
+impl Ipv4Range {
+    #[inline]
+    fn from_network(network: u32, prefix_len: u8) -> Self {
+        let host_mask = if prefix_len == 32 {
+            0
+        } else {
+            u32::MAX >> prefix_len as u32
+        };
         Self {
-            terminal: false,
-            zero: NO_CHILD,
-            one: NO_CHILD,
+            start: network,
+            end: network | host_mask,
+        }
+    }
+
+    #[inline]
+    fn contains(&self, value: u32) -> bool {
+        value >= self.start && value <= self.end
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct Ipv6Range {
+    start: u128,
+    end: u128,
+}
+
+impl Ipv6Range {
+    #[inline]
+    fn from_network(network: u128, prefix_len: u8) -> Self {
+        let host_mask = if prefix_len == 128 {
+            0
+        } else {
+            u128::MAX >> prefix_len as u32
+        };
+        Self {
+            start: network,
+            end: network | host_mask,
+        }
+    }
+
+    #[inline]
+    fn contains(&self, value: u128) -> bool {
+        value >= self.start && value <= self.end
+    }
+}
+
+#[derive(Debug)]
+enum Ipv4Page {
+    Empty,
+    Full,
+    Small(Box<[(u16, u16)]>),
+    Bitmap(Box<[u64]>),
+}
+
+impl Default for Ipv4Page {
+    fn default() -> Self {
+        Self::Empty
+    }
+}
+
+impl Ipv4Page {
+    #[inline]
+    fn contains(&self, low_bits: u16) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::Full => true,
+            Self::Small(ranges) => ranges
+                .iter()
+                .take_while(|(start, _)| *start <= low_bits)
+                .any(|(start, end)| low_bits >= *start && low_bits <= *end),
+            Self::Bitmap(words) => {
+                let word_idx = (low_bits as usize) >> 6;
+                let bit_idx = low_bits as usize & 63;
+                (words[word_idx] & (1u64 << bit_idx)) != 0
+            }
         }
     }
 }
 
 #[derive(Debug)]
-struct BitTrie {
-    /// Flat arena to keep branch traversal cache-friendly.
-    nodes: Vec<BitTrieNode>,
-    /// Number of effective prefixes inserted.
+enum Ipv4MatcherBackend {
+    MatchAll,
+    Sparse(Box<[(u16, Ipv4Page)]>),
+    Dense(Box<[Ipv4Page]>),
+}
+
+#[derive(Debug)]
+struct Ipv4Matcher {
+    backend: Ipv4MatcherBackend,
     rule_count: usize,
 }
 
-impl Default for BitTrie {
-    fn default() -> Self {
-        Self {
-            nodes: vec![BitTrieNode::default()],
-            rule_count: 0,
-        }
-    }
-}
-
-impl BitTrie {
+impl Ipv4Matcher {
     #[inline]
     fn has_rules(&self) -> bool {
         self.rule_count > 0
     }
 
     #[inline]
-    fn insert_prefix(&mut self, bits: u128, prefix_len: u8) {
-        // If root already terminal, /0 has covered everything.
-        if self.nodes[0].terminal {
-            return;
-        }
-
-        let mut cursor = 0u32;
-        for depth in 0..prefix_len {
-            // If a shorter prefix already exists on this path,
-            // a longer prefix is redundant.
-            if self.nodes[cursor as usize].terminal {
-                return;
+    fn contains(&self, value: u32) -> bool {
+        match &self.backend {
+            Ipv4MatcherBackend::MatchAll => true,
+            Ipv4MatcherBackend::Sparse(pages) => {
+                let high = (value >> IPV4_PAGE_SHIFT) as u16;
+                let low = (value & IPV4_PAGE_MASK) as u16;
+                match pages.binary_search_by_key(&high, |(page, _)| *page) {
+                    Ok(idx) => {
+                        let (_, page) = &pages[idx];
+                        page.contains(low)
+                    }
+                    Err(_) => false,
+                }
             }
-
-            let bit = bit_at(bits, depth);
-            let next = if bit == 0 {
-                let zero = self.nodes[cursor as usize].zero;
-                if zero == NO_CHILD {
-                    let idx = self.nodes.len() as u32;
-                    self.nodes.push(BitTrieNode::default());
-                    self.nodes[cursor as usize].zero = idx;
-                    idx
-                } else {
-                    zero
-                }
-            } else {
-                let one = self.nodes[cursor as usize].one;
-                if one == NO_CHILD {
-                    let idx = self.nodes.len() as u32;
-                    self.nodes.push(BitTrieNode::default());
-                    self.nodes[cursor as usize].one = idx;
-                    idx
-                } else {
-                    one
-                }
-            };
-
-            cursor = next;
+            Ipv4MatcherBackend::Dense(pages) => {
+                let high = (value >> IPV4_PAGE_SHIFT) as usize;
+                let low = (value & IPV4_PAGE_MASK) as u16;
+                pages[high].contains(low)
+            }
         }
+    }
+}
 
-        let node = &mut self.nodes[cursor as usize];
-        if !node.terminal {
-            // Mark terminal and prune deeper branches because they are
-            // shadowed by this prefix.
-            node.terminal = true;
-            node.zero = NO_CHILD;
-            node.one = NO_CHILD;
-            self.rule_count += 1;
-        }
+#[derive(Debug, Default)]
+struct Ipv6IntervalMatcher {
+    ranges: Box<[Ipv6Range]>,
+    rule_count: usize,
+}
+
+impl Ipv6IntervalMatcher {
+    #[inline]
+    fn has_rules(&self) -> bool {
+        self.rule_count > 0
     }
 
     #[inline]
-    fn contains_bits(&self, bits: u128, total_bits: u8) -> bool {
-        // Fast-path for /0.
-        if self.nodes[0].terminal {
-            return true;
+    fn contains(&self, value: u128) -> bool {
+        if self.ranges.is_empty() {
+            return false;
         }
 
-        let mut cursor = 0u32;
-        for depth in 0..total_bits {
-            let node = &self.nodes[cursor as usize];
-            let next = if bit_at(bits, depth) == 0 {
-                node.zero
-            } else {
-                node.one
-            };
-            if next == NO_CHILD {
-                return false;
-            }
-            cursor = next;
-            if self.nodes[cursor as usize].terminal {
-                return true;
-            }
+        if self.ranges.len() <= SMALL_IPV6_LINEAR_THRESHOLD {
+            return self.ranges.iter().any(|range| range.contains(value));
         }
-        false
+
+        let idx = self.ranges.partition_point(|range| range.start <= value);
+        idx > 0 && self.ranges[idx - 1].contains(value)
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum ParsedPrefix {
-    /// IPv4 bits are left-aligned in u128 (high 32 bits used).
-    V4 {
-        bits: u128,
-        prefix_len: u8,
-    },
-    V6 {
-        bits: u128,
-        prefix_len: u8,
-    },
+    V4 { network: u32, prefix_len: u8 },
+    V6 { network: u128, prefix_len: u8 },
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct IpPrefixMatcher {
-    /// Separate tries keep IPv4 and IPv6 hot paths minimal.
-    v4: BitTrie,
-    v6: BitTrie,
+    v4_rules: Vec<Ipv4Range>,
+    v6_rules: Vec<Ipv6Range>,
+    v4: Option<Ipv4Matcher>,
+    v6: Option<Ipv6IntervalMatcher>,
 }
 
 impl IpPrefixMatcher {
     #[inline]
     pub(crate) fn has_v4_rules(&self) -> bool {
-        self.v4.has_rules()
+        self.v4.as_ref().is_some_and(Ipv4Matcher::has_rules) || !self.v4_rules.is_empty()
     }
 
     #[inline]
     pub(crate) fn has_v6_rules(&self) -> bool {
-        self.v6.has_rules()
+        self.v6.as_ref().is_some_and(Ipv6IntervalMatcher::has_rules) || !self.v6_rules.is_empty()
     }
 
     #[inline]
     pub(crate) fn v4_rule_count(&self) -> usize {
-        self.v4.rule_count
+        self.v4
+            .as_ref()
+            .map_or(self.v4_rules.len(), |matcher| matcher.rule_count)
     }
 
     #[inline]
     pub(crate) fn v6_rule_count(&self) -> usize {
-        self.v6.rule_count
+        self.v6
+            .as_ref()
+            .map_or(self.v6_rules.len(), |matcher| matcher.rule_count)
     }
 
     pub(crate) fn add_rule(&mut self, raw_rule: &str) -> Result<(), String> {
@@ -181,29 +222,232 @@ impl IpPrefixMatcher {
         }
 
         match parse_ip_prefix(rule)? {
-            ParsedPrefix::V4 { bits, prefix_len } => self.v4.insert_prefix(bits, prefix_len),
-            ParsedPrefix::V6 { bits, prefix_len } => self.v6.insert_prefix(bits, prefix_len),
+            ParsedPrefix::V4 {
+                network,
+                prefix_len,
+            } => {
+                self.v4_rules
+                    .push(Ipv4Range::from_network(network, prefix_len));
+                self.v4 = None;
+            }
+            ParsedPrefix::V6 {
+                network,
+                prefix_len,
+            } => {
+                self.v6_rules
+                    .push(Ipv6Range::from_network(network, prefix_len));
+                self.v6 = None;
+            }
         }
         Ok(())
+    }
+
+    pub(crate) fn finalize(&mut self) {
+        self.v4 = compile_ipv4_matcher(&mut self.v4_rules);
+        self.v6 = compile_ipv6_matcher(&mut self.v6_rules);
     }
 
     #[inline]
     pub(crate) fn contains_ip(&self, ip: IpAddr) -> bool {
         match ip {
             IpAddr::V4(ip) => {
-                if !self.v4.has_rules() {
-                    return false;
-                }
-                self.v4.contains_bits(ipv4_to_u128(ip), 32)
+                let value = u32::from(ip);
+                self.v4
+                    .as_ref()
+                    .is_some_and(|matcher| matcher.contains(value))
+                    || self.v4.is_none() && contains_ipv4_uncompiled(&self.v4_rules, value)
             }
             IpAddr::V6(ip) => {
-                if !self.v6.has_rules() {
-                    return false;
-                }
-                self.v6.contains_bits(ipv6_to_u128(ip), 128)
+                let value = ipv6_to_u128(ip);
+                self.v6
+                    .as_ref()
+                    .is_some_and(|matcher| matcher.contains(value))
+                    || self.v6.is_none() && contains_ipv6_uncompiled(&self.v6_rules, value)
             }
         }
     }
+}
+
+fn compile_ipv4_matcher(ranges: &mut Vec<Ipv4Range>) -> Option<Ipv4Matcher> {
+    if ranges.is_empty() {
+        return None;
+    }
+
+    merge_ipv4_ranges(ranges);
+    let rule_count = ranges.len();
+    if rule_count == 1 && ranges[0].start == 0 && ranges[0].end == u32::MAX {
+        return Some(Ipv4Matcher {
+            backend: Ipv4MatcherBackend::MatchAll,
+            rule_count,
+        });
+    }
+
+    let mut active_pages = Vec::<(u16, SmallVec<[(u16, u16); 4]>)>::new();
+    for range in ranges.iter().copied() {
+        let start_page = (range.start >> IPV4_PAGE_SHIFT) as usize;
+        let end_page = (range.end >> IPV4_PAGE_SHIFT) as usize;
+        for page in start_page..=end_page {
+            let local_start = if page == start_page {
+                (range.start & IPV4_PAGE_MASK) as u16
+            } else {
+                0
+            };
+            let local_end = if page == end_page {
+                (range.end & IPV4_PAGE_MASK) as u16
+            } else {
+                u16::MAX
+            };
+            push_ipv4_page_range(&mut active_pages, page as u16, local_start, local_end);
+        }
+    }
+
+    let backend = if active_pages.len() >= DENSE_IPV4_PAGE_THRESHOLD {
+        let mut dense = Vec::with_capacity(IPV4_PAGE_COUNT);
+        dense.resize_with(IPV4_PAGE_COUNT, Ipv4Page::default);
+        for (page_idx, page_ranges) in active_pages {
+            dense[page_idx as usize] = build_ipv4_page(page_ranges);
+        }
+        Ipv4MatcherBackend::Dense(dense.into_boxed_slice())
+    } else {
+        let sparse = active_pages
+            .into_iter()
+            .map(|(page_idx, page_ranges)| (page_idx, build_ipv4_page(page_ranges)))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Ipv4MatcherBackend::Sparse(sparse)
+    };
+
+    Some(Ipv4Matcher {
+        backend,
+        rule_count,
+    })
+}
+
+fn compile_ipv6_matcher(ranges: &mut Vec<Ipv6Range>) -> Option<Ipv6IntervalMatcher> {
+    if ranges.is_empty() {
+        return None;
+    }
+
+    merge_ipv6_ranges(ranges);
+    Some(Ipv6IntervalMatcher {
+        ranges: ranges.clone().into_boxed_slice(),
+        rule_count: ranges.len(),
+    })
+}
+
+#[inline]
+fn contains_ipv4_uncompiled(ranges: &[Ipv4Range], value: u32) -> bool {
+    ranges.iter().any(|range| range.contains(value))
+}
+
+#[inline]
+fn contains_ipv6_uncompiled(ranges: &[Ipv6Range], value: u128) -> bool {
+    ranges.iter().any(|range| range.contains(value))
+}
+
+#[inline]
+fn push_ipv4_page_range(
+    pages: &mut Vec<(u16, SmallVec<[(u16, u16); 4]>)>,
+    page: u16,
+    start: u16,
+    end: u16,
+) {
+    if let Some((last_page, ranges)) = pages.last_mut()
+        && *last_page == page
+    {
+        ranges.push((start, end));
+        return;
+    }
+
+    let mut ranges = SmallVec::<[(u16, u16); 4]>::new();
+    ranges.push((start, end));
+    pages.push((page, ranges));
+}
+
+fn build_ipv4_page(ranges: SmallVec<[(u16, u16); 4]>) -> Ipv4Page {
+    if ranges.is_empty() {
+        return Ipv4Page::Empty;
+    }
+    if ranges.len() == 1 && ranges[0] == (0, u16::MAX) {
+        return Ipv4Page::Full;
+    }
+    if ranges.len() <= SMALL_IPV4_PAGE_RANGE_THRESHOLD {
+        return Ipv4Page::Small(ranges.into_vec().into_boxed_slice());
+    }
+
+    let mut bitmap = vec![0u64; IPV4_BITMAP_WORDS].into_boxed_slice();
+    for (start, end) in ranges {
+        set_ipv4_bitmap_range(bitmap.as_mut(), start, end);
+    }
+    Ipv4Page::Bitmap(bitmap)
+}
+
+fn set_ipv4_bitmap_range(words: &mut [u64], start: u16, end: u16) {
+    let start_word = (start as usize) >> 6;
+    let end_word = (end as usize) >> 6;
+    let start_bit = start as u32 & 63;
+    let end_bit = end as u32 & 63;
+
+    if start_word == end_word {
+        words[start_word] |= bit_mask_between(start_bit, end_bit);
+        return;
+    }
+
+    words[start_word] |= u64::MAX << start_bit;
+    for word in &mut words[start_word + 1..end_word] {
+        *word = u64::MAX;
+    }
+    words[end_word] |= bit_mask_between(0, end_bit);
+}
+
+#[inline]
+fn bit_mask_between(start_bit: u32, end_bit: u32) -> u64 {
+    let end_mask = if end_bit == 63 {
+        u64::MAX
+    } else {
+        (1u64 << (end_bit + 1)) - 1
+    };
+    end_mask & (u64::MAX << start_bit)
+}
+
+fn merge_ipv4_ranges(ranges: &mut Vec<Ipv4Range>) {
+    if ranges.len() <= 1 {
+        return;
+    }
+
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut write = 0usize;
+    for read in 1..ranges.len() {
+        let next = ranges[read];
+        let current = &mut ranges[write];
+        if next.start <= current.end.saturating_add(1) {
+            current.end = current.end.max(next.end);
+        } else {
+            write += 1;
+            ranges[write] = next;
+        }
+    }
+    ranges.truncate(write + 1);
+}
+
+fn merge_ipv6_ranges(ranges: &mut Vec<Ipv6Range>) {
+    if ranges.len() <= 1 {
+        return;
+    }
+
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut write = 0usize;
+    for read in 1..ranges.len() {
+        let next = ranges[read];
+        let current = &mut ranges[write];
+        if next.start <= current.end.saturating_add(1) {
+            current.end = current.end.max(next.end);
+        } else {
+            write += 1;
+            ranges[write] = next;
+        }
+    }
+    ranges.truncate(write + 1);
 }
 
 #[derive(Debug, Default)]
@@ -277,6 +521,21 @@ impl DomainTrie {
         }
         false
     }
+
+    #[inline]
+    pub(crate) fn contains_query_view(&self, query_view: &QueryView) -> bool {
+        let mut cursor = 0u32;
+        for label in query_view.iter_labels_rev() {
+            let Some(next) = self.nodes[cursor as usize].children.get(label) else {
+                return false;
+            };
+            cursor = *next;
+            if self.nodes[cursor as usize].terminal {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -338,6 +597,11 @@ impl TrieDomainMatcher {
     #[inline]
     pub(crate) fn is_match(&self, labels_rev: &[&str]) -> bool {
         self.trie.contains_labels(labels_rev)
+    }
+
+    #[inline]
+    pub(crate) fn is_match_query_view(&self, query_view: &QueryView) -> bool {
+        self.trie.contains_query_view(query_view)
     }
 
     #[inline]
@@ -546,6 +810,25 @@ impl DomainRuleMatcher {
         }
         self.regexp.as_ref().is_some_and(|m| m.is_match(domain))
     }
+
+    #[inline]
+    pub(crate) fn is_match_query_view(&self, query_view: &QueryView) -> bool {
+        let domain = query_view.normalized_name();
+        if self.full.as_ref().is_some_and(|m| m.is_match(domain)) {
+            return true;
+        }
+        if self
+            .trie
+            .as_ref()
+            .is_some_and(|m| m.is_match_query_view(query_view))
+        {
+            return true;
+        }
+        if self.keyword.as_ref().is_some_and(|m| m.is_match(domain)) {
+            return true;
+        }
+        self.regexp.as_ref().is_some_and(|m| m.is_match(domain))
+    }
 }
 
 #[inline]
@@ -586,18 +869,6 @@ pub(crate) fn normalize_domain_cow(domain: &str) -> Cow<'_, str> {
 pub(crate) fn split_labels_rev<'a>(domain: &'a str, labels: &mut SmallVec<[&'a str; 8]>) {
     labels.clear();
     labels.extend(domain.rsplit('.').filter(|label| !label.is_empty()));
-}
-
-#[inline]
-fn bit_at(bits: u128, depth: u8) -> u8 {
-    // Depth 0 means the highest bit.
-    ((bits >> (127 - depth as u32)) & 1) as u8
-}
-
-#[inline]
-fn ipv4_to_u128(ip: Ipv4Addr) -> u128 {
-    // Keep IPv4 in high bits so bit_at() can be shared with IPv6 trie logic.
-    (u32::from(ip) as u128) << 96
 }
 
 #[inline]
@@ -643,7 +914,7 @@ fn parse_ip_prefix(raw: &str) -> Result<ParsedPrefix, String> {
             }
             let masked = mask_v4_bits(u32::from(ip), prefix_len);
             Ok(ParsedPrefix::V4 {
-                bits: (masked as u128) << 96,
+                network: masked,
                 prefix_len,
             })
         }
@@ -663,7 +934,7 @@ fn parse_ip_prefix(raw: &str) -> Result<ParsedPrefix, String> {
             }
             let masked = mask_v6_bits(ipv6_to_u128(ip), prefix_len);
             Ok(ParsedPrefix::V6 {
-                bits: masked,
+                network: masked,
                 prefix_len,
             })
         }
@@ -691,6 +962,7 @@ fn mask_v6_bits(bits: u128, prefix_len: u8) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn test_ip_prefix_matcher_matches_masked_ipv4_prefix() {
@@ -698,6 +970,7 @@ mod tests {
         matcher
             .add_rule("192.0.2.99/24")
             .expect("rule should be accepted");
+        matcher.finalize();
 
         assert!(matcher.contains_ip(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))));
         assert!(!matcher.contains_ip(IpAddr::V4(Ipv4Addr::new(192, 0, 3, 1))));
@@ -712,8 +985,21 @@ mod tests {
         matcher
             .add_rule("2001:db8:1::/48")
             .expect("specific rule should be accepted");
+        matcher.finalize();
 
         assert_eq!(matcher.v6_rule_count(), 1);
+    }
+
+    #[test]
+    fn test_ip_prefix_matcher_matches_ipv4_prefix_across_pages() {
+        let mut matcher = IpPrefixMatcher::default();
+        matcher
+            .add_rule("10.0.0.0/8")
+            .expect("broad rule should be accepted");
+        matcher.finalize();
+
+        assert!(matcher.contains_ip(IpAddr::V4(Ipv4Addr::new(10, 255, 7, 9))));
+        assert!(!matcher.contains_ip(IpAddr::V4(Ipv4Addr::new(11, 0, 0, 1))));
     }
 
     #[test]

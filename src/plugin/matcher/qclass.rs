@@ -81,11 +81,17 @@ impl Plugin for QclassMatcher {
 
 impl Matcher for QclassMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
+        if context.request.question_count() == 1
+            && let Some(qclass) = context.request.first_question_class()
+        {
+            return self.qclasses.contains(&u16::from(qclass));
+        }
+
         context
             .request
-            .queries()
+            .questions()
             .iter()
-            .any(|q| self.qclasses.contains(&u16::from(q.query_class())))
+            .any(|q| self.qclasses.contains(&u16::from(q.question_class())))
     }
 }
 
@@ -93,15 +99,15 @@ impl Matcher for QclassMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{DNSClass, Name, RecordType};
+    use crate::message::{DNSClass, Name, RecordType};
+    use crate::message::{Message, Question};
     use std::net::SocketAddr;
 
     fn make_context(qclass: DNSClass) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), RecordType::A);
-        query.set_query_class(qclass);
-        request.add_query(query);
+        let mut query = Question::new(Name::from_ascii("example.com.").unwrap(), RecordType::A);
+        query.set_question_class(qclass);
+        request.add_question(query);
 
         DnsContext {
             src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
@@ -110,7 +116,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }

@@ -10,6 +10,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
+use crate::core::dns_utils::context_has_answer_type;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -80,41 +81,32 @@ impl Plugin for HasWantedAnsMatcher {
 
 impl Matcher for HasWantedAnsMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(response) = context.response.as_ref() else {
-            return false;
-        };
+        if context.request.question_count() == 1
+            && let Some(qtype) = context.request.first_question_type()
+        {
+            return context_has_answer_type(context, &[u16::from(qtype)]);
+        }
 
-        let queries = context.request.queries();
+        let queries = context.request.questions();
         if queries.is_empty() {
             return false;
         }
-
-        if queries.len() == 1 {
-            let qtype = queries[0].query_type();
-            return response
-                .answers()
-                .iter()
-                .any(|rr| rr.record_type() == qtype);
-        }
-
         let mut wanted = AHashSet::with_capacity(queries.len());
         for query in queries {
-            wanted.insert(u16::from(query.query_type()));
+            wanted.insert(u16::from(query.question_type()));
         }
-        response
-            .answers()
-            .iter()
-            .any(|rr| wanted.contains(&u16::from(rr.record_type())))
+        let wanted: Vec<u16> = wanted.into_iter().collect();
+        context_has_answer_type(context, &wanted)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::Question;
+    use crate::message::rdata::A;
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::test_utils::{test_context, test_registry};
-    use hickory_proto::op::Query;
-    use hickory_proto::rr::rdata::A;
-    use hickory_proto::rr::{Name, RData, Record, RecordType};
 
     #[test]
     fn test_has_wanted_ans_quick_setup_rejects_param() {
@@ -136,23 +128,23 @@ mod tests {
             tag: "wanted".to_string(),
         };
         let mut ctx = test_context();
-        ctx.request.queries_mut().clear();
-        ctx.request.add_query(Query::query(
+        ctx.request.questions_mut().clear();
+        ctx.request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
 
-        let mut response = hickory_proto::op::Message::new();
+        let mut response = crate::message::Message::new();
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             60,
             RData::A(A::new(1, 1, 1, 1)),
         ));
-        ctx.response = Some(response);
+        ctx.response = Some(response.into());
 
         assert!(matcher.is_match(&mut ctx));
 
-        ctx.response = Some(hickory_proto::op::Message::new());
+        ctx.response = Some(crate::message::Message::new().into());
         assert!(!matcher.is_match(&mut ctx));
     }
 }

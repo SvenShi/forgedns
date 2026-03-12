@@ -6,9 +6,9 @@
 //! Cache key composition helpers.
 
 use crate::core::context::DnsContext;
-use hickory_proto::op::Message;
-use hickory_proto::rr::rdata::opt::{ClientSubnet, EdnsCode, EdnsOption};
-use hickory_proto::rr::{DNSClass, RecordType};
+use crate::message::Message;
+use crate::message::rdata::opt::ClientSubnet as OwnedClientSubnet;
+use crate::message::{DNSClass, RecordType};
 use std::net::IpAddr;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -64,7 +64,7 @@ fn write_truncated_prefix(src: &[u8], prefix: u8, out: &mut [u8; 16]) -> u8 {
 }
 
 #[inline]
-fn build_ecs_scope_digest(subnet: &ClientSubnet) -> EcsScopeDigest {
+fn build_ecs_scope_digest(subnet: &OwnedClientSubnet) -> EcsScopeDigest {
     let mut network = [0u8; 16];
     let (family, max_prefix, network_len) = match subnet.addr() {
         IpAddr::V4(v4) => {
@@ -92,41 +92,34 @@ fn build_ecs_scope_digest(subnet: &ClientSubnet) -> EcsScopeDigest {
 }
 
 #[inline]
-fn extract_do_bit(request: &Message) -> bool {
+fn extract_any_ecs_scope(request: &Message) -> Option<EcsScopeDigest> {
     request
-        .extensions()
-        .as_ref()
-        .is_some_and(|edns| edns.flags().dnssec_ok)
-}
-
-#[inline]
-fn extract_ecs_scope(request: &Message) -> Option<EcsScopeDigest> {
-    let edns = request.extensions().as_ref()?;
-    let option = edns.option(EdnsCode::Subnet)?;
-    let EdnsOption::Subnet(subnet) = option else {
-        return None;
-    };
-
-    Some(build_ecs_scope_digest(subnet))
+        .edns_access()
+        .and_then(|edns| edns.client_subnet())
+        .map(|subnet| build_ecs_scope_digest(&subnet))
 }
 
 #[inline]
 pub(super) fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Option<CacheKey> {
-    let (record_type, dns_class) = context
-        .request
-        .query()
-        .map(|query| (query.query_type, query.query_class))?;
-
-    let domain = context.query_view()?.normalized_name().to_string();
+    let (domain, record_type, dns_class, do_bit, cd_bit) = {
+        let query_view = context.query_view()?;
+        (
+            query_view.normalized_name().to_string(),
+            RecordType::from(query_view.qtype()),
+            DNSClass::from(query_view.qclass()),
+            query_view.do_bit(),
+            query_view.cd_bit(),
+        )
+    };
 
     Some(CacheKey {
         domain,
         record_type,
         dns_class,
-        do_bit: extract_do_bit(&context.request),
-        cd_bit: context.request.checking_disabled(),
+        do_bit,
+        cd_bit,
         ecs_scope: if ecs_in_key {
-            extract_ecs_scope(&context.request)
+            extract_any_ecs_scope(&context.request)
         } else {
             None
         },
@@ -136,14 +129,14 @@ pub(super) fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::{Edns, Message, Question};
+    use crate::message::{Name, RecordType, rdata::opt::EdnsOption};
     use crate::plugin::test_utils::test_registry;
-    use hickory_proto::op::{Edns, Message, Query};
-    use hickory_proto::rr::{Name, RecordType, rdata::opt::EdnsOption};
     use std::net::SocketAddr;
 
     fn make_context(name: &str) -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii(name).expect("query name should be valid"),
             RecordType::A,
         ));
@@ -154,7 +147,9 @@ mod tests {
             exec_flow_state: crate::core::context::ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: test_registry(),
         }
     }
@@ -179,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_build_ecs_scope_digest_clamps_prefix_and_truncates_network() {
-        let subnet = ClientSubnet::new(IpAddr::from([192, 0, 2, 129]), 40, 48);
+        let subnet = OwnedClientSubnet::new(IpAddr::from([192, 0, 2, 129]), 40, 48);
 
         let digest = build_ecs_scope_digest(&subnet);
 
@@ -211,12 +206,11 @@ mod tests {
     fn test_build_cache_key_includes_ecs_when_enabled() {
         let mut context = make_context("example.com.");
         let mut edns = Edns::new();
-        edns.options_mut()
-            .insert(EdnsOption::Subnet(ClientSubnet::new(
-                IpAddr::from([203, 0, 113, 199]),
-                20,
-                24,
-            )));
+        edns.insert(EdnsOption::Subnet(OwnedClientSubnet::new(
+            IpAddr::from([203, 0, 113, 199]),
+            20,
+            24,
+        )));
         context.request.set_edns(edns);
 
         let cache_key = build_cache_key(&mut context, true).expect("cache key should exist");
@@ -238,7 +232,9 @@ mod tests {
             exec_flow_state: crate::core::context::ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: test_registry(),
         };
 

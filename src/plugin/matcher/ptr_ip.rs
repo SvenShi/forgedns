@@ -11,6 +11,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::IpPrefixMatcher;
+use crate::message::RecordType;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 #[cfg(test)]
@@ -22,7 +23,6 @@ use crate::plugin::matcher::matcher_utils::{
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::rr::RecordType;
 use std::fmt::Debug;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -114,8 +114,21 @@ impl Plugin for PtrIpMatcher {
 
 impl Matcher for PtrIpMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        context.request.queries().iter().any(|query| {
-            if query.query_type() != RecordType::PTR {
+        if context.request.question_count() == 1
+            && let Some(query_view) = context.query_view()
+        {
+            if query_view.qtype() != u16::from(RecordType::PTR) {
+                return false;
+            }
+            let Some(ip) = parse_ptr_name_ip_str(query_view.normalized_name()) else {
+                return false;
+            };
+            return self.ip_rules.contains_ip(ip)
+                || self.ip_sets.iter().any(|set| set.contains_ip(ip));
+        }
+
+        context.request.questions().iter().any(|query| {
+            if query.question_type() != RecordType::PTR {
                 return false;
             }
             let Some(ip) = parse_ptr_name_ip(query.name()) else {
@@ -126,10 +139,54 @@ impl Matcher for PtrIpMatcher {
     }
 }
 
-fn parse_ptr_name_ip(name: &hickory_proto::rr::Name) -> Option<IpAddr> {
+fn parse_ptr_name_ip(name: &crate::message::Name) -> Option<IpAddr> {
     name.parse_arpa_name()
         .ok()
         .map(|net| normalize_ip(net.addr()))
+}
+
+fn parse_ptr_name_ip_str(name: &str) -> Option<IpAddr> {
+    if let Some(prefix) = name.strip_suffix(".in-addr.arpa") {
+        let mut parts = prefix
+            .split('.')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if parts.len() != 4 {
+            return None;
+        }
+        parts.reverse();
+        let mut octets = [0u8; 4];
+        for (idx, part) in parts.into_iter().enumerate() {
+            octets[idx] = part.parse::<u8>().ok()?;
+        }
+        return Some(IpAddr::V4(octets.into()));
+    }
+
+    if let Some(prefix) = name.strip_suffix(".ip6.arpa") {
+        let nibbles = prefix
+            .split('.')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if nibbles.len() != 32 {
+            return None;
+        }
+
+        let mut hex = String::with_capacity(32);
+        for nibble in nibbles.iter().rev() {
+            if nibble.len() != 1 || !nibble.as_bytes()[0].is_ascii_hexdigit() {
+                return None;
+            }
+            hex.push_str(nibble);
+        }
+
+        let mut bytes = [0u8; 16];
+        for idx in 0..16 {
+            bytes[idx] = u8::from_str_radix(&hex[idx * 2..idx * 2 + 2], 16).ok()?;
+        }
+        return Some(normalize_ip(IpAddr::V6(bytes.into())));
+    }
+
+    None
 }
 
 fn normalize_ip(ip: IpAddr) -> IpAddr {
@@ -146,15 +203,15 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::SocketAddr;
 
     #[tokio::test]
     async fn test_ptr_ip_match_ipv4_arpa() {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("1.0.168.192.in-addr.arpa.").unwrap(),
             RecordType::PTR,
         ));
@@ -165,7 +222,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         };
 
@@ -191,7 +250,7 @@ mod tests {
         };
 
         let mut non_ptr_request = Message::new();
-        non_ptr_request.add_query(Query::query(
+        non_ptr_request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
@@ -202,13 +261,15 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         };
         assert!(!matcher.is_match(&mut non_ptr_ctx));
 
         let mut invalid_ptr_request = Message::new();
-        invalid_ptr_request.add_query(Query::query(
+        invalid_ptr_request.add_question(Question::new(
             Name::from_ascii("bad.ptr.example.com.").unwrap(),
             RecordType::PTR,
         ));
@@ -219,7 +280,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         };
         assert!(!matcher.is_match(&mut invalid_ptr_ctx));

@@ -81,11 +81,17 @@ impl Plugin for QtypeMatcher {
 
 impl Matcher for QtypeMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
+        if context.request.question_count() == 1
+            && let Some(qtype) = context.request.first_question_type()
+        {
+            return self.qtypes.contains(&u16::from(qtype));
+        }
+
         context
             .request
-            .queries()
+            .questions()
             .iter()
-            .any(|q| self.qtypes.contains(&u16::from(q.query_type())))
+            .any(|q| self.qtypes.contains(&u16::from(q.question_type())))
     }
 }
 
@@ -93,17 +99,17 @@ impl Matcher for QtypeMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::message::{DNSClass, Name, RecordType};
+    use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{DNSClass, Name, RecordType};
     use std::net::SocketAddr;
 
     fn make_context(qtypes: &[RecordType]) -> DnsContext {
         let mut request = Message::new();
         for qtype in qtypes {
-            let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), *qtype);
-            query.set_query_class(DNSClass::IN);
-            request.add_query(query);
+            let mut query = Question::new(Name::from_ascii("example.com.").unwrap(), *qtype);
+            query.set_question_class(DNSClass::IN);
+            request.add_question(query);
         }
 
         DnsContext {
@@ -111,9 +117,11 @@ mod tests {
             request,
             response: None,
             exec_flow_state: ExecFlowState::Running,
+            request_meta: Default::default(),
             marks: Default::default(),
             attributes: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }

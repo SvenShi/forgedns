@@ -20,7 +20,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::rr_to_ip;
+use crate::core::dns_utils::context_answer_ip_ttls;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -160,16 +160,13 @@ impl Executor for IpSetExecutor {
             return Ok(ExecStep::Next);
         }
 
-        let Some(response) = context.response.as_ref() else {
+        let answers = context_answer_ip_ttls(context);
+        if answers.is_empty() {
             return Ok(ExecStep::Next);
-        };
+        }
 
         let mut entries = AHashSet::new();
-        for record in response.answers() {
-            let Some(ip) = rr_to_ip(record) else {
-                continue;
-            };
-
+        for (ip, _) in answers {
             let (set_name, mask) = match ip {
                 IpAddr::V4(_) => (self.set_name4.as_deref(), self.mask4),
                 IpAddr::V6(_) => (self.set_name6.as_deref(), self.mask6),

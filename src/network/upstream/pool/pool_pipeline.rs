@@ -6,6 +6,7 @@
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
+use crate::message::Message;
 use crate::network::upstream::pool::{
     Connection, ConnectionBuilder, ConnectionPool, ManagedMaintenanceTask, start_maintenance,
 };
@@ -14,7 +15,6 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use hickory_proto::op::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::Mutex;

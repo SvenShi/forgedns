@@ -9,9 +9,9 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::{DnsContext, ExecFlowState};
+use crate::message::Message;
 use crate::plugin::PluginRegistry;
 use ahash::AHashMap;
-use hickory_proto::op::Message;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
@@ -39,7 +39,9 @@ pub(crate) fn test_context() -> DnsContext {
         exec_flow_state: ExecFlowState::Running,
         marks: Default::default(),
         attributes: AHashMap::new(),
+        request_meta: Default::default(),
         query_view: None,
+        query_view_version: None,
         registry: test_registry(),
     }
 }

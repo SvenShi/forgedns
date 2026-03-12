@@ -6,13 +6,13 @@
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 use crate::core::task_center;
+use crate::message::Message;
 use crate::network::upstream::pool::{
     Connection, ConnectionBuilder, ConnectionPool, ManagedMaintenanceTask, start_maintenance,
 };
 use crate::network::upstream::utils::close_conns;
 use async_trait::async_trait;
 use crossbeam_queue::ArrayQueue;
-use hickory_proto::op::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -317,7 +317,7 @@ impl<C: Connection> Drop for ReusePool<C> {
 mod tests {
     use super::*;
     use crate::core::error::{DnsError, Result};
-    use hickory_proto::op::Message;
+    use crate::message::Message;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU64};

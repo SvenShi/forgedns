@@ -10,9 +10,8 @@ use super::{CacheItem, CacheMap};
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 use crate::core::ttl_cache::TtlCacheEntry;
-use hickory_proto::op::Message;
-use hickory_proto::rr::{DNSClass, RecordType};
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use crate::message::Packet;
+use crate::message::{DNSClass, RecordType};
 use std::path::Path;
 use tokio::fs;
 use tokio::fs::File;
@@ -59,13 +58,7 @@ pub(super) async fn dump_cache_to_file(cache_map: &CacheMap, dump_path: &str) ->
             continue;
         }
 
-        let resp_bytes = match value.resp.to_bytes() {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                warn!("Failed to serialize DNS message for {}: {}", key.domain, e);
-                continue;
-            }
-        };
+        let resp_bytes = value.resp.as_slice().to_vec();
 
         let (ecs_family, ecs_source_prefix, ecs_scope_prefix, ecs_network) = match &key.ecs_scope {
             Some(ecs) => (
@@ -189,16 +182,14 @@ pub(super) async fn load_cache_from_file(
             continue;
         };
 
-        let resp = match Message::from_bytes(&entry.resp_bytes) {
-            Ok(message) => message,
-            Err(e) => {
-                warn!(
-                    "Failed to parse cached DNS message for {}: {}",
-                    entry.domain, e
-                );
-                continue;
-            }
-        };
+        let resp = Packet::from_vec(entry.resp_bytes);
+        if let Err(e) = resp.parse() {
+            warn!(
+                "Failed to parse cached DNS packet for {}: {}",
+                entry.domain, e
+            );
+            continue;
+        }
 
         let expire_time = now.saturating_add(entry.remaining_ttl_ms);
         let cache_time = now.saturating_sub(entry.cache_age_ms);

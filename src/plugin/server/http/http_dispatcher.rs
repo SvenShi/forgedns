@@ -9,14 +9,14 @@
 //! - GET method: DNS query passed via URL parameter (base64url encoded)
 //! - POST method: DNS query passed in request body (binary format)
 
+use crate::message::Message;
+use crate::message::Packet;
 use crate::plugin::server::{RequestHandle, RequestMeta};
 use ahash::AHashMap;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
-use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use http::{Method, Response, StatusCode};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -128,7 +128,7 @@ impl DnsGetHandler {
     ///
     /// Looks for the "dns" parameter containing a base64url-encoded DNS query.
     /// Returns None if the parameter is missing or cannot be decoded.
-    fn parse_dns_query(&self, query: Option<&str>) -> Option<Message> {
+    fn parse_dns_query(&self, query: Option<&str>) -> Option<(Message, Packet)> {
         let query = query?;
 
         // Parse query parameters: ?dns=<base64url>
@@ -137,11 +137,12 @@ impl DnsGetHandler {
                 // Decode base64url
                 return match URL_SAFE_NO_PAD.decode(value) {
                     Ok(dns_bytes) => {
+                        let packet = Packet::from_vec(dns_bytes);
                         // Parse DNS message
-                        match Message::from_bytes(&dns_bytes) {
+                        match Message::from_packet(packet.clone()) {
                             Ok(msg) => {
                                 debug!("Successfully parsed GET DNS query, ID: {}", msg.id());
-                                Some(msg)
+                                Some((msg, packet))
                             }
                             Err(e) => {
                                 warn!("Failed to parse DNS message: {}", e);
@@ -174,8 +175,8 @@ impl HttpHandler for DnsGetHandler {
         server_name: Option<String>,
     ) -> Response<Bytes> {
         // Parse DNS query from URL parameters
-        let dns_query = match self.parse_dns_query(query.as_deref()) {
-            Some(msg) => msg,
+        let (dns_query, packet) = match self.parse_dns_query(query.as_deref()) {
+            Some(parsed) => parsed,
             None => {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -188,8 +189,9 @@ impl HttpHandler for DnsGetHandler {
         // Process DNS query through the executor
         let dns_result = self
             .request_handle
-            .handle_request_with_meta(
+            .handle_request_with_packet_meta(
                 dns_query,
+                packet,
                 src_addr,
                 RequestMeta {
                     server_name,
@@ -243,7 +245,8 @@ impl HttpHandler for DnsPostHandler {
         }
 
         // Parse DNS query from binary body
-        let dns_query = match Message::from_bytes(&body) {
+        let packet = Packet::from_bytes(body.clone());
+        let dns_query = match Message::from_packet(packet.clone()) {
             Ok(msg) => {
                 debug!(
                     "Successfully parsed POST DNS query, ID: {}, size: {} bytes",
@@ -265,8 +268,9 @@ impl HttpHandler for DnsPostHandler {
         // Process DNS query through the executor
         let dns_result = self
             .request_handle
-            .handle_request_with_meta(
+            .handle_request_with_packet_meta(
                 dns_query,
+                packet,
                 src_addr,
                 RequestMeta {
                     server_name,
@@ -279,7 +283,7 @@ impl HttpHandler for DnsPostHandler {
 }
 
 #[inline]
-fn msg_to_response(dns_response: Message) -> Response<Bytes> {
+fn msg_to_response(dns_response: crate::message::ResponsePlan) -> Response<Bytes> {
     // Serialize DNS response to binary format
     match dns_response.to_bytes() {
         Ok(response_bytes) => {
@@ -308,12 +312,12 @@ mod tests {
     use crate::core::context::DnsContext;
     use crate::core::dns_utils::build_response_from_request;
     use crate::core::error::Result;
+    use crate::message::{Name, RecordType};
+    use crate::message::{Question, ResponseCode};
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
     use async_trait::async_trait;
-    use hickory_proto::op::{Query, ResponseCode};
-    use hickory_proto::rr::{Name, RecordType};
     use std::sync::Mutex;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -356,21 +360,15 @@ mod tests {
             let observed = ObservedRequest {
                 query_name,
                 query_id: context.request.id(),
-                server_name: context
-                    .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
-                    .cloned(),
-                url_path: context
-                    .get_attr::<String>(DnsContext::ATTR_URL_PATH)
-                    .cloned(),
+                server_name: context.server_name().map(str::to_string),
+                url_path: context.url_path().map(str::to_string),
             };
             self.observed
                 .lock()
                 .expect("request observation lock should not be poisoned")
                 .replace(observed);
-            context.response = Some(build_response_from_request(
-                &context.request,
-                self.response_code,
-            ));
+            context.response =
+                Some(build_response_from_request(&context.request, self.response_code).into());
             Ok(ExecStep::Next)
         }
     }
@@ -395,7 +393,7 @@ mod tests {
     fn make_dns_query(id: u16, qname: &str) -> Message {
         let mut request = Message::new();
         request.set_id(id);
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii(qname).expect("query name should be valid"),
             RecordType::A,
         ));

@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
-use crate::core::dns_utils::{build_response_from_request, parse_named_response_code};
+use crate::core::dns_utils::{build_response_plan_from_request, parse_named_response_code};
 use crate::core::error::{DnsError, Result};
+use crate::message::ResponseCode;
+use crate::message::build_response_packet;
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{
@@ -14,7 +16,6 @@ use crate::plugin::executor::{ExecState, ExecStep, Executor, execute_with_post};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
 use ahash::AHashSet;
-use hickory_proto::op::ResponseCode;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::debug;
@@ -115,8 +116,19 @@ impl ChainProgram {
                     }
                     BuiltinOp::Return => break,
                     BuiltinOp::Reject(rcode) => {
+                        if let Some(packet) = context.request_packet() {
+                            let code = u16::from(*rcode);
+                            if code <= 0x0f {
+                                if let Ok(response) = build_response_packet(packet, code) {
+                                    context.set_response_packet(response)?;
+                                    context.exec_flow_state = ExecFlowState::Broken;
+                                    break;
+                                }
+                            }
+                        }
+
                         context.response =
-                            Some(build_response_from_request(&context.request, *rcode));
+                            Some(build_response_plan_from_request(&context.request, *rcode));
                         context.exec_flow_state = ExecFlowState::Broken;
                         break;
                     }
@@ -468,12 +480,13 @@ fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<String>> {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
+    use crate::message::Packet;
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
     use crate::plugin::executor::ExecResult;
     use ahash::AHashMap;
     use async_trait::async_trait;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Mutex;
 
@@ -561,7 +574,7 @@ mod tests {
     fn make_context() -> DnsContext {
         let mut request = Message::new();
         request.set_id(42);
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
@@ -573,7 +586,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: AHashMap::new(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
@@ -687,11 +702,38 @@ mod tests {
         program.run(&mut context).await.unwrap();
 
         // Assert
-        let response = context.response.expect("reject should build a response");
+        let response = context
+            .response
+            .expect("reject should build a response")
+            .to_message()
+            .expect("response should materialize");
         assert_eq!(response.id(), 42);
         assert_eq!(response.response_code(), ResponseCode::ServFail);
         assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
         assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_reject_builds_response_when_request_packet_exists() {
+        let program = Arc::new(ChainProgram {
+            instructions: vec![builtin_instruction(BuiltinOp::Reject(
+                ResponseCode::ServFail,
+            ))],
+        });
+        let mut context = make_context();
+        let packet = Packet::from_vec(context.request.to_bytes().unwrap());
+        context.set_request_packet(packet);
+
+        program.run(&mut context).await.unwrap();
+
+        let response = context
+            .response
+            .expect("reject should build response")
+            .to_message()
+            .expect("response should materialize");
+        assert_eq!(response.id(), 42);
+        assert_eq!(response.response_code(), ResponseCode::ServFail);
+        assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
     }
 
     #[tokio::test]

@@ -302,6 +302,8 @@ mod tests {
     use crate::core::context::DnsContext;
     use crate::core::dns_utils::build_response_from_request;
     use crate::core::error::Result;
+    use crate::message::{Message, Question, ResponseCode};
+    use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::server::RequestHandle;
@@ -309,9 +311,6 @@ mod tests {
     use crate::plugin::test_utils::test_registry;
     use async_trait::async_trait;
     use bytes::Bytes;
-    use hickory_proto::op::{Message, Query, ResponseCode};
-    use hickory_proto::rr::{Name, RecordType};
-    use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
     use http::Request;
     use std::sync::{Arc, Mutex};
     use tokio::io::duplex;
@@ -352,17 +351,11 @@ mod tests {
                 .expect("capture lock should not be poisoned")
                 .replace(ObservedRequest {
                     src_addr: context.src_addr,
-                    server_name: context
-                        .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
-                        .cloned(),
-                    url_path: context
-                        .get_attr::<String>(DnsContext::ATTR_URL_PATH)
-                        .cloned(),
+                    server_name: context.server_name().map(str::to_string),
+                    url_path: context.url_path().map(str::to_string),
                 });
-            context.response = Some(build_response_from_request(
-                &context.request,
-                ResponseCode::NoError,
-            ));
+            context.response =
+                Some(build_response_from_request(&context.request, ResponseCode::NoError).into());
             Ok(ExecStep::Stop)
         }
     }
@@ -377,7 +370,7 @@ mod tests {
     fn make_dns_query(id: u16) -> Message {
         let mut message = Message::new();
         message.set_id(id);
-        message.add_query(Query::query(
+        message.add_question(Question::new(
             Name::from_ascii("example.com.").expect("query name should be valid"),
             RecordType::A,
         ));

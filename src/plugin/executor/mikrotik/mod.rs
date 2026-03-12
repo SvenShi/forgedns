@@ -32,15 +32,14 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::rr_to_ip;
+use crate::core::dns_utils::{context_answer_ip_ttls, context_response_code};
 use crate::core::error::{DnsError, Result};
+use crate::message::ResponseCode;
 use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::{AHashMap, AHashSet};
 use async_trait::async_trait;
-use hickory_proto::op::ResponseCode;
-use hickory_proto::rr::RecordType;
 use serde::Deserialize;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -431,25 +430,17 @@ fn extract_observation(
         .or_else(|| {
             context
                 .request
-                .query()
-                .map(|q| DnsContext::normalize_dns_name(q.name()))
+                .question()
+                .map(|question| DnsContext::normalize_dns_name(question.name()))
         })?;
 
-    let response = context.response.as_ref()?;
-    if response.response_code() != ResponseCode::NoError {
+    if context_response_code(context)? != u16::from(ResponseCode::NoError) {
         return None;
     }
 
     // Collapse duplicated A/AAAA answers by IP and keep max TTL per IP.
     let mut dedup = AHashMap::<IpAddr, u32>::new();
-    for answer in response.answers() {
-        if !matches!(answer.record_type(), RecordType::A | RecordType::AAAA) {
-            continue;
-        }
-        let Some(ip) = rr_to_ip(answer) else {
-            continue;
-        };
-
+    for (ip, ttl_secs) in context_answer_ip_ttls(context) {
         match ip {
             IpAddr::V4(_) if config.gateway4.is_none() => continue,
             IpAddr::V6(_) if config.gateway6.is_none() => continue,
@@ -458,8 +449,8 @@ fn extract_observation(
 
         dedup
             .entry(ip)
-            .and_modify(|ttl| *ttl = (*ttl).max(answer.ttl()))
-            .or_insert(answer.ttl());
+            .and_modify(|ttl| *ttl = (*ttl).max(ttl_secs))
+            .or_insert(ttl_secs);
     }
 
     if dedup.is_empty() {
@@ -798,14 +789,14 @@ fn is_persistent_ip_family_enabled(
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
+    use crate::message::rdata::{A, AAAA};
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::PluginRegistry;
     use crate::plugin::executor::mikrotik::api::RouterRoute;
     use crate::plugin::executor::mikrotik::manager::{
         RouteCommentCodec, RouteEntry, RouteFamily, RouteKey, SyncState,
     };
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::{A, AAAA};
-    use hickory_proto::rr::{Name, RData, Record};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::str::FromStr;
 
@@ -1025,7 +1016,7 @@ mod tests {
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
@@ -1036,7 +1027,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: AHashSet::new(),
             attributes: AHashMap::new(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
@@ -1931,10 +1924,13 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response = Some(response_with_records(vec![
-            a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
-            aaaa_record(Ipv6Addr::LOCALHOST, 300),
-        ]));
+        ctx.response = Some(
+            response_with_records(vec![
+                a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
+                aaaa_record(Ipv6Addr::LOCALHOST, 300),
+            ])
+            .into(),
+        );
         executor.post_execute(&mut ctx, None).await.unwrap();
         yield_until("ipv6 route upsert", || {
             api.state.lock().unwrap().upsert_v6 >= 1
@@ -1966,10 +1962,8 @@ persistent_route:
         let _ = executor.init().await;
 
         let mut ctx = make_context();
-        ctx.response = Some(response_with_records(vec![a_record(
-            Ipv4Addr::new(10, 0, 0, 1),
-            300,
-        )]));
+        ctx.response =
+            Some(response_with_records(vec![a_record(Ipv4Addr::new(10, 0, 0, 1), 300)]).into());
         executor.post_execute(&mut ctx, None).await.unwrap();
         assert!(
             ctx.response.is_some(),
@@ -1991,10 +1985,8 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response = Some(response_with_records(vec![a_record(
-            Ipv4Addr::new(6, 6, 6, 6),
-            300,
-        )]));
+        ctx.response =
+            Some(response_with_records(vec![a_record(Ipv4Addr::new(6, 6, 6, 6), 300)]).into());
         executor.post_execute(&mut ctx, None).await.unwrap();
         yield_until("background manager route creation", || {
             api.route_count() > 0
@@ -2017,10 +2009,8 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response = Some(response_with_records(vec![a_record(
-            Ipv4Addr::new(11, 11, 11, 11),
-            300,
-        )]));
+        ctx.response =
+            Some(response_with_records(vec![a_record(Ipv4Addr::new(11, 11, 11, 11), 300)]).into());
         executor.post_execute(&mut ctx, None).await.unwrap();
         yield_until("dynamic route creation before shutdown", || {
             api.route_count() > 0

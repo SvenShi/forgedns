@@ -13,15 +13,15 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::dns_utils::build_response_from_request;
 use crate::core::error::{DnsError, Result};
+use crate::message::ResponseCode;
+use crate::message::rdata::name::{CNAME, NS, PTR};
+use crate::message::rdata::{A, AAAA, MX, TXT};
+use crate::message::{Name, RData, Record, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashMap;
 use async_trait::async_trait;
-use hickory_proto::op::ResponseCode;
-use hickory_proto::rr::rdata::name::{CNAME, NS, PTR};
-use hickory_proto::rr::rdata::{A, AAAA, MX, TXT};
-use hickory_proto::rr::{Name, RData, Record, RecordType};
 use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -71,30 +71,33 @@ impl Plugin for Arbitrary {
 #[async_trait]
 impl Executor for Arbitrary {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let Some(qtype) = context.request.query().map(|q| q.query_type) else {
-            return Ok(ExecStep::Next);
-        };
-
         let Some(query_view) = context.query_view() else {
             return Ok(ExecStep::Next);
         };
+        let qtype = RecordType::from(query_view.qtype());
         let qname = query_view.normalized_name();
 
         let Some(name_records) = self.records.get(qname) else {
             return Ok(ExecStep::Next);
         };
 
-        let mut answers = Vec::new();
-        if qtype == RecordType::ANY {
-            answers.extend(name_records.any.iter().cloned());
-        } else if let Some(records) = name_records.by_type.get(&qtype) {
-            answers.extend(records.iter().cloned());
-        }
+        let answer_count = if qtype == RecordType::ANY {
+            name_records.any.len()
+        } else {
+            name_records.by_type.get(&qtype).map_or(0, Vec::len)
+        };
 
-        if !answers.is_empty() {
+        if answer_count > 0 {
             let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
-            *response.answers_mut() = answers;
-            context.response = Some(response);
+            response.answers_mut().reserve(answer_count);
+            if qtype == RecordType::ANY {
+                response
+                    .answers_mut()
+                    .extend(name_records.any.iter().cloned());
+            } else if let Some(records) = name_records.by_type.get(&qtype) {
+                response.answers_mut().extend(records.iter().cloned());
+            }
+            context.response = Some(response.into());
         }
 
         Ok(ExecStep::Next)
@@ -301,10 +304,10 @@ fn normalize_name(name: &Name) -> String {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
@@ -315,7 +318,7 @@ mod tests {
 
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(Name::from_ascii(name).unwrap(), qtype));
+        request.add_question(Question::new(Name::from_ascii(name).unwrap(), qtype));
         DnsContext {
             src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
@@ -323,7 +326,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: test_registry(),
         }
     }
@@ -348,7 +353,11 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        let response = ctx.response.expect("response should exist");
+        let response = ctx
+            .response
+            .expect("response should exist")
+            .to_message()
+            .expect("response should materialize");
         assert_eq!(response.answers().len(), 1);
         assert_eq!(response.answers()[0].record_type(), RecordType::A);
     }
@@ -372,7 +381,11 @@ mod tests {
             .execute(&mut ctx)
             .await
             .expect("execute should succeed");
-        let response = ctx.response.expect("response should exist");
+        let response = ctx
+            .response
+            .expect("response should exist")
+            .to_message()
+            .expect("response should materialize");
         assert_eq!(response.answers().len(), 2);
     }
 }

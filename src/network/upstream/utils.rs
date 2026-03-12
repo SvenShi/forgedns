@@ -556,8 +556,8 @@ pub async fn connect_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::Message;
     use async_trait::async_trait;
-    use hickory_proto::op::Message;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;

@@ -20,14 +20,15 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::message::DNSClass;
+use crate::message::RData;
+use crate::message::rdata::OPT;
+use crate::message::rdata::opt::{ClientSubnet, EdnsCode, EdnsOption};
+use crate::message::{Packet, RDataView, RecordType};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::rr::DNSClass;
-use hickory_proto::rr::RData;
-use hickory_proto::rr::rdata::OPT;
-use hickory_proto::rr::rdata::opt::{ClientSubnet, EdnsCode, EdnsOption};
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -81,7 +82,7 @@ impl Plugin for EcsHandler {
 #[async_trait]
 impl Executor for EcsHandler {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let Some(query_class) = context.request.query().map(|q| q.query_class) else {
+        let Some(query_class) = context.request.first_question_class() else {
             return Ok(ExecStep::Next);
         };
 
@@ -94,7 +95,15 @@ impl Executor for EcsHandler {
             if self.forward {
                 forwarded_client_ecs = true;
             } else {
-                strip_ecs_from_message(&mut context.request);
+                let rewritten = match context.request.packet() {
+                    Some(packet) => strip_ecs_from_packet(packet)?,
+                    None => None,
+                };
+                if let Some(rewritten) = rewritten {
+                    context.set_request_packet(rewritten);
+                } else {
+                    strip_ecs_from_message(&mut context.request);
+                }
             }
         } else {
             let source_ip = if let Some(preset) = self.preset {
@@ -111,8 +120,13 @@ impl Executor for EcsHandler {
                     IpAddr::V6(_) => self.mask6,
                 };
                 let ecs = EdnsOption::Subnet(ClientSubnet::new(source_ip, mask, 0));
-                let opt = ensure_opt_record(&mut context.request);
-                opt.insert(ecs);
+                if let Some(packet) = context.request.packet() {
+                    let rewritten = append_ecs_to_packet(packet, &ecs)?;
+                    context.set_request_packet(rewritten);
+                } else {
+                    let opt = ensure_opt_record(&mut context.request);
+                    opt.insert(ecs);
+                }
             }
         }
 
@@ -131,7 +145,22 @@ impl Executor for EcsHandler {
             return Ok(());
         }
 
-        if let Some(response) = context.response.as_mut() {
+        let packet_rewritten = match context
+            .response
+            .as_ref()
+            .and_then(|response| response.packet())
+        {
+            Some(packet) => Some(strip_ecs_from_packet(packet)?),
+            None => None,
+        };
+        if let Some(rewritten) = packet_rewritten {
+            if let Some(rewritten) = rewritten {
+                context.set_response_packet(rewritten)?;
+            }
+            return Ok(());
+        }
+
+        if let Some(response) = context.response_message_mut()? {
             strip_ecs_from_message(response);
         }
         Ok(())
@@ -221,19 +250,13 @@ fn parse_handler_from_value(tag: &str, args: Option<serde_yml::Value>) -> Result
     })
 }
 
-fn request_has_ecs(message: &hickory_proto::op::Message) -> bool {
-    for record in message.additionals() {
-        let RData::OPT(opt) = record.data() else {
-            continue;
-        };
-        if opt.get(EdnsCode::Subnet).is_some() {
-            return true;
-        }
-    }
-    false
+fn request_has_ecs(message: &crate::message::Message) -> bool {
+    message
+        .edns_access()
+        .is_some_and(|edns| edns.client_subnet().is_some())
 }
 
-fn strip_ecs_from_message(message: &mut hickory_proto::op::Message) {
+fn strip_ecs_from_message(message: &mut crate::message::Message) {
     for record in message.additionals_mut() {
         let RData::OPT(opt) = record.data_mut() else {
             continue;
@@ -242,7 +265,172 @@ fn strip_ecs_from_message(message: &mut hickory_proto::op::Message) {
     }
 }
 
-fn ensure_opt_record(message: &mut hickory_proto::op::Message) -> &mut OPT {
+fn strip_ecs_from_packet(packet: &Packet) -> Result<Option<Packet>> {
+    let parsed = packet.parse()?;
+    let bytes = packet.as_slice();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut cursor = 0usize;
+    let mut changed = false;
+
+    for record in parsed.additional_records() {
+        let record = record?;
+        if record.record_type() != RecordType::OPT {
+            continue;
+        }
+        let RDataView::Opt(_) = record.rdata() else {
+            continue;
+        };
+
+        let (removed_ecs, filtered_rdata) = strip_ecs_from_opt_rdata(record.raw_rdata());
+        if !removed_ecs {
+            continue;
+        }
+
+        changed = true;
+        let rdata_range = record.rdata_range();
+        let rdlength_offset = rdata_range.start as usize - 2;
+        out.extend_from_slice(&bytes[cursor..rdlength_offset]);
+        out.extend_from_slice(&(filtered_rdata.len() as u16).to_be_bytes());
+        out.extend_from_slice(&filtered_rdata);
+        cursor = record.wire_range().end as usize;
+    }
+
+    if !changed {
+        return Ok(None);
+    }
+
+    out.extend_from_slice(&bytes[cursor..]);
+    Ok(Some(Packet::from_vec(out)))
+}
+
+fn strip_ecs_from_opt_rdata(rdata: &[u8]) -> (bool, Vec<u8>) {
+    let mut cursor = 0usize;
+    let mut out = Vec::with_capacity(rdata.len());
+    let mut removed = false;
+
+    while cursor + 4 <= rdata.len() {
+        let code = u16::from_be_bytes([rdata[cursor], rdata[cursor + 1]]);
+        let len = u16::from_be_bytes([rdata[cursor + 2], rdata[cursor + 3]]) as usize;
+        let end = cursor + 4 + len;
+        if end > rdata.len() {
+            out.extend_from_slice(&rdata[cursor..]);
+            return (removed, out);
+        }
+
+        if code == u16::from(EdnsCode::Subnet) {
+            removed = true;
+        } else {
+            out.extend_from_slice(&rdata[cursor..end]);
+        }
+        cursor = end;
+    }
+
+    out.extend_from_slice(&rdata[cursor..]);
+    (removed, out)
+}
+
+fn append_ecs_to_packet(packet: &Packet, ecs: &EdnsOption) -> Result<Packet> {
+    let parsed = packet.parse()?;
+    let bytes = packet.as_slice();
+    let mut ecs_wire = Vec::with_capacity(16);
+    encode_edns_option_wire(&mut ecs_wire, ecs)?;
+
+    for record in parsed.additional_records() {
+        let record = record?;
+        if record.record_type() != RecordType::OPT {
+            continue;
+        }
+        let RDataView::Opt(_) = record.rdata() else {
+            continue;
+        };
+
+        let rdata_range = record.rdata_range();
+        let rdlength_offset = rdata_range.start as usize - 2;
+        let new_rdlength = record
+            .raw_rdata()
+            .len()
+            .checked_add(ecs_wire.len())
+            .ok_or_else(|| DnsError::protocol("edns option block too large"))?;
+        let new_rdlength = u16::try_from(new_rdlength)
+            .map_err(|_| DnsError::protocol("edns option block too large"))?;
+
+        let mut out = Vec::with_capacity(bytes.len() + ecs_wire.len());
+        out.extend_from_slice(&bytes[..rdlength_offset]);
+        out.extend_from_slice(&new_rdlength.to_be_bytes());
+        out.extend_from_slice(record.raw_rdata());
+        out.extend_from_slice(&ecs_wire);
+        out.extend_from_slice(&bytes[record.wire_range().end as usize..]);
+        return Ok(Packet::from_vec(out));
+    }
+
+    let additional_count = parsed
+        .header()
+        .arcount()
+        .checked_add(1)
+        .ok_or_else(|| DnsError::protocol("dns additional record count overflow"))?;
+    let opt_record = encode_opt_record_wire(&ecs_wire)?;
+    let mut out = Vec::with_capacity(bytes.len() + opt_record.len());
+    out.extend_from_slice(bytes);
+    out.extend_from_slice(&opt_record);
+    out[10..12].copy_from_slice(&additional_count.to_be_bytes());
+    Ok(Packet::from_vec(out))
+}
+
+fn encode_edns_option_wire(out: &mut Vec<u8>, option: &EdnsOption) -> Result<()> {
+    match option {
+        EdnsOption::Subnet(value) => {
+            let code = u16::from(EdnsCode::Subnet);
+            let (family, addr_bytes, max_prefix) = match value.addr() {
+                IpAddr::V4(addr) => (1u16, addr.octets().to_vec(), 32u8),
+                IpAddr::V6(addr) => (2u16, addr.octets().to_vec(), 128u8),
+            };
+            let prefix = value.source_prefix().min(max_prefix);
+            let network_len = usize::from(prefix.div_ceil(8));
+            let mut truncated = addr_bytes[..network_len].to_vec();
+            if let Some(last) = truncated.last_mut() {
+                let remaining_bits = prefix % 8;
+                if remaining_bits != 0 {
+                    *last &= 0xFFu8 << (8 - remaining_bits);
+                }
+            }
+            out.extend_from_slice(&code.to_be_bytes());
+            let body_len = 4usize
+                .checked_add(truncated.len())
+                .ok_or_else(|| DnsError::protocol("edns option too large"))?;
+            let body_len =
+                u16::try_from(body_len).map_err(|_| DnsError::protocol("edns option too large"))?;
+            out.extend_from_slice(&body_len.to_be_bytes());
+            out.extend_from_slice(&family.to_be_bytes());
+            out.push(prefix);
+            out.push(value.scope_prefix().min(max_prefix));
+            out.extend_from_slice(&truncated);
+        }
+        EdnsOption::Unknown(code, data) => {
+            let data_len = u16::try_from(data.len())
+                .map_err(|_| DnsError::protocol("edns option too large"))?;
+            out.extend_from_slice(&code.to_be_bytes());
+            out.extend_from_slice(&data_len.to_be_bytes());
+            out.extend_from_slice(data);
+        }
+    }
+    Ok(())
+}
+
+fn encode_opt_record_wire(rdata: &[u8]) -> Result<Vec<u8>> {
+    let rdlength = u16::try_from(rdata.len())
+        .map_err(|_| DnsError::protocol("edns option block too large"))?;
+    let opt = OPT::default();
+    let mut out = Vec::with_capacity(11 + rdata.len());
+    out.push(0);
+    out.extend_from_slice(&u16::from(RecordType::OPT).to_be_bytes());
+    out.extend_from_slice(&opt.udp_payload_size().to_be_bytes());
+    out.extend_from_slice(&opt.raw_ttl().to_be_bytes());
+    out.extend_from_slice(&rdlength.to_be_bytes());
+    out.extend_from_slice(rdata);
+    Ok(out)
+}
+
+fn ensure_opt_record(message: &mut crate::message::Message) -> &mut OPT {
     let mut opt_idx = None;
     for (idx, record) in message.additionals().iter().enumerate() {
         if matches!(record.data(), RData::OPT(_)) {
@@ -254,8 +442,8 @@ fn ensure_opt_record(message: &mut hickory_proto::op::Message) -> &mut OPT {
     let idx = match opt_idx {
         Some(idx) => idx,
         None => {
-            message.add_additional(hickory_proto::rr::Record::from_rdata(
-                hickory_proto::rr::Name::root(),
+            message.add_additional(crate::message::Record::from_rdata(
+                crate::message::Name::root(),
                 0,
                 RData::OPT(OPT::default()),
             ));
@@ -283,10 +471,10 @@ fn unmap_ip(ip: IpAddr) -> IpAddr {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     #[test]
@@ -300,9 +488,9 @@ mod tests {
 
     fn make_context(qclass: DNSClass) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), RecordType::A);
-        query.set_query_class(qclass);
-        request.add_query(query);
+        let mut query = Question::new(Name::from_ascii("example.com.").unwrap(), RecordType::A);
+        query.set_question_class(qclass);
+        request.add_question(query);
         DnsContext {
             src_addr: SocketAddr::from((Ipv4Addr::new(10, 1, 1, 9), 5353)),
             request,
@@ -310,7 +498,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: test_registry(),
         }
     }
@@ -344,14 +534,20 @@ mod tests {
 
         let mut response = Message::new();
         add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
-        ctx.response = Some(response);
+        ctx.response = Some(response.into());
 
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
         assert!(
-            !request_has_ecs(ctx.response.as_ref().expect("response should exist")),
+            !request_has_ecs(
+                &ctx.response
+                    .as_ref()
+                    .expect("response should exist")
+                    .to_message()
+                    .expect("response should materialize")
+            ),
             "response ECS should be stripped when not forwarded from client"
         );
     }
@@ -381,14 +577,18 @@ mod tests {
 
         let mut response = Message::new();
         add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
-        ctx.response = Some(response);
+        ctx.response = Some(response.into());
 
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
         assert!(request_has_ecs(
-            ctx.response.as_ref().expect("response should exist")
+            &ctx.response
+                .as_ref()
+                .expect("response should exist")
+                .to_message()
+                .expect("response should materialize")
         ));
     }
 
@@ -410,5 +610,141 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(!request_has_ecs(&ctx.request));
+    }
+
+    #[tokio::test]
+    async fn test_ecs_handler_strips_client_ecs_from_packet_request() {
+        let plugin = EcsHandler {
+            tag: "ecs".to_string(),
+            forward: false,
+            send: false,
+            preset: None,
+            mask4: 24,
+            mask6: 48,
+        };
+        let mut ctx = make_context(DNSClass::IN);
+        add_ecs_option(&mut ctx.request, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
+        let packet = Packet::from_vec(ctx.request.to_bytes().unwrap());
+        ctx.set_request_packet(packet);
+
+        plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(
+            ctx.request.packet().is_some(),
+            "request should stay packet-backed"
+        );
+        assert!(!request_has_ecs(&ctx.request));
+    }
+
+    #[tokio::test]
+    async fn test_ecs_handler_send_appends_ecs_to_existing_packet_opt() {
+        let plugin = EcsHandler {
+            tag: "ecs".to_string(),
+            forward: false,
+            send: true,
+            preset: None,
+            mask4: 24,
+            mask6: 48,
+        };
+        let mut ctx = make_context(DNSClass::IN);
+        let _ = ensure_opt_record(&mut ctx.request);
+        let packet = Packet::from_vec(ctx.request.to_bytes().unwrap());
+        ctx.set_request_packet(packet);
+
+        plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(
+            ctx.request.packet().is_some(),
+            "request should stay packet-backed"
+        );
+        assert!(request_has_ecs(&ctx.request));
+    }
+
+    #[tokio::test]
+    async fn test_ecs_handler_send_creates_packet_opt_when_request_has_none() {
+        let plugin = EcsHandler {
+            tag: "ecs".to_string(),
+            forward: false,
+            send: true,
+            preset: None,
+            mask4: 24,
+            mask6: 48,
+        };
+        let mut ctx = make_context(DNSClass::IN);
+        let packet = Packet::from_vec(ctx.request.to_bytes().unwrap());
+        ctx.set_request_packet(packet);
+
+        plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(
+            ctx.request.packet().is_some(),
+            "request should stay packet-backed"
+        );
+        assert!(request_has_ecs(&ctx.request));
+        assert_eq!(
+            ctx.request
+                .packet()
+                .expect("request packet should exist")
+                .parse()
+                .expect("packet should parse")
+                .header()
+                .arcount(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ecs_handler_strips_ecs_from_packet_response() {
+        let plugin = EcsHandler {
+            tag: "ecs".to_string(),
+            forward: false,
+            send: true,
+            preset: None,
+            mask4: 24,
+            mask6: 48,
+        };
+        let mut ctx = make_context(DNSClass::IN);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        let mut response = Message::new();
+        add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
+        ctx.set_response_packet(Packet::from_vec(response.to_bytes().unwrap()))
+            .expect("packet response should decode");
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+        assert!(
+            ctx.response
+                .as_ref()
+                .and_then(|response| response.packet())
+                .is_some(),
+            "response should stay packet-backed"
+        );
+        assert!(
+            !request_has_ecs(
+                &ctx.response
+                    .as_ref()
+                    .expect("response should exist")
+                    .to_message()
+                    .expect("response should materialize")
+            ),
+            "response ECS should be stripped when not forwarded from client"
+        );
     }
 }

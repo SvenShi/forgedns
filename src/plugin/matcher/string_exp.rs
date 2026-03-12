@@ -18,7 +18,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{response_records, rr_to_ip};
+use crate::core::dns_utils::{context_response_code, context_response_ips};
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -172,32 +172,25 @@ impl StringSource {
             StringSource::Qtype => Cow::Owned(
                 context
                     .request
-                    .queries()
-                    .first()
-                    .map(|q| u16::from(q.query_type()).to_string())
+                    .first_question_type()
+                    .map(|qtype| u16::from(qtype).to_string())
                     .unwrap_or_default(),
             ),
             StringSource::Qclass => Cow::Owned(
                 context
                     .request
-                    .queries()
-                    .first()
-                    .map(|q| u16::from(q.query_class()).to_string())
+                    .first_question_class()
+                    .map(|qclass| u16::from(qclass).to_string())
                     .unwrap_or_default(),
             ),
             StringSource::Rcode => Cow::Owned(
-                context
-                    .response
-                    .as_ref()
-                    .map(|r| u16::from(r.response_code()).to_string())
+                context_response_code(context)
+                    .map(|rcode| rcode.to_string())
                     .unwrap_or_default(),
             ),
             StringSource::RespIp => {
-                let Some(response) = context.response.as_ref() else {
-                    return Cow::Borrowed("");
-                };
                 let mut out = String::new();
-                for ip in response_records(response).filter_map(rr_to_ip) {
+                for ip in context_response_ips(context) {
                     if !out.is_empty() {
                         out.push(',');
                     }
@@ -218,12 +211,12 @@ impl StringSource {
             }
             StringSource::ClientIp => Cow::Owned(context.src_addr.ip().to_string()),
             StringSource::ServerName => context
-                .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
-                .map(|v| Cow::Borrowed(v.as_str()))
+                .server_name()
+                .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Borrowed("")),
             StringSource::UrlPath => context
-                .get_attr::<String>(DnsContext::ATTR_URL_PATH)
-                .map(|v| Cow::Borrowed(v.as_str()))
+                .url_path()
+                .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Borrowed("")),
             StringSource::Env(_) => Cow::Borrowed(""),
         }
@@ -362,15 +355,15 @@ where
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::message::rdata::A;
+    use crate::message::{Message, Question, ResponseCode};
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query, ResponseCode};
-    use hickory_proto::rr::rdata::A;
-    use hickory_proto::rr::{Name, RData, Record, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("www.example.com.").unwrap(),
             RecordType::A,
         ));
@@ -382,7 +375,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: ["1".to_string()].into_iter().collect(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
@@ -395,7 +390,7 @@ mod tests {
             60,
             RData::A(A(ip)),
         ));
-        ctx.response = Some(response);
+        ctx.response = Some(response.into());
     }
 
     #[tokio::test]
@@ -423,8 +418,10 @@ mod tests {
     #[tokio::test]
     async fn test_string_exp_supports_multiple_sources_and_operations() {
         let mut ctx = make_context();
-        ctx.set_attr(DnsContext::ATTR_SERVER_NAME, "dns.example.com".to_string());
-        ctx.set_attr(DnsContext::ATTR_URL_PATH, "/dns-query".to_string());
+        ctx.set_request_meta(crate::core::context::RequestMeta {
+            server_name: Some("dns.example.com".to_string()),
+            url_path: Some("/dns-query".to_string()),
+        });
         add_response_with_ip_and_rcode(&mut ctx, Ipv4Addr::new(8, 8, 8, 8), ResponseCode::NoError);
 
         let qtype_matcher = StringExpMatcher {

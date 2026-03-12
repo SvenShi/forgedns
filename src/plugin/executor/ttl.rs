@@ -22,11 +22,11 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::message::{RecordType, rewrite_response_ttls};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::rr::RecordType;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -88,7 +88,17 @@ impl Plugin for TtlExecutor {
 #[async_trait]
 impl Executor for TtlExecutor {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if let Some(response) = context.response.as_mut() {
+        if let Some(packet) = context
+            .response
+            .as_ref()
+            .and_then(|response| response.packet())
+        {
+            let rewritten = rewrite_response_ttls(packet, |ttl| self.policy.apply(ttl))?;
+            context.set_response_packet(rewritten)?;
+            return Ok(ExecStep::Next);
+        }
+
+        if let Some(response) = context.response_message_mut()? {
             for record in response.answers_mut() {
                 let ttl = self.policy.apply(record.ttl());
                 record.set_ttl(ttl);
@@ -210,10 +220,10 @@ fn parse_policy_from_expr(raw: &str) -> Result<TtlPolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::rdata::{A, OPT};
+    use crate::message::{Name, RData, Record};
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
-    use hickory_proto::rr::rdata::{A, OPT};
-    use hickory_proto::rr::{Name, RData, Record};
 
     #[test]
     fn test_parse_policy_from_expr_supports_fix_and_range() {
@@ -237,7 +247,7 @@ mod tests {
             },
         };
 
-        let mut response = hickory_proto::op::Message::new();
+        let mut response = crate::message::Message::new();
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             120,
@@ -260,7 +270,7 @@ mod tests {
         ));
 
         let mut ctx = test_context();
-        ctx.response = Some(response);
+        ctx.response = Some(response.into());
 
         let step = plugin
             .execute(&mut ctx)
@@ -268,7 +278,11 @@ mod tests {
             .expect("ttl execute should work");
         assert!(matches!(step, ExecStep::Next));
 
-        let updated = ctx.response.expect("response should remain present");
+        let updated = ctx
+            .response
+            .expect("response should remain present")
+            .to_message()
+            .expect("response should materialize");
         assert_eq!(updated.answers()[0].ttl(), 60);
         assert_eq!(updated.name_servers()[0].ttl(), 60);
         assert_eq!(updated.additionals()[0].ttl(), 60);
@@ -277,6 +291,50 @@ mod tests {
             0,
             "OPT ttl should not change"
         );
+    }
+
+    #[tokio::test]
+    async fn test_execute_rewrites_packet_backed_response_ttls() {
+        let plugin = TtlExecutor {
+            tag: "ttl_test".to_string(),
+            policy: TtlPolicy {
+                fix: Some(60),
+                min: None,
+                max: None,
+            },
+        };
+
+        let mut response = crate::message::Message::new();
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            120,
+            RData::A(A::new(1, 1, 1, 1)),
+        ));
+
+        let mut ctx = test_context();
+        let packet = crate::message::Packet::from_vec(response.to_bytes().unwrap());
+        ctx.set_response_packet(packet)
+            .expect("packet response should decode");
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("ttl execute should work");
+        assert!(matches!(step, ExecStep::Next));
+        assert!(
+            ctx.response
+                .as_ref()
+                .and_then(|response| response.packet())
+                .is_some(),
+            "packet-backed response should stay packet-backed"
+        );
+
+        let updated = ctx
+            .response
+            .expect("response should remain present")
+            .to_message()
+            .expect("response should materialize");
+        assert_eq!(updated.answers()[0].ttl(), 60);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::net::IpAddr;
  */
 use async_trait::async_trait;
 
+use crate::core::context::QueryView;
 use crate::plugin::Plugin;
 
 pub mod domain_set;
@@ -31,6 +32,16 @@ pub trait Provider: Plugin {
     #[inline]
     fn contains_domain_prepared(&self, domain: &str, _labels_rev: &[&str]) -> bool {
         self.contains_domain(domain)
+    }
+
+    /// Domain membership check using the cached query view from `DnsContext`.
+    #[inline]
+    fn contains_query_view(&self, query_view: &QueryView) -> bool {
+        if !self.has_trie_domain_rules() {
+            return self.contains_domain_prepared(query_view.normalized_name(), &[]);
+        }
+        let labels = query_view.labels_rev();
+        self.contains_domain_prepared(query_view.normalized_name(), &labels)
     }
 
     /// Whether this provider has suffix-domain(trie) rules and can use `labels_rev`.

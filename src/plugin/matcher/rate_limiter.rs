@@ -325,9 +325,9 @@ fn mask_ip(ip: IpAddr, mask4: u8, mask6: u8) -> Option<IpAddr> {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
+    use crate::message::Message;
     use crate::plugin::test_utils::test_registry;
     use ahash::AHashMap;
-    use hickory_proto::op::Message;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     fn make_context(ip: Ipv4Addr) -> DnsContext {
@@ -338,7 +338,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: AHashMap::new(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: test_registry(),
         }
     }

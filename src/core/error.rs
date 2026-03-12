@@ -50,10 +50,6 @@ pub enum DnsError {
     #[error("DNS protocol error: {0}")]
     Protocol(String),
 
-    /// DNS protocol error
-    #[error("DNS Hickory protocol error: {0}")]
-    HickoryProtocol(#[from] hickory_proto::ProtoError),
-
     /// Quic connect error
     #[error("quic connect error: {0}")]
     QuicConnectError(#[from] quinn::ConnectError),

@@ -14,8 +14,10 @@
 //! - No locks or async operations
 //! - Cache-friendly: slots are inline in the array
 
-use hickory_proto::op::Message;
+use crate::message::Message;
+use ahash::AHasher;
 use rand::random;
+use std::hash::Hasher;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU16, Ordering};
 use tokio::sync::oneshot::Sender;
@@ -31,10 +33,24 @@ const MAX_IDS: usize = u16::MAX as usize;
 pub struct RequestMap {
     /// Array of atomic pointers to response senders
     /// Index = DNS query ID
-    slots: Vec<AtomicPtr<Sender<Message>>>,
+    slots: Vec<AtomicPtr<PendingRequest>>,
 
     /// Current number of active requests
     size: AtomicU16,
+}
+
+#[derive(Debug)]
+struct PendingRequest {
+    sender: Sender<Message>,
+    fingerprint: Option<ResponseFingerprint>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ResponseFingerprint {
+    opcode: u8,
+    qtype: u16,
+    qclass: u16,
+    qname_hash: u64,
 }
 
 impl RequestMap {
@@ -62,8 +78,12 @@ impl RequestMap {
     /// Panics if all slots are occupied (extremely rare in practice)
     #[inline(always)]
     #[hotpath::measure]
-    pub fn store(&self, tx: Sender<Message>) -> u16 {
-        let ptr = Box::into_raw(Box::new(tx));
+    pub fn store(&self, request: &Message, tx: Sender<Message>) -> u16 {
+        let pending = PendingRequest {
+            sender: tx,
+            fingerprint: fingerprint_message(request),
+        };
+        let ptr = Box::into_raw(Box::new(pending));
         let start = random::<u16>() as usize;
 
         // Phase 1: Quadratic probing for better cache locality
@@ -135,10 +155,81 @@ impl RequestMap {
             None
         } else {
             self.size.fetch_sub(1, Ordering::Relaxed);
-            unsafe { Some(*Box::from_raw(ptr)) }
+            unsafe { Some(Box::from_raw(ptr).sender) }
         }
     }
 
+    #[inline(always)]
+    #[hotpath::measure]
+    pub fn take_if_matches(&self, response: &Message) -> Option<Sender<Message>> {
+        let id = response.id();
+        let slot = &self.slots[id as usize];
+        let ptr = slot.load(Ordering::Acquire);
+        if ptr.is_null() {
+            return None;
+        }
+
+        let pending = unsafe { &*ptr };
+        if pending
+            .fingerprint
+            .is_some_and(|fingerprint| !fingerprint_matches(response, fingerprint))
+        {
+            return None;
+        }
+
+        let ptr = slot
+            .compare_exchange(ptr, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire)
+            .ok()?;
+        self.size.fetch_sub(1, Ordering::Relaxed);
+        unsafe { Some(Box::from_raw(ptr).sender) }
+    }
+}
+
+fn fingerprint_message(message: &Message) -> Option<ResponseFingerprint> {
+    let question = message.first_question_access()?;
+    let mut hasher = AHasher::default();
+    let mut first = true;
+    question.name().for_each_label_bytes(|label| {
+        if !first {
+            hasher.write_u8(b'.');
+        }
+        for &byte in label {
+            hasher.write_u8(byte.to_ascii_lowercase());
+        }
+        first = false;
+    });
+    Some(ResponseFingerprint {
+        opcode: u8::from(message.op_code()),
+        qtype: question.qtype(),
+        qclass: question.qclass(),
+        qname_hash: hasher.finish(),
+    })
+}
+
+fn fingerprint_matches(message: &Message, expected: ResponseFingerprint) -> bool {
+    let question = match message.first_question_access() {
+        Some(question) => question,
+        None => return false,
+    };
+    let mut hasher = AHasher::default();
+    let mut first = true;
+    question.name().for_each_label_bytes(|label| {
+        if !first {
+            hasher.write_u8(b'.');
+        }
+        for &byte in label {
+            hasher.write_u8(byte.to_ascii_lowercase());
+        }
+        first = false;
+    });
+    message.message_type() == crate::message::MessageType::Response
+        && u8::from(message.op_code()) == expected.opcode
+        && question.qtype() == expected.qtype
+        && question.qclass() == expected.qclass
+        && hasher.finish() == expected.qname_hash
+}
+
+impl RequestMap {
     /// Get the current number of active requests
     pub fn size(&self) -> u16 {
         self.size.load(Ordering::Relaxed)
@@ -153,11 +244,17 @@ impl RequestMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::Question;
+    use crate::message::{Name, RecordType};
     use tokio::sync::oneshot;
 
     fn make_message(id: u16) -> Message {
         let mut message = Message::new();
         message.set_id(id);
+        message.add_question(Question::new(
+            Name::from_ascii("example.com.").expect("query name should be valid"),
+            RecordType::A,
+        ));
         message
     }
 
@@ -166,7 +263,8 @@ mod tests {
         let map = RequestMap::new();
         let (tx, rx) = oneshot::channel();
 
-        let id = map.store(tx);
+        let request = make_message(1);
+        let id = map.store(&request, tx);
 
         assert_eq!(map.size(), 1);
         let sender = map.take(id).expect("stored sender should be retrievable");
@@ -189,7 +287,8 @@ mod tests {
     fn test_take_twice_only_returns_sender_once() {
         let map = RequestMap::new();
         let (tx, _rx) = oneshot::channel();
-        let id = map.store(tx);
+        let request = make_message(2);
+        let id = map.store(&request, tx);
 
         assert!(map.take(id).is_some());
         assert!(map.take(id).is_none());
@@ -200,11 +299,13 @@ mod tests {
     fn test_store_after_take_keeps_map_usable() {
         let map = RequestMap::new();
         let (tx1, _rx1) = oneshot::channel();
-        let id1 = map.store(tx1);
+        let request1 = make_message(3);
+        let id1 = map.store(&request1, tx1);
         let _ = map.take(id1);
 
         let (tx2, rx2) = oneshot::channel();
-        let id2 = map.store(tx2);
+        let request2 = make_message(4);
+        let id2 = map.store(&request2, tx2);
         let sender = map.take(id2).expect("second sender should be retrievable");
 
         assert!(sender.send(make_message(9)).is_ok());
@@ -214,5 +315,24 @@ mod tests {
                 .id(),
             9
         );
+    }
+
+    #[test]
+    fn test_take_if_matches_rejects_response_with_same_id_but_different_question() {
+        let map = RequestMap::new();
+        let request = make_message(5);
+        let (tx, _rx) = oneshot::channel();
+        let id = map.store(&request, tx);
+
+        let mut mismatched = Message::new();
+        mismatched.set_id(id);
+        mismatched.set_message_type(crate::message::MessageType::Response);
+        mismatched.add_question(Question::new(
+            Name::from_ascii("other.example.com.").expect("query name should be valid"),
+            RecordType::A,
+        ));
+
+        assert!(map.take_if_matches(&mismatched).is_none());
+        assert_eq!(map.size(), 1);
     }
 }

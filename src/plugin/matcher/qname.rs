@@ -21,7 +21,6 @@ use crate::plugin::matcher::matcher_utils::{
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -129,18 +128,13 @@ impl Matcher for QnameMatcher {
         if query_name.is_empty() {
             return false;
         }
-        let labels = if self.domains.has_trie_rules() || self.domain_sets_has_trie_rules {
-            query_view.labels_rev()
-        } else {
-            SmallVec::<[&str; 8]>::new()
-        };
-        if self.domains.is_match_normalized(query_name, &labels) {
+        if self.domains.is_match_query_view(query_view) {
             return true;
         }
 
         self.domain_sets
             .iter()
-            .any(|set| set.contains_domain_prepared(query_name, &labels))
+            .any(|set| set.contains_query_view(query_view))
     }
 }
 
@@ -148,16 +142,16 @@ impl Matcher for QnameMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::message::{DNSClass, Name, RecordType};
+    use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{DNSClass, Name, RecordType};
     use std::net::SocketAddr;
 
     fn make_context(name: &str) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Query::query(Name::from_ascii(name).unwrap(), RecordType::A);
-        query.set_query_class(DNSClass::IN);
-        request.add_query(query);
+        let mut query = Question::new(Name::from_ascii(name).unwrap(), RecordType::A);
+        query.set_question_class(DNSClass::IN);
+        request.add_question(query);
 
         DnsContext {
             src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
@@ -166,7 +160,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
@@ -179,7 +175,9 @@ mod tests {
             exec_flow_state: ExecFlowState::Running,
             marks: Default::default(),
             attributes: Default::default(),
+            request_meta: Default::default(),
             query_view: None,
+            query_view_version: None,
             registry: Arc::new(PluginRegistry::new()),
         }
     }
