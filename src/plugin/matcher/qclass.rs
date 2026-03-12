@@ -98,7 +98,7 @@ impl Matcher for QclassMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::{DNSClass, Name, RecordType};
     use crate::message::{Message, Question};
     use std::net::SocketAddr;
@@ -109,18 +109,11 @@ mod tests {
         query.set_question_class(qclass);
         request.add_question(query);
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[test]

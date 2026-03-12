@@ -142,8 +142,8 @@ impl Executor for DualSelector {
         }
 
         let Some(domain) = context
-            .query_view()
-            .map(|view| view.normalized_name().to_string())
+            .question()
+            .map(|question| question.normalized_name().to_string())
         else {
             return Ok(ExecStep::Next);
         };
@@ -158,7 +158,7 @@ impl Executor for DualSelector {
         if self.cache_enabled {
             if let Some(preferred_exists) = self.cache_get_preferred_state(&domain) {
                 if preferred_exists {
-                    context.response = Some(build_response_plan_from_request(
+                    context.response.set_plan(build_response_plan_from_request(
                         &context.request,
                         ResponseCode::NoError,
                     ));
@@ -226,7 +226,7 @@ impl DualSelector {
             if self.cache_enabled {
                 self.cache_probe_result(domain, true);
             }
-            context.response = Some(build_response_plan_from_request(
+            context.response.set_plan(build_response_plan_from_request(
                 &context.request,
                 ResponseCode::NoError,
             ));
@@ -353,7 +353,6 @@ mod tests {
     use crate::message::rdata::{A, AAAA};
     use crate::message::{Message, Question};
     use crate::message::{Name, RData, Record};
-    use ahash::{AHashMap, AHashSet};
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn make_context(qtype: RecordType) -> DnsContext {
@@ -362,18 +361,13 @@ mod tests {
             Name::from_ascii("example.com.").unwrap(),
             qtype,
         ));
-        DnsContext {
-            src_addr: "127.0.0.1:5533".parse().unwrap(),
+        let mut context = DnsContext::new(
+            "127.0.0.1:5533".parse().unwrap(),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: AHashSet::new(),
-            attributes: AHashMap::new(),
-            request_meta: crate::core::context::RequestMeta::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        );
+        context.set_flow(ExecFlowState::Running);
+        context
     }
 
     fn make_selector(preferred_type: RecordType) -> DualSelector {
@@ -389,8 +383,10 @@ mod tests {
     }
 
     fn set_answer(context: &mut DnsContext, qtype: RecordType) {
-        let query = context.request.question().expect("question must exist");
-        let qname = query.name().clone();
+        let qname = context
+            .request
+            .first_question_name_owned()
+            .expect("question must exist");
         let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
         match qtype {
             RecordType::A => response.answers_mut().push(Record::from_rdata(
@@ -405,7 +401,7 @@ mod tests {
             )),
             _ => {}
         }
-        context.response = Some(response.into());
+        context.response.set_message(response);
     }
 
     fn has_answer_of_type(context: &DnsContext, qtype: RecordType) -> bool {
@@ -578,7 +574,7 @@ mod tests {
                 original_error: Some("forward original query failed".to_string()),
             },
         );
-        context.response = None;
+        context.response.clear();
 
         let err = selector
             .post_execute(&mut context, state)

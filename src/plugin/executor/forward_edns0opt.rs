@@ -389,7 +389,7 @@ fn split_tokens(raw: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::rdata::opt::ClientSubnet;
     use crate::message::{Message, Question};
     use crate::message::{Name, RecordType};
@@ -411,18 +411,11 @@ mod tests {
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     fn add_ecs(message: &mut Message, ip: Ipv4Addr, mask: u8) {
@@ -459,7 +452,7 @@ mod tests {
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -470,7 +463,7 @@ mod tests {
             _ => panic!("expected NextWithPost"),
         };
 
-        ctx.response = Some(Message::new().into());
+        ctx.response.set_message(Message::new());
         plugin
             .post_execute(&mut ctx, state)
             .await
@@ -488,7 +481,7 @@ mod tests {
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -501,7 +494,7 @@ mod tests {
 
         let mut response = Message::new();
         add_ecs(&mut response, Ipv4Addr::new(2, 2, 2, 2), 24);
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
 
         plugin
             .post_execute(&mut ctx, state)
@@ -520,7 +513,7 @@ mod tests {
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
         let packet = crate::message::Packet::from_vec(ctx.request.to_bytes().unwrap());
         ctx.set_request_packet(packet);
 
@@ -533,7 +526,7 @@ mod tests {
             _ => panic!("expected NextWithPost"),
         };
 
-        ctx.response = Some(Message::new().into());
+        ctx.response.set_message(Message::new());
         plugin
             .post_execute(&mut ctx, state)
             .await
@@ -551,7 +544,7 @@ mod tests {
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -591,7 +584,7 @@ mod tests {
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -631,7 +624,7 @@ mod tests {
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)

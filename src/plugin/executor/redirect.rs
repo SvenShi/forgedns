@@ -115,12 +115,12 @@ impl Executor for RedirectExecutor {
             return Ok(ExecStep::Next);
         }
 
-        let Some(query_view) = context.query_view() else {
+        let Some(question) = context.question() else {
             return Ok(ExecStep::Next);
         };
         let Some(rule) = self
             .index
-            .match_rule(&self.rules, query_view.normalized_name())
+            .match_rule(&self.rules, question.normalized_name())
         else {
             return Ok(ExecStep::Next);
         };
@@ -409,7 +409,7 @@ fn _question_name(question: &Question) -> &Name {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::Message;
     use crate::message::rdata::A;
     use crate::message::{RData, RecordType};
@@ -428,18 +428,11 @@ mod tests {
         let mut query = Question::new(Name::from_ascii(name).unwrap(), RecordType::A);
         query.set_question_class(DNSClass::IN);
         request.add_question(query);
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     #[tokio::test]
@@ -463,9 +456,8 @@ mod tests {
         };
         assert_eq!(
             ctx.request
-                .question()
+                .first_question_name_owned()
                 .expect("question should exist")
-                .name()
                 .to_utf8(),
             "target.example.com."
         );
@@ -480,7 +472,7 @@ mod tests {
             60,
             RData::A(A::new(1, 1, 1, 1)),
         ));
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
 
         plugin
             .post_execute(&mut ctx, state)
@@ -489,9 +481,8 @@ mod tests {
 
         assert_eq!(
             ctx.request
-                .question()
+                .first_question_name_owned()
                 .expect("question should exist")
-                .name()
                 .to_utf8(),
             "example.com."
         );

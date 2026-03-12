@@ -353,7 +353,7 @@ mod tests {
     impl Executor for RecordingExecutor {
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
             let query_name = context
-                .query_view()
+                .question()
                 .expect("request should contain one query")
                 .normalized_name()
                 .to_string();
@@ -367,8 +367,10 @@ mod tests {
                 .lock()
                 .expect("request observation lock should not be poisoned")
                 .replace(observed);
-            context.response =
-                Some(build_response_from_request(&context.request, self.response_code).into());
+            context.response.set_message(build_response_from_request(
+                &context.request,
+                self.response_code,
+            ));
             Ok(ExecStep::Next)
         }
     }

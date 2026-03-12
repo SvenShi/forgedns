@@ -350,12 +350,14 @@ mod tests {
                 .lock()
                 .expect("capture lock should not be poisoned")
                 .replace(ObservedRequest {
-                    src_addr: context.src_addr,
+                    src_addr: context.peer_addr(),
                     server_name: context.server_name().map(str::to_string),
                     url_path: context.url_path().map(str::to_string),
                 });
-            context.response =
-                Some(build_response_from_request(&context.request, ResponseCode::NoError).into());
+            context.response.set_message(build_response_from_request(
+                &context.request,
+                ResponseCode::NoError,
+            ));
             Ok(ExecStep::Stop)
         }
     }

@@ -247,7 +247,7 @@ mod tests {
     async fn test_metrics_collector_records_success_latency() {
         let plugin = make_collector();
         let mut ctx = test_context();
-        ctx.response = Some(crate::message::Message::new().into());
+        ctx.response.set_message(crate::message::Message::new());
 
         let step = plugin.execute(&mut ctx).await.expect("execute should work");
         let state = match step {

@@ -499,15 +499,17 @@ mod tests {
                 server_name: context.server_name().map(str::to_string),
                 qname: context
                     .request
-                    .question()
-                    .map(|question| question.name().to_utf8()),
+                    .first_question_name_owned()
+                    .map(|name| name.to_utf8()),
             };
             self.observed
                 .lock()
                 .expect("capture lock should not be poisoned")
                 .replace(observed);
-            context.response =
-                Some(build_response_from_request(&context.request, ResponseCode::Refused).into());
+            context.response.set_message(build_response_from_request(
+                &context.request,
+                ResponseCode::Refused,
+            ));
             Ok(ExecStep::Stop)
         }
     }

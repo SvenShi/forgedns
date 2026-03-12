@@ -113,7 +113,7 @@ impl Plugin for ClientIpMatcher {
 
 impl Matcher for ClientIpMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let client_ip = context.src_addr.ip();
+        let client_ip = context.peer_addr().ip();
         self.client_ip_rules.contains_ip(client_ip)
             || self.ip_sets.iter().any(|set| set.contains_ip(client_ip))
     }
@@ -122,7 +122,7 @@ impl Matcher for ClientIpMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::{DNSClass, Name, RecordType};
     use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
@@ -134,18 +134,11 @@ mod tests {
         query.set_question_class(DNSClass::IN);
         request.add_question(query);
 
-        DnsContext {
-            src_addr: SocketAddr::new("192.168.1.10".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("192.168.1.10".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[tokio::test]
@@ -182,7 +175,7 @@ mod tests {
             registry: Arc::new(PluginRegistry::new()),
         };
         let mut ctx = make_context();
-        ctx.src_addr = SocketAddr::from((Ipv4Addr::new(192, 168, 2, 9), 5353));
+        ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(192, 168, 2, 9), 5353)));
         assert!(matcher.is_match(&mut ctx));
     }
 }

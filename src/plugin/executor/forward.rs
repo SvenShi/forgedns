@@ -79,14 +79,14 @@ impl Executor for SingleDnsForwarder {
 impl SingleDnsForwarder {
     #[inline]
     async fn execute_standard(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        match self.upstream.query(context.request.clone()).await {
+        match self.upstream.query(context.request.clone_message()).await {
             Ok(res) => {
-                context.response = Some(res.into());
+                context.response.set_message(res);
             }
             Err(e) => {
                 warn!(
                     "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
-                    context.src_addr,
+                    context.peer_addr(),
                     context.request.questions(),
                     context.request.id(),
                     e
@@ -105,11 +105,11 @@ impl SingleDnsForwarder {
         context: &mut DnsContext,
         probe: ForwardProbeRequest,
     ) -> Result<ExecStep> {
-        let mut preferred_request = context.request.clone();
+        let mut preferred_request = context.request.clone_message();
         if !set_message_first_question_type(&mut preferred_request, probe.preferred_type) {
             return self.execute_standard(context).await;
         }
-        let original_request = context.request.clone();
+        let original_request = context.request.clone_message();
 
         let mut original_fut = std::pin::pin!(self.upstream.query(original_request));
         let mut preferred_fut = std::pin::pin!(self.upstream.query(preferred_request));
@@ -126,7 +126,7 @@ impl SingleDnsForwarder {
 
         match original_result {
             Ok(response) => {
-                context.response = Some(response.into());
+                context.response.set_message(response);
             }
             Err(e) => {
                 let original_error = format!("forward plugin '{}' query failed: {}", self.tag, e);
@@ -140,7 +140,7 @@ impl SingleDnsForwarder {
                 );
                 warn!(
                     "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
-                    context.src_addr,
+                    context.peer_addr(),
                     context.request.questions(),
                     context.request.id(),
                     e
@@ -294,9 +294,11 @@ impl ConcurrentForwarder {
     }
 
     async fn execute_standard(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let (response, last_error) = self.query_any_upstream(context.request.clone()).await;
+        let (response, last_error) = self
+            .query_any_upstream(context.request.clone_message())
+            .await;
         if let Some(response) = response {
-            context.response = Some(response.into());
+            context.response.set_message(response);
             return Ok(ExecStep::Next);
         }
 
@@ -316,11 +318,11 @@ impl ConcurrentForwarder {
         context: &mut DnsContext,
         probe: ForwardProbeRequest,
     ) -> Result<ExecStep> {
-        let mut preferred_request = context.request.clone();
+        let mut preferred_request = context.request.clone_message();
         if !set_message_first_question_type(&mut preferred_request, probe.preferred_type) {
             return self.execute_standard(context).await;
         }
-        let original_request = context.request.clone();
+        let original_request = context.request.clone_message();
 
         let mut original_fut = std::pin::pin!(self.query_any_upstream(original_request));
         let mut preferred_fut = std::pin::pin!(self.query_any_upstream(preferred_request));
@@ -354,7 +356,7 @@ impl ConcurrentForwarder {
                 self.tag, err
             )));
         };
-        context.response = Some(response.into());
+        context.response.set_message(response);
 
         let preferred_outcome = if let Some(result) = preferred_early {
             Some(result)
@@ -623,10 +625,8 @@ impl PluginFactory for ForwardFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
     use crate::message::Name;
     use crate::message::{Question, ResponseCode};
-    use ahash::{AHashMap, AHashSet};
 
     #[derive(Debug)]
     struct MockUpstream {
@@ -689,18 +689,11 @@ mod tests {
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
-        DnsContext {
-            src_addr: "127.0.0.1:5533".parse().unwrap(),
+        DnsContext::new(
+            "127.0.0.1:5533".parse().unwrap(),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: AHashSet::new(),
-            attributes: AHashMap::new(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     fn make_plugin_config(args: &str) -> PluginConfig {

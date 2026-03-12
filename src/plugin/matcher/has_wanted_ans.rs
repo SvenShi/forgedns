@@ -129,7 +129,7 @@ mod tests {
         };
         let mut ctx = test_context();
         ctx.request.questions_mut().clear();
-        ctx.request.add_question(Question::new(
+        ctx.request.questions_mut().push(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
@@ -140,11 +140,11 @@ mod tests {
             60,
             RData::A(A::new(1, 1, 1, 1)),
         ));
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
 
         assert!(matcher.is_match(&mut ctx));
 
-        ctx.response = Some(crate::message::Message::new().into());
+        ctx.response.set_message(crate::message::Message::new());
         assert!(!matcher.is_match(&mut ctx));
     }
 }

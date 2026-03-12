@@ -98,7 +98,7 @@ impl Matcher for QtypeMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::{DNSClass, Name, RecordType};
     use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
@@ -112,18 +112,11 @@ mod tests {
             request.add_question(query);
         }
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            request_meta: Default::default(),
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[tokio::test]

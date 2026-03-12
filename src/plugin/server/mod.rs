@@ -10,7 +10,6 @@ use crate::message::ResponsePlan;
 use crate::message::{Message, ResponseCode};
 use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
 use crate::plugin::{Plugin, PluginRegistry};
-use ahash::AHashMap;
 use std::io::Error;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -125,19 +124,7 @@ impl RequestHandle {
         src_addr: SocketAddr,
         meta: RequestMeta,
     ) -> RequestResult {
-        // Parse DNS message
-        let mut context = DnsContext {
-            src_addr,
-            request: msg,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: AHashMap::new(),
-            request_meta: RequestMeta::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: self.registry.clone(),
-        };
+        let mut context = DnsContext::new(src_addr, msg, self.registry.clone());
         if let Some(packet) = packet
             && context.request.packet().is_none()
         {
@@ -167,14 +154,14 @@ impl RequestHandle {
         let exec_outcome = execute_with_post(self.entry_executor.as_ref(), &mut context).await;
         let (response, exit) = match exec_outcome {
             Ok(step) => {
-                if context.exec_flow_state == ExecFlowState::Running {
-                    context.exec_flow_state = match step {
+                if context.flow() == ExecFlowState::Running {
+                    context.set_flow(match step {
                         ExecStep::Next => ExecFlowState::ReachedTail,
                         ExecStep::Stop => ExecFlowState::Broken,
                         ExecStep::NextWithPost(_) => ExecFlowState::Running,
-                    };
+                    });
                 }
-                let exit = if context.exec_flow_state == ExecFlowState::ReachedTail {
+                let exit = if context.flow() == ExecFlowState::ReachedTail {
                     RequestExit::Completed
                 } else {
                     RequestExit::Controlled
@@ -333,7 +320,7 @@ mod tests {
     #[async_trait]
     impl Executor for StopWithResponseExecutor {
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-            context.response = Some(build_response_plan_from_request(
+            context.response.set_plan(build_response_plan_from_request(
                 &context.request,
                 ResponseCode::Refused,
             ));
@@ -436,7 +423,7 @@ mod tests {
             context: &mut DnsContext,
             _state: Option<crate::plugin::executor::ExecState>,
         ) -> crate::plugin::executor::ExecResult {
-            context.response = Some(build_response_plan_from_request(
+            context.response.set_plan(build_response_plan_from_request(
                 &context.request,
                 ResponseCode::NXDomain,
             ));

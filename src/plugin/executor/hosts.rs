@@ -101,11 +101,11 @@ impl Plugin for HostsExecutor {
 #[async_trait]
 impl Executor for HostsExecutor {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let Some(query_view) = context.query_view() else {
+        let Some(question) = context.question() else {
             return Ok(ExecStep::Next);
         };
-        let qclass = query_view.qclass();
-        let qtype = query_view.qtype();
+        let qclass = question.qclass();
+        let qtype = question.qtype();
         if qclass != CLASS_IN {
             return Ok(ExecStep::Next);
         }
@@ -114,7 +114,7 @@ impl Executor for HostsExecutor {
         }
         let Some(rule) = self
             .index
-            .match_rule(&self.rules, query_view.normalized_name())
+            .match_rule(&self.rules, question.normalized_name())
         else {
             return Ok(ExecStep::Next);
         };
@@ -164,7 +164,7 @@ impl Executor for HostsExecutor {
         }
 
         if !response.answers().is_empty() {
-            context.response = Some(response.into());
+            context.response.set_message(response);
         }
 
         Ok(ExecStep::Next)
@@ -414,7 +414,7 @@ fn normalize_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::Packet;
     use crate::message::{DNSClass, Name, RecordType};
     use crate::message::{Message, Question};
@@ -434,18 +434,11 @@ mod tests {
         let mut query = Question::new(Name::from_ascii(name).unwrap(), qtype);
         query.set_question_class(DNSClass::IN);
         request.add_question(query);
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     #[tokio::test]

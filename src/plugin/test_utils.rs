@@ -8,10 +8,9 @@
 #![cfg(test)]
 
 use crate::config::types::PluginConfig;
-use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::context::DnsContext;
 use crate::message::Message;
 use crate::plugin::PluginRegistry;
-use ahash::AHashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
@@ -32,16 +31,9 @@ pub(crate) fn plugin_config(
 }
 
 pub(crate) fn test_context() -> DnsContext {
-    DnsContext {
-        src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5353)),
-        request: Message::new(),
-        response: None,
-        exec_flow_state: ExecFlowState::Running,
-        marks: Default::default(),
-        attributes: AHashMap::new(),
-        request_meta: Default::default(),
-        query_view: None,
-        query_view_version: None,
-        registry: test_registry(),
-    }
+    DnsContext::new(
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 5353)),
+        Message::new(),
+        test_registry(),
+    )
 }

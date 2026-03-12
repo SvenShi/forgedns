@@ -165,8 +165,8 @@ impl Executor for Sequence {
     #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> DnsResult<ExecStep> {
         self.program.get().unwrap().run(context).await?;
-        if context.exec_flow_state == ExecFlowState::Running {
-            context.exec_flow_state = ExecFlowState::ReachedTail;
+        if context.flow() == ExecFlowState::Running {
+            context.set_flow(ExecFlowState::ReachedTail);
         }
         Ok(ExecStep::Next)
     }

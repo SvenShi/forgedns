@@ -111,7 +111,7 @@ impl ChainProgram {
                 },
                 OpCode::Builtin(op) => match op {
                     BuiltinOp::Accept => {
-                        context.exec_flow_state = ExecFlowState::Broken;
+                        context.set_flow(ExecFlowState::Broken);
                         break;
                     }
                     BuiltinOp::Return => break,
@@ -121,15 +121,16 @@ impl ChainProgram {
                             if code <= 0x0f {
                                 if let Ok(response) = build_response_packet(packet, code) {
                                     context.set_response_packet(response)?;
-                                    context.exec_flow_state = ExecFlowState::Broken;
+                                    context.set_flow(ExecFlowState::Broken);
                                     break;
                                 }
                             }
                         }
 
-                        context.response =
-                            Some(build_response_plan_from_request(&context.request, *rcode));
-                        context.exec_flow_state = ExecFlowState::Broken;
+                        context
+                            .response
+                            .set_plan(build_response_plan_from_request(&context.request, *rcode));
+                        context.set_flow(ExecFlowState::Broken);
                         break;
                     }
                     BuiltinOp::Jump(executor) => {
@@ -143,11 +144,11 @@ impl ChainProgram {
                         match step {
                             ExecStep::Stop => break,
                             ExecStep::Next => {
-                                if context.exec_flow_state == ExecFlowState::Broken {
+                                if context.flow() == ExecFlowState::Broken {
                                     break;
                                 }
-                                if context.exec_flow_state == ExecFlowState::ReachedTail {
-                                    context.exec_flow_state = ExecFlowState::Running;
+                                if context.flow() == ExecFlowState::ReachedTail {
+                                    context.set_flow(ExecFlowState::Running);
                                 }
                                 pc += 1;
                             }
@@ -166,7 +167,7 @@ impl ChainProgram {
                         break;
                     }
                     BuiltinOp::Mark(marks) => {
-                        context.marks.extend(marks.iter().cloned());
+                        context.marks_mut().extend(marks.iter().cloned());
                         pc += 1;
                     }
                 },
@@ -485,7 +486,6 @@ mod tests {
     use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
     use crate::plugin::executor::ExecResult;
-    use ahash::AHashMap;
     use async_trait::async_trait;
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Mutex;
@@ -549,7 +549,7 @@ mod tests {
                 self.log.lock().unwrap().push(label);
             }
             if let Some(state) = self.next_flow_state {
-                context.exec_flow_state = state;
+                context.set_flow(state);
             }
 
             match self.behavior {
@@ -579,18 +579,11 @@ mod tests {
             RecordType::A,
         ));
 
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: AHashMap::new(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     fn executor_instruction(executor: Arc<dyn Executor>) -> Instruction {
@@ -709,7 +702,7 @@ mod tests {
             .expect("response should materialize");
         assert_eq!(response.id(), 42);
         assert_eq!(response.response_code(), ResponseCode::ServFail);
-        assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
+        assert_eq!(context.flow(), ExecFlowState::Broken);
         assert!(log.lock().unwrap().is_empty());
     }
 
@@ -733,7 +726,7 @@ mod tests {
             .expect("response should materialize");
         assert_eq!(response.id(), 42);
         assert_eq!(response.response_code(), ResponseCode::ServFail);
-        assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
+        assert_eq!(context.flow(), ExecFlowState::Broken);
     }
 
     #[tokio::test]
@@ -761,7 +754,7 @@ mod tests {
 
         // Assert
         assert!(context.response.is_none());
-        assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
+        assert_eq!(context.flow(), ExecFlowState::Broken);
         assert!(log.lock().unwrap().is_empty());
     }
 
@@ -790,7 +783,7 @@ mod tests {
 
         // Assert
         assert!(context.response.is_none());
-        assert_eq!(context.exec_flow_state, ExecFlowState::Running);
+        assert_eq!(context.flow(), ExecFlowState::Running);
         assert!(log.lock().unwrap().is_empty());
     }
 
@@ -830,6 +823,6 @@ mod tests {
             log.lock().unwrap().clone(),
             vec!["execute:jumped", "execute:after_jump"]
         );
-        assert_eq!(context.exec_flow_state, ExecFlowState::Running);
+        assert_eq!(context.flow(), ExecFlowState::Running);
     }
 }

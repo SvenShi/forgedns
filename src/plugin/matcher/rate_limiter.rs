@@ -168,7 +168,7 @@ impl Plugin for RateLimiter {
 
 impl Matcher for RateLimiter {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let masked = mask_ip(context.src_addr.ip(), self.mask4, self.mask6);
+        let masked = mask_ip(context.peer_addr().ip(), self.mask4, self.mask6);
         let Some(masked) = masked else {
             return true;
         };
@@ -324,25 +324,16 @@ fn mask_ip(ip: IpAddr, mask4: u8, mask6: u8) -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
     use crate::message::Message;
     use crate::plugin::test_utils::test_registry;
-    use ahash::AHashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     fn make_context(ip: Ipv4Addr) -> DnsContext {
-        DnsContext {
-            src_addr: SocketAddr::from((ip, 5300)),
-            request: Message::new(),
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: AHashMap::new(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+        DnsContext::new(
+            SocketAddr::from((ip, 5300)),
+            Message::new(),
+            test_registry(),
+        )
     }
 
     #[test]

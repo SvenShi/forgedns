@@ -771,18 +771,11 @@ mod tests {
     }
 
     fn make_context(request: Message) -> DnsContext {
-        DnsContext {
-            src_addr: "127.0.0.1:5300".parse::<SocketAddr>().unwrap(),
+        DnsContext::new(
+            "127.0.0.1:5300".parse::<SocketAddr>().unwrap(),
             request,
-            response: None,
-            exec_flow_state: crate::core::context::ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     fn make_request_with_query(name: &str, do_bit: bool, cd_bit: bool) -> Message {
@@ -966,7 +959,7 @@ mod tests {
         let mut response = Message::new();
         response.set_response_code(ResponseCode::NoError);
         response.set_truncated(true);
-        context.response = Some(response.into());
+        context.response.set_message(response);
 
         cache.post_execute(&mut context, state).await.unwrap();
 

@@ -76,10 +76,10 @@ impl Executor for QuerySummary {
             .unwrap_or_else(AppClock::elapsed_millis);
 
         let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
-        let (qname, qtype) = match context.query_view() {
-            Some(view) => (
-                view.normalized_name().to_string(),
-                format!("{:?}", RecordType::from(view.qtype())),
+        let (qname, qtype) = match context.question() {
+            Some(question) => (
+                question.normalized_name().to_string(),
+                format!("{:?}", RecordType::from(question.qtype())),
             ),
             None => ("<none>".to_string(), "<none>".to_string()),
         };
@@ -103,7 +103,7 @@ impl Executor for QuerySummary {
             title = %self.msg,
             qname = %qname,
             qtype = %qtype,
-            src = %context.src_addr,
+            src = %context.peer_addr(),
             rcode = %rcode,
             elapsed_ms = elapsed,
             "query_summary"
@@ -212,7 +212,7 @@ mod tests {
             msg: "m".to_string(),
         };
         let mut ctx = test_context();
-        ctx.response = Some(Message::new().into());
+        ctx.response.set_message(Message::new());
 
         plugin
             .post_execute(&mut ctx, None)

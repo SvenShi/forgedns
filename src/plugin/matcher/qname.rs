@@ -121,20 +121,20 @@ impl Plugin for QnameMatcher {
 
 impl Matcher for QnameMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(query_view) = context.query_view() else {
+        let Some(question) = context.question() else {
             return false;
         };
-        let query_name = query_view.normalized_name();
+        let query_name = question.normalized_name();
         if query_name.is_empty() {
             return false;
         }
-        if self.domains.is_match_query_view(query_view) {
+        if self.domains.is_match_question(question) {
             return true;
         }
 
         self.domain_sets
             .iter()
-            .any(|set| set.contains_query_view(query_view))
+            .any(|set| set.contains_question(question))
     }
 }
 
@@ -153,33 +153,23 @@ mod tests {
         query.set_question_class(DNSClass::IN);
         request.add_question(query);
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        let mut context = DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        );
+        context.set_flow(ExecFlowState::Running);
+        context
     }
 
     fn make_context_without_query() -> DnsContext {
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request: Message::new(),
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+        let mut context = DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+            Message::new(),
+            Arc::new(PluginRegistry::new()),
+        );
+        context.set_flow(ExecFlowState::Running);
+        context
     }
 
     #[tokio::test]

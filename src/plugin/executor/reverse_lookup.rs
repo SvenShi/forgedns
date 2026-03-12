@@ -128,7 +128,7 @@ impl Executor for ReverseLookup {
         if self.handle_ptr
             && let Some(response) = self.try_handle_ptr(&context.request)
         {
-            context.response = Some(response.into());
+            context.response.set_message(response);
             return Ok(ExecStep::Stop);
         }
 
@@ -289,7 +289,7 @@ fn parse_ptr_name(name: &Name) -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::rdata::A;
     use crate::message::{Message, Question};
     use crate::message::{Name, RData, Record};
@@ -312,18 +312,11 @@ mod tests {
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
         request.add_question(Question::new(Name::from_ascii(name).unwrap(), qtype));
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     #[tokio::test]
@@ -345,7 +338,7 @@ mod tests {
             300,
             RData::A(A(Ipv4Addr::new(8, 8, 4, 4))),
         ));
-        a_ctx.response = Some(response.into());
+        a_ctx.response.set_message(response);
 
         plugin
             .post_execute(&mut a_ctx, None)

@@ -166,8 +166,8 @@ impl StringSource {
     fn read<'a>(&self, context: &'a mut DnsContext) -> Cow<'a, str> {
         match self {
             StringSource::Qname => context
-                .query_view()
-                .map(|view| Cow::Borrowed(view.normalized_name()))
+                .question()
+                .map(|question| Cow::Borrowed(question.normalized_name()))
                 .unwrap_or_else(|| Cow::Borrowed("")),
             StringSource::Qtype => Cow::Owned(
                 context
@@ -201,7 +201,7 @@ impl StringSource {
             }
             StringSource::Mark => {
                 let mut out = String::new();
-                for mark in &context.marks {
+                for mark in context.marks() {
                     if !out.is_empty() {
                         out.push(',');
                     }
@@ -209,7 +209,7 @@ impl StringSource {
                 }
                 Cow::Owned(out)
             }
-            StringSource::ClientIp => Cow::Owned(context.src_addr.ip().to_string()),
+            StringSource::ClientIp => Cow::Owned(context.peer_addr().ip().to_string()),
             StringSource::ServerName => context
                 .server_name()
                 .map(Cow::Borrowed)
@@ -354,7 +354,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::rdata::A;
     use crate::message::{Message, Question, ResponseCode};
     use crate::message::{Name, RData, Record, RecordType};
@@ -367,19 +367,13 @@ mod tests {
             Name::from_ascii("www.example.com.").unwrap(),
             RecordType::A,
         ));
-
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        let mut context = DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: ["1".to_string()].into_iter().collect(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        );
+        context.marks_mut().insert("1".to_string());
+        context
     }
 
     fn add_response_with_ip_and_rcode(ctx: &mut DnsContext, ip: Ipv4Addr, rcode: ResponseCode) {
@@ -390,7 +384,7 @@ mod tests {
             60,
             RData::A(A(ip)),
         ));
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
     }
 
     #[tokio::test]

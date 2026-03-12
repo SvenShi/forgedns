@@ -70,10 +70,10 @@ impl Executor for BlackHole {
             return Ok(ExecStep::Next);
         }
 
-        let Some(query_view) = context.query_view() else {
+        let Some(question) = context.question() else {
             return Ok(ExecStep::Next);
         };
-        let qtype = query_view.qtype();
+        let qtype = question.qtype();
 
         let mut addresses = Vec::new();
         match qtype {
@@ -119,7 +119,7 @@ impl Executor for BlackHole {
             _ => {}
         }
         if !response.answers().is_empty() {
-            context.response = Some(response.into());
+            context.response.set_message(response);
         }
 
         Ok(ExecStep::Next)
@@ -234,7 +234,6 @@ fn split_ips(ips: Vec<IpAddr>) -> (Vec<std::net::Ipv4Addr>, Vec<std::net::Ipv6Ad
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
     use crate::message::Packet;
     use crate::message::{DNSClass, Name};
     use crate::message::{Message, Question};
@@ -248,18 +247,11 @@ mod tests {
         query.set_question_class(DNSClass::IN);
         request.add_question(query);
 
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     #[test]
@@ -346,7 +338,7 @@ mod tests {
             ipv6: vec![],
         };
         let mut ctx = make_context(RecordType::A);
-        ctx.request.add_question(Question::new(
+        ctx.request.questions_mut().push(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));

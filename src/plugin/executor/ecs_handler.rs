@@ -102,14 +102,14 @@ impl Executor for EcsHandler {
                 if let Some(rewritten) = rewritten {
                     context.set_request_packet(rewritten);
                 } else {
-                    strip_ecs_from_message(&mut context.request);
+                    strip_ecs_from_message(context.request.message_mut());
                 }
             }
         } else {
             let source_ip = if let Some(preset) = self.preset {
                 Some(unmap_ip(preset))
             } else if self.send {
-                Some(unmap_ip(context.src_addr.ip()))
+                Some(unmap_ip(context.peer_addr().ip()))
             } else {
                 None
             };
@@ -124,7 +124,7 @@ impl Executor for EcsHandler {
                     let rewritten = append_ecs_to_packet(packet, &ecs)?;
                     context.set_request_packet(rewritten);
                 } else {
-                    let opt = ensure_opt_record(&mut context.request);
+                    let opt = ensure_opt_record(context.request.message_mut());
                     opt.insert(ecs);
                 }
             }
@@ -470,7 +470,7 @@ fn unmap_ip(ip: IpAddr) -> IpAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::{Message, Question};
     use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
@@ -491,18 +491,11 @@ mod tests {
         let mut query = Question::new(Name::from_ascii("example.com.").unwrap(), RecordType::A);
         query.set_question_class(qclass);
         request.add_question(query);
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::new(10, 1, 1, 9), 5353)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::new(10, 1, 1, 9), 5353)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     fn add_ecs_option(message: &mut Message, ip: IpAddr, mask: u8) {
@@ -534,7 +527,7 @@ mod tests {
 
         let mut response = Message::new();
         add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
 
         plugin
             .post_execute(&mut ctx, state)
@@ -563,7 +556,11 @@ mod tests {
             mask6: 48,
         };
         let mut ctx = make_context(DNSClass::IN);
-        add_ecs_option(&mut ctx.request, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
+        add_ecs_option(
+            ctx.request.message_mut(),
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+            24,
+        );
 
         let step = plugin
             .execute(&mut ctx)
@@ -577,7 +574,7 @@ mod tests {
 
         let mut response = Message::new();
         add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
 
         plugin
             .post_execute(&mut ctx, state)
@@ -603,7 +600,11 @@ mod tests {
             mask6: 48,
         };
         let mut ctx = make_context(DNSClass::IN);
-        add_ecs_option(&mut ctx.request, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
+        add_ecs_option(
+            ctx.request.message_mut(),
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+            24,
+        );
 
         plugin
             .execute(&mut ctx)
@@ -623,7 +624,11 @@ mod tests {
             mask6: 48,
         };
         let mut ctx = make_context(DNSClass::IN);
-        add_ecs_option(&mut ctx.request, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
+        add_ecs_option(
+            ctx.request.message_mut(),
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+            24,
+        );
         let packet = Packet::from_vec(ctx.request.to_bytes().unwrap());
         ctx.set_request_packet(packet);
 
@@ -649,7 +654,7 @@ mod tests {
             mask6: 48,
         };
         let mut ctx = make_context(DNSClass::IN);
-        let _ = ensure_opt_record(&mut ctx.request);
+        let _ = ensure_opt_record(ctx.request.message_mut());
         let packet = Packet::from_vec(ctx.request.to_bytes().unwrap());
         ctx.set_request_packet(packet);
 

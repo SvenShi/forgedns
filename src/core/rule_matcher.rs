@@ -5,7 +5,7 @@
 
 //! Shared high-performance rule matchers used by providers and matchers.
 
-use crate::core::context::QueryView;
+use crate::core::context::QuestionFacts;
 use ahash::{AHashMap, AHashSet};
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::{RegexBuilder, RegexSet, RegexSetBuilder};
@@ -523,9 +523,9 @@ impl DomainTrie {
     }
 
     #[inline]
-    pub(crate) fn contains_query_view(&self, query_view: &QueryView) -> bool {
+    pub(crate) fn contains_question(&self, question: &QuestionFacts) -> bool {
         let mut cursor = 0u32;
-        for label in query_view.iter_labels_rev() {
+        for label in question.iter_labels_rev() {
             let Some(next) = self.nodes[cursor as usize].children.get(label) else {
                 return false;
             };
@@ -600,8 +600,8 @@ impl TrieDomainMatcher {
     }
 
     #[inline]
-    pub(crate) fn is_match_query_view(&self, query_view: &QueryView) -> bool {
-        self.trie.contains_query_view(query_view)
+    pub(crate) fn is_match_question(&self, question: &QuestionFacts) -> bool {
+        self.trie.contains_question(question)
     }
 
     #[inline]
@@ -812,15 +812,15 @@ impl DomainRuleMatcher {
     }
 
     #[inline]
-    pub(crate) fn is_match_query_view(&self, query_view: &QueryView) -> bool {
-        let domain = query_view.normalized_name();
+    pub(crate) fn is_match_question(&self, question: &QuestionFacts) -> bool {
+        let domain = question.normalized_name();
         if self.full.as_ref().is_some_and(|m| m.is_match(domain)) {
             return true;
         }
         if self
             .trie
             .as_ref()
-            .is_some_and(|m| m.is_match_query_view(query_view))
+            .is_some_and(|m| m.is_match_question(question))
         {
             return true;
         }

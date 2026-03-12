@@ -71,11 +71,11 @@ impl Plugin for Arbitrary {
 #[async_trait]
 impl Executor for Arbitrary {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let Some(query_view) = context.query_view() else {
+        let Some(question) = context.question() else {
             return Ok(ExecStep::Next);
         };
-        let qtype = RecordType::from(query_view.qtype());
-        let qname = query_view.normalized_name();
+        let qtype = RecordType::from(question.qtype());
+        let qname = question.normalized_name();
 
         let Some(name_records) = self.records.get(qname) else {
             return Ok(ExecStep::Next);
@@ -97,7 +97,7 @@ impl Executor for Arbitrary {
             } else if let Some(records) = name_records.by_type.get(&qtype) {
                 response.answers_mut().extend(records.iter().cloned());
             }
-            context.response = Some(response.into());
+            context.response.set_message(response);
         }
 
         Ok(ExecStep::Next)
@@ -303,7 +303,6 @@ fn normalize_name(name: &Name) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
     use crate::message::{Message, Question};
     use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
@@ -319,18 +318,11 @@ mod tests {
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
         request.add_question(Question::new(Name::from_ascii(name).unwrap(), qtype));
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     #[tokio::test]

@@ -99,7 +99,7 @@ mod tests {
         };
         let mut ctx = test_context();
         assert!(!matcher.is_match(&mut ctx));
-        ctx.response = Some(crate::message::Message::new().into());
+        ctx.response.set_message(crate::message::Message::new());
         assert!(matcher.is_match(&mut ctx));
     }
 }

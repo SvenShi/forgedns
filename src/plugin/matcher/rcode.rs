@@ -92,7 +92,7 @@ impl Matcher for RcodeMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::{Message, Question, ResponseCode};
     use crate::message::{Name, RecordType};
     use crate::plugin::matcher::Matcher;
@@ -105,18 +105,11 @@ mod tests {
             RecordType::A,
         ));
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[tokio::test]
@@ -129,7 +122,7 @@ mod tests {
         let mut ctx = make_context();
         let mut response = Message::new();
         response.set_response_code(ResponseCode::NoError);
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
 
         assert!(!matcher.is_match(&mut ctx));
     }
@@ -147,7 +140,7 @@ mod tests {
         let mut match_ctx = make_context();
         let mut response = Message::new();
         response.set_response_code(ResponseCode::ServFail);
-        match_ctx.response = Some(response.into());
+        match_ctx.response.set_message(response);
         assert!(matcher.is_match(&mut match_ctx));
     }
 }

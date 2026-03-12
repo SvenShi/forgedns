@@ -154,6 +154,6 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        assert_eq!(ctx.request, original_request);
+        assert_eq!(ctx.request.message(), original_request.message());
     }
 }

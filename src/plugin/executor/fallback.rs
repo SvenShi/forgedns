@@ -350,7 +350,7 @@ mod tests {
                 return Err(DnsError::plugin("stub failed"));
             }
             if self.produce_response {
-                context.response = Some(crate::message::Message::new().into());
+                context.response.set_message(crate::message::Message::new());
             }
             Ok(ExecStep::Next)
         }

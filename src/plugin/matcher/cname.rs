@@ -147,7 +147,7 @@ impl Matcher for CnameMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::message::rdata::{A, CNAME};
     use crate::message::{Message, Question};
     use crate::message::{Name, RData, Record, RecordType};
@@ -162,18 +162,11 @@ mod tests {
             RecordType::A,
         ));
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[tokio::test]
@@ -199,7 +192,7 @@ mod tests {
             60,
             RData::CNAME(CNAME(Name::from_ascii("target.example.com.").unwrap())),
         ));
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
 
         assert!(matcher.is_match(&mut ctx));
     }
@@ -233,7 +226,7 @@ mod tests {
             60,
             RData::CNAME(CNAME(Name::from_ascii("target.example.com.").unwrap())),
         ));
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
         assert!(matcher.is_match(&mut ctx));
     }
 
@@ -263,7 +256,7 @@ mod tests {
             60,
             RData::A(A(Ipv4Addr::new(1, 1, 1, 1))),
         ));
-        non_cname_response.response = Some(response.into());
+        non_cname_response.response.set_message(response);
         assert!(!matcher.is_match(&mut non_cname_response));
     }
 }

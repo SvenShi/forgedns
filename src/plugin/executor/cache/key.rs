@@ -101,16 +101,15 @@ fn extract_any_ecs_scope(request: &Message) -> Option<EcsScopeDigest> {
 
 #[inline]
 pub(super) fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Option<CacheKey> {
-    let (domain, record_type, dns_class, do_bit, cd_bit) = {
-        let query_view = context.query_view()?;
-        (
-            query_view.normalized_name().to_string(),
-            RecordType::from(query_view.qtype()),
-            DNSClass::from(query_view.qclass()),
-            query_view.do_bit(),
-            query_view.cd_bit(),
-        )
-    };
+    let facts = context.request_facts().clone();
+    let question = facts.first_question()?;
+    let (domain, record_type, dns_class, do_bit, cd_bit) = (
+        question.normalized_name().to_string(),
+        RecordType::from(question.qtype()),
+        DNSClass::from(question.qclass()),
+        facts.do_bit(),
+        facts.cd_bit(),
+    );
 
     Some(CacheKey {
         domain,
@@ -140,18 +139,11 @@ mod tests {
             Name::from_ascii(name).expect("query name should be valid"),
             RecordType::A,
         ));
-        DnsContext {
-            src_addr: SocketAddr::from(([127, 0, 0, 1], 5300)),
+        DnsContext::new(
+            SocketAddr::from(([127, 0, 0, 1], 5300)),
             request,
-            response: None,
-            exec_flow_state: crate::core::context::ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     #[test]
@@ -225,18 +217,11 @@ mod tests {
 
     #[test]
     fn test_build_cache_key_returns_none_without_query() {
-        let mut context = DnsContext {
-            src_addr: SocketAddr::from(([127, 0, 0, 1], 5300)),
-            request: Message::new(),
-            response: None,
-            exec_flow_state: crate::core::context::ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: test_registry(),
-        };
+        let mut context = DnsContext::new(
+            SocketAddr::from(([127, 0, 0, 1], 5300)),
+            Message::new(),
+            test_registry(),
+        );
 
         let cache_key = build_cache_key(&mut context, true);
 

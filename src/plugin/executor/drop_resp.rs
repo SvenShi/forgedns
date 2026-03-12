@@ -43,7 +43,7 @@ impl Plugin for DropResp {
 #[async_trait]
 impl Executor for DropResp {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        context.response = None;
+        context.response.clear();
         Ok(ExecStep::Next)
     }
 }
@@ -88,7 +88,7 @@ mod tests {
             tag: "drop_resp".to_string(),
         };
         let mut ctx = test_context();
-        ctx.response = Some(crate::message::Message::new().into());
+        ctx.response.set_message(crate::message::Message::new());
 
         let step = plugin
             .execute(&mut ctx)

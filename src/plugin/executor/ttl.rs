@@ -270,7 +270,7 @@ mod tests {
         ));
 
         let mut ctx = test_context();
-        ctx.response = Some(response.into());
+        ctx.response.set_message(response);
 
         let step = plugin
             .execute(&mut ctx)

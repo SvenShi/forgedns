@@ -425,13 +425,13 @@ fn extract_observation(
 ) -> Option<(String, Vec<ObservedAddr>)> {
     // Prefer normalized query view if available; fallback to raw request question.
     let domain = context
-        .query_view()
-        .map(|view| view.normalized_name().to_string())
+        .question()
+        .map(|question| question.normalized_name().to_string())
         .or_else(|| {
             context
                 .request
-                .question()
-                .map(|question| DnsContext::normalize_dns_name(question.name()))
+                .first_question_name_owned()
+                .map(|name| DnsContext::normalize_dns_name(&name))
         })?;
 
     if context_response_code(context)? != u16::from(ResponseCode::NoError) {
@@ -788,7 +788,6 @@ fn is_persistent_ip_family_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
     use crate::message::rdata::{A, AAAA};
     use crate::message::{Message, Question};
     use crate::message::{Name, RData, Record, RecordType};
@@ -1020,18 +1019,11 @@ mod tests {
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
         ));
-        DnsContext {
-            src_addr: "127.0.0.1:5353".parse::<SocketAddr>().unwrap(),
+        DnsContext::new(
+            "127.0.0.1:5353".parse::<SocketAddr>().unwrap(),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: AHashSet::new(),
-            attributes: AHashMap::new(),
-            request_meta: Default::default(),
-            query_view: None,
-            query_view_version: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     fn response_with_records(records: Vec<Record>) -> Message {
@@ -1924,13 +1916,10 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response = Some(
-            response_with_records(vec![
-                a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
-                aaaa_record(Ipv6Addr::LOCALHOST, 300),
-            ])
-            .into(),
-        );
+        ctx.response.set_message(response_with_records(vec![
+            a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
+            aaaa_record(Ipv6Addr::LOCALHOST, 300),
+        ]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         yield_until("ipv6 route upsert", || {
             api.state.lock().unwrap().upsert_v6 >= 1
@@ -1962,8 +1951,11 @@ persistent_route:
         let _ = executor.init().await;
 
         let mut ctx = make_context();
-        ctx.response =
-            Some(response_with_records(vec![a_record(Ipv4Addr::new(10, 0, 0, 1), 300)]).into());
+        ctx.response
+            .set_message(response_with_records(vec![a_record(
+                Ipv4Addr::new(10, 0, 0, 1),
+                300,
+            )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         assert!(
             ctx.response.is_some(),
@@ -1985,8 +1977,11 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response =
-            Some(response_with_records(vec![a_record(Ipv4Addr::new(6, 6, 6, 6), 300)]).into());
+        ctx.response
+            .set_message(response_with_records(vec![a_record(
+                Ipv4Addr::new(6, 6, 6, 6),
+                300,
+            )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         yield_until("background manager route creation", || {
             api.route_count() > 0
@@ -2009,8 +2004,11 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response =
-            Some(response_with_records(vec![a_record(Ipv4Addr::new(11, 11, 11, 11), 300)]).into());
+        ctx.response
+            .set_message(response_with_records(vec![a_record(
+                Ipv4Addr::new(11, 11, 11, 11),
+                300,
+            )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         yield_until("dynamic route creation before shutdown", || {
             api.route_count() > 0

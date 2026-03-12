@@ -170,8 +170,8 @@ plugins:
     let step = sequence.execute(&mut context).await?;
 
     assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
-    assert!(context.marks.contains("100"));
+    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(context.marks().contains("100"));
     assert_eq!(
         context
             .response
@@ -264,9 +264,9 @@ plugins:
     let step = sequence.execute(&mut context).await?;
 
     assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
-    assert!(context.marks.contains("100"));
-    assert!(context.marks.contains("200"));
+    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(context.marks().contains("100"));
+    assert!(context.marks().contains("200"));
     assert_eq!(
         context
             .response
