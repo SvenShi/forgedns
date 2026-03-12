@@ -21,12 +21,12 @@
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{build_response_from_request, rr_to_ip};
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::message::Packet;
 use crate::message::ResponseCode;
+use crate::message::build_response_message_from_request;
 use crate::message::rdata::name::PTR;
 use crate::message::{Name, RData, Record, RecordType};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
@@ -149,7 +149,7 @@ impl Executor for ReverseLookup {
         };
         let now = AppClock::elapsed_millis();
         for record in response.answers_mut() {
-            let Some(ip) = rr_to_ip(record) else {
+            let Some(ip) = record.ip_addr() else {
                 continue;
             };
 
@@ -177,7 +177,7 @@ impl ReverseLookup {
     ) -> Result<Option<Packet>> {
         let Some(packet) = context
             .response
-            .as_ref()
+            .current()
             .and_then(|response| response.packet())
         else {
             return Ok(None);
@@ -228,7 +228,7 @@ impl ReverseLookup {
         let now = AppClock::elapsed_millis();
         let entry = self.cache.get_fresh_cloned(&ip, now, 1000)?;
 
-        let mut response = build_response_from_request(request, ResponseCode::NoError);
+        let mut response = build_response_message_from_request(request, ResponseCode::NoError);
         response.answers_mut().push(Record::from_rdata(
             qname,
             5,
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(
             a_ctx
                 .response
-                .as_ref()
+                .current()
                 .expect("response should exist")
                 .to_message()
                 .expect("response should materialize")
@@ -365,6 +365,7 @@ mod tests {
 
         let ptr_resp = ptr_ctx
             .response
+            .current()
             .expect("PTR response should be returned")
             .to_message()
             .expect("response should materialize");
@@ -401,13 +402,14 @@ mod tests {
 
         assert!(
             ctx.response
-                .as_ref()
+                .current()
                 .and_then(|response| response.packet())
                 .is_some(),
             "packet-backed response should stay packet-backed"
         );
         assert_eq!(
             ctx.response
+                .current()
                 .expect("response should exist")
                 .to_message()
                 .expect("response should materialize")

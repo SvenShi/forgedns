@@ -18,7 +18,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{context_response_code, context_response_ips};
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -184,13 +183,15 @@ impl StringSource {
                     .unwrap_or_default(),
             ),
             StringSource::Rcode => Cow::Owned(
-                context_response_code(context)
+                context
+                    .response
+                    .response_code()
                     .map(|rcode| rcode.to_string())
                     .unwrap_or_default(),
             ),
             StringSource::RespIp => {
                 let mut out = String::new();
-                for ip in context_response_ips(context) {
+                for ip in context.response.answer_ips() {
                     if !out.is_empty() {
                         out.push(',');
                     }

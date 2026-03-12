@@ -10,7 +10,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::context_response_cnames;
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::{DomainRuleMatcher, split_labels_rev};
 use crate::plugin::dependency::DependencySpec;
@@ -128,7 +127,7 @@ impl Plugin for CnameMatcher {
 
 impl Matcher for CnameMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        context_response_cnames(context).into_iter().any(|cname| {
+        context.response.cnames().into_iter().any(|cname| {
             let mut labels = SmallVec::<[&str; 8]>::new();
             if self.cname_rules.has_trie_rules() || self.domain_sets_has_trie_rules {
                 split_labels_rev(&cname, &mut labels);

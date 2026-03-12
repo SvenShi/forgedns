@@ -294,7 +294,7 @@ async fn handle_dns_stream<S>(
     let transport = TcpTransport::new(stream);
     let (mut reader, mut writer) = transport.into_split();
 
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<crate::message::ResponsePlan>(4096);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<crate::message::Response>(4096);
 
     let handle = tokio::spawn(async move {
         loop {
@@ -435,8 +435,8 @@ impl PluginFactory for TcpServerFactory {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::core::dns_utils::build_response_from_request;
     use crate::core::error::Result;
+    use crate::message::build_response_message_from_request;
     use crate::message::{Message, Question, ResponseCode};
     use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
@@ -506,10 +506,12 @@ mod tests {
                 .lock()
                 .expect("capture lock should not be poisoned")
                 .replace(observed);
-            context.response.set_message(build_response_from_request(
-                &context.request,
-                ResponseCode::Refused,
-            ));
+            context
+                .response
+                .set_message(build_response_message_from_request(
+                    &context.request,
+                    ResponseCode::Refused,
+                ));
             Ok(ExecStep::Stop)
         }
     }

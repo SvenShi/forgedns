@@ -3,21 +3,23 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Response plans and packet-level response helpers.
+//! DNS response values and packet-level response helpers.
 
 mod build;
-mod plan;
 mod rewrite;
 mod scan;
+mod value;
 
 #[cfg(test)]
 mod tests;
 
-pub use build::{build_address_response_packet, build_response_packet};
-pub use plan::{RejectResponsePlan, ResponsePlan};
+pub use build::{
+    build_address_response_packet, build_response_message_from_request, build_response_packet,
+};
 pub use rewrite::{rewrite_response_id, rewrite_response_ttls};
 pub use scan::{
     response_answer_any_ip, response_answer_ip_ttls, response_answer_ips, response_cnames,
     response_has_answer_type, response_ips, response_min_answer_ttl,
     response_negative_ttl_from_soa, response_rcode,
 };
+pub use value::Response;

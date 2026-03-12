@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
-use crate::core::dns_utils::{build_response_plan_from_request, parse_named_response_code};
+use crate::core::dns_utils::parse_named_response_code;
 use crate::core::error::{DnsError, Result};
-use crate::message::ResponseCode;
 use crate::message::build_response_packet;
+use crate::message::{Response, ResponseCode};
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{
@@ -129,7 +129,7 @@ impl ChainProgram {
 
                         context
                             .response
-                            .set_plan(build_response_plan_from_request(&context.request, *rcode));
+                            .set_response(Response::from_request(&context.request, *rcode));
                         context.set_flow(ExecFlowState::Broken);
                         break;
                     }
@@ -697,6 +697,7 @@ mod tests {
         // Assert
         let response = context
             .response
+            .current()
             .expect("reject should build a response")
             .to_message()
             .expect("response should materialize");
@@ -721,6 +722,7 @@ mod tests {
 
         let response = context
             .response
+            .current()
             .expect("reject should build response")
             .to_message()
             .expect("response should materialize");
@@ -753,7 +755,7 @@ mod tests {
         program.run(&mut context).await.unwrap();
 
         // Assert
-        assert!(context.response.is_none());
+        assert!(!context.response.has_response());
         assert_eq!(context.flow(), ExecFlowState::Broken);
         assert!(log.lock().unwrap().is_empty());
     }
@@ -782,7 +784,7 @@ mod tests {
         program.run(&mut context).await.unwrap();
 
         // Assert
-        assert!(context.response.is_none());
+        assert!(!context.response.has_response());
         assert_eq!(context.flow(), ExecFlowState::Running);
         assert!(log.lock().unwrap().is_empty());
     }

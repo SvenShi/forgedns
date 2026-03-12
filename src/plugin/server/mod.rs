@@ -3,10 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
-use crate::core::dns_utils::build_response_plan_from_request;
 use crate::core::error::{DnsError, Result};
 use crate::message::Packet;
-use crate::message::ResponsePlan;
+use crate::message::Response;
 use crate::message::{Message, ResponseCode};
 use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
 use crate::plugin::{Plugin, PluginRegistry};
@@ -76,7 +75,7 @@ pub enum RequestExit {
 #[derive(Debug)]
 #[allow(unused)]
 pub struct RequestResult {
-    pub response: ResponsePlan,
+    pub response: Response,
     pub exit: RequestExit,
 }
 
@@ -168,7 +167,7 @@ impl RequestHandle {
                 };
                 let response = context
                     .response
-                    .take()
+                    .take_response()
                     .unwrap_or_else(|| self.build_empty_response(&context));
                 (response, exit)
             }
@@ -211,18 +210,18 @@ impl RequestHandle {
     }
 
     #[inline]
-    fn build_servfail_response(&self, context: &DnsContext) -> ResponsePlan {
+    fn build_servfail_response(&self, context: &DnsContext) -> Response {
         self.build_base_response(context, ResponseCode::ServFail)
     }
 
     #[inline]
-    fn build_empty_response(&self, context: &DnsContext) -> ResponsePlan {
+    fn build_empty_response(&self, context: &DnsContext) -> Response {
         self.build_base_response(context, ResponseCode::NoError)
     }
 
     #[inline]
-    fn build_base_response(&self, context: &DnsContext, rcode: ResponseCode) -> ResponsePlan {
-        build_response_plan_from_request(&context.request, rcode)
+    fn build_base_response(&self, context: &DnsContext, rcode: ResponseCode) -> Response {
+        Response::from_request(&context.request, rcode)
     }
 }
 
@@ -320,7 +319,7 @@ mod tests {
     #[async_trait]
     impl Executor for StopWithResponseExecutor {
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-            context.response.set_plan(build_response_plan_from_request(
+            context.response.set_response(Response::from_request(
                 &context.request,
                 ResponseCode::Refused,
             ));
@@ -423,7 +422,7 @@ mod tests {
             context: &mut DnsContext,
             _state: Option<crate::plugin::executor::ExecState>,
         ) -> crate::plugin::executor::ExecResult {
-            context.response.set_plan(build_response_plan_from_request(
+            context.response.set_response(Response::from_request(
                 &context.request,
                 ResponseCode::NXDomain,
             ));

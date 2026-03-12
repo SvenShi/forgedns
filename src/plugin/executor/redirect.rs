@@ -489,6 +489,7 @@ mod tests {
 
         let response = ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");

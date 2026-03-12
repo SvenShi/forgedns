@@ -18,7 +18,7 @@ use crate::core::ttl_cache::TtlCache;
 use crate::message::RData;
 use crate::message::{Message, ResponseCode};
 use crate::message::{
-    Packet, ResponsePlan, response_min_answer_ttl, response_negative_ttl_from_soa, response_rcode,
+    Packet, Response, response_min_answer_ttl, response_negative_ttl_from_soa, response_rcode,
     rewrite_response_id, rewrite_response_ttls,
 };
 use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
@@ -366,7 +366,7 @@ impl Cache {
     }
 
     #[inline]
-    fn compute_positive_ttl(&self, response: &ResponsePlan) -> Option<u32> {
+    fn compute_positive_ttl(&self, response: &Response) -> Option<u32> {
         if let Some(packet) = response.packet() {
             if response_rcode(packet).ok()? != u16::from(ResponseCode::NoError) {
                 return None;
@@ -415,7 +415,7 @@ impl Cache {
     }
 
     #[inline]
-    fn compute_negative_ttl(&self, response: &ResponsePlan) -> Option<u32> {
+    fn compute_negative_ttl(&self, response: &Response) -> Option<u32> {
         if let Some(packet) = response.packet() {
             if !self.cache_negative {
                 return None;
@@ -465,7 +465,7 @@ impl Cache {
     }
 
     #[inline]
-    fn compute_cache_ttl(&self, response: &ResponsePlan) -> Option<u32> {
+    fn compute_cache_ttl(&self, response: &Response) -> Option<u32> {
         self.compute_positive_ttl(response)
             .or_else(|| self.compute_negative_ttl(response))
     }
@@ -595,7 +595,7 @@ impl Executor for Cache {
             .map(|boxed| *boxed);
 
         if let Some(key) = cache_key {
-            if let Some(response) = context.response.as_ref() {
+            if let Some(response) = context.response.current() {
                 if response.truncated() {
                     return Ok(());
                 }
@@ -904,7 +904,7 @@ mod tests {
             )),
         ));
 
-        let response_plan: ResponsePlan = response.into();
+        let response_plan: Response = response.into();
         assert_eq!(cache.compute_negative_ttl(&response_plan), Some(20));
     }
 
@@ -917,7 +917,7 @@ mod tests {
         let mut response = Message::new();
         response.set_response_code(ResponseCode::NXDomain);
 
-        let response_plan: ResponsePlan = response.into();
+        let response_plan: Response = response.into();
         assert_eq!(cache.compute_negative_ttl(&response_plan), Some(45));
     }
 
@@ -930,7 +930,7 @@ mod tests {
         let mut response = Message::new();
         response.set_response_code(ResponseCode::NXDomain);
 
-        let response_plan: ResponsePlan = response.into();
+        let response_plan: Response = response.into();
         assert_eq!(cache.compute_negative_ttl(&response_plan), None);
     }
 
@@ -941,7 +941,7 @@ mod tests {
         let mut response = Message::new();
         response.set_response_code(ResponseCode::ServFail);
 
-        let response_plan: ResponsePlan = response.into();
+        let response_plan: Response = response.into();
         assert_eq!(cache.compute_cache_ttl(&response_plan), None);
     }
 
@@ -1000,6 +1000,7 @@ mod tests {
         assert!(hit);
         let response = context
             .response
+            .current()
             .expect("cache hit should set response")
             .to_message()
             .expect("response should materialize");

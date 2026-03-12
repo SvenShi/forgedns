@@ -672,7 +672,7 @@ mod tests {
                 return Err(DnsError::plugin(err.clone()));
             }
             let response_code = self.response_code.unwrap_or(ResponseCode::NoError);
-            Ok(crate::core::dns_utils::build_response_from_request(
+            Ok(crate::message::build_response_message_from_request(
                 &request,
                 response_code,
             ))
@@ -722,7 +722,7 @@ mod tests {
             err.to_string()
                 .contains("failed across all concurrent upstreams")
         );
-        assert!(context.response.is_none());
+        assert!(!context.response.has_response());
     }
 
     #[test]
@@ -803,7 +803,7 @@ upstreams:
         let mut context = make_context();
         let step = forwarder.execute(&mut context).await.unwrap();
         assert!(matches!(step, ExecStep::Next));
-        assert!(context.response.is_some());
+        assert!(context.response.has_response());
     }
 
     #[tokio::test(start_paused = true)]
@@ -829,7 +829,7 @@ upstreams:
         assert_eq!(
             context
                 .response
-                .as_ref()
+                .current()
                 .expect("response must exist")
                 .response_code_hint(),
             Some(ResponseCode::NoError)
@@ -859,7 +859,7 @@ upstreams:
         assert_eq!(
             context
                 .response
-                .as_ref()
+                .current()
                 .expect("response must exist")
                 .response_code_hint(),
             Some(ResponseCode::Refused)

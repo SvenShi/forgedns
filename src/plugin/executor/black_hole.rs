@@ -18,9 +18,9 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::build_response_from_request;
 use crate::core::error::{DnsError, Result};
 use crate::message::ResponseCode;
+use crate::message::build_response_message_from_request;
 use crate::message::rdata::{A, AAAA};
 use crate::message::{RData, Record, RecordType};
 use crate::message::{TYPE_A, TYPE_AAAA, build_address_response_packet};
@@ -96,7 +96,8 @@ impl Executor for BlackHole {
             return Ok(ExecStep::Next);
         };
 
-        let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
+        let mut response =
+            build_response_message_from_request(&context.request, ResponseCode::NoError);
         match RecordType::from(qtype) {
             RecordType::A => {
                 for ip in &self.ipv4 {
@@ -276,6 +277,7 @@ mod tests {
         assert!(matches!(step, ExecStep::Next));
         let resp = ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");
@@ -298,6 +300,7 @@ mod tests {
         assert!(matches!(step, ExecStep::Next));
         let resp = ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");
@@ -323,6 +326,7 @@ mod tests {
         assert!(matches!(step, ExecStep::Next));
         let resp = ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");
@@ -348,6 +352,6 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        assert!(ctx.response.is_none());
+        assert!(!ctx.response.has_response());
     }
 }

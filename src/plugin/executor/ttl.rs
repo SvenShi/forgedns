@@ -90,7 +90,7 @@ impl Executor for TtlExecutor {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if let Some(packet) = context
             .response
-            .as_ref()
+            .current()
             .and_then(|response| response.packet())
         {
             let rewritten = rewrite_response_ttls(packet, |ttl| self.policy.apply(ttl))?;
@@ -280,6 +280,7 @@ mod tests {
 
         let updated = ctx
             .response
+            .current()
             .expect("response should remain present")
             .to_message()
             .expect("response should materialize");
@@ -323,7 +324,7 @@ mod tests {
         assert!(matches!(step, ExecStep::Next));
         assert!(
             ctx.response
-                .as_ref()
+                .current()
                 .and_then(|response| response.packet())
                 .is_some(),
             "packet-backed response should stay packet-backed"
@@ -331,6 +332,7 @@ mod tests {
 
         let updated = ctx
             .response
+            .current()
             .expect("response should remain present")
             .to_message()
             .expect("response should materialize");

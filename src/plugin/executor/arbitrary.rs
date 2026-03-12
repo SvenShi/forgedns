@@ -11,9 +11,9 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::build_response_from_request;
 use crate::core::error::{DnsError, Result};
 use crate::message::ResponseCode;
+use crate::message::build_response_message_from_request;
 use crate::message::rdata::name::{CNAME, NS, PTR};
 use crate::message::rdata::{A, AAAA, MX, TXT};
 use crate::message::{Name, RData, Record, RecordType};
@@ -88,7 +88,8 @@ impl Executor for Arbitrary {
         };
 
         if answer_count > 0 {
-            let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
+            let mut response =
+                build_response_message_from_request(&context.request, ResponseCode::NoError);
             response.answers_mut().reserve(answer_count);
             if qtype == RecordType::ANY {
                 response
@@ -297,7 +298,7 @@ fn parse_name(raw: &str) -> std::result::Result<Name, String> {
 
 #[inline]
 fn normalize_name(name: &Name) -> String {
-    crate::core::context::DnsContext::normalize_dns_name(name)
+    DnsContext::normalize_dns_name(name)
 }
 
 #[cfg(test)]
@@ -347,6 +348,7 @@ mod tests {
         assert!(matches!(step, ExecStep::Next));
         let response = ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");
@@ -375,6 +377,7 @@ mod tests {
             .expect("execute should succeed");
         let response = ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");

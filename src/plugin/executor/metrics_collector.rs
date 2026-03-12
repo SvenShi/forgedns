@@ -21,7 +21,6 @@
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::context_has_response;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -90,7 +89,7 @@ impl Executor for MetricsCollector {
             .map(|boxed| boxed.start_ms)
             .unwrap_or_else(AppClock::elapsed_millis);
 
-        if !context_has_response(context) {
+        if !context.response.has_response() {
             self.err_total.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }

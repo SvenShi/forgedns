@@ -20,7 +20,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::context_answer_ip_ttls;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -160,7 +159,7 @@ impl Executor for IpSetExecutor {
             return Ok(ExecStep::Next);
         }
 
-        let answers = context_answer_ip_ttls(context);
+        let answers = context.response.answer_ip_ttls();
         if answers.is_empty() {
             return Ok(ExecStep::Next);
         }

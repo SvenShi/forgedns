@@ -300,8 +300,8 @@ async fn handle_http_stream<S>(
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::core::dns_utils::build_response_from_request;
     use crate::core::error::Result;
+    use crate::message::build_response_message_from_request;
     use crate::message::{Message, Question, ResponseCode};
     use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
@@ -354,10 +354,12 @@ mod tests {
                     server_name: context.server_name().map(str::to_string),
                     url_path: context.url_path().map(str::to_string),
                 });
-            context.response.set_message(build_response_from_request(
-                &context.request,
-                ResponseCode::NoError,
-            ));
+            context
+                .response
+                .set_message(build_response_message_from_request(
+                    &context.request,
+                    ResponseCode::NoError,
+                ));
             Ok(ExecStep::Stop)
         }
     }

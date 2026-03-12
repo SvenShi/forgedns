@@ -10,7 +10,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::context_response_code;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
@@ -82,7 +81,7 @@ impl Plugin for RcodeMatcher {
 
 impl Matcher for RcodeMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(rcode) = context_response_code(context) else {
+        let Some(rcode) = context.response.response_code() else {
             return false;
         };
         self.rcodes.contains(&rcode)

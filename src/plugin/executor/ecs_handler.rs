@@ -147,7 +147,7 @@ impl Executor for EcsHandler {
 
         let packet_rewritten = match context
             .response
-            .as_ref()
+            .current()
             .and_then(|response| response.packet())
         {
             Some(packet) => Some(strip_ecs_from_packet(packet)?),
@@ -536,7 +536,7 @@ mod tests {
         assert!(
             !request_has_ecs(
                 &ctx.response
-                    .as_ref()
+                    .current()
                     .expect("response should exist")
                     .to_message()
                     .expect("response should materialize")
@@ -582,7 +582,7 @@ mod tests {
             .expect("post_execute should succeed");
         assert!(request_has_ecs(
             &ctx.response
-                .as_ref()
+                .current()
                 .expect("response should exist")
                 .to_message()
                 .expect("response should materialize")
@@ -736,7 +736,7 @@ mod tests {
             .expect("post_execute should succeed");
         assert!(
             ctx.response
-                .as_ref()
+                .current()
                 .and_then(|response| response.packet())
                 .is_some(),
             "response should stay packet-backed"
@@ -744,7 +744,7 @@ mod tests {
         assert!(
             !request_has_ecs(
                 &ctx.response
-                    .as_ref()
+                    .current()
                     .expect("response should exist")
                     .to_message()
                     .expect("response should materialize")

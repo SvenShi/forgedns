@@ -11,12 +11,13 @@
 use crate::core::error::Result;
 use crate::message::Name;
 use crate::message::rdata::opt::ClientSubnet;
-use crate::message::{Message, Packet, QuestionAccess, ResponsePlan};
+use crate::message::{Message, Packet, QuestionAccess, Response};
 use crate::plugin::PluginRegistry;
 use ahash::AHashMap;
 use ahash::AHashSet;
 use smallvec::SmallVec;
 use std::any::Any;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::ops::Range;
@@ -419,82 +420,91 @@ impl Deref for RequestContext {
 /// Response state carried through the executor pipeline.
 #[derive(Debug, Clone, Default)]
 pub struct ResponseContext {
-    plan: Option<ResponsePlan>,
+    response: Option<Response>,
 }
 
 impl ResponseContext {
     #[inline]
-    pub fn is_some(&self) -> bool {
-        self.plan.is_some()
+    pub fn has_response(&self) -> bool {
+        self.response.is_some()
     }
 
     #[inline]
-    pub fn is_none(&self) -> bool {
-        self.plan.is_none()
+    pub fn current(&self) -> Option<&Response> {
+        self.response.as_ref()
     }
 
     #[inline]
-    pub fn plan(&self) -> Option<&ResponsePlan> {
-        self.plan.as_ref()
+    pub fn response_code(&self) -> Option<u16> {
+        self.current()
+            .and_then(|response| response.response_code().map(u16::from))
     }
 
     #[inline]
-    pub fn plan_mut(&mut self) -> Option<&mut ResponsePlan> {
-        self.plan.as_mut()
+    pub fn answer_ips(&self) -> SmallVec<[IpAddr; 8]> {
+        self.current()
+            .map_or_else(SmallVec::new, Response::answer_ips)
+    }
+
+    pub fn has_answer_ip(&self, pred: impl FnMut(IpAddr) -> bool) -> bool {
+        self.current()
+            .is_some_and(|response| response.has_answer_ip(pred))
     }
 
     #[inline]
-    pub fn as_ref(&self) -> Option<&ResponsePlan> {
-        self.plan.as_ref()
+    pub fn answer_ip_ttls(&self) -> SmallVec<[(IpAddr, u32); 8]> {
+        self.current()
+            .map_or_else(SmallVec::new, Response::answer_ip_ttls)
     }
 
     #[inline]
-    pub fn as_mut(&mut self) -> Option<&mut ResponsePlan> {
-        self.plan.as_mut()
+    pub fn cnames(&self) -> SmallVec<[String; 4]> {
+        self.current().map_or_else(SmallVec::new, Response::cnames)
     }
 
     #[inline]
-    pub fn take(&mut self) -> Option<ResponsePlan> {
-        self.plan.take()
+    pub fn has_answer_type(&self, wanted: &[u16]) -> bool {
+        self.current()
+            .is_some_and(|response| response.has_answer_type(wanted))
     }
 
     #[inline]
-    pub fn expect(&self, msg: &str) -> &ResponsePlan {
-        self.plan.as_ref().expect(msg)
+    pub fn take_response(&mut self) -> Option<Response> {
+        self.response.take()
     }
 
     #[inline]
-    pub fn set_plan(&mut self, plan: ResponsePlan) {
-        self.plan = Some(plan);
+    pub fn set_response(&mut self, response: Response) {
+        self.response = Some(response);
     }
 
     #[inline]
     pub fn clear(&mut self) {
-        self.plan = None;
+        self.response = None;
     }
 
     pub fn message(&mut self) -> Result<Option<&Message>> {
-        let Some(plan) = self.plan.as_mut() else {
+        let Some(response) = self.response.as_mut() else {
             return Ok(None);
         };
-        Ok(Some(plan.ensure_message()?))
+        Ok(Some(response.ensure_message()?))
     }
 
     pub fn message_mut(&mut self) -> Result<Option<&mut Message>> {
-        let Some(plan) = self.plan.as_mut() else {
+        let Some(response) = self.response.as_mut() else {
             return Ok(None);
         };
-        Ok(Some(plan.ensure_message()?))
+        Ok(Some(response.ensure_message()?))
     }
 
     #[inline]
     pub fn set_packet(&mut self, packet: Packet) {
-        self.plan = Some(ResponsePlan::Packet(packet));
+        self.response = Some(Response::from_packet(packet));
     }
 
     #[inline]
     pub fn set_message(&mut self, message: Message) {
-        self.plan = Some(ResponsePlan::Message(message));
+        self.response = Some(Response::from_message(message));
     }
 }
 
@@ -651,13 +661,13 @@ impl DnsContext {
     }
 
     #[inline]
-    pub fn set_response_plan(&mut self, plan: ResponsePlan) {
-        self.response.set_plan(plan);
+    pub fn set_response(&mut self, response: Response) {
+        self.response.set_response(response);
     }
 
     #[inline]
-    pub fn take_response_plan(&mut self) -> Option<ResponsePlan> {
-        self.response.take()
+    pub fn take_response(&mut self) -> Option<Response> {
+        self.response.take_response()
     }
 
     #[inline]

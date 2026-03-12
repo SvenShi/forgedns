@@ -9,7 +9,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::context_has_response;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -73,7 +72,7 @@ impl Plugin for HasRespMatcher {
 
 impl Matcher for HasRespMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        context_has_response(context)
+        context.response.has_response()
     }
 }
 

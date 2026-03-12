@@ -32,7 +32,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{context_answer_ip_ttls, context_response_code};
 use crate::core::error::{DnsError, Result};
 use crate::message::ResponseCode;
 use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
@@ -434,13 +433,13 @@ fn extract_observation(
                 .map(|name| DnsContext::normalize_dns_name(&name))
         })?;
 
-    if context_response_code(context)? != u16::from(ResponseCode::NoError) {
+    if context.response.response_code()? != u16::from(ResponseCode::NoError) {
         return None;
     }
 
     // Collapse duplicated A/AAAA answers by IP and keep max TTL per IP.
     let mut dedup = AHashMap::<IpAddr, u32>::new();
-    for (ip, ttl_secs) in context_answer_ip_ttls(context) {
+    for (ip, ttl_secs) in context.response.answer_ip_ttls() {
         match ip {
             IpAddr::V4(_) if config.gateway4.is_none() => continue,
             IpAddr::V6(_) if config.gateway6.is_none() => continue,
@@ -1958,7 +1957,7 @@ persistent_route:
             )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         assert!(
-            ctx.response.is_some(),
+            ctx.response.has_response(),
             "DNS response should be kept unchanged"
         );
         let _ = executor.destroy().await;

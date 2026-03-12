@@ -6,6 +6,7 @@
 //! Owned DNS resource records.
 
 use crate::message::model::data::{DNSClass, Name, RData, RecordType};
+use std::net::IpAddr;
 
 /// Owned resource record.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -69,6 +70,19 @@ impl Record {
     /// Borrow the type-specific record payload.
     pub fn data(&self) -> &RData {
         &self.data
+    }
+
+    /// Extract an IP address from `A` and `AAAA` records.
+    pub fn ip_addr(&self) -> Option<IpAddr> {
+        self.data.ip_addr()
+    }
+
+    /// Return the CNAME target when this record carries one.
+    pub fn cname_target(&self) -> Option<&Name> {
+        match &self.data {
+            RData::CNAME(value) => Some(&value.0),
+            _ => None,
+        }
     }
 
     /// Mutably borrow the type-specific record payload.

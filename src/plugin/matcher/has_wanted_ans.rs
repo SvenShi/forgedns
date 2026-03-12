@@ -10,7 +10,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::context_has_answer_type;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -84,7 +83,7 @@ impl Matcher for HasWantedAnsMatcher {
         if context.request.question_count() == 1
             && let Some(qtype) = context.request.first_question_type()
         {
-            return context_has_answer_type(context, &[u16::from(qtype)]);
+            return context.response.has_answer_type(&[u16::from(qtype)]);
         }
 
         let queries = context.request.questions();
@@ -96,7 +95,7 @@ impl Matcher for HasWantedAnsMatcher {
             wanted.insert(u16::from(query.question_type()));
         }
         let wanted: Vec<u16> = wanted.into_iter().collect();
-        context_has_answer_type(context, &wanted)
+        context.response.has_answer_type(&wanted)
     }
 }
 

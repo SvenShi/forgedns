@@ -92,7 +92,7 @@ impl Executor for ForwardEdns0Opt {
 
         let packet_rewritten = if let Some(packet) = context
             .response
-            .as_ref()
+            .current()
             .and_then(|response| response.packet())
         {
             let existing_codes = collect_selected_codes_from_packet(packet, &self.code_set)?;
@@ -427,7 +427,7 @@ mod tests {
         )));
     }
 
-    fn count_code(plan: &crate::message::ResponsePlan, code: u16) -> usize {
+    fn count_code(plan: &crate::message::Response, code: u16) -> usize {
         let message = plan
             .to_message()
             .expect("response should materialize for inspection");
@@ -469,7 +469,7 @@ mod tests {
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            count_code(ctx.response.current().expect("response should exist"), 8),
             1
         );
     }
@@ -501,7 +501,7 @@ mod tests {
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            count_code(ctx.response.current().expect("response should exist"), 8),
             1
         );
     }
@@ -532,7 +532,7 @@ mod tests {
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            count_code(ctx.response.current().expect("response should exist"), 8),
             1
         );
     }
@@ -566,13 +566,13 @@ mod tests {
             .expect("post_execute should succeed");
         assert!(
             ctx.response
-                .as_ref()
+                .current()
                 .and_then(|response| response.packet())
                 .is_some(),
             "packet-backed response should stay packet-backed"
         );
         assert_eq!(
-            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            count_code(ctx.response.current().expect("response should exist"), 8),
             1
         );
     }
@@ -606,13 +606,13 @@ mod tests {
             .expect("post_execute should succeed");
         assert!(
             ctx.response
-                .as_ref()
+                .current()
                 .and_then(|response| response.packet())
                 .is_some(),
             "packet-backed response should stay packet-backed"
         );
         assert_eq!(
-            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            count_code(ctx.response.current().expect("response should exist"), 8),
             1
         );
     }
@@ -645,7 +645,7 @@ mod tests {
             .expect("post_execute should succeed");
         assert!(
             ctx.response
-                .as_ref()
+                .current()
                 .and_then(|response| response.packet())
                 .is_some(),
             "packet-backed response should stay packet-backed"
@@ -653,14 +653,14 @@ mod tests {
 
         let updated = ctx
             .response
-            .as_ref()
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");
         assert_eq!(updated.additionals().len(), 1);
         assert_eq!(updated.additionals()[0].record_type(), RecordType::OPT);
         assert_eq!(
-            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            count_code(ctx.response.current().expect("response should exist"), 8),
             1
         );
     }

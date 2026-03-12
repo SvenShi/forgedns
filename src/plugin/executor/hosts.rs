@@ -22,9 +22,9 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::build_response_from_request;
 use crate::core::error::{DnsError, Result};
 use crate::message::ResponseCode;
+use crate::message::build_response_message_from_request;
 use crate::message::rdata::{A, AAAA};
 use crate::message::{CLASS_IN, TYPE_A, TYPE_AAAA, build_address_response_packet};
 use crate::message::{RData, Record};
@@ -138,7 +138,8 @@ impl Executor for HostsExecutor {
         let Some(qname_wire) = context.request.first_question_name_owned() else {
             return Ok(ExecStep::Next);
         };
-        let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
+        let mut response =
+            build_response_message_from_request(&context.request, ResponseCode::NoError);
         match qtype {
             TYPE_A => {
                 response.answers_mut().reserve(rule.ipv4.len());
@@ -462,6 +463,7 @@ mod tests {
         assert!(matches!(step, ExecStep::Next));
         let a_resp = a_ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");
@@ -475,6 +477,7 @@ mod tests {
             .expect("execute should work");
         let aaaa_resp = aaaa_ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");
@@ -501,6 +504,7 @@ mod tests {
         assert!(matches!(step, ExecStep::Next));
         let response = ctx
             .response
+            .current()
             .expect("response should exist")
             .to_message()
             .expect("response should materialize");
@@ -523,6 +527,6 @@ mod tests {
 
         let mut ctx = make_context("other.com.", RecordType::A);
         plugin.execute(&mut ctx).await.expect("execute should work");
-        assert!(ctx.response.is_none());
+        assert!(!ctx.response.has_response());
     }
 }

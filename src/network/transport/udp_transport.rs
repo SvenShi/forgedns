@@ -5,7 +5,7 @@
 
 use crate::core::buffer_pool::ReusableBuffer;
 use crate::message::Message;
-use crate::message::ResponsePlan;
+use crate::message::Response;
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 
@@ -53,7 +53,7 @@ impl UdpTransport {
     }
 
     #[inline]
-    pub async fn write_response(&self, response: &ResponsePlan) -> Result<()> {
+    pub async fn write_response(&self, response: &Response) -> Result<()> {
         let mut bytes = ReusableBuffer::with_capacity(response_buffer_capacity_hint(response));
         encode_response_with_max_payload_into(response, u16::MAX, bytes.as_mut_vec())?;
 
@@ -153,7 +153,7 @@ impl UdpTransport {
     #[inline]
     pub async fn write_response_to(
         &self,
-        response: &ResponsePlan,
+        response: &Response,
         to: SocketAddr,
         max_payload: u16,
     ) -> Result<()> {
@@ -196,7 +196,7 @@ fn encode_message_with_max_payload_into(
 
 #[inline]
 fn encode_response_with_max_payload_into(
-    response: &ResponsePlan,
+    response: &Response,
     max_payload: u16,
     bytes: &mut Vec<u8>,
 ) -> Result<()> {
@@ -213,7 +213,7 @@ fn message_buffer_capacity_hint(message: &Message) -> usize {
 }
 
 #[inline]
-fn response_buffer_capacity_hint(response: &ResponsePlan) -> usize {
+fn response_buffer_capacity_hint(response: &Response) -> usize {
     response.response_len_hint().unwrap_or(512).max(512)
 }
 

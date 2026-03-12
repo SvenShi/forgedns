@@ -9,7 +9,7 @@
 //!
 //! - `wire`: packet-backed DNS views and parsers.
 //! - `model`: owned DNS message and RR data model.
-//! - `response`: response plans and packet-level response helpers.
+//! - `response`: DNS response values and packet-level response helpers.
 //! - `read`: unified read-only accessors over packet-backed and owned data.
 
 /// Shared owned-message encoders and decoders.
@@ -18,7 +18,7 @@ pub(crate) mod codec;
 pub mod model;
 /// Unified read-only accessors over packet-backed and owned message state.
 pub mod read;
-/// Packet-level response helpers and lazy response plans.
+/// Packet-level response helpers and DNS response values.
 pub mod response;
 /// Zero-copy wire-level packet parser and borrowed views.
 pub mod wire;
@@ -34,9 +34,9 @@ pub use model::{MessageType, OpCode, Question, ResponseCode};
 pub use read::{EdnsAccess, EdnsOptionAccess, EdnsOptionAccessIter, NameAccess, QuestionAccess};
 /// Re-export packet-level response builders and scanners.
 pub use response::{
-    RejectResponsePlan, ResponsePlan, build_address_response_packet, build_response_packet,
-    response_answer_any_ip, response_answer_ip_ttls, response_answer_ips, response_cnames,
-    response_has_answer_type, response_ips, response_min_answer_ttl,
+    Response, build_address_response_packet, build_response_message_from_request,
+    build_response_packet, response_answer_any_ip, response_answer_ip_ttls, response_answer_ips,
+    response_cnames, response_has_answer_type, response_ips, response_min_answer_ttl,
     response_negative_ttl_from_soa, response_rcode, rewrite_response_id, rewrite_response_ttls,
 };
 /// Re-export borrowed wire constants.

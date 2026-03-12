@@ -283,7 +283,7 @@ impl HttpHandler for DnsPostHandler {
 }
 
 #[inline]
-fn msg_to_response(dns_response: crate::message::ResponsePlan) -> Response<Bytes> {
+fn msg_to_response(dns_response: crate::message::Response) -> Response<Bytes> {
     // Serialize DNS response to binary format
     match dns_response.to_bytes() {
         Ok(response_bytes) => {
@@ -310,8 +310,8 @@ fn msg_to_response(dns_response: crate::message::ResponsePlan) -> Response<Bytes
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::core::dns_utils::build_response_from_request;
     use crate::core::error::Result;
+    use crate::message::build_response_message_from_request;
     use crate::message::{Name, RecordType};
     use crate::message::{Question, ResponseCode};
     use crate::plugin::Plugin;
@@ -367,10 +367,12 @@ mod tests {
                 .lock()
                 .expect("request observation lock should not be poisoned")
                 .replace(observed);
-            context.response.set_message(build_response_from_request(
-                &context.request,
-                self.response_code,
-            ));
+            context
+                .response
+                .set_message(build_response_message_from_request(
+                    &context.request,
+                    self.response_code,
+                ));
             Ok(ExecStep::Next)
         }
     }

@@ -7,7 +7,7 @@ use crate::core::buffer_pool::ReusableBuffer;
 use crate::core::error::{DnsError, Result};
 use crate::message::Message;
 use crate::message::Packet;
-use crate::message::ResponsePlan;
+use crate::message::Response;
 use bytes::BytesMut;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 
@@ -93,7 +93,7 @@ impl QuicTransportWriter {
     }
 
     #[inline]
-    pub async fn write_response(&mut self, response: &ResponsePlan) -> Result<()> {
+    pub async fn write_response(&mut self, response: &Response) -> Result<()> {
         let mut body = ReusableBuffer::with_capacity(response_buffer_capacity_hint(response));
         encode_response_into(response, body.as_mut_vec())?;
         let body_len = body.as_slice().len();
@@ -170,7 +170,7 @@ fn encode_message_into(message: &Message, body: &mut Vec<u8>) -> Result<()> {
 }
 
 #[inline]
-fn encode_response_into(response: &ResponsePlan, body: &mut Vec<u8>) -> Result<()> {
+fn encode_response_into(response: &Response, body: &mut Vec<u8>) -> Result<()> {
     response.encode_into(body)
 }
 
@@ -184,6 +184,6 @@ fn message_buffer_capacity_hint(message: &Message) -> usize {
 }
 
 #[inline]
-fn response_buffer_capacity_hint(response: &ResponsePlan) -> usize {
+fn response_buffer_capacity_hint(response: &Response) -> usize {
     response.response_len_hint().unwrap_or(512).max(512)
 }

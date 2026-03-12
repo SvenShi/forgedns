@@ -288,7 +288,7 @@ async fn run_executor(
 ) -> Outcome {
     match execute_with_post(executor.as_ref(), &mut context).await {
         Ok(step) => {
-            let has_response = context.response.is_some();
+            let has_response = context.response.has_response();
             Outcome {
                 context: if has_response { Some(context) } else { None },
                 source,

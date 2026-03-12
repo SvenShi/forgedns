@@ -95,6 +95,6 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        assert!(ctx.response.is_none());
+        assert!(!ctx.response.has_response());
     }
 }

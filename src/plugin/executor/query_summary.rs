@@ -85,7 +85,7 @@ impl Executor for QuerySummary {
         };
         let rcode = context
             .response
-            .as_ref()
+            .current()
             .and_then(|response| {
                 response
                     .response_code_hint()

@@ -16,14 +16,10 @@
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{
-    build_response_plan_from_request, context_has_answer_type, context_has_response,
-};
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
-use crate::message::RecordType;
-use crate::message::ResponseCode;
+use crate::message::{RecordType, Response, ResponseCode};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -158,7 +154,7 @@ impl Executor for DualSelector {
         if self.cache_enabled {
             if let Some(preferred_exists) = self.cache_get_preferred_state(&domain) {
                 if preferred_exists {
-                    context.response.set_plan(build_response_plan_from_request(
+                    context.response.set_response(Response::from_request(
                         &context.request,
                         ResponseCode::NoError,
                     ));
@@ -191,8 +187,9 @@ impl Executor for DualSelector {
 
         match state.mode {
             PostMode::Preferred => {
-                let has_preferred_answer =
-                    context_has_answer_type(context, &[u16::from(self.preferred_type)]);
+                let has_preferred_answer = context
+                    .response
+                    .has_answer_type(&[u16::from(self.preferred_type)]);
                 if has_preferred_answer {
                     self.cache_preferred(&state.domain);
                 }
@@ -214,7 +211,7 @@ impl DualSelector {
         // Probe errors mean preferred-type availability is unknown.
         // Never cache/block in this case to avoid false positive suppression.
         if probe.preferred_error.is_some() {
-            if !context_has_response(context) {
+            if !context.response.has_response() {
                 if let Some(err) = probe.original_error {
                     return Err(DnsError::plugin(err));
                 }
@@ -226,7 +223,7 @@ impl DualSelector {
             if self.cache_enabled {
                 self.cache_probe_result(domain, true);
             }
-            context.response.set_plan(build_response_plan_from_request(
+            context.response.set_response(Response::from_request(
                 &context.request,
                 ResponseCode::NoError,
             ));
@@ -237,7 +234,7 @@ impl DualSelector {
             self.cache_probe_result(domain, false);
         }
 
-        if !context_has_response(context) {
+        if !context.response.has_response() {
             if let Some(err) = probe.original_error {
                 return Err(DnsError::plugin(err));
             }
@@ -349,7 +346,7 @@ impl PluginFactory for DualSelectorFactory {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
-    use crate::core::dns_utils::build_response_from_request;
+    use crate::message::build_response_message_from_request;
     use crate::message::rdata::{A, AAAA};
     use crate::message::{Message, Question};
     use crate::message::{Name, RData, Record};
@@ -387,7 +384,8 @@ mod tests {
             .request
             .first_question_name_owned()
             .expect("question must exist");
-        let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
+        let mut response =
+            build_response_message_from_request(&context.request, ResponseCode::NoError);
         match qtype {
             RecordType::A => response.answers_mut().push(Record::from_rdata(
                 qname,
@@ -405,7 +403,7 @@ mod tests {
     }
 
     fn has_answer_of_type(context: &DnsContext, qtype: RecordType) -> bool {
-        context.response.as_ref().is_some_and(|response| {
+        context.response.current().is_some_and(|response| {
             response
                 .to_message()
                 .expect("response should materialize")

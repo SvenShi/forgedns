@@ -175,7 +175,7 @@ plugins:
     assert_eq!(
         context
             .response
-            .as_ref()
+            .current()
             .expect("reject should set a response")
             .response_code_hint(),
         Some(ResponseCode::ServFail)
@@ -270,7 +270,7 @@ plugins:
     assert_eq!(
         context
             .response
-            .as_ref()
+            .current()
             .expect("reject should set a response")
             .response_code_hint(),
         Some(ResponseCode::ServFail)

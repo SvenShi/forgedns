@@ -3,14 +3,48 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Packet-level response builders that reuse request wire sections.
+//! Packet-level and owned-message response builders.
 
 use crate::core::error::{DnsError, Result};
-use crate::message::Packet;
+use crate::message::rdata::Edns;
 use crate::message::wire::constants::{CLASS_IN, RCODE_NOERROR, TYPE_A, TYPE_AAAA, TYPE_OPT};
 use crate::message::wire::flags::{DNS_HEADER_LEN, EDNS_FLAG_DO, FLAG_CD, FLAG_QR, FLAG_RD};
+use crate::message::{Message, MessageType, Packet, ResponseCode};
 use smallvec::SmallVec;
 use std::net::IpAddr;
+
+/// Build a minimal owned DNS response from a request, preserving id/opcode/query.
+pub fn build_response_message_from_request(request: &Message, rcode: ResponseCode) -> Message {
+    if let Some(packet) = request.packet() {
+        if let Ok(response) = build_response_packet(packet, u16::from(rcode)) {
+            if let Ok(message) = Message::from_packet(response) {
+                return message;
+            }
+        }
+    }
+
+    let mut response = Message::new();
+    response.set_id(request.id());
+    response.set_op_code(request.op_code());
+    response.set_message_type(MessageType::Response);
+    response.set_recursion_desired(request.recursion_desired());
+    response.set_checking_disabled(request.checking_disabled());
+    response.set_response_code(rcode);
+    *response.questions_mut() = request.questions().to_vec();
+    if let Some(request_edns) = request.edns_access() {
+        let mut edns = Edns::new();
+        edns.set_udp_payload_size(request_edns.udp_payload_size().max(512));
+        edns.set_version(request_edns.version());
+        edns.flags_mut().dnssec_ok = request_edns.dnssec_ok();
+        edns.set_ext_rcode((u16::from(rcode) >> 4) as u8);
+        response.set_edns(edns);
+    } else if u16::from(rcode) > 0x0f {
+        let mut edns = Edns::new();
+        edns.set_ext_rcode((u16::from(rcode) >> 4) as u8);
+        response.set_edns(edns);
+    }
+    response
+}
 
 /// Build a minimal DNS response packet by reusing the request question section.
 ///

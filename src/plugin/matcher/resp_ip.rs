@@ -10,7 +10,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::context_response_has_ip;
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::dependency::DependencySpec;
@@ -114,7 +113,7 @@ impl Plugin for RespIpMatcher {
 
 impl Matcher for RespIpMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        context_response_has_ip(context, |ip| {
+        context.response.has_answer_ip(|ip| {
             self.ip_rules.contains_ip(ip) || self.ip_sets.iter().any(|set| set.contains_ip(ip))
         })
     }
