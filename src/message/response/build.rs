@@ -15,14 +15,6 @@ use std::net::IpAddr;
 
 /// Build a minimal owned DNS response from a request, preserving id/opcode/query.
 pub fn build_response_message_from_request(request: &Message, rcode: ResponseCode) -> Message {
-    if let Some(packet) = request.packet() {
-        if let Ok(response) = build_response_packet(packet, u16::from(rcode)) {
-            if let Ok(message) = Message::from_packet(response) {
-                return message;
-            }
-        }
-    }
-
     let mut response = Message::new();
     response.set_id(request.id());
     response.set_op_code(request.op_code());

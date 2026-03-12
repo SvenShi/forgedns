@@ -29,6 +29,7 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
+use smallvec::SmallVec;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -75,7 +76,7 @@ impl Executor for BlackHole {
         };
         let qtype = question.qtype();
 
-        let mut addresses = Vec::new();
+        let mut addresses = SmallVec::<[IpAddr; 8]>::new();
         match qtype {
             TYPE_A if !self.ipv4.is_empty() => {
                 addresses.extend(self.ipv4.iter().copied().map(IpAddr::V4));
@@ -88,7 +89,7 @@ impl Executor for BlackHole {
 
         if let Some(packet) = context.request_packet() {
             let response = build_address_response_packet(packet, 300, &addresses)?;
-            context.set_response_packet(response)?;
+            context.set_response_packet_with_answer_ips(response, addresses.clone())?;
             return Ok(ExecStep::Next);
         }
 
@@ -120,7 +121,7 @@ impl Executor for BlackHole {
             _ => {}
         }
         if !response.answers().is_empty() {
-            context.response.set_message(response);
+            context.set_response_message_with_answer_ips(response, addresses);
         }
 
         Ok(ExecStep::Next)

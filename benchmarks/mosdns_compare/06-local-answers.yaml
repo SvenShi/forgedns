@@ -1,0 +1,39 @@
+log:
+  level: error
+
+plugins:
+  - tag: hosts_main
+    type: hosts
+    args:
+      entries:
+        - "full:bench.local 192.0.2.10 2001:db8::10"
+        - "full:svc.bench.local 192.0.2.20 2001:db8::20"
+        - "full:api.bench.local 192.0.2.40 2001:db8::40"
+        - "full:cdn.bench.local 192.0.2.50 2001:db8::50"
+        - "full:metrics.bench.local 192.0.2.60 2001:db8::60"
+
+  - tag: arbitrary_main
+    type: arbitrary
+    args:
+      rules:
+        - 'txt.bench.local. 60 IN TXT "forge-bench"'
+        - "target.bench.local. 60 IN A 192.0.2.30"
+        - 'status.bench.local. 60 IN TXT "ok"'
+        - "alias.bench.local. 60 IN CNAME target.bench.local."
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: $hosts_main
+      - matches: ["has_resp"]
+        exec: accept
+      - exec: $arbitrary_main
+      - matches: ["has_resp"]
+        exec: accept
+      - exec: reject 3
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5306"

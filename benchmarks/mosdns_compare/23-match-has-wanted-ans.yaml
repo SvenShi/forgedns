@@ -1,0 +1,17 @@
+log:
+  level: error
+
+plugins:
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: black_hole 192.0.2.10
+      - matches: ["has_wanted_ans"]
+        exec: accept
+      - exec: reject 2
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5323"

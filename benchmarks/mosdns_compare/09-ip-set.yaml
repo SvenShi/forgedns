@@ -1,0 +1,36 @@
+log:
+  level: error
+
+plugins:
+  - tag: bench_ip_set
+    type: ip_set
+    args:
+      files:
+        - "./data/ip_set_rules.txt"
+
+  - tag: arbitrary_main
+    type: arbitrary
+    args:
+      rules:
+        - "ipset-01.bench.test. 60 IN A 10.1.0.10"
+        - "ipset-02.bench.test. 60 IN A 10.2.0.20"
+        - "ipset-03.bench.test. 60 IN A 10.3.0.30"
+        - "ipset-04.bench.test. 60 IN A 10.4.0.40"
+        - "ipset-05.bench.test. 60 IN A 203.0.113.50"
+        - "ipset-06.bench.test. 60 IN A 203.0.113.60"
+        - "ipset-07.bench.test. 60 IN A 203.0.113.70"
+        - "ipset-08.bench.test. 60 IN A 203.0.113.80"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: $arbitrary_main
+      - matches: ["resp_ip $bench_ip_set"]
+        exec: accept
+      - exec: reject 2
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5309"

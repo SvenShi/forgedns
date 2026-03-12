@@ -11,7 +11,8 @@
 use crate::core::error::Result;
 use crate::message::Name;
 use crate::message::rdata::opt::ClientSubnet;
-use crate::message::{Message, Packet, QuestionAccess, Response};
+use crate::message::response::{ResponseScanSummary, ResponseTtlOffsets, scan_response};
+use crate::message::{Message, Packet, QuestionAccess, RData, Response, ResponseCode};
 use crate::plugin::PluginRegistry;
 use ahash::AHashMap;
 use ahash::AHashSet;
@@ -417,10 +418,177 @@ impl Deref for RequestContext {
     }
 }
 
+/// Cached response summary shared by matchers and executors.
+#[derive(Debug, Clone, Default)]
+pub struct ResponseFacts {
+    response_code: Option<u16>,
+    truncated: bool,
+    answer_ips: SmallVec<[IpAddr; 8]>,
+    answer_ip_ttls: SmallVec<[(IpAddr, u32); 8]>,
+    cnames: SmallVec<[String; 4]>,
+    answer_types: SmallVec<[u16; 8]>,
+    min_answer_ttl: Option<u32>,
+    negative_ttl_from_soa: Option<u32>,
+    ttl_offsets: ResponseTtlOffsets,
+}
+
+impl ResponseFacts {
+    #[inline]
+    pub fn response_code(&self) -> Option<u16> {
+        self.response_code
+    }
+
+    #[inline]
+    pub fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    #[inline]
+    pub fn answer_ips(&self) -> &SmallVec<[IpAddr; 8]> {
+        &self.answer_ips
+    }
+
+    #[inline]
+    pub fn answer_ip_ttls(&self) -> &SmallVec<[(IpAddr, u32); 8]> {
+        &self.answer_ip_ttls
+    }
+
+    #[inline]
+    pub fn cnames(&self) -> &SmallVec<[String; 4]> {
+        &self.cnames
+    }
+
+    #[inline]
+    pub fn min_answer_ttl(&self) -> Option<u32> {
+        self.min_answer_ttl
+    }
+
+    #[inline]
+    pub fn negative_ttl_from_soa(&self) -> Option<u32> {
+        self.negative_ttl_from_soa
+    }
+
+    #[inline]
+    pub fn ttl_offsets(&self) -> &[usize] {
+        &self.ttl_offsets
+    }
+
+    #[inline]
+    pub fn has_answer_ip(&self, mut pred: impl FnMut(IpAddr) -> bool) -> bool {
+        self.answer_ips.iter().copied().any(&mut pred)
+    }
+
+    #[inline]
+    pub fn has_answer_type(&self, wanted: &[u16]) -> bool {
+        self.answer_types
+            .iter()
+            .copied()
+            .any(|rr_type| wanted.contains(&rr_type))
+    }
+
+    pub(crate) fn from_response(
+        response: &Response,
+        answer_ips_hint: Option<&SmallVec<[IpAddr; 8]>>,
+    ) -> Option<Self> {
+        if let Some(message) = response.message() {
+            if let Some(packet) = message.packet() {
+                return scan_response(packet)
+                    .ok()
+                    .map(|summary| Self::from_scan(summary, answer_ips_hint));
+            }
+            return Some(Self::from_message(message, answer_ips_hint));
+        }
+        if let Some(packet) = response.packet() {
+            return scan_response(packet)
+                .ok()
+                .map(|summary| Self::from_scan(summary, answer_ips_hint));
+        }
+        Some(Self::from_synthetic(response.response_code_hint()))
+    }
+
+    fn from_scan(
+        summary: ResponseScanSummary,
+        answer_ips_hint: Option<&SmallVec<[IpAddr; 8]>>,
+    ) -> Self {
+        let mut facts = Self {
+            response_code: Some(summary.response_code()),
+            truncated: summary.truncated(),
+            answer_ips: summary.answer_ips().clone(),
+            answer_ip_ttls: summary.answer_ip_ttls().clone(),
+            cnames: summary.cnames().clone(),
+            answer_types: summary.answer_types().clone(),
+            min_answer_ttl: summary.min_answer_ttl(),
+            negative_ttl_from_soa: summary.negative_ttl_from_soa(),
+            ttl_offsets: summary.ttl_offsets().iter().copied().collect(),
+        };
+        if let Some(ips) = answer_ips_hint {
+            facts.answer_ips = ips.clone();
+        }
+        facts
+    }
+
+    fn from_message(message: &Message, answer_ips_hint: Option<&SmallVec<[IpAddr; 8]>>) -> Self {
+        let mut facts = Self {
+            response_code: Some(u16::from(message.response_code())),
+            truncated: message.truncated(),
+            ..Self::default()
+        };
+
+        for record in message.answers() {
+            facts.answer_types.push(u16::from(record.record_type()));
+            facts.min_answer_ttl = Some(match facts.min_answer_ttl {
+                Some(current) => current.min(record.ttl()),
+                None => record.ttl(),
+            });
+            if let Some(ip) = record.ip_addr() {
+                facts.answer_ips.push(ip);
+                facts.answer_ip_ttls.push((ip, record.ttl()));
+            }
+            if let Some(target) = record.cname_target() {
+                facts.cnames.push(target.normalized());
+            }
+        }
+
+        for record in message.name_servers() {
+            if let RData::SOA(soa) = record.data() {
+                let ttl = record.ttl().min(soa.minimum());
+                facts.negative_ttl_from_soa = Some(match facts.negative_ttl_from_soa {
+                    Some(current) => current.min(ttl),
+                    None => ttl,
+                });
+            }
+            if let Some(target) = record.cname_target() {
+                facts.cnames.push(target.normalized());
+            }
+        }
+
+        for record in message.additionals() {
+            if let Some(target) = record.cname_target() {
+                facts.cnames.push(target.normalized());
+            }
+        }
+
+        if let Some(ips) = answer_ips_hint {
+            facts.answer_ips = ips.clone();
+        }
+
+        facts
+    }
+
+    fn from_synthetic(response_code: Option<ResponseCode>) -> Self {
+        Self {
+            response_code: response_code.map(u16::from),
+            ..Self::default()
+        }
+    }
+}
+
 /// Response state carried through the executor pipeline.
 #[derive(Debug, Clone, Default)]
 pub struct ResponseContext {
     response: Option<Response>,
+    answer_ips_hint: Option<SmallVec<[IpAddr; 8]>>,
+    facts: Option<ResponseFacts>,
 }
 
 impl ResponseContext {
@@ -435,52 +603,103 @@ impl ResponseContext {
     }
 
     #[inline]
-    pub fn response_code(&self) -> Option<u16> {
-        self.current()
-            .and_then(|response| response.response_code().map(u16::from))
+    pub fn response_code(&mut self) -> Option<u16> {
+        self.facts()
+            .and_then(ResponseFacts::response_code)
+            .or_else(|| {
+                self.current()
+                    .and_then(|response| response.response_code_hint().map(u16::from))
+            })
     }
 
     #[inline]
-    pub fn answer_ips(&self) -> SmallVec<[IpAddr; 8]> {
-        self.current()
-            .map_or_else(SmallVec::new, Response::answer_ips)
+    pub fn answer_ips(&mut self) -> SmallVec<[IpAddr; 8]> {
+        if let Some(facts) = self.facts.as_ref() {
+            return facts.answer_ips().clone();
+        }
+        if let Some(ips) = self.answer_ips_hint.as_ref() {
+            return ips.clone();
+        }
+        self.facts()
+            .map_or_else(SmallVec::new, |facts| facts.answer_ips().clone())
     }
 
-    pub fn has_answer_ip(&self, pred: impl FnMut(IpAddr) -> bool) -> bool {
-        self.current()
-            .is_some_and(|response| response.has_answer_ip(pred))
+    pub fn has_answer_ip(&mut self, mut pred: impl FnMut(IpAddr) -> bool) -> bool {
+        if let Some(facts) = self.facts.as_ref() {
+            return facts.has_answer_ip(pred);
+        }
+        if let Some(ips) = self.answer_ips_hint.as_ref() {
+            return ips.iter().copied().any(&mut pred);
+        }
+        self.facts().is_some_and(|facts| facts.has_answer_ip(pred))
     }
 
     #[inline]
-    pub fn answer_ip_ttls(&self) -> SmallVec<[(IpAddr, u32); 8]> {
-        self.current()
-            .map_or_else(SmallVec::new, Response::answer_ip_ttls)
+    pub fn answer_ip_ttls(&mut self) -> SmallVec<[(IpAddr, u32); 8]> {
+        self.facts()
+            .map_or_else(SmallVec::new, |facts| facts.answer_ip_ttls().clone())
     }
 
     #[inline]
-    pub fn cnames(&self) -> SmallVec<[String; 4]> {
-        self.current().map_or_else(SmallVec::new, Response::cnames)
+    pub fn cnames(&mut self) -> SmallVec<[String; 4]> {
+        self.facts()
+            .map_or_else(SmallVec::new, |facts| facts.cnames().clone())
     }
 
     #[inline]
-    pub fn has_answer_type(&self, wanted: &[u16]) -> bool {
-        self.current()
-            .is_some_and(|response| response.has_answer_type(wanted))
+    pub fn has_answer_type(&mut self, wanted: &[u16]) -> bool {
+        self.facts()
+            .is_some_and(|facts| facts.has_answer_type(wanted))
+    }
+
+    #[inline]
+    pub fn truncated(&mut self) -> bool {
+        self.facts().is_some_and(ResponseFacts::truncated)
+    }
+
+    pub fn facts(&mut self) -> Option<&ResponseFacts> {
+        if self.facts.is_none() {
+            let response = self.response.as_ref()?;
+            self.facts = ResponseFacts::from_response(response, self.answer_ips_hint.as_ref());
+        }
+        self.facts.as_ref()
+    }
+
+    #[inline]
+    fn invalidate_facts(&mut self) {
+        self.facts = None;
     }
 
     #[inline]
     pub fn take_response(&mut self) -> Option<Response> {
+        self.answer_ips_hint = None;
+        self.invalidate_facts();
         self.response.take()
     }
 
     #[inline]
     pub fn set_response(&mut self, response: Response) {
         self.response = Some(response);
+        self.answer_ips_hint = None;
+        self.invalidate_facts();
+    }
+
+    #[inline]
+    pub fn set_response_with_answer_ips(
+        &mut self,
+        response: Response,
+        answer_ips: SmallVec<[IpAddr; 8]>,
+    ) {
+        self.response = Some(response);
+        self.answer_ips_hint = (!answer_ips.is_empty()).then_some(answer_ips);
+        self.invalidate_facts();
     }
 
     #[inline]
     pub fn clear(&mut self) {
         self.response = None;
+        self.answer_ips_hint = None;
+        self.invalidate_facts();
     }
 
     pub fn message(&mut self) -> Result<Option<&Message>> {
@@ -491,6 +710,8 @@ impl ResponseContext {
     }
 
     pub fn message_mut(&mut self) -> Result<Option<&mut Message>> {
+        self.answer_ips_hint = None;
+        self.invalidate_facts();
         let Some(response) = self.response.as_mut() else {
             return Ok(None);
         };
@@ -500,11 +721,37 @@ impl ResponseContext {
     #[inline]
     pub fn set_packet(&mut self, packet: Packet) {
         self.response = Some(Response::from_packet(packet));
+        self.answer_ips_hint = None;
+        self.invalidate_facts();
+    }
+
+    #[inline]
+    pub fn set_packet_with_answer_ips(
+        &mut self,
+        packet: Packet,
+        answer_ips: SmallVec<[IpAddr; 8]>,
+    ) {
+        self.response = Some(Response::from_packet(packet));
+        self.answer_ips_hint = (!answer_ips.is_empty()).then_some(answer_ips);
+        self.invalidate_facts();
     }
 
     #[inline]
     pub fn set_message(&mut self, message: Message) {
         self.response = Some(Response::from_message(message));
+        self.answer_ips_hint = None;
+        self.invalidate_facts();
+    }
+
+    #[inline]
+    pub fn set_message_with_answer_ips(
+        &mut self,
+        message: Message,
+        answer_ips: SmallVec<[IpAddr; 8]>,
+    ) {
+        self.response = Some(Response::from_message(message));
+        self.answer_ips_hint = (!answer_ips.is_empty()).then_some(answer_ips);
+        self.invalidate_facts();
     }
 }
 
@@ -677,8 +924,28 @@ impl DnsContext {
     }
 
     #[inline]
+    pub fn set_response_packet_with_answer_ips(
+        &mut self,
+        packet: Packet,
+        answer_ips: SmallVec<[IpAddr; 8]>,
+    ) -> Result<()> {
+        self.response.set_packet_with_answer_ips(packet, answer_ips);
+        Ok(())
+    }
+
+    #[inline]
     pub fn set_response_message(&mut self, message: Message) {
         self.response.set_message(message);
+    }
+
+    #[inline]
+    pub fn set_response_message_with_answer_ips(
+        &mut self,
+        message: Message,
+        answer_ips: SmallVec<[IpAddr; 8]>,
+    ) {
+        self.response
+            .set_message_with_answer_ips(message, answer_ips);
     }
 
     #[inline]
@@ -783,7 +1050,8 @@ impl DnsContext {
 mod tests {
     use super::*;
     use crate::message::Question;
-    use crate::message::{Name, RecordType};
+    use crate::message::rdata::A;
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::PluginRegistry;
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
@@ -849,5 +1117,87 @@ mod tests {
 
         assert_eq!(ctx.server_name(), Some("dns.example.com"));
         assert_eq!(ctx.url_path(), Some("/dns-query"));
+    }
+
+    #[test]
+    fn test_response_answer_ip_hint_is_used_until_mutation() {
+        let mut ctx = make_context();
+        let mut response = Message::new();
+        response.set_message_type(crate::message::MessageType::Response);
+        response.add_question(Question::new(
+            Name::from_ascii("www.example.com.").unwrap(),
+            RecordType::A,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("www.example.com.").unwrap(),
+            60,
+            RData::A(A::from(Ipv4Addr::new(192, 0, 2, 1))),
+        ));
+        let mut answer_ips = SmallVec::<[IpAddr; 8]>::new();
+        answer_ips.push(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)));
+
+        ctx.set_response_message_with_answer_ips(response, answer_ips);
+
+        assert!(
+            ctx.response
+                .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)))
+        );
+
+        let response = ctx
+            .response_message_mut()
+            .expect("response access should succeed")
+            .expect("response should exist");
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("www.example.com.").unwrap(),
+            60,
+            RData::A(A::from(Ipv4Addr::new(198, 51, 100, 2))),
+        ));
+
+        assert!(
+            ctx.response
+                .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2)))
+        );
+    }
+
+    #[test]
+    fn test_response_packet_answer_ip_hint_is_used_until_mutation() {
+        let mut ctx = make_context();
+        let mut response = Message::new();
+        response.set_message_type(crate::message::MessageType::Response);
+        response.add_question(Question::new(
+            Name::from_ascii("www.example.com.").unwrap(),
+            RecordType::A,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("www.example.com.").unwrap(),
+            60,
+            RData::A(A::from(Ipv4Addr::new(192, 0, 2, 55))),
+        ));
+        let packet = Packet::from_vec(response.to_bytes().expect("response should encode"));
+        let mut answer_ips = SmallVec::<[IpAddr; 8]>::new();
+        answer_ips.push(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 55)));
+
+        ctx.set_response_packet_with_answer_ips(packet, answer_ips)
+            .expect("setting packet response should succeed");
+
+        assert!(
+            ctx.response
+                .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(192, 0, 2, 55)))
+        );
+
+        let response = ctx
+            .response_message_mut()
+            .expect("response access should succeed")
+            .expect("response should exist");
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("www.example.com.").unwrap(),
+            60,
+            RData::A(A::from(Ipv4Addr::new(198, 51, 100, 7))),
+        ));
+
+        assert!(
+            ctx.response
+                .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)))
+        );
     }
 }

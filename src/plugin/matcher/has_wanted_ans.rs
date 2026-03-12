@@ -86,6 +86,24 @@ impl Matcher for HasWantedAnsMatcher {
             return context.response.has_answer_type(&[u16::from(qtype)]);
         }
 
+        if let Some(packet) = context.request.packet() {
+            let Ok(parsed) = packet.parse() else {
+                return false;
+            };
+            let mut wanted = AHashSet::with_capacity(parsed.header().qdcount() as usize);
+            for question in parsed.question_records() {
+                let Ok(question) = question else {
+                    return false;
+                };
+                wanted.insert(question.qtype());
+            }
+            if wanted.is_empty() {
+                return false;
+            }
+            let wanted: Vec<u16> = wanted.into_iter().collect();
+            return context.response.has_answer_type(&wanted);
+        }
+
         let queries = context.request.questions();
         if queries.is_empty() {
             return false;

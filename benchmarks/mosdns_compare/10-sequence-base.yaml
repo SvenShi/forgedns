@@ -1,0 +1,14 @@
+log:
+  level: error
+
+plugins:
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: reject 5
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5310"

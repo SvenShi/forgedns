@@ -1,0 +1,35 @@
+log:
+  level: error
+
+plugins:
+  - tag: redirect_main
+    type: redirect
+    args:
+      rules:
+        - "full:bench.test target.bench.test"
+        - "full:bench-alt.test target-alt.bench.test"
+        - "full:bench-v6.test target-v6.bench.test"
+
+  - tag: arbitrary_main
+    type: arbitrary
+    args:
+      rules:
+        - "target.bench.test. 60 IN A 192.0.2.10"
+        - "target-alt.bench.test. 60 IN A 192.0.2.11"
+        - "target-v6.bench.test. 60 IN AAAA 2001:db8::10"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: $redirect_main
+      - exec: $arbitrary_main
+      - exec: ttl 60
+      - matches: ["has_resp"]
+        exec: accept
+      - exec: reject 2
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5342"

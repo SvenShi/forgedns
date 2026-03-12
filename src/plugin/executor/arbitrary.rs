@@ -13,16 +13,18 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::message::ResponseCode;
+use crate::message::build_address_response_packet;
 use crate::message::build_response_message_from_request;
 use crate::message::rdata::name::{CNAME, NS, PTR};
 use crate::message::rdata::{A, AAAA, MX, TXT};
-use crate::message::{Name, RData, Record, RecordType};
+use crate::message::{DNSClass, Name, RData, Record, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashMap;
 use async_trait::async_trait;
 use serde::Deserialize;
+use smallvec::SmallVec;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -49,8 +51,33 @@ struct Arbitrary {
 
 #[derive(Debug, Default)]
 struct NameRecords {
-    by_type: AHashMap<RecordType, Vec<Record>>,
-    any: Vec<Record>,
+    by_type: AHashMap<RecordType, StoredAnswers>,
+    any: StoredAnswers,
+}
+
+#[derive(Debug, Clone, Default)]
+struct StoredAnswers {
+    records: Vec<Record>,
+    answer_ips: SmallVec<[IpAddr; 8]>,
+    fast_address: Option<FastAddressAnswer>,
+}
+
+#[derive(Debug, Clone)]
+struct FastAddressAnswer {
+    ttl: u32,
+    addresses: SmallVec<[IpAddr; 8]>,
+}
+
+impl StoredAnswers {
+    #[inline]
+    fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    fn finalize(&mut self) {
+        self.answer_ips = self.records.iter().filter_map(Record::ip_addr).collect();
+        self.fast_address = build_fast_address_answer(&self.records);
+    }
 }
 
 #[async_trait]
@@ -71,9 +98,11 @@ impl Plugin for Arbitrary {
 #[async_trait]
 impl Executor for Arbitrary {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        let question_count = context.request_facts().question_count();
         let Some(question) = context.question() else {
             return Ok(ExecStep::Next);
         };
+        let qclass = question.qclass();
         let qtype = RecordType::from(question.qtype());
         let qname = question.normalized_name();
 
@@ -81,24 +110,47 @@ impl Executor for Arbitrary {
             return Ok(ExecStep::Next);
         };
 
-        let answer_count = if qtype == RecordType::ANY {
-            name_records.any.len()
+        let answers = if qtype == RecordType::ANY {
+            &name_records.any
         } else {
-            name_records.by_type.get(&qtype).map_or(0, Vec::len)
+            let Some(records) = name_records.by_type.get(&qtype) else {
+                return Ok(ExecStep::Next);
+            };
+            records
         };
+        let answer_count = answers.len();
 
         if answer_count > 0 {
+            if qtype != RecordType::ANY
+                && qclass == u16::from(DNSClass::IN)
+                && question_count == 1
+                && let Some(packet) = context.request_packet()
+                && let Some(fast_address) = answers.fast_address.as_ref()
+            {
+                let response = build_address_response_packet(
+                    packet,
+                    fast_address.ttl,
+                    fast_address.addresses.as_slice(),
+                )?;
+                context.set_response_packet_with_answer_ips(
+                    response,
+                    fast_address.addresses.clone(),
+                )?;
+                return Ok(ExecStep::Next);
+            }
+
             let mut response =
                 build_response_message_from_request(&context.request, ResponseCode::NoError);
             response.answers_mut().reserve(answer_count);
-            if qtype == RecordType::ANY {
-                response
-                    .answers_mut()
-                    .extend(name_records.any.iter().cloned());
-            } else if let Some(records) = name_records.by_type.get(&qtype) {
-                response.answers_mut().extend(records.iter().cloned());
+            response
+                .answers_mut()
+                .extend(answers.records.iter().cloned());
+
+            if answers.answer_ips.is_empty() {
+                context.response.set_message(response);
+            } else {
+                context.set_response_message_with_answer_ips(response, answers.answer_ips.clone());
             }
-            context.response.set_message(response);
         }
 
         Ok(ExecStep::Next)
@@ -148,8 +200,9 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
             .by_type
             .entry(record.record_type())
             .or_default()
+            .records
             .push(record.clone());
-        entry.any.push(record);
+        entry.any.records.push(record);
     }
 
     for path in &cfg.files {
@@ -194,12 +247,45 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
                 .by_type
                 .entry(record.record_type())
                 .or_default()
+                .records
                 .push(record.clone());
-            entry.any.push(record);
+            entry.any.records.push(record);
+        }
+    }
+
+    for name_records in map.values_mut() {
+        name_records.any.finalize();
+        for answers in name_records.by_type.values_mut() {
+            answers.finalize();
         }
     }
 
     Ok(map)
+}
+
+fn build_fast_address_answer(records: &[Record]) -> Option<FastAddressAnswer> {
+    let first = records.first()?;
+    let record_type = first.record_type();
+    if !matches!(record_type, RecordType::A | RecordType::AAAA) {
+        return None;
+    }
+    if first.dns_class() != DNSClass::IN {
+        return None;
+    }
+
+    let ttl = first.ttl();
+    let mut addresses = SmallVec::<[IpAddr; 8]>::with_capacity(records.len());
+    for record in records {
+        if record.record_type() != record_type
+            || record.dns_class() != DNSClass::IN
+            || record.ttl() != ttl
+        {
+            return None;
+        }
+        addresses.push(record.ip_addr()?);
+    }
+
+    Some(FastAddressAnswer { ttl, addresses })
 }
 
 fn parse_zone_line(raw: &str) -> std::result::Result<Record, String> {
@@ -304,7 +390,7 @@ fn normalize_name(name: &Name) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{Message, Question};
+    use crate::message::{Message, Packet, Question};
     use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
@@ -324,6 +410,13 @@ mod tests {
             request,
             test_registry(),
         )
+    }
+
+    fn make_packet_backed_context(name: &str, qtype: RecordType) -> DnsContext {
+        let mut ctx = make_context(name, qtype);
+        let packet = ctx.request.to_bytes().expect("request should encode");
+        ctx.set_request_packet(Packet::from_vec(packet));
+        ctx
     }
 
     #[tokio::test]
@@ -382,5 +475,30 @@ mod tests {
             .to_message()
             .expect("response should materialize");
         assert_eq!(response.answers().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_arbitrary_execute_uses_packet_fast_path_for_static_address_answer() {
+        let cfg = ArbitraryConfig {
+            rules: vec!["example.com. 60 IN A 1.1.1.1".to_string()],
+            files: vec![],
+        };
+        let plugin = Arbitrary {
+            tag: "arbitrary".to_string(),
+            records: build_records(&cfg).expect("records should parse"),
+        };
+
+        let mut ctx = make_packet_backed_context("example.com.", RecordType::A);
+        plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+
+        let response = ctx.response.current().expect("response should exist");
+        assert!(response.packet().is_some());
+        assert!(
+            ctx.response
+                .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))
+        );
     }
 }

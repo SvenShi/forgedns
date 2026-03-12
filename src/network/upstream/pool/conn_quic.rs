@@ -73,7 +73,7 @@ impl Connection for QuicConnection {
     ///
     /// This follows RFC 9250 (DNS over Dedicated QUIC Connections)
     #[hotpath::measure]
-    async fn query(&self, mut request: Message) -> Result<Message> {
+    async fn query(&self, request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("Cannot query on closed QUIC connection"));
         }
@@ -99,9 +99,7 @@ impl Connection for QuicConnection {
         };
 
         let raw_id = request.id();
-        request.set_id(0); // RFC 9250: query ID SHOULD be set to 0
-
-        if let Err(e) = writer.write_message(&request).await {
+        if let Err(e) = writer.write_message_with_id(&request, 0).await {
             self.using_count.fetch_sub(1, Ordering::Relaxed);
             return Err(DnsError::protocol(format!(
                 "Failed to write DNS query to QUIC stream: {}",

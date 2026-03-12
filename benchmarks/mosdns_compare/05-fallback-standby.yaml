@@ -1,0 +1,29 @@
+log:
+  level: error
+
+plugins:
+  - tag: forward_primary
+    type: forward
+    args:
+      upstreams:
+        - addr: "223.5.5.5"
+
+  - tag: forward_secondary
+    type: forward
+    args:
+      upstreams:
+        - addr: "119.29.29.29"
+
+  - tag: fallback_main
+    type: fallback
+    args:
+      primary: "forward_primary"
+      secondary: "forward_secondary"
+      threshold: 200
+      always_standby: true
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "fallback_main"
+      listen: "127.0.0.1:5305"

@@ -1,0 +1,16 @@
+www.baidu.com A
+www.qq.com A
+www.taobao.com A
+www.jd.com A
+www.bilibili.com A
+www.zhihu.com A
+www.sina.com.cn A
+www.aliyun.com A
+www.tmall.com A
+www.github.com A
+www.wikipedia.org A
+www.cloudflare.com A
+www.apple.com A
+www.microsoft.com A
+www.amazon.com A
+www.openai.com A

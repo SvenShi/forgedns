@@ -1,0 +1,40 @@
+log:
+  level: error
+
+plugins:
+  - tag: bench_domain_set
+    type: domain_set
+    args:
+      files:
+        - "./data/geosite_cn.txt"
+        - "./data/geosite_geolocation-!cn.txt"
+
+  - tag: bench_ip_set
+    type: ip_set
+    args:
+      files:
+        - "./data/ip_set_rules.txt"
+
+  - tag: arbitrary_main
+    type: arbitrary
+    args:
+      rules:
+        - "265.com. 60 IN A 10.1.0.10"
+        - "apps.mzstatic.com. 60 IN A 10.2.0.20"
+        - "azure.microsoft.com. 60 IN A 198.51.100.10"
+        - "android.googlesource.com. 60 IN A 203.0.113.10"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - matches: ["qname $bench_domain_set"]
+        exec: $arbitrary_main
+      - matches: ["resp_ip $bench_ip_set"]
+        exec: accept
+      - exec: reject 2
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5343"

@@ -87,6 +87,21 @@ impl Matcher for QtypeMatcher {
             return self.qtypes.contains(&u16::from(qtype));
         }
 
+        if let Some(packet) = context.request.packet() {
+            let Ok(parsed) = packet.parse() else {
+                return false;
+            };
+            for question in parsed.question_records() {
+                let Ok(question) = question else {
+                    return false;
+                };
+                if self.qtypes.contains(&question.qtype()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         context
             .request
             .questions()

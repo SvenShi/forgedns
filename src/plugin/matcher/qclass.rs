@@ -87,6 +87,21 @@ impl Matcher for QclassMatcher {
             return self.qclasses.contains(&u16::from(qclass));
         }
 
+        if let Some(packet) = context.request.packet() {
+            let Ok(parsed) = packet.parse() else {
+                return false;
+            };
+            for question in parsed.question_records() {
+                let Ok(question) = question else {
+                    return false;
+                };
+                if self.qclasses.contains(&question.qclass()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         context
             .request
             .questions()

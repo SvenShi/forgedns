@@ -6,10 +6,9 @@
 //! Zero-copy DNS packet parser used by packet-backed message mode.
 //!
 //! The parser keeps references into the original packet instead of allocating
-//! owned names or records. It only exposes the first question because the rest
-//! of ForgeDNS treats requests as single-question messages, but it still walks
-//! all questions and sections so offsets remain correct for validation and
-//! response helpers.
+//! owned names or records. It caches the first question directly in the parsed
+//! view and still walks all questions and sections so later helpers can iterate
+//! them without reparsing the header/section layout.
 
 use crate::core::error::{DnsError, Result};
 use crate::message::wire::flags::DNS_HEADER_LEN;
@@ -28,10 +27,9 @@ pub fn parse_message(packet: &[u8]) -> Result<ParsedMessage<'_>> {
     for index in 0..header.qdcount() {
         let (question, next_offset) = parse_question_meta(packet, offset)?;
         offset = next_offset;
-        // ForgeDNS only keeps the first question in its parsed view. We still
-        // advance through the full question section so later section offsets
-        // stay correct and callers can reject multi-question packets without
-        // reparsing.
+        // Keep the first question inline for the common fast path, but still
+        // walk the whole section so later question iterators can reuse the
+        // validated section layout.
         if index == 0 {
             first_question = Some(question);
         }

@@ -12,6 +12,7 @@ use crate::core::error::Result;
 use crate::core::ttl_cache::TtlCacheEntry;
 use crate::message::Packet;
 use crate::message::{DNSClass, RecordType};
+use smallvec::SmallVec;
 use std::path::Path;
 use tokio::fs;
 use tokio::fs::File;
@@ -197,9 +198,15 @@ pub(super) async fn load_cache_from_file(
 
         cache_map.insert_or_update_with_meta(
             key,
-            CacheItem {
-                resp,
-                ttl: entry.ttl,
+            match CacheItem::new(resp, entry.ttl, SmallVec::new(), SmallVec::new()) {
+                Ok(item) => item,
+                Err(e) => {
+                    warn!(
+                        "Failed to rebuild cache metadata for {} from dump: {}",
+                        entry.domain, e
+                    );
+                    continue;
+                }
             },
             cache_time,
             expire_time,

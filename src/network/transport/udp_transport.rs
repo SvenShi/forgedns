@@ -33,8 +33,14 @@ impl UdpTransport {
     /// Ensures the entire datagram is sent; otherwise returns a protocol error.
     #[inline]
     pub async fn write_message(&self, msg: &Message) -> Result<()> {
+        self.write_message_with_id(msg, msg.id()).await
+    }
+
+    /// Serialize and send a DNS message while overriding the wire ID.
+    #[inline]
+    pub async fn write_message_with_id(&self, msg: &Message, id: u16) -> Result<()> {
         let mut bytes = ReusableBuffer::with_capacity(message_buffer_capacity_hint(msg));
-        encode_message_with_max_payload_into(msg, u16::MAX, bytes.as_mut_vec())?;
+        encode_message_with_max_payload_into_and_id(msg, u16::MAX, id, bytes.as_mut_vec())?;
 
         let n = self
             .socket
@@ -192,6 +198,16 @@ fn encode_message_with_max_payload_into(
     bytes: &mut Vec<u8>,
 ) -> Result<()> {
     msg.encode_into_with_limit(usize::from(max_payload.max(512)), bytes)
+}
+
+#[inline]
+fn encode_message_with_max_payload_into_and_id(
+    msg: &Message,
+    max_payload: u16,
+    id: u16,
+    bytes: &mut Vec<u8>,
+) -> Result<()> {
+    msg.encode_into_with_limit_and_id(usize::from(max_payload.max(512)), id, bytes)
 }
 
 #[inline]

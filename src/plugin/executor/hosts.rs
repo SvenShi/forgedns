@@ -36,6 +36,7 @@ use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use async_trait::async_trait;
 use regex::{Regex, RegexSet, RegexSetBuilder};
 use serde::Deserialize;
+use smallvec::SmallVec;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -119,7 +120,7 @@ impl Executor for HostsExecutor {
             return Ok(ExecStep::Next);
         };
 
-        let mut addresses = Vec::new();
+        let mut addresses = SmallVec::<[IpAddr; 8]>::new();
         match qtype {
             TYPE_A => addresses.extend(rule.ipv4.iter().copied().map(IpAddr::V4)),
             TYPE_AAAA => addresses.extend(rule.ipv6.iter().copied().map(IpAddr::V6)),
@@ -131,7 +132,7 @@ impl Executor for HostsExecutor {
 
         if let Some(packet) = context.request_packet() {
             let response = build_address_response_packet(packet, 300, &addresses)?;
-            context.set_response_packet(response)?;
+            context.set_response_packet_with_answer_ips(response, addresses.clone())?;
             return Ok(ExecStep::Next);
         }
 
@@ -165,7 +166,7 @@ impl Executor for HostsExecutor {
         }
 
         if !response.answers().is_empty() {
-            context.response.set_message(response);
+            context.set_response_message_with_answer_ips(response, addresses);
         }
 
         Ok(ExecStep::Next)

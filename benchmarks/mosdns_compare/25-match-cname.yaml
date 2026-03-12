@@ -1,0 +1,23 @@
+log:
+  level: error
+
+plugins:
+  - tag: arbitrary_main
+    type: arbitrary
+    args:
+      rules:
+        - "bench.test. 60 IN CNAME target.bench.test."
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: $arbitrary_main
+      - matches: ["cname full:target.bench.test"]
+        exec: accept
+      - exec: reject 2
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5325"

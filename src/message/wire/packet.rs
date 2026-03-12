@@ -8,24 +8,52 @@
 use crate::core::error::Result;
 use crate::message::parse_message;
 use crate::message::wire::edns::EdnsRef;
+use crate::message::wire::flags::DNS_HEADER_LEN;
 use crate::message::wire::header::Header;
 use crate::message::wire::meta::{EdnsMeta, QuestionMeta};
-use crate::message::wire::question::QuestionRef;
+use crate::message::wire::question::{QuestionRef, QuestionsIter};
 use crate::message::wire::record::{RecordSection, RecordsIter};
 use bytes::Bytes;
+use std::sync::OnceLock;
 
 /// Immutable DNS packet wrapper shared across transports and packet helpers.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Packet {
     /// Reference-counted packet bytes.
     bytes: Bytes,
+    /// Cached zero-copy parse metadata reused across repeated packet scans.
+    parsed: OnceLock<ParsedPacketCache>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedPacketCache {
+    header: Header,
+    question: Option<QuestionMeta>,
+    edns: Option<EdnsMeta>,
+    sections: SectionOffsets,
+}
+
+impl ParsedPacketCache {
+    #[inline]
+    fn parsed_message<'a>(&self, packet: &'a [u8]) -> ParsedMessage<'a> {
+        ParsedMessage::new(
+            packet,
+            self.header,
+            self.question.clone(),
+            self.edns.clone(),
+            self.sections,
+        )
+    }
 }
 
 impl Packet {
     /// Wrap a reference-counted byte buffer as a DNS packet.
     #[inline]
     pub fn from_bytes(bytes: Bytes) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            parsed: OnceLock::new(),
+        }
     }
 
     /// Wrap an owned byte vector as a DNS packet.
@@ -33,6 +61,7 @@ impl Packet {
     pub fn from_vec(bytes: Vec<u8>) -> Self {
         Self {
             bytes: Bytes::from(bytes),
+            parsed: OnceLock::new(),
         }
     }
 
@@ -45,7 +74,32 @@ impl Packet {
     /// Parse this packet into a zero-copy view.
     #[inline]
     pub fn parse(&self) -> Result<ParsedMessage<'_>> {
-        parse_message(self.as_slice())
+        if let Some(parsed) = self.parsed.get() {
+            return Ok(parsed.parsed_message(self.as_slice()));
+        }
+
+        let parsed = parse_message(self.as_slice())?;
+        let cached = ParsedPacketCache {
+            header: parsed.header,
+            question: parsed.question.clone(),
+            edns: parsed.edns.clone(),
+            sections: parsed.sections,
+        };
+        let _ = self.parsed.set(cached);
+        Ok(parsed)
+    }
+}
+
+impl Clone for Packet {
+    fn clone(&self) -> Self {
+        let parsed = OnceLock::new();
+        if let Some(cache) = self.parsed.get() {
+            let _ = parsed.set(cache.clone());
+        }
+        Self {
+            bytes: self.bytes.clone(),
+            parsed,
+        }
     }
 }
 
@@ -115,6 +169,12 @@ impl<'a> ParsedMessage<'a> {
         self.question
             .as_ref()
             .map(|question| question.as_question_ref(self.packet))
+    }
+
+    #[inline]
+    /// Iterate question-section entries without materializing owned questions.
+    pub fn question_records(&self) -> QuestionsIter<'a> {
+        QuestionsIter::new(self.packet(), DNS_HEADER_LEN, self.header().qdcount())
     }
 
     #[inline]

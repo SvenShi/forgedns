@@ -5,8 +5,10 @@
 
 //! Borrowed DNS question view extracted from a packet.
 
+use crate::core::error::Result;
 use crate::message::NameRef;
 use crate::message::model::data::{DNSClass, RecordType};
+use crate::message::wire::parser::parse_question_meta;
 use std::ops::Range;
 
 /// Borrowed view of one DNS question section entry.
@@ -67,5 +69,45 @@ impl<'a> QuestionRef<'a> {
     /// Return the byte range of the full question in the original packet.
     pub fn wire_range(&self) -> Range<u16> {
         self.wire_range.clone()
+    }
+}
+
+/// Iterator over borrowed question views in the DNS question section.
+pub struct QuestionsIter<'a> {
+    packet: &'a [u8],
+    offset: usize,
+    remaining: u16,
+}
+
+impl<'a> QuestionsIter<'a> {
+    #[inline]
+    pub(crate) fn new(packet: &'a [u8], offset: usize, remaining: u16) -> Self {
+        Self {
+            packet,
+            offset,
+            remaining,
+        }
+    }
+}
+
+impl<'a> Iterator for QuestionsIter<'a> {
+    type Item = Result<QuestionRef<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+
+        self.remaining -= 1;
+        match parse_question_meta(self.packet, self.offset) {
+            Ok((question_meta, next_offset)) => {
+                self.offset = next_offset;
+                Some(Ok(question_meta.as_question_ref(self.packet)))
+            }
+            Err(err) => {
+                self.remaining = 0;
+                Some(Err(err))
+            }
+        }
     }
 }

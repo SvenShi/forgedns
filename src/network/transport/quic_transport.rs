@@ -71,8 +71,14 @@ impl QuicTransportWriter {
     /// Write a single DNS message as a length-prefixed frame.
     #[inline]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
+        self.write_message_with_id(msg, msg.id()).await
+    }
+
+    /// Write a single DNS message as a length-prefixed frame while overriding the wire ID.
+    #[inline]
+    pub async fn write_message_with_id(&mut self, msg: &Message, id: u16) -> Result<()> {
         let mut body = ReusableBuffer::with_capacity(message_buffer_capacity_hint(msg));
-        encode_message_into(msg, body.as_mut_vec())?;
+        encode_message_into_with_id(msg, id, body.as_mut_vec())?;
         let body_len = body.as_slice().len();
         if body_len > u16::MAX as usize {
             return Err(DnsError::protocol(format!(
@@ -164,9 +170,8 @@ impl QuicTransportReader {
     }
 }
 
-#[inline]
-fn encode_message_into(message: &Message, body: &mut Vec<u8>) -> Result<()> {
-    message.encode_into(body)
+fn encode_message_into_with_id(message: &Message, id: u16, body: &mut Vec<u8>) -> Result<()> {
+    message.encode_into_with_id(id, body)
 }
 
 #[inline]

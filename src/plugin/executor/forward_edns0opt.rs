@@ -81,7 +81,7 @@ impl Executor for ForwardEdns0Opt {
     }
 
     async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let mut selected = state
+        let selected = state
             .and_then(|boxed| boxed.downcast::<Vec<EdnsOption>>().ok())
             .map(|boxed| *boxed)
             .unwrap_or_default();
@@ -90,22 +90,14 @@ impl Executor for ForwardEdns0Opt {
             return Ok(());
         }
 
-        let packet_rewritten = if let Some(packet) = context
+        if let Some(packet) = context
             .response
             .current()
             .and_then(|response| response.packet())
         {
-            let existing_codes = collect_selected_codes_from_packet(packet, &self.code_set)?;
-            selected.retain(|option| !existing_codes.contains(&u16::from(EdnsCode::from(option))));
-            if selected.is_empty() {
-                return Ok(());
+            if let Some(rewritten) = append_missing_selected_options_to_packet(packet, &selected)? {
+                context.set_response_packet(rewritten)?;
             }
-            append_selected_options_to_packet(packet, &selected)?
-        } else {
-            None
-        };
-        if let Some(rewritten) = packet_rewritten {
-            context.set_response_packet(rewritten)?;
             return Ok(());
         }
 
@@ -221,28 +213,7 @@ fn collect_selected_codes(
     out
 }
 
-fn collect_selected_codes_from_packet(
-    packet: &Packet,
-    code_set: &AHashSet<u16>,
-) -> Result<AHashSet<u16>> {
-    let parsed = packet.parse()?;
-    let mut out = AHashSet::new();
-    for record in parsed.additional_records() {
-        let record = record?;
-        let RDataView::Opt(edns) = record.rdata() else {
-            continue;
-        };
-        for option in edns.options() {
-            let code = option.code();
-            if code_set.contains(&code) {
-                out.insert(code);
-            }
-        }
-    }
-    Ok(out)
-}
-
-fn append_selected_options_to_packet(
+fn append_missing_selected_options_to_packet(
     packet: &Packet,
     selected: &[EdnsOption],
 ) -> Result<Option<Packet>> {
@@ -252,24 +223,39 @@ fn append_selected_options_to_packet(
 
     let parsed = packet.parse()?;
     let bytes = packet.as_slice();
-    let mut appended = Vec::with_capacity(selected.len() * 16);
-    for option in selected {
-        encode_edns_option_wire(&mut appended, option)?;
-    }
+    let mut existing_codes = AHashSet::new();
+    let mut opt_rdata_range = None;
 
     for record in parsed.additional_records() {
         let record = record?;
         if record.record_type() != RecordType::OPT {
             continue;
         }
-        let RDataView::Opt(_) = record.rdata() else {
+        let RDataView::Opt(edns) = record.rdata() else {
             continue;
         };
+        opt_rdata_range.get_or_insert_with(|| record.rdata_range());
+        for option in edns.options() {
+            existing_codes.insert(option.code());
+        }
+    }
 
-        let rdata_range = record.rdata_range();
+    let mut appended = Vec::with_capacity(selected.len() * 16);
+    for option in selected {
+        let code = u16::from(EdnsCode::from(option));
+        if !existing_codes.insert(code) {
+            continue;
+        }
+        encode_edns_option_wire(&mut appended, option)?;
+    }
+    if appended.is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(rdata_range) = opt_rdata_range {
         let rdlength_offset = rdata_range.start as usize - 2;
-        let new_rdlength = record
-            .raw_rdata()
+        let existing_rdata = &bytes[rdata_range.start as usize..rdata_range.end as usize];
+        let new_rdlength = existing_rdata
             .len()
             .checked_add(appended.len())
             .ok_or_else(|| DnsError::protocol("edns option block too large"))?;
@@ -279,9 +265,9 @@ fn append_selected_options_to_packet(
         let mut out = Vec::with_capacity(bytes.len() + appended.len());
         out.extend_from_slice(&bytes[..rdlength_offset]);
         out.extend_from_slice(&new_rdlength.to_be_bytes());
-        out.extend_from_slice(record.raw_rdata());
+        out.extend_from_slice(existing_rdata);
         out.extend_from_slice(&appended);
-        out.extend_from_slice(&bytes[record.wire_range().end as usize..]);
+        out.extend_from_slice(&bytes[rdata_range.end as usize..]);
         return Ok(Some(Packet::from_vec(out)));
     }
 

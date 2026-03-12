@@ -142,13 +142,6 @@ impl RequestHandle {
             );
         }
 
-        if context.request.question_count() > 1 {
-            return RequestResult {
-                response: self.build_base_response(&context, ResponseCode::FormErr),
-                exit: RequestExit::Controlled,
-            };
-        }
-
         // Execute entry plugin to process the request
         let exec_outcome = execute_with_post(self.entry_executor.as_ref(), &mut context).await;
         let (response, exit) = match exec_outcome {
@@ -536,7 +529,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_rejects_multi_question_request_before_executor() {
+    async fn test_handle_request_allows_multi_question_request() {
         let request_handle = make_request_handle(Arc::new(FallthroughExecutor));
         let mut request = make_request(17, "example.com.");
         request.add_question(Question::new(
@@ -548,13 +541,13 @@ mod tests {
             .handle_request(request, SocketAddr::from(([127, 0, 0, 1], 5305)))
             .await;
 
-        assert_eq!(result.exit, RequestExit::Controlled);
-        assert_eq!(
-            result
-                .response
-                .response_code_hint()
-                .expect("response should expose rcode"),
-            ResponseCode::FormErr
-        );
+        let response = result
+            .response
+            .to_message()
+            .expect("response should materialize");
+
+        assert_eq!(result.exit, RequestExit::Completed);
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert_eq!(response.question_count(), 2);
     }
 }

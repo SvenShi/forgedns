@@ -1,0 +1,23 @@
+log:
+  level: error
+
+plugins:
+  - tag: forward_main
+    type: forward
+    args:
+      upstreams:
+        - addr: "223.5.5.5"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: $forward_main
+      - matches: ["rcode 3"]
+        exec: accept
+      - exec: reject 2
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5340"

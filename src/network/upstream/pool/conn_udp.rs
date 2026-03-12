@@ -83,14 +83,13 @@ impl Connection for UdpConnection {
     /// This two-stage approach improves resilience against UDP packet loss
     /// while maintaining low latency for successful queries.
     #[hotpath::measure]
-    async fn query(&self, mut request: Message) -> Result<Message> {
+    async fn query(&self, request: Message) -> Result<Message> {
         let raw_id = request.id();
         let mut current_timeout = RETRY_TIMEOUT;
 
         for attempt in 0..2 {
             let (tx, rx) = oneshot::channel();
             let query_id = self.request_map.store(&request, tx);
-            request.set_id(query_id);
 
             trace!(
                 conn_id = self.id,
@@ -101,7 +100,11 @@ impl Connection for UdpConnection {
             );
 
             // Send UDP datagram via transport
-            match self.transport.write_message(&request).await {
+            match self
+                .transport
+                .write_message_with_id(&request, query_id)
+                .await
+            {
                 Ok(()) => {}
                 Err(e) => {
                     self.request_map.take(query_id);

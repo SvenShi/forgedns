@@ -127,6 +127,29 @@ impl Matcher for PtrIpMatcher {
                 || self.ip_sets.iter().any(|set| set.contains_ip(ip));
         }
 
+        if let Some(packet) = context.request.packet() {
+            let Ok(parsed) = packet.parse() else {
+                return false;
+            };
+            for question in parsed.question_records() {
+                let Ok(question) = question else {
+                    return false;
+                };
+                if question.question_type() != RecordType::PTR {
+                    continue;
+                }
+                let Some(ip) = parse_ptr_name_ip_ref(question.name()) else {
+                    continue;
+                };
+                if self.ip_rules.contains_ip(ip)
+                    || self.ip_sets.iter().any(|set| set.contains_ip(ip))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         context.request.questions().iter().any(|query| {
             if query.question_type() != RecordType::PTR {
                 return false;
@@ -143,6 +166,38 @@ fn parse_ptr_name_ip(name: &crate::message::Name) -> Option<IpAddr> {
     name.parse_arpa_name()
         .ok()
         .map(|net| normalize_ip(net.addr()))
+}
+
+fn parse_ptr_name_ip_ref(name: &crate::message::NameRef<'_>) -> Option<IpAddr> {
+    let mut labels = name.iter_labels_rev();
+    let suffix = labels.next()?;
+    if !suffix.eq_ignore_ascii_case("arpa") {
+        return None;
+    }
+
+    let zone = labels.next()?;
+    if zone.eq_ignore_ascii_case("in-addr") {
+        let mut octets = [0u8; 4];
+        for octet in &mut octets {
+            *octet = labels.next()?.parse::<u8>().ok()?;
+        }
+        return labels.next().is_none().then_some(IpAddr::V4(octets.into()));
+    }
+
+    if zone.eq_ignore_ascii_case("ip6") {
+        let mut bytes = [0u8; 16];
+        for byte in &mut bytes {
+            let high = parse_hex_nibble(labels.next()?)?;
+            let low = parse_hex_nibble(labels.next()?)?;
+            *byte = (high << 4) | low;
+        }
+        return labels
+            .next()
+            .is_none()
+            .then_some(normalize_ip(IpAddr::V6(bytes.into())));
+    }
+
+    None
 }
 
 fn parse_ptr_name_ip_str(name: &str) -> Option<IpAddr> {
@@ -187,6 +242,17 @@ fn parse_ptr_name_ip_str(name: &str) -> Option<IpAddr> {
     }
 
     None
+}
+
+fn parse_hex_nibble(label: &str) -> Option<u8> {
+    if label.len() != 1 {
+        return None;
+    }
+    label
+        .as_bytes()
+        .first()
+        .and_then(|byte| (*byte as char).to_digit(16))
+        .map(|digit| digit as u8)
 }
 
 fn normalize_ip(ip: IpAddr) -> IpAddr {

@@ -1,0 +1,28 @@
+log:
+  level: error
+
+plugins:
+  - tag: cache_main
+    type: cache
+    args:
+      size: 200000
+
+  - tag: forward_main
+    type: forward
+    args:
+      upstreams:
+        - addr: "223.5.5.5"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: $cache_main
+      - matches: ["has_resp"]
+        exec: accept
+      - exec: $forward_main
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5302"

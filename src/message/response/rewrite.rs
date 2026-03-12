@@ -7,9 +7,44 @@
 
 use crate::core::error::Result;
 use crate::message::Packet;
-use crate::message::response::scan::visit_records;
+use crate::message::response::scan::{ResponseTtlOffsets, visit_records};
 use crate::message::wire::constants::TYPE_OPT;
 use smallvec::SmallVec;
+
+fn collect_ttl_offsets(packet: &Packet) -> Result<ResponseTtlOffsets> {
+    let parsed = packet.parse()?;
+    let mut offsets = ResponseTtlOffsets::new();
+
+    visit_records(parsed.answer_records(), |record| {
+        offsets.push(record.ttl_offset());
+        Ok(())
+    })?;
+    visit_records(parsed.authority_records(), |record| {
+        offsets.push(record.ttl_offset());
+        Ok(())
+    })?;
+    visit_records(parsed.additional_records(), |record| {
+        if record.rr_type() != TYPE_OPT {
+            offsets.push(record.ttl_offset());
+        }
+        Ok(())
+    })?;
+
+    Ok(offsets)
+}
+
+#[inline]
+fn patch_ttls(bytes: &mut [u8], ttl_offsets: &[usize], ttl: u32) {
+    let ttl = ttl.to_be_bytes();
+    for &offset in ttl_offsets {
+        bytes[offset..offset + 4].copy_from_slice(&ttl);
+    }
+}
+
+/// Collect response TTL field offsets once so hot paths can patch them later.
+pub(crate) fn collect_response_ttl_offsets(packet: &Packet) -> Result<ResponseTtlOffsets> {
+    collect_ttl_offsets(packet)
+}
 
 /// Rewrite all response TTL fields except the OPT pseudo-record TTL.
 pub fn rewrite_response_ttls(
@@ -45,5 +80,18 @@ pub fn rewrite_response_ttls(
 pub fn rewrite_response_id(packet: &Packet, id: u16) -> Packet {
     let mut bytes = packet.as_slice().to_vec();
     bytes[0..2].copy_from_slice(&id.to_be_bytes());
+    Packet::from_vec(bytes)
+}
+
+/// Rewrite the DNS message identifier and all non-OPT TTL fields in one pass.
+pub(crate) fn rewrite_response_id_and_ttls(
+    packet: &Packet,
+    id: u16,
+    ttl: u32,
+    ttl_offsets: &[usize],
+) -> Packet {
+    let mut bytes = packet.as_slice().to_vec();
+    bytes[0..2].copy_from_slice(&id.to_be_bytes());
+    patch_ttls(&mut bytes, ttl_offsets, ttl);
     Packet::from_vec(bytes)
 }

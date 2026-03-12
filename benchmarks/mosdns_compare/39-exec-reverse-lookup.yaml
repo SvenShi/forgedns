@@ -1,0 +1,31 @@
+log:
+  level: error
+
+plugins:
+  - tag: reverse_main
+    type: reverse_lookup
+    args:
+      handle_ptr: true
+      ttl: 300
+      size: 4096
+
+  - tag: arbitrary_main
+    type: arbitrary
+    args:
+      rules:
+        - "bench.test. 60 IN A 192.0.2.10"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: $reverse_main
+      - exec: $arbitrary_main
+      - matches: ["has_resp"]
+        exec: accept
+      - exec: reject 2
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: "127.0.0.1:5339"

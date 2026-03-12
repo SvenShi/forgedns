@@ -348,6 +348,11 @@ impl Message {
         self.to_bytes_with_limit(usize::MAX)
     }
 
+    /// Encode the message into a newly allocated byte vector with an overridden ID.
+    pub fn to_bytes_with_id(&self, id: u16) -> Result<Vec<u8>> {
+        self.to_bytes_with_limit_and_id(usize::MAX, id)
+    }
+
     /// Encode the message into a newly allocated byte vector while honoring `max_size`.
     pub fn to_bytes_with_limit(&self, max_size: usize) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(512);
@@ -355,9 +360,21 @@ impl Message {
         Ok(out)
     }
 
+    /// Encode the message into a newly allocated byte vector with an overridden ID and size cap.
+    pub fn to_bytes_with_limit_and_id(&self, max_size: usize, id: u16) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(512);
+        self.encode_into_with_limit_and_id(max_size, id, &mut out)?;
+        Ok(out)
+    }
+
     /// Encode the message into `out` without an explicit size cap.
     pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<()> {
         self.encode_into_with_limit(usize::MAX, out)
+    }
+
+    /// Encode the message into `out` without an explicit size cap and override the wire ID.
+    pub fn encode_into_with_id(&self, id: u16, out: &mut Vec<u8>) -> Result<()> {
+        self.encode_into_with_limit_and_id(usize::MAX, id, out)
     }
 
     /// Encode the message into `out`, preserving raw packet bytes when possible.
@@ -375,6 +392,33 @@ impl Message {
             }
             MessageRepr::Packet(packet) => encode_owned_into(packet.decoded(), Some(max_size), out),
             MessageRepr::Owned(data) => encode_owned_into(data.as_ref(), Some(max_size), out),
+        }
+    }
+
+    /// Encode the message into `out` while overriding the wire ID.
+    ///
+    /// Packet-backed messages can patch the two-byte DNS header ID directly
+    /// without materializing the whole message. Owned messages, or packet-backed
+    /// messages that need truncation-aware re-encoding, fall back to cloning and
+    /// rewriting the ID before the normal encoder runs.
+    pub fn encode_into_with_limit_and_id(
+        &self,
+        max_size: usize,
+        id: u16,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        out.clear();
+        match &self.repr {
+            MessageRepr::Packet(packet) if packet.packet.as_slice().len() <= max_size => {
+                out.extend_from_slice(packet.packet.as_slice());
+                out[..2].copy_from_slice(&id.to_be_bytes());
+                Ok(())
+            }
+            _ => {
+                let mut cloned = self.clone();
+                cloned.set_id(id);
+                cloned.encode_into_with_limit(max_size, out)
+            }
         }
     }
 
@@ -839,6 +883,21 @@ mod tests {
     }
 
     #[test]
+    /// Overriding the wire ID during encoding should preserve packet-backed mode and original ID.
+    fn packet_backed_encode_with_id_patches_output_only() {
+        let message = Message::from_packet(build_query_packet(0x1234, RecordType::A))
+            .expect("packet-backed message should parse");
+
+        let bytes = message
+            .to_bytes_with_id(0xBEEF)
+            .expect("message should encode with overridden id");
+
+        assert!(message.packet().is_some());
+        assert_eq!(message.id(), 0x1234);
+        assert_eq!(&bytes[..2], &0xBEEFu16.to_be_bytes());
+    }
+
+    #[test]
     /// Ensure first-question type rewrites stay packet-backed when only wire bytes change.
     fn packet_backed_fast_question_type_rewrite_updates_wire_question() {
         let mut message = Message::from_packet(build_query_packet(7, RecordType::A))
@@ -878,6 +937,30 @@ mod tests {
 
         assert!(message.packet().is_none());
         assert_eq!(message.response_code(), ResponseCode::ServFail);
+    }
+
+    #[test]
+    /// Owned messages should also support encoding with an overridden wire ID.
+    fn owned_encode_with_id_overrides_only_encoded_bytes() {
+        let mut message = Message::new();
+        message.set_id(0x1234);
+        message.add_question(Question::new(
+            Name::from_ascii("example.com.").expect("query name should be valid"),
+            RecordType::A,
+        ));
+        message.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").expect("answer name should be valid"),
+            60,
+            RData::A(A::new(1, 1, 1, 1)),
+        ));
+
+        let bytes = message
+            .to_bytes_with_id(0xBEEF)
+            .expect("owned message should encode with overridden id");
+
+        assert!(message.packet().is_none());
+        assert_eq!(message.id(), 0x1234);
+        assert_eq!(&bytes[..2], &0xBEEFu16.to_be_bytes());
     }
 
     #[test]

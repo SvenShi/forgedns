@@ -54,7 +54,7 @@ impl Connection for H3Connection {
     }
 
     #[hotpath::measure]
-    async fn query(&self, mut request: Message) -> Result<Message> {
+    async fn query(&self, request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("H3 connection closed"));
         }
@@ -63,8 +63,7 @@ impl Connection for H3Connection {
             .store(AppClock::elapsed_millis(), Ordering::Relaxed);
 
         let raw_id = request.id();
-        request.set_id(0);
-        let body_bytes = request.to_bytes()?;
+        let body_bytes = request.to_bytes_with_id(0)?;
 
         let request = build_dns_get_request(self.request_uri.clone(), body_bytes, Version::HTTP_3);
 
