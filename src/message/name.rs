@@ -747,8 +747,8 @@ mod tests {
     }
 
     #[test]
-    // This matrix is intentionally close to miekg/dns parse tests: one valid compressed
-    // suffix case plus the most valuable malformed pointer variants.
+    // Covers one valid compressed suffix case plus the most valuable malformed
+    // pointer variants.
     fn parse_wire_name_pointer_matrix() {
         let cases: Vec<(&str, Vec<u8>, bool)> = vec![
             (

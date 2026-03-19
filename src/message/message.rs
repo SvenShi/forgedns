@@ -127,10 +127,10 @@ impl Message {
 
     /// Truncate this message in-place to the requested UDP payload budget.
     ///
-    /// Behavior matches miekg/dns `Msg.Truncate` semantics:
-    /// - skips truncation when TSIG is present,
+    /// Behavior:
+    /// - skips truncation when a signature RR is present,
     /// - treats sizes below 512 as 512,
-    /// - disables compression when uncompressed payload already fits,
+    /// - disables compression when the uncompressed payload already fits,
     /// - otherwise truncates `Answer`, then `Authority`, then `Additional`,
     /// - preserves a single OPT RR at the end when present,
     /// - sets TC if any RR is omitted.
@@ -205,12 +205,12 @@ impl Message {
         self.compress
     }
 
-    /// miekg/dns-compatible naming: return compression switch for packing.
+    /// Return the compression switch used during wire encoding.
     pub fn compress(&self) -> bool {
         self.compress
     }
 
-    /// miekg/dns-compatible naming: set compression switch for packing.
+    /// Set the compression switch used during wire encoding.
     pub fn set_compress(&mut self, compress: bool) {
         self.compress = compress;
     }
@@ -654,8 +654,8 @@ mod tests {
     }
 
     #[test]
-    // Mirrors miekg/dns-style EDNS truncation expectations: stay inside budget and keep
-    // OPT available to the decoder.
+    // Verifies that truncation stays inside the requested budget while preserving
+    // the OPT record for the decoder.
     fn truncate_keeps_edns_last_and_honors_limit() {
         let mut message = Message::new();
         message.add_question(Question::new(

@@ -40,8 +40,8 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
-    // Mirrors the exact wire accounting used by OPT packing so reserve/truncate logic
-    // cannot drift from the encoder.
+    // Verifies that the shared helper stays aligned with the actual OPT option
+    // wire layout used by the encoder.
     fn edns_option_len_matches_wire_layout() {
         let subnet = EdnsOption::Subnet(ClientSubnet::new(
             IpAddr::V4(Ipv4Addr::new(192, 0, 2, 123)),

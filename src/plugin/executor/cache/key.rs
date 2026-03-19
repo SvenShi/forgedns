@@ -7,9 +7,7 @@
 
 use crate::core::context::DnsContext;
 use crate::message::Message;
-use crate::message::{
-    ClientSubnet as OwnedClientSubnet, DNSClass, EdnsCode, EdnsOption, RecordType,
-};
+use crate::message::{ClientSubnet, DNSClass, EdnsCode, EdnsOption, RecordType};
 use std::net::IpAddr;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -65,7 +63,7 @@ fn write_truncated_prefix(src: &[u8], prefix: u8, out: &mut [u8; 16]) -> u8 {
 }
 
 #[inline]
-fn build_ecs_scope_digest(subnet: &OwnedClientSubnet) -> EcsScopeDigest {
+fn build_ecs_scope_digest(subnet: &ClientSubnet) -> EcsScopeDigest {
     let mut network = [0u8; 16];
     let (family, max_prefix, network_len) = match subnet.addr() {
         IpAddr::V4(v4) => {
@@ -173,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_build_ecs_scope_digest_clamps_prefix_and_truncates_network() {
-        let subnet = OwnedClientSubnet::new(IpAddr::from([192, 0, 2, 129]), 40, 48);
+        let subnet = ClientSubnet::new(IpAddr::from([192, 0, 2, 129]), 40, 48);
 
         let digest = build_ecs_scope_digest(&subnet);
 
@@ -205,7 +203,7 @@ mod tests {
     fn test_build_cache_key_includes_ecs_when_enabled() {
         let mut context = make_context("example.com.");
         let mut edns = Edns::new();
-        edns.insert(EdnsOption::Subnet(OwnedClientSubnet::new(
+        edns.insert(EdnsOption::Subnet(ClientSubnet::new(
             IpAddr::from([203, 0, 113, 199]),
             20,
             24,

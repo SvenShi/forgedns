@@ -20,7 +20,7 @@ use tracing::{info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Registry, fmt};
+use tracing_subscriber::{fmt, EnvFilter, Registry};
 
 pub mod app_clock;
 pub mod context;
@@ -93,13 +93,10 @@ pub fn init_log(log: LogConfig) -> WorkerGuard {
             .with_writer(writer)
     });
 
-    let (mut filter, invalid_level) = match EnvFilter::try_new(&log.level) {
+    let (filter, invalid_level) = match EnvFilter::try_new(&log.level) {
         Ok(filter) => (filter, false),
         Err(_) => (EnvFilter::new("info"), true),
     };
-
-    // Suppress noisy hickory_server logs
-    filter = filter.add_directive("hickory_server::server=off".parse().unwrap());
 
     let subscriber = Registry::default().with(filter).with(console_layer);
 
