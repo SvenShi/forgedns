@@ -165,38 +165,41 @@ impl StringSource {
     fn read<'a>(&self, context: &'a mut DnsContext) -> Cow<'a, str> {
         match self {
             StringSource::Qname => context
-                .question()
-                .map(|question| Cow::Borrowed(question.normalized_name()))
+                .request
+                .first_question()
+                .map(|question| Cow::Borrowed(question.name().normalized()))
                 .unwrap_or_else(|| Cow::Borrowed("")),
             StringSource::Qtype => Cow::Owned(
                 context
                     .request
-                    .first_question_type()
+                    .first_qtype()
                     .map(|qtype| u16::from(qtype).to_string())
                     .unwrap_or_default(),
             ),
             StringSource::Qclass => Cow::Owned(
                 context
                     .request
-                    .first_question_class()
+                    .first_qclass()
                     .map(|qclass| u16::from(qclass).to_string())
                     .unwrap_or_default(),
             ),
             StringSource::Rcode => Cow::Owned(
                 context
-                    .response
-                    .response_code()
-                    .map(|rcode| rcode.to_string())
+                    .response()
+                    .map(|response| response.rcode())
+                    .map(|rcode| u16::from(rcode).to_string())
                     .unwrap_or_default(),
             ),
             StringSource::RespIp => {
                 let mut out = String::new();
-                for ip in context.response.answer_ips() {
-                    if !out.is_empty() {
-                        out.push(',');
+                if let Some(response) = context.response() {
+                    for ip in response.answer_ips() {
+                        if !out.is_empty() {
+                            out.push(',');
+                        }
+                        // Writing directly avoids temporary Vec allocations.
+                        let _ = write!(&mut out, "{}", ip);
                     }
-                    // Writing directly avoids temporary Vec allocations.
-                    let _ = write!(&mut out, "{}", ip);
                 }
                 Cow::Owned(out)
             }
@@ -357,7 +360,7 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::message::rdata::A;
-    use crate::message::{Message, Question, ResponseCode};
+    use crate::message::{Message, Question, Rcode};
     use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
     use std::net::{Ipv4Addr, SocketAddr};
@@ -367,6 +370,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("www.example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
         let mut context = DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
@@ -377,15 +381,15 @@ mod tests {
         context
     }
 
-    fn add_response_with_ip_and_rcode(ctx: &mut DnsContext, ip: Ipv4Addr, rcode: ResponseCode) {
+    fn add_response_with_ip_and_rcode(ctx: &mut DnsContext, ip: Ipv4Addr, rcode: Rcode) {
         let mut response = Message::new();
-        response.set_response_code(rcode);
+        response.set_rcode(rcode);
         response.add_answer(Record::from_rdata(
             Name::from_ascii("www.example.com.").unwrap(),
             60,
             RData::A(A(ip)),
         ));
-        ctx.response.set_message(response);
+        ctx.set_response(response);
     }
 
     #[tokio::test]
@@ -417,7 +421,7 @@ mod tests {
             server_name: Some("dns.example.com".to_string()),
             url_path: Some("/dns-query".to_string()),
         });
-        add_response_with_ip_and_rcode(&mut ctx, Ipv4Addr::new(8, 8, 8, 8), ResponseCode::NoError);
+        add_response_with_ip_and_rcode(&mut ctx, Ipv4Addr::new(8, 8, 8, 8), Rcode::NoError);
 
         let qtype_matcher = StringExpMatcher {
             tag: "string_exp".into(),

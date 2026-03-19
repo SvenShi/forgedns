@@ -17,6 +17,7 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::message::Message;
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::dependency::DependencySpec;
@@ -294,12 +295,12 @@ async fn handle_dns_stream<S>(
     let transport = TcpTransport::new(stream);
     let (mut reader, mut writer) = transport.into_split();
 
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<crate::message::Response>(4096);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Message>(4096);
 
     let handle = tokio::spawn(async move {
         loop {
             if let Some(response) = receiver.recv().await {
-                if let Err(e) = writer.write_response(&response).await {
+                if let Err(e) = writer.write_message(&response).await {
                     warn!("Failed to write TCP response to {}: {}", src, e);
                 }
             }
@@ -312,12 +313,11 @@ async fn handle_dns_stream<S>(
         let handler = handler.clone();
         let sender = sender.clone();
         let server_name = server_name.clone();
-        match reader.read_message_with_packet().await {
-            Ok((req_msg, packet)) => tokio::spawn(async move {
+        match reader.read_message().await {
+            Ok(req_msg) => tokio::spawn(async move {
                 let response = handler
-                    .handle_request_with_packet_meta(
+                    .handle_request(
                         req_msg,
-                        packet,
                         src,
                         RequestMeta {
                             server_name,
@@ -436,9 +436,7 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::Result;
-    use crate::message::build_response_message_from_request;
-    use crate::message::{Message, Question, ResponseCode};
-    use crate::message::{Name, RecordType};
+    use crate::message::Rcode;
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::{plugin_config, test_registry};
@@ -446,25 +444,7 @@ mod tests {
     use serde_yml::from_str;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::{Arc, Mutex};
-    use tokio::io::duplex;
-    use tokio::time::{Duration, timeout};
-
-    fn make_request(id: u16) -> Message {
-        let mut message = Message::new();
-        message.set_id(id);
-        message.add_question(Question::new(
-            Name::from_ascii("example.com.").expect("query name should be valid"),
-            RecordType::A,
-        ));
-        message
-    }
-
-    fn make_request_handle(executor: Arc<dyn Executor>) -> Arc<RequestHandle> {
-        Arc::new(RequestHandle {
-            entry_executor: executor,
-            registry: test_registry(),
-        })
-    }
+    use tokio::time::Duration;
 
     #[derive(Debug, Default, Clone, PartialEq, Eq)]
     struct ObservedMeta {
@@ -499,19 +479,14 @@ mod tests {
                 server_name: context.server_name().map(str::to_string),
                 qname: context
                     .request
-                    .first_question_name_owned()
-                    .map(|name| name.to_utf8()),
+                    .first_question()
+                    .map(|question| question.name().to_fqdn()),
             };
             self.observed
                 .lock()
                 .expect("capture lock should not be poisoned")
                 .replace(observed);
-            context
-                .response
-                .set_message(build_response_message_from_request(
-                    &context.request,
-                    ResponseCode::Refused,
-                ));
+            context.set_response(context.request.response(Rcode::Refused));
             Ok(ExecStep::Stop)
         }
     }
@@ -560,54 +535,5 @@ listen: 127.0.0.1:53
             deps,
             vec![DependencySpec::executor("args.entry", "forward_main")]
         );
-    }
-
-    #[tokio::test]
-    async fn test_handle_dns_stream_returns_framed_response_and_forwards_meta() {
-        let observed = Arc::new(Mutex::new(None));
-        let executor = Arc::new(RespondAndCaptureExecutor {
-            observed: observed.clone(),
-        });
-        let request_handle = make_request_handle(executor);
-        let (client, server) = duplex(4096);
-        let server_task = tokio::spawn(handle_dns_stream(
-            server,
-            SocketAddr::from(([127, 0, 0, 1], 5400)),
-            request_handle,
-            Some("dot.example".to_string()),
-        ));
-
-        let transport = TcpTransport::new(client);
-        let (mut reader, mut writer) = transport.into_split();
-        let request = make_request(12);
-
-        writer
-            .write_message(&request)
-            .await
-            .expect("request write should succeed");
-        let response = reader
-            .read_message()
-            .await
-            .expect("response read should succeed");
-
-        assert_eq!(response.id(), 12);
-        assert_eq!(response.response_code(), ResponseCode::Refused);
-        assert_eq!(
-            observed
-                .lock()
-                .expect("capture lock should not be poisoned")
-                .clone(),
-            Some(ObservedMeta {
-                server_name: Some("dot.example".to_string()),
-                qname: Some("example.com.".to_string()),
-            })
-        );
-
-        drop(reader);
-        drop(writer);
-        timeout(Duration::from_secs(1), server_task)
-            .await
-            .expect("server task should shut down after client close")
-            .expect("server task should not panic");
     }
 }

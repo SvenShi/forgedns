@@ -95,7 +95,7 @@ impl Connection for TcpConnection {
 
         // Register query and get unique ID for request/response matching
         let (tx, rx) = oneshot::channel();
-        let query_id = self.request_map.store(&request, tx);
+        let query_id = self.request_map.store(tx);
 
         trace!(
             conn_id = self.id,
@@ -271,7 +271,7 @@ impl TcpConnection {
                     match res {
                         Ok(msg) => {
                             let id = msg.id();
-                            if let Some(sender) = self.request_map.take_if_matches(&msg) {
+                            if let Some(sender) = self.request_map.take(id) {
                                 let _ = sender.send(msg);
                                 self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
                                 trace!(

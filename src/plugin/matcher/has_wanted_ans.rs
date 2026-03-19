@@ -14,7 +14,6 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use ahash::AHashSet;
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -80,40 +79,23 @@ impl Plugin for HasWantedAnsMatcher {
 
 impl Matcher for HasWantedAnsMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        if context.request.question_count() == 1
-            && let Some(qtype) = context.request.first_question_type()
-        {
-            return context.response.has_answer_type(&[u16::from(qtype)]);
-        }
-
-        if let Some(packet) = context.request.packet() {
-            let Ok(parsed) = packet.parse() else {
-                return false;
-            };
-            let mut wanted = AHashSet::with_capacity(parsed.header().qdcount() as usize);
-            for question in parsed.question_records() {
-                let Ok(question) = question else {
-                    return false;
-                };
-                wanted.insert(question.qtype());
-            }
-            if wanted.is_empty() {
-                return false;
-            }
-            let wanted: Vec<u16> = wanted.into_iter().collect();
-            return context.response.has_answer_type(&wanted);
+        if let Some(qtype) = context.request.first_qtype() {
+            return context
+                .response()
+                .is_some_and(|response| response.has_answer_type(qtype));
         }
 
         let queries = context.request.questions();
         if queries.is_empty() {
             return false;
         }
-        let mut wanted = AHashSet::with_capacity(queries.len());
+        let mut wanted = Vec::with_capacity(queries.len());
         for query in queries {
-            wanted.insert(u16::from(query.question_type()));
+            wanted.push(query.qtype());
         }
-        let wanted: Vec<u16> = wanted.into_iter().collect();
-        context.response.has_answer_type(&wanted)
+        context
+            .response()
+            .is_some_and(|response| response.has_answer_types(&wanted))
     }
 }
 
@@ -149,6 +131,7 @@ mod tests {
         ctx.request.questions_mut().push(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
 
         let mut response = crate::message::Message::new();
@@ -157,11 +140,11 @@ mod tests {
             60,
             RData::A(A::new(1, 1, 1, 1)),
         ));
-        ctx.response.set_message(response);
+        ctx.set_response(response);
 
         assert!(matcher.is_match(&mut ctx));
 
-        ctx.response.set_message(crate::message::Message::new());
+        ctx.set_response(crate::message::Message::new());
         assert!(!matcher.is_match(&mut ctx));
     }
 }

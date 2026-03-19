@@ -130,8 +130,12 @@ mod tests {
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        let mut query = Question::new(Name::from_ascii("example.com.").unwrap(), RecordType::A);
-        query.set_question_class(DNSClass::IN);
+        let mut query = Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            crate::message::DNSClass::IN,
+        );
+        query.set_qclass(DNSClass::IN);
         request.add_question(query);
 
         DnsContext::new(

@@ -90,12 +90,11 @@ impl Plugin for FallbackExecutor {
 #[async_trait]
 impl Executor for FallbackExecutor {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let base = context.clone_for_subquery();
         let mut join_set = JoinSet::new();
         let (primary_state_tx, primary_state_rx) = watch::channel(PrimaryState::Running);
 
         let primary = self.primary.clone();
-        let primary_ctx = base.clone_for_subquery();
+        let primary_ctx = context.copy_for_subquery();
         join_set.spawn(async move {
             let outcome = run_executor(primary, primary_ctx, "primary").await;
             let state = if outcome.context.is_some() {
@@ -108,7 +107,7 @@ impl Executor for FallbackExecutor {
         });
 
         let secondary = self.secondary.clone();
-        let secondary_ctx = base.clone_for_subquery();
+        let secondary_ctx = context.copy_for_subquery();
         let delay = self.threshold;
         let always_standby = self.always_standby;
         let mut primary_state_rx = primary_state_rx.clone();
@@ -155,7 +154,7 @@ impl Executor for FallbackExecutor {
                     // In standby mode, secondary can finish early but should not win until
                     // the threshold elapses. Flush buffered response once timer fires.
                     if let Some(secondary_ctx) = buffered_secondary.take() {
-                        context.replace_with_subquery_result(secondary_ctx);
+                        context.apply_subquery_result(secondary_ctx);
                         join_set.abort_all();
                         return Ok(ExecStep::Next);
                     }
@@ -175,12 +174,12 @@ impl Executor for FallbackExecutor {
                     match outcome.source {
                         "primary" => {
                             if let Some(primary_ctx) = outcome.context {
-                                context.replace_with_subquery_result(primary_ctx);
+                                context.apply_subquery_result(primary_ctx);
                                 join_set.abort_all();
                                 return Ok(ExecStep::Next);
                             }
                             if let Some(secondary_ctx) = buffered_secondary.take() {
-                                context.replace_with_subquery_result(secondary_ctx);
+                                context.apply_subquery_result(secondary_ctx);
                                 join_set.abort_all();
                                 return Ok(ExecStep::Next);
                             }
@@ -188,7 +187,7 @@ impl Executor for FallbackExecutor {
                         "secondary" => {
                             if let Some(secondary_ctx) = outcome.context {
                                 if !self.always_standby || threshold_reached {
-                                    context.replace_with_subquery_result(secondary_ctx);
+                                    context.apply_subquery_result(secondary_ctx);
                                     join_set.abort_all();
                                     return Ok(ExecStep::Next);
                                 }
@@ -288,7 +287,7 @@ async fn run_executor(
 ) -> Outcome {
     match execute_with_post(executor.as_ref(), &mut context).await {
         Ok(step) => {
-            let has_response = context.response.has_response();
+            let has_response = context.response().is_some();
             Outcome {
                 context: if has_response { Some(context) } else { None },
                 source,
@@ -350,7 +349,7 @@ mod tests {
                 return Err(DnsError::plugin("stub failed"));
             }
             if self.produce_response {
-                context.response.set_message(crate::message::Message::new());
+                context.set_response(crate::message::Message::new());
             }
             Ok(ExecStep::Next)
         }

@@ -89,7 +89,7 @@ impl Executor for MetricsCollector {
             .map(|boxed| boxed.start_ms)
             .unwrap_or_else(AppClock::elapsed_millis);
 
-        if !context.response.has_response() {
+        if context.response().is_none() {
             self.err_total.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
@@ -246,7 +246,7 @@ mod tests {
     async fn test_metrics_collector_records_success_latency() {
         let plugin = make_collector();
         let mut ctx = test_context();
-        ctx.response.set_message(crate::message::Message::new());
+        ctx.set_response(crate::message::Message::new());
 
         let step = plugin.execute(&mut ctx).await.expect("execute should work");
         let state = match step {

@@ -72,7 +72,7 @@ impl Plugin for HasRespMatcher {
 
 impl Matcher for HasRespMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        context.response.has_response()
+        context.response().is_some()
     }
 }
 
@@ -98,7 +98,7 @@ mod tests {
         };
         let mut ctx = test_context();
         assert!(!matcher.is_match(&mut ctx));
-        ctx.response.set_message(crate::message::Message::new());
+        ctx.set_response(crate::message::Message::new());
         assert!(matcher.is_match(&mut ctx));
     }
 }

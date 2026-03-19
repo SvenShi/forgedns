@@ -58,6 +58,14 @@ pub enum DnsError {
     #[error("No initial cipher error: {0}")]
     NoInitialCipherSuiteError(#[from] quinn::crypto::rustls::NoInitialCipherSuite),
 
+    /// An unknown dns class was found
+    #[error("dns class string unknown: {0}")]
+    UnknownDnsClassStr(String),
+
+    /// An unknown record type string was found
+    #[error("record type string unknown: {0}")]
+    UnknownRecordTypeStr(String),
+
     #[error("integer bounds exceeded error: {0}")]
     VarIntBoundsExceeded(#[from] quinn::VarIntBoundsExceeded),
 

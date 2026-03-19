@@ -4,12 +4,12 @@
  */
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::message::Message;
 use crate::network::transport::quic_transport::QuicTransport;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
 use crate::network::upstream::{Connection, ConnectionInfo};
 
-use crate::message::Message;
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
@@ -99,7 +99,7 @@ impl Connection for QuicConnection {
         };
 
         let raw_id = request.id();
-        if let Err(e) = writer.write_message_with_id(&request, 0).await {
+        if let Err(e) = writer.write_message(&request).await {
             self.using_count.fetch_sub(1, Ordering::Relaxed);
             return Err(DnsError::protocol(format!(
                 "Failed to write DNS query to QUIC stream: {}",

@@ -301,8 +301,7 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::Result;
-    use crate::message::build_response_message_from_request;
-    use crate::message::{Message, Question, ResponseCode};
+    use crate::message::{Message, Question, Rcode};
     use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
@@ -354,12 +353,7 @@ mod tests {
                     server_name: context.server_name().map(str::to_string),
                     url_path: context.url_path().map(str::to_string),
                 });
-            context
-                .response
-                .set_message(build_response_message_from_request(
-                    &context.request,
-                    ResponseCode::NoError,
-                ));
+            context.set_response(context.request.response(Rcode::NoError));
             Ok(ExecStep::Stop)
         }
     }
@@ -377,6 +371,7 @@ mod tests {
         message.add_question(Question::new(
             Name::from_ascii("example.com.").expect("query name should be valid"),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
         message
     }
@@ -439,7 +434,7 @@ mod tests {
             .expect("response bytes should decode as DNS message");
 
         assert_eq!(dns_response.id(), 55);
-        assert_eq!(dns_response.response_code(), ResponseCode::NoError);
+        assert_eq!(dns_response.rcode(), Rcode::NoError);
         assert_eq!(
             observed
                 .lock()

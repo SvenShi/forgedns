@@ -10,7 +10,6 @@
 //! - POST method: DNS query passed in request body (binary format)
 
 use crate::message::Message;
-use crate::message::Packet;
 use crate::plugin::server::{RequestHandle, RequestMeta};
 use ahash::AHashMap;
 use async_trait::async_trait;
@@ -128,7 +127,7 @@ impl DnsGetHandler {
     ///
     /// Looks for the "dns" parameter containing a base64url-encoded DNS query.
     /// Returns None if the parameter is missing or cannot be decoded.
-    fn parse_dns_query(&self, query: Option<&str>) -> Option<(Message, Packet)> {
+    fn parse_dns_query(&self, query: Option<&str>) -> Option<Message> {
         let query = query?;
 
         // Parse query parameters: ?dns=<base64url>
@@ -136,20 +135,16 @@ impl DnsGetHandler {
             if let Some(value) = param.strip_prefix("dns=") {
                 // Decode base64url
                 return match URL_SAFE_NO_PAD.decode(value) {
-                    Ok(dns_bytes) => {
-                        let packet = Packet::from_vec(dns_bytes);
-                        // Parse DNS message
-                        match Message::from_packet(packet.clone()) {
-                            Ok(msg) => {
-                                debug!("Successfully parsed GET DNS query, ID: {}", msg.id());
-                                Some((msg, packet))
-                            }
-                            Err(e) => {
-                                warn!("Failed to parse DNS message: {}", e);
-                                None
-                            }
+                    Ok(dns_bytes) => match Message::from_bytes(&dns_bytes) {
+                        Ok(msg) => {
+                            debug!("Successfully parsed GET DNS query, ID: {}", msg.id());
+                            Some(msg)
                         }
-                    }
+                        Err(e) => {
+                            warn!("Failed to parse DNS message: {}", e);
+                            None
+                        }
+                    },
                     Err(e) => {
                         warn!("Failed to decode base64: {}", e);
                         None
@@ -175,7 +170,7 @@ impl HttpHandler for DnsGetHandler {
         server_name: Option<String>,
     ) -> Response<Bytes> {
         // Parse DNS query from URL parameters
-        let (dns_query, packet) = match self.parse_dns_query(query.as_deref()) {
+        let dns_query = match self.parse_dns_query(query.as_deref()) {
             Some(parsed) => parsed,
             None => {
                 return Response::builder()
@@ -189,9 +184,8 @@ impl HttpHandler for DnsGetHandler {
         // Process DNS query through the executor
         let dns_result = self
             .request_handle
-            .handle_request_with_packet_meta(
+            .handle_request(
                 dns_query,
-                packet,
                 src_addr,
                 RequestMeta {
                     server_name,
@@ -199,7 +193,7 @@ impl HttpHandler for DnsGetHandler {
                 },
             )
             .await;
-        msg_to_response(dns_result.response)
+        msg_response(dns_result.response)
     }
 }
 
@@ -245,8 +239,7 @@ impl HttpHandler for DnsPostHandler {
         }
 
         // Parse DNS query from binary body
-        let packet = Packet::from_bytes(body.clone());
-        let dns_query = match Message::from_packet(packet.clone()) {
+        let dns_query = match Message::from_bytes(&body) {
             Ok(msg) => {
                 debug!(
                     "Successfully parsed POST DNS query, ID: {}, size: {} bytes",
@@ -268,9 +261,8 @@ impl HttpHandler for DnsPostHandler {
         // Process DNS query through the executor
         let dns_result = self
             .request_handle
-            .handle_request_with_packet_meta(
+            .handle_request(
                 dns_query,
-                packet,
                 src_addr,
                 RequestMeta {
                     server_name,
@@ -278,12 +270,12 @@ impl HttpHandler for DnsPostHandler {
                 },
             )
             .await;
-        msg_to_response(dns_result.response)
+        msg_response(dns_result.response)
     }
 }
 
 #[inline]
-fn msg_to_response(dns_response: crate::message::Response) -> Response<Bytes> {
+fn msg_response(dns_response: Message) -> Response<Bytes> {
     // Serialize DNS response to binary format
     match dns_response.to_bytes() {
         Ok(response_bytes) => {
@@ -311,9 +303,8 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::Result;
-    use crate::message::build_response_message_from_request;
     use crate::message::{Name, RecordType};
-    use crate::message::{Question, ResponseCode};
+    use crate::message::{Question, Rcode};
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
@@ -331,7 +322,7 @@ mod tests {
     #[derive(Debug)]
     struct RecordingExecutor {
         observed: Arc<Mutex<Option<ObservedRequest>>>,
-        response_code: ResponseCode,
+        response_code: Rcode,
     }
 
     #[async_trait]
@@ -353,9 +344,11 @@ mod tests {
     impl Executor for RecordingExecutor {
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
             let query_name = context
-                .question()
+                .request
+                .first_question()
                 .expect("request should contain one query")
-                .normalized_name()
+                .name()
+                .normalized()
                 .to_string();
             let observed = ObservedRequest {
                 query_name,
@@ -367,18 +360,13 @@ mod tests {
                 .lock()
                 .expect("request observation lock should not be poisoned")
                 .replace(observed);
-            context
-                .response
-                .set_message(build_response_message_from_request(
-                    &context.request,
-                    self.response_code,
-                ));
+            context.set_response(context.request.response(self.response_code));
             Ok(ExecStep::Next)
         }
     }
 
     fn make_request_handle(
-        response_code: ResponseCode,
+        response_code: Rcode,
     ) -> (Arc<RequestHandle>, Arc<Mutex<Option<ObservedRequest>>>) {
         let observed = Arc::new(Mutex::new(None));
         let executor = Arc::new(RecordingExecutor {
@@ -400,6 +388,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii(qname).expect("query name should be valid"),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
         request
     }
@@ -437,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_get_handler_returns_bad_request_when_dns_param_is_missing() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let (request_handle, observed) = make_request_handle(Rcode::NoError);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::GET,
@@ -471,7 +460,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_get_handler_processes_valid_query_and_forwards_meta() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::Refused);
+        let (request_handle, observed) = make_request_handle(Rcode::Refused);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::GET,
@@ -500,7 +489,7 @@ mod tests {
         );
         assert_eq!(response.headers()["Cache-Control"], "max-age=300");
         assert_eq!(dns_response.id(), 31);
-        assert_eq!(dns_response.response_code(), ResponseCode::Refused);
+        assert_eq!(dns_response.rcode(), Rcode::Refused);
         assert_eq!(
             observed
                 .lock()
@@ -517,7 +506,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_post_handler_returns_payload_too_large_for_oversized_body() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let (request_handle, observed) = make_request_handle(Rcode::NoError);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
@@ -548,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_post_handler_returns_bad_request_for_invalid_dns_body() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let (request_handle, observed) = make_request_handle(Rcode::NoError);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
@@ -582,7 +571,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_post_handler_processes_valid_body_and_forwards_meta() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::NXDomain);
+        let (request_handle, observed) = make_request_handle(Rcode::NXDomain);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
@@ -608,7 +597,7 @@ mod tests {
         let dns_response = decode_response(&response);
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(dns_response.id(), 41);
-        assert_eq!(dns_response.response_code(), ResponseCode::NXDomain);
+        assert_eq!(dns_response.rcode(), Rcode::NXDomain);
         assert_eq!(
             observed
                 .lock()

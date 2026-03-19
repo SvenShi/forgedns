@@ -22,17 +22,13 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::RData;
-use crate::message::rdata::OPT;
-use crate::message::rdata::opt::{EdnsCode, EdnsOption};
-use crate::message::{Packet, RDataView, RecordType};
+use crate::message::{EdnsCode, EdnsOption};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::net::IpAddr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -90,18 +86,7 @@ impl Executor for ForwardEdns0Opt {
             return Ok(());
         }
 
-        if let Some(packet) = context
-            .response
-            .current()
-            .and_then(|response| response.packet())
-        {
-            if let Some(rewritten) = append_missing_selected_options_to_packet(packet, &selected)? {
-                context.set_response_packet(rewritten)?;
-            }
-            return Ok(());
-        }
-
-        if let Some(response) = context.response_message_mut()? {
+        if let Some(response) = context.response_mut() {
             let mut existing_codes = collect_selected_codes(response, &self.code_set);
             let opt = ensure_opt_record(response);
             for option in selected {
@@ -182,14 +167,15 @@ fn collect_selected_options(
     message: &crate::message::Message,
     code_set: &AHashSet<u16>,
 ) -> Vec<EdnsOption> {
-    let Some(edns) = message.edns_access() else {
+    let Some(edns) = message.edns() else {
         return Vec::new();
     };
 
     let mut selected = Vec::new();
     for option in edns.options() {
-        if code_set.contains(&option.code()) {
-            selected.push(option.to_owned());
+        let code = u16::from(EdnsCode::from(option));
+        if code_set.contains(&code) {
+            selected.push(option.clone());
         }
     }
     selected
@@ -199,13 +185,13 @@ fn collect_selected_codes(
     message: &crate::message::Message,
     code_set: &AHashSet<u16>,
 ) -> AHashSet<u16> {
-    let Some(edns) = message.edns_access() else {
+    let Some(edns) = message.edns() else {
         return AHashSet::new();
     };
 
     let mut out = AHashSet::new();
     for option in edns.options() {
-        let code = option.code();
+        let code = u16::from(EdnsCode::from(option));
         if code_set.contains(&code) {
             out.insert(code);
         }
@@ -213,156 +199,8 @@ fn collect_selected_codes(
     out
 }
 
-fn append_missing_selected_options_to_packet(
-    packet: &Packet,
-    selected: &[EdnsOption],
-) -> Result<Option<Packet>> {
-    if selected.is_empty() {
-        return Ok(None);
-    }
-
-    let parsed = packet.parse()?;
-    let bytes = packet.as_slice();
-    let mut existing_codes = AHashSet::new();
-    let mut opt_rdata_range = None;
-
-    for record in parsed.additional_records() {
-        let record = record?;
-        if record.record_type() != RecordType::OPT {
-            continue;
-        }
-        let RDataView::Opt(edns) = record.rdata() else {
-            continue;
-        };
-        opt_rdata_range.get_or_insert_with(|| record.rdata_range());
-        for option in edns.options() {
-            existing_codes.insert(option.code());
-        }
-    }
-
-    let mut appended = Vec::with_capacity(selected.len() * 16);
-    for option in selected {
-        let code = u16::from(EdnsCode::from(option));
-        if !existing_codes.insert(code) {
-            continue;
-        }
-        encode_edns_option_wire(&mut appended, option)?;
-    }
-    if appended.is_empty() {
-        return Ok(None);
-    }
-
-    if let Some(rdata_range) = opt_rdata_range {
-        let rdlength_offset = rdata_range.start as usize - 2;
-        let existing_rdata = &bytes[rdata_range.start as usize..rdata_range.end as usize];
-        let new_rdlength = existing_rdata
-            .len()
-            .checked_add(appended.len())
-            .ok_or_else(|| DnsError::protocol("edns option block too large"))?;
-        let new_rdlength = u16::try_from(new_rdlength)
-            .map_err(|_| DnsError::protocol("edns option block too large"))?;
-
-        let mut out = Vec::with_capacity(bytes.len() + appended.len());
-        out.extend_from_slice(&bytes[..rdlength_offset]);
-        out.extend_from_slice(&new_rdlength.to_be_bytes());
-        out.extend_from_slice(existing_rdata);
-        out.extend_from_slice(&appended);
-        out.extend_from_slice(&bytes[rdata_range.end as usize..]);
-        return Ok(Some(Packet::from_vec(out)));
-    }
-
-    let additional_count = parsed
-        .header()
-        .arcount()
-        .checked_add(1)
-        .ok_or_else(|| DnsError::protocol("dns additional record count overflow"))?;
-    let opt_record = encode_opt_record_wire(&appended)?;
-    let mut out = Vec::with_capacity(bytes.len() + opt_record.len());
-    out.extend_from_slice(bytes);
-    out.extend_from_slice(&opt_record);
-    out[10..12].copy_from_slice(&additional_count.to_be_bytes());
-    Ok(Some(Packet::from_vec(out)))
-}
-
-fn encode_edns_option_wire(out: &mut Vec<u8>, option: &EdnsOption) -> Result<()> {
-    match option {
-        EdnsOption::Subnet(value) => {
-            let code = u16::from(EdnsCode::Subnet);
-            let (family, addr_bytes, max_prefix) = match value.addr() {
-                IpAddr::V4(addr) => (1u16, addr.octets().to_vec(), 32u8),
-                IpAddr::V6(addr) => (2u16, addr.octets().to_vec(), 128u8),
-            };
-            let prefix = value.source_prefix().min(max_prefix);
-            let network_len = usize::from(prefix.div_ceil(8));
-            let mut truncated = addr_bytes[..network_len].to_vec();
-            if let Some(last) = truncated.last_mut() {
-                let remaining_bits = prefix % 8;
-                if remaining_bits != 0 {
-                    *last &= 0xFFu8 << (8 - remaining_bits);
-                }
-            }
-            out.extend_from_slice(&code.to_be_bytes());
-            let body_len = 4usize
-                .checked_add(truncated.len())
-                .ok_or_else(|| DnsError::protocol("edns option too large"))?;
-            let body_len =
-                u16::try_from(body_len).map_err(|_| DnsError::protocol("edns option too large"))?;
-            out.extend_from_slice(&body_len.to_be_bytes());
-            out.extend_from_slice(&family.to_be_bytes());
-            out.push(prefix);
-            out.push(value.scope_prefix().min(max_prefix));
-            out.extend_from_slice(&truncated);
-        }
-        EdnsOption::Unknown(code, data) => {
-            let data_len = u16::try_from(data.len())
-                .map_err(|_| DnsError::protocol("edns option too large"))?;
-            out.extend_from_slice(&code.to_be_bytes());
-            out.extend_from_slice(&data_len.to_be_bytes());
-            out.extend_from_slice(data);
-        }
-    }
-    Ok(())
-}
-
-fn encode_opt_record_wire(rdata: &[u8]) -> Result<Vec<u8>> {
-    let rdlength = u16::try_from(rdata.len())
-        .map_err(|_| DnsError::protocol("edns option block too large"))?;
-    let opt = OPT::default();
-    let mut out = Vec::with_capacity(11 + rdata.len());
-    out.push(0);
-    out.extend_from_slice(&u16::from(RecordType::OPT).to_be_bytes());
-    out.extend_from_slice(&opt.udp_payload_size().to_be_bytes());
-    out.extend_from_slice(&opt.raw_ttl().to_be_bytes());
-    out.extend_from_slice(&rdlength.to_be_bytes());
-    out.extend_from_slice(rdata);
-    Ok(out)
-}
-
-fn ensure_opt_record(message: &mut crate::message::Message) -> &mut OPT {
-    let mut opt_idx = None;
-    for (idx, record) in message.additionals().iter().enumerate() {
-        if matches!(record.data(), RData::OPT(_)) {
-            opt_idx = Some(idx);
-            break;
-        }
-    }
-
-    let idx = match opt_idx {
-        Some(idx) => idx,
-        None => {
-            message.add_additional(crate::message::Record::from_rdata(
-                crate::message::Name::root(),
-                0,
-                RData::OPT(OPT::default()),
-            ));
-            message.additionals().len() - 1
-        }
-    };
-
-    match message.additionals_mut()[idx].data_mut() {
-        RData::OPT(opt) => opt,
-        _ => unreachable!("OPT record must contain OPT rdata"),
-    }
+fn ensure_opt_record(message: &mut crate::message::Message) -> &mut crate::message::Edns {
+    message.ensure_edns_mut()
 }
 
 fn split_tokens(raw: &str) -> Vec<&str> {
@@ -376,8 +214,7 @@ fn split_tokens(raw: &str) -> Vec<&str> {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::rdata::opt::ClientSubnet;
-    use crate::message::{Message, Question};
+    use crate::message::{ClientSubnet, DNSClass, Message, Question};
     use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
@@ -396,6 +233,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            DNSClass::IN,
         ));
         DnsContext::new(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
@@ -413,32 +251,27 @@ mod tests {
         )));
     }
 
-    fn count_code(plan: &crate::message::Response, code: u16) -> usize {
-        let message = plan
-            .to_message()
-            .expect("response should materialize for inspection");
-        let mut total = 0usize;
-        for record in message.additionals() {
-            let RData::OPT(opt) = record.data() else {
-                continue;
-            };
-            for (_, option) in opt.as_ref() {
-                if u16::from(EdnsCode::from(option)) == code {
-                    total += 1;
-                }
-            }
-        }
-        total
+    fn count_code(message: &Message, code: u16) -> usize {
+        message
+            .edns()
+            .as_ref()
+            .map(|edns| {
+                edns.options()
+                    .iter()
+                    .filter(|option| u16::from(EdnsCode::from(*option)) == code)
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     #[tokio::test]
-    async fn test_forward_edns0opt_moves_selected_request_options_to_response() {
+    async fn test_forward_edns0opt_moves_selected_request_options_response() {
         let plugin = ForwardEdns0Opt {
             tag: "forward_opt".to_string(),
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -449,13 +282,13 @@ mod tests {
             _ => panic!("expected NextWithPost"),
         };
 
-        ctx.response.set_message(Message::new());
+        ctx.set_response(Message::new());
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            count_code(ctx.response.current().expect("response should exist"), 8),
+            count_code(ctx.response().expect("response should exist"), 8),
             1
         );
     }
@@ -467,7 +300,7 @@ mod tests {
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -480,28 +313,26 @@ mod tests {
 
         let mut response = Message::new();
         add_ecs(&mut response, Ipv4Addr::new(2, 2, 2, 2), 24);
-        ctx.response.set_message(response);
+        ctx.set_response(response);
 
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            count_code(ctx.response.current().expect("response should exist"), 8),
+            count_code(ctx.response().expect("response should exist"), 8),
             1
         );
     }
 
     #[tokio::test]
-    async fn test_forward_edns0opt_reads_selected_options_from_packet_request() {
+    async fn test_forward_edns0opt_reads_selected_options_from_request() {
         let plugin = ForwardEdns0Opt {
             tag: "forward_opt".to_string(),
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
-        let packet = crate::message::Packet::from_vec(ctx.request.to_bytes().unwrap());
-        ctx.set_request_packet(packet);
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -512,25 +343,25 @@ mod tests {
             _ => panic!("expected NextWithPost"),
         };
 
-        ctx.response.set_message(Message::new());
+        ctx.set_response(Message::new());
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            count_code(ctx.response.current().expect("response should exist"), 8),
+            count_code(ctx.response().expect("response should exist"), 8),
             1
         );
     }
 
     #[tokio::test]
-    async fn test_forward_edns0opt_short_circuits_packet_response_with_existing_code() {
+    async fn test_forward_edns0opt_keeps_single_existing_rcode() {
         let plugin = ForwardEdns0Opt {
             tag: "forward_opt".to_string(),
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -543,34 +374,26 @@ mod tests {
 
         let mut response = Message::new();
         add_ecs(&mut response, Ipv4Addr::new(2, 2, 2, 2), 24);
-        ctx.set_response_packet(Packet::from_vec(response.to_bytes().unwrap()))
-            .expect("packet response should decode");
+        ctx.set_response(response);
 
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
-        assert!(
-            ctx.response
-                .current()
-                .and_then(|response| response.packet())
-                .is_some(),
-            "packet-backed response should stay packet-backed"
-        );
         assert_eq!(
-            count_code(ctx.response.current().expect("response should exist"), 8),
+            count_code(ctx.response().expect("response should exist"), 8),
             1
         );
     }
 
     #[tokio::test]
-    async fn test_forward_edns0opt_appends_to_existing_packet_opt() {
+    async fn test_forward_edns0opt_appends_to_existing_response_opt() {
         let plugin = ForwardEdns0Opt {
             tag: "forward_opt".to_string(),
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -583,34 +406,26 @@ mod tests {
 
         let mut response = Message::new();
         let _ = ensure_opt_record(&mut response);
-        ctx.set_response_packet(Packet::from_vec(response.to_bytes().unwrap()))
-            .expect("packet response should decode");
+        ctx.set_response(response);
 
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
-        assert!(
-            ctx.response
-                .current()
-                .and_then(|response| response.packet())
-                .is_some(),
-            "packet-backed response should stay packet-backed"
-        );
         assert_eq!(
-            count_code(ctx.response.current().expect("response should exist"), 8),
+            count_code(ctx.response().expect("response should exist"), 8),
             1
         );
     }
 
     #[tokio::test]
-    async fn test_forward_edns0opt_creates_packet_opt_when_response_has_none() {
+    async fn test_forward_edns0opt_creates_response_opt_when_missing() {
         let plugin = ForwardEdns0Opt {
             tag: "forward_opt".to_string(),
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(ctx.request.message_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -621,32 +436,17 @@ mod tests {
             _ => panic!("expected NextWithPost"),
         };
 
-        let response = Message::new();
-        ctx.set_response_packet(Packet::from_vec(response.to_bytes().unwrap()))
-            .expect("packet response should decode");
+        ctx.set_response(Message::new());
 
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
-        assert!(
-            ctx.response
-                .current()
-                .and_then(|response| response.packet())
-                .is_some(),
-            "packet-backed response should stay packet-backed"
-        );
 
-        let updated = ctx
-            .response
-            .current()
-            .expect("response should exist")
-            .to_message()
-            .expect("response should materialize");
-        assert_eq!(updated.additionals().len(), 1);
-        assert_eq!(updated.additionals()[0].record_type(), RecordType::OPT);
+        let updated = ctx.response().expect("response should exist");
+        assert!(updated.edns().is_some());
         assert_eq!(
-            count_code(ctx.response.current().expect("response should exist"), 8),
+            count_code(ctx.response().expect("response should exist"), 8),
             1
         );
     }

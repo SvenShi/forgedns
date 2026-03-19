@@ -12,12 +12,9 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::ResponseCode;
-use crate::message::build_address_response_packet;
-use crate::message::build_response_message_from_request;
-use crate::message::rdata::name::{CNAME, NS, PTR};
+use crate::message::Rcode;
 use crate::message::rdata::{A, AAAA, MX, TXT};
-use crate::message::{DNSClass, Name, RData, Record, RecordType};
+use crate::message::{CNAME, DNSClass, NS, Name, PTR, RData, Record, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -98,13 +95,12 @@ impl Plugin for Arbitrary {
 #[async_trait]
 impl Executor for Arbitrary {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let question_count = context.request_facts().question_count();
-        let Some(question) = context.question() else {
+        let Some(question) = context.request.first_question() else {
             return Ok(ExecStep::Next);
         };
         let qclass = question.qclass();
-        let qtype = RecordType::from(question.qtype());
-        let qname = question.normalized_name();
+        let qtype = question.qtype();
+        let qname = question.name().normalized();
 
         let Some(name_records) = self.records.get(qname) else {
             return Ok(ExecStep::Next);
@@ -122,35 +118,25 @@ impl Executor for Arbitrary {
 
         if answer_count > 0 {
             if qtype != RecordType::ANY
-                && qclass == u16::from(DNSClass::IN)
-                && question_count == 1
-                && let Some(packet) = context.request_packet()
+                && qclass == DNSClass::IN
                 && let Some(fast_address) = answers.fast_address.as_ref()
             {
-                let response = build_address_response_packet(
-                    packet,
+                let response = context.request.address_response(
+                    question,
                     fast_address.ttl,
                     fast_address.addresses.as_slice(),
                 )?;
-                context.set_response_packet_with_answer_ips(
-                    response,
-                    fast_address.addresses.clone(),
-                )?;
+                context.set_response(response);
                 return Ok(ExecStep::Next);
             }
 
-            let mut response =
-                build_response_message_from_request(&context.request, ResponseCode::NoError);
+            let mut response = context.request().response(Rcode::NoError);
             response.answers_mut().reserve(answer_count);
             response
                 .answers_mut()
                 .extend(answers.records.iter().cloned());
 
-            if answers.answer_ips.is_empty() {
-                context.response.set_message(response);
-            } else {
-                context.set_response_message_with_answer_ips(response, answers.answer_ips.clone());
-            }
+            context.set_response(response);
         }
 
         Ok(ExecStep::Next)
@@ -194,11 +180,12 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
         let record = parse_zone_line(line).map_err(|e| {
             DnsError::plugin(format!("invalid arbitrary rule #{} '{}': {}", idx, line, e))
         })?;
-        let key = normalize_name(record.name());
-        let entry = map.entry(key).or_default();
+        let entry = map
+            .entry(record.name().normalized().to_string())
+            .or_default();
         entry
             .by_type
-            .entry(record.record_type())
+            .entry(record.rr_type())
             .or_default()
             .records
             .push(record.clone());
@@ -241,11 +228,12 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
                     path, line_no, raw, e
                 ))
             })?;
-            let key = normalize_name(record.name());
-            let entry = map.entry(key).or_default();
+            let entry = map
+                .entry(record.name().normalized().to_string())
+                .or_default();
             entry
                 .by_type
-                .entry(record.record_type())
+                .entry(record.rr_type())
                 .or_default()
                 .records
                 .push(record.clone());
@@ -265,20 +253,18 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
 
 fn build_fast_address_answer(records: &[Record]) -> Option<FastAddressAnswer> {
     let first = records.first()?;
-    let record_type = first.record_type();
+    let record_type = first.rr_type();
     if !matches!(record_type, RecordType::A | RecordType::AAAA) {
         return None;
     }
-    if first.dns_class() != DNSClass::IN {
+    if first.class() != DNSClass::IN {
         return None;
     }
 
     let ttl = first.ttl();
     let mut addresses = SmallVec::<[IpAddr; 8]>::with_capacity(records.len());
     for record in records {
-        if record.record_type() != record_type
-            || record.dns_class() != DNSClass::IN
-            || record.ttl() != ttl
+        if record.rr_type() != record_type || record.class() != DNSClass::IN || record.ttl() != ttl
         {
             return None;
         }
@@ -360,11 +346,18 @@ fn parse_rdata(record_type: RecordType, fields: &[&str]) -> std::result::Result<
             Ok(RData::MX(MX::new(preference, exchange)))
         }
         RecordType::TXT => {
-            let text = fields
-                .iter()
-                .map(|f| f.trim_matches('"').to_string())
-                .collect::<Vec<_>>();
-            Ok(RData::TXT(TXT::new(text)))
+            let mut wire = Vec::new();
+
+            for field in fields {
+                let part = field.trim_matches('"').as_bytes();
+                if part.len() > u8::MAX as usize {
+                    return Err(format!("TXT chunk exceeds 255 bytes: '{}'", field));
+                }
+                wire.push(part.len() as u8);
+                wire.extend_from_slice(part);
+            }
+
+            Ok(RData::TXT(TXT::new(wire.into_boxed_slice())))
         }
         _ => Err(format!(
             "record type '{}' is not supported by arbitrary plugin",
@@ -382,15 +375,10 @@ fn parse_name(raw: &str) -> std::result::Result<Name, String> {
     Name::from_ascii(&fqdn).map_err(|e| format!("invalid name '{}': {}", raw, e))
 }
 
-#[inline]
-fn normalize_name(name: &Name) -> String {
-    DnsContext::normalize_dns_name(name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{Message, Packet, Question};
+    use crate::message::{Message, Question};
     use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
@@ -404,19 +392,16 @@ mod tests {
 
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
-        request.add_question(Question::new(Name::from_ascii(name).unwrap(), qtype));
+        request.add_question(Question::new(
+            Name::from_ascii(name).unwrap(),
+            qtype,
+            DNSClass::IN,
+        ));
         DnsContext::new(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
             test_registry(),
         )
-    }
-
-    fn make_packet_backed_context(name: &str, qtype: RecordType) -> DnsContext {
-        let mut ctx = make_context(name, qtype);
-        let packet = ctx.request.to_bytes().expect("request should encode");
-        ctx.set_request_packet(Packet::from_vec(packet));
-        ctx
     }
 
     #[tokio::test]
@@ -439,14 +424,9 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        let response = ctx
-            .response
-            .current()
-            .expect("response should exist")
-            .to_message()
-            .expect("response should materialize");
+        let response = ctx.response().expect("response should exist");
         assert_eq!(response.answers().len(), 1);
-        assert_eq!(response.answers()[0].record_type(), RecordType::A);
+        assert_eq!(response.answers()[0].rr_type(), RecordType::A);
     }
 
     #[tokio::test]
@@ -468,17 +448,12 @@ mod tests {
             .execute(&mut ctx)
             .await
             .expect("execute should succeed");
-        let response = ctx
-            .response
-            .current()
-            .expect("response should exist")
-            .to_message()
-            .expect("response should materialize");
+        let response = ctx.response().expect("response should exist");
         assert_eq!(response.answers().len(), 2);
     }
 
     #[tokio::test]
-    async fn test_arbitrary_execute_uses_packet_fast_path_for_static_address_answer() {
+    async fn test_arbitrary_execute_uses_message_static_address_answer() {
         let cfg = ArbitraryConfig {
             rules: vec!["example.com. 60 IN A 1.1.1.1".to_string()],
             files: vec![],
@@ -488,17 +463,15 @@ mod tests {
             records: build_records(&cfg).expect("records should parse"),
         };
 
-        let mut ctx = make_packet_backed_context("example.com.", RecordType::A);
+        let mut ctx = make_context("example.com.", RecordType::A);
         plugin
             .execute(&mut ctx)
             .await
             .expect("execute should succeed");
 
-        let response = ctx.response.current().expect("response should exist");
-        assert!(response.packet().is_some());
-        assert!(
-            ctx.response
-                .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))
-        );
+        assert!(ctx.response().is_some());
+        assert!(ctx.response().is_some_and(|response| {
+            response.has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))
+        }));
     }
 }

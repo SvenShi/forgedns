@@ -18,7 +18,6 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
-use crate::message::RecordType;
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -76,26 +75,16 @@ impl Executor for QuerySummary {
             .unwrap_or_else(AppClock::elapsed_millis);
 
         let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
-        let (qname, qtype) = match context.question() {
+        let (qname, qtype) = match context.request.first_question() {
             Some(question) => (
-                question.normalized_name().to_string(),
-                format!("{:?}", RecordType::from(question.qtype())),
+                question.name().normalized().to_string(),
+                format!("{:?}", question.qtype()),
             ),
             None => ("<none>".to_string(), "<none>".to_string()),
         };
         let rcode = context
-            .response
-            .current()
-            .and_then(|response| {
-                response
-                    .response_code_hint()
-                    .map(|rcode| format!("{:?}", rcode))
-                    .or_else(|| {
-                        response
-                            .message()
-                            .map(|message| format!("{:?}", message.response_code()))
-                    })
-            })
+            .response()
+            .map(|response| format!("{:?}", response.rcode()))
             .unwrap_or_else(|| "<none>".to_string());
 
         info!(
@@ -212,7 +201,7 @@ mod tests {
             msg: "m".to_string(),
         };
         let mut ctx = test_context();
-        ctx.response.set_message(Message::new());
+        ctx.set_response(Message::new());
 
         plugin
             .post_execute(&mut ctx, None)

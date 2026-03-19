@@ -24,17 +24,13 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
-use crate::message::Packet;
-use crate::message::ResponseCode;
-use crate::message::build_response_message_from_request;
-use crate::message::rdata::name::PTR;
-use crate::message::{Name, RData, Record, RecordType};
+use crate::message::Rcode;
+use crate::message::{Name, PTR, RData, Record, RecordType};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
-use smallvec::SmallVec;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,7 +59,7 @@ struct CacheEntry {
 #[derive(Debug)]
 struct ReverseLookup {
     tag: String,
-    cache: TtlCache<IpAddr, CacheEntry>,
+    cache: TtlCache<IpAddr, Arc<CacheEntry>>,
     size: usize,
     ttl: u32,
     handle_ptr: bool,
@@ -128,7 +124,7 @@ impl Executor for ReverseLookup {
         if self.handle_ptr
             && let Some(response) = self.try_handle_ptr(&context.request)
         {
-            context.response.set_message(response);
+            context.set_response(response);
             return Ok(ExecStep::Stop);
         }
 
@@ -138,13 +134,11 @@ impl Executor for ReverseLookup {
     async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
         let _ = state;
 
-        let query_name = context.request.first_question_name_owned();
-        if let Some(rewritten) = self.rewrite_packet_response(context, query_name.as_ref())? {
-            context.set_response_packet(rewritten)?;
-            return Ok(());
-        }
-
-        let Some(response) = context.response_message_mut()? else {
+        let query_name = context
+            .request
+            .first_question()
+            .map(|question| question.name().clone());
+        let Some(response) = context.response_mut() else {
             return Ok(());
         };
         let now = AppClock::elapsed_millis();
@@ -161,8 +155,12 @@ impl Executor for ReverseLookup {
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| record.name().clone());
-            self.cache
-                .insert_or_update(normalize_ip(ip), CacheEntry { domain }, now, expire_at_ms);
+            self.cache.insert_or_update(
+                normalize_ip(ip),
+                Arc::new(CacheEntry { domain }),
+                now,
+                expire_at_ms,
+            );
         }
 
         Ok(())
@@ -170,69 +168,22 @@ impl Executor for ReverseLookup {
 }
 
 impl ReverseLookup {
-    fn rewrite_packet_response(
-        &self,
-        context: &DnsContext,
-        query_name: Option<&Name>,
-    ) -> Result<Option<Packet>> {
-        let Some(packet) = context
-            .response
-            .current()
-            .and_then(|response| response.packet())
-        else {
-            return Ok(None);
-        };
-
-        let parsed = packet.parse()?;
-        let now = AppClock::elapsed_millis();
-        let mut patches = SmallVec::<[(usize, u32); 8]>::new();
-
-        for record in parsed.answer_records() {
-            let record = record?;
-            let Some(ip) = record.ip_addr() else {
-                continue;
-            };
-
-            let effective_ttl = record.ttl().min(self.ttl);
-            if effective_ttl != record.ttl() {
-                patches.push((record.ttl_offset(), effective_ttl));
-            }
-
-            let expire_at_ms = now.saturating_add(effective_ttl as u64 * 1000);
-            let domain = query_name
-                .cloned()
-                .unwrap_or_else(|| Name::from_wire_ref(record.name()));
-            self.cache
-                .insert_or_update(normalize_ip(ip), CacheEntry { domain }, now, expire_at_ms);
-        }
-
-        if patches.is_empty() {
-            return Ok(Some(packet.clone()));
-        }
-
-        let mut bytes = packet.as_slice().to_vec();
-        for (offset, ttl) in patches {
-            bytes[offset..offset + 4].copy_from_slice(&ttl.to_be_bytes());
-        }
-        Ok(Some(Packet::from_vec(bytes)))
-    }
-
     fn try_handle_ptr(&self, request: &crate::message::Message) -> Option<crate::message::Message> {
-        if request.question_count() != 1 || request.first_question_type()? != RecordType::PTR {
+        if request.question_count() != 1 || request.first_qtype()? != RecordType::PTR {
             return None;
         }
 
-        let qname = request.first_question_name_owned()?;
+        let qname = request.first_question()?.name().clone();
         let ip = parse_ptr_name(&qname)?;
         let ip = normalize_ip(ip);
         let now = AppClock::elapsed_millis();
         let entry = self.cache.get_fresh_cloned(&ip, now, 1000)?;
 
-        let mut response = build_response_message_from_request(request, ResponseCode::NoError);
+        let mut response = request.response(Rcode::NoError);
         response.answers_mut().push(Record::from_rdata(
             qname,
             5,
-            RData::PTR(PTR(entry.value.domain)),
+            RData::PTR(PTR(entry.value.domain.clone())),
         ));
         Some(response)
     }
@@ -311,7 +262,11 @@ mod tests {
 
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
-        request.add_question(Question::new(Name::from_ascii(name).unwrap(), qtype));
+        request.add_question(Question::new(
+            Name::from_ascii(name).unwrap(),
+            qtype,
+            crate::message::DNSClass::IN,
+        ));
         DnsContext::new(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
@@ -338,21 +293,14 @@ mod tests {
             300,
             RData::A(A(Ipv4Addr::new(8, 8, 4, 4))),
         ));
-        a_ctx.response.set_message(response);
+        a_ctx.set_response(response);
 
         plugin
             .post_execute(&mut a_ctx, None)
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            a_ctx
-                .response
-                .current()
-                .expect("response should exist")
-                .to_message()
-                .expect("response should materialize")
-                .answers()[0]
-                .ttl(),
+            a_ctx.response().expect("response should exist").answers()[0].ttl(),
             120
         );
 
@@ -363,18 +311,13 @@ mod tests {
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Stop));
 
-        let ptr_resp = ptr_ctx
-            .response
-            .current()
-            .expect("PTR response should be returned")
-            .to_message()
-            .expect("response should materialize");
+        let ptr_resp = ptr_ctx.response().expect("PTR response should be returned");
         assert_eq!(ptr_resp.answers().len(), 1);
-        assert_eq!(ptr_resp.answers()[0].record_type(), RecordType::PTR);
+        assert_eq!(ptr_resp.answers()[0].rr_type(), RecordType::PTR);
     }
 
     #[tokio::test]
-    async fn test_reverse_lookup_rewrites_packet_backed_response() {
+    async fn test_reverse_lookup_rewrites_response() {
         let plugin = ReverseLookup {
             tag: "reverse_lookup".to_string(),
             cache: TtlCache::with_capacity(64),
@@ -392,29 +335,14 @@ mod tests {
             300,
             RData::A(A(Ipv4Addr::new(8, 8, 4, 4))),
         ));
-        ctx.set_response_packet(Packet::from_vec(response.to_bytes().unwrap()))
-            .expect("packet response should decode");
+        ctx.set_response(response);
 
         plugin
             .post_execute(&mut ctx, None)
             .await
             .expect("post_execute should succeed");
-
-        assert!(
-            ctx.response
-                .current()
-                .and_then(|response| response.packet())
-                .is_some(),
-            "packet-backed response should stay packet-backed"
-        );
         assert_eq!(
-            ctx.response
-                .current()
-                .expect("response should exist")
-                .to_message()
-                .expect("response should materialize")
-                .answers()[0]
-                .ttl(),
+            ctx.response().expect("response should exist").answers()[0].ttl(),
             120
         );
     }

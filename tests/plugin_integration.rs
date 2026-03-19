@@ -6,7 +6,7 @@
 use forgedns::config::types::Config;
 use forgedns::core::context::{DnsContext, ExecFlowState};
 use forgedns::core::error::{DnsError, Result};
-use forgedns::message::{Message, Question, ResponseCode};
+use forgedns::message::{DNSClass, Message, Question, Rcode};
 use forgedns::message::{Name, RecordType};
 use forgedns::network::transport::udp_transport::UdpTransport;
 use forgedns::plugin;
@@ -28,6 +28,7 @@ fn make_context(registry: Arc<PluginRegistry>, qname: &str) -> DnsContext {
     request.add_question(Question::new(
         Name::from_ascii(qname).expect("query name should be valid"),
         RecordType::A,
+        DNSClass::IN,
     ));
 
     DnsContext::new(
@@ -54,9 +55,12 @@ async fn exchange_udp_query(server_addr: SocketAddr, qname: &str) -> Result<Mess
     request.add_question(Question::new(
         Name::from_ascii(qname).expect("query name should be valid"),
         RecordType::A,
+        DNSClass::IN,
     ));
 
-    transport.write_message(&request).await?;
+    transport
+        .write_message_with_id(&request, request.id())
+        .await?;
 
     let mut buf = [0u8; 4096];
     timeout(Duration::from_secs(1), transport.read_message(&mut buf))
@@ -155,7 +159,7 @@ plugins:
     args:
       - matches: $allow_all
         exec: mark 100
-      - exec: reject SERVFAIL
+      - exec: reject 2
 "#;
 
     let config = parse_config(yaml)?;
@@ -174,11 +178,10 @@ plugins:
     assert!(context.marks().contains("100"));
     assert_eq!(
         context
-            .response
-            .current()
+            .response()
             .expect("reject should set a response")
-            .response_code_hint(),
-        Some(ResponseCode::ServFail)
+            .rcode(),
+        Rcode::ServFail
     );
 
     registry.destroy_plugins().await;
@@ -249,7 +252,7 @@ plugins:
       - matches:
           - _true
         exec: mark 100 200
-      - exec: reject SERVFAIL
+      - exec: reject 2
 "#;
 
     let config = parse_config(yaml)?;
@@ -269,11 +272,10 @@ plugins:
     assert!(context.marks().contains("200"));
     assert_eq!(
         context
-            .response
-            .current()
+            .response()
             .expect("reject should set a response")
-            .response_code_hint(),
-        Some(ResponseCode::ServFail)
+            .rcode(),
+        Rcode::ServFail
     );
 
     registry.destroy_plugins().await;
@@ -321,9 +323,9 @@ plugins:
     let response = response_result?;
 
     assert_eq!(response.id(), 0x1234);
-    assert_eq!(response.response_code(), ResponseCode::NoError);
+    assert_eq!(response.rcode(), Rcode::NoError);
     assert_eq!(response.answers().len(), 1);
-    assert_eq!(response.answers()[0].record_type(), RecordType::A);
+    assert_eq!(response.answers()[0].rr_type(), RecordType::A);
     assert_eq!(
         response.answers()[0].data().ip_addr(),
         Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)))
@@ -359,9 +361,9 @@ plugins:
         .expect("combined domain provider should exist")
         .to_provider();
 
-    assert!(provider.contains_domain("local.example"));
-    assert!(provider.contains_domain("www.shared.example"));
-    assert!(!provider.contains_domain("missing.example"));
+    assert!(provider.contains_name(&Name::from_ascii("local.example").unwrap()));
+    assert!(provider.contains_name(&Name::from_ascii("www.shared.example").unwrap()));
+    assert!(!provider.contains_name(&Name::from_ascii("missing.example").unwrap()));
 
     registry.destroy_plugins().await;
     Ok(())

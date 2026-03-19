@@ -289,12 +289,11 @@ async fn handle_doq_bi_stream(
     remote_addr: std::net::SocketAddr,
     server_name: Option<String>,
 ) -> Result<()> {
-    match reader.read_message_with_packet().await {
-        Ok((request_msg, packet)) => {
+    match reader.read_message().await {
+        Ok(request_msg) => {
             let response = handler
-                .handle_request_with_packet_meta(
+                .handle_request(
                     request_msg,
-                    packet,
                     remote_addr,
                     RequestMeta {
                         server_name,
@@ -302,7 +301,7 @@ async fn handle_doq_bi_stream(
                     },
                 )
                 .await;
-            if let Err(e) = writer.write_response(&response.response).await {
+            if let Err(e) = writer.write_message(&response.response).await {
                 warn!("Failed to send DoQ response to {}: {}", remote_addr, e);
                 return Ok(());
             }

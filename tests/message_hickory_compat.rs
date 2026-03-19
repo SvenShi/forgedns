@@ -1,7 +1,6 @@
 use forgedns::message::{
-    DNSClass, Message, MessageType, OpCode, Packet, Question, RData, RDataView, Record,
-    RecordSection, RecordType, ResponseCode, parse_message,
-    rdata::{self, opt},
+    DNSClass, Message, MessageType, Opcode, Question, RData, Rcode, Record, RecordType,
+    rdata::{self, ClientSubnet, EdnsOption},
 };
 use hickory_proto::{
     op as hp_op, rr as hp_rr,
@@ -202,13 +201,17 @@ fn build_forgedns_fixture() -> Message {
     let mut message = Message::new();
     message.set_id(0x4242);
     message.set_message_type(MessageType::Response);
-    message.set_op_code(OpCode::Update);
+    message.set_opcode(Opcode::Update);
     message.set_authoritative(true);
     message.set_recursion_desired(true);
     message.set_recursion_available(true);
     message.set_authentic_data(true);
     message.set_checking_disabled(true);
-    message.add_question(Question::new(forgedns_name("example.com."), RecordType::A));
+    message.add_question(Question::new(
+        forgedns_name("example.com."),
+        RecordType::A,
+        DNSClass::IN,
+    ));
 
     message.add_answer(Record::from_rdata(
         forgedns_name("example.com."),
@@ -231,12 +234,12 @@ fn build_forgedns_fixture() -> Message {
         RData::PTR(rdata::PTR(forgedns_name("localhost."))),
     ));
 
-    message.add_name_server(Record::from_rdata(
+    message.add_authority(Record::from_rdata(
         forgedns_name("example.com."),
         600,
         RData::NS(rdata::NS(forgedns_name("ns1.example.com."))),
     ));
-    message.add_name_server(Record::from_rdata(
+    message.add_authority(Record::from_rdata(
         forgedns_name("example.com."),
         601,
         RData::SOA(rdata::SOA::new(
@@ -258,25 +261,22 @@ fn build_forgedns_fixture() -> Message {
     let mut chaos_txt = Record::from_rdata(
         forgedns_name("version.bind."),
         0,
-        RData::TXT(rdata::TXT::new(vec![
-            "ForgeDNS".to_string(),
-            "compat".to_string(),
-        ])),
+        RData::TXT(rdata::TXT::new(txt_wire(&["ForgeDNS", "compat"]))),
     );
-    chaos_txt.set_dns_class(DNSClass::CH);
+    chaos_txt.set_class(DNSClass::CH);
     message.add_additional(chaos_txt);
 
     let mut edns = rdata::Edns::new();
     edns.set_udp_payload_size(1400);
     edns.set_dnssec_ok(true);
-    edns.insert(opt::EdnsOption::Subnet(opt::ClientSubnet::new(
+    edns.insert(EdnsOption::Subnet(ClientSubnet::new(
         IpAddr::V4(Ipv4Addr::new(192, 0, 2, 0)),
         24,
         0,
     )));
-    edns.insert(opt::EdnsOption::Unknown(65001, vec![1, 2, 3, 4]));
+    edns.insert(EdnsOption::Unknown(65001, vec![1, 2, 3, 4]));
     message.set_edns(edns);
-    message.set_response_code(ResponseCode::BADCOOKIE);
+    message.set_rcode(Rcode::BADCOOKIE);
 
     message
 }
@@ -375,38 +375,27 @@ fn build_hickory_fixture() -> hp_op::Message {
 }
 
 fn snapshot_forgedns_message(message: &Message) -> MessageSnapshot {
-    let mut additionals = Vec::new();
-    let mut edns = None;
-    for record in message.additionals() {
-        match record.data() {
-            RData::OPT(opt) => {
-                edns = Some(snapshot_forgedns_edns(&opt.0));
-            }
-            _ => additionals.push(snapshot_forgedns_record(record)),
-        }
-    }
-
     MessageSnapshot {
         id: message.id(),
         message_type: match message.message_type() {
             MessageType::Query => 0,
             MessageType::Response => 1,
         },
-        op_code: u8::from(message.op_code()),
+        op_code: u8::from(message.opcode()),
         authoritative: message.authoritative(),
         truncated: message.truncated(),
         recursion_desired: message.recursion_desired(),
         recursion_available: message.recursion_available(),
         authentic_data: message.authentic_data(),
         checking_disabled: message.checking_disabled(),
-        response_code: u16::from(message.response_code()),
+        response_code: u16::from(message.rcode()),
         questions: message
             .questions()
             .iter()
             .map(|question| QuestionSnapshot {
-                name: question.name().to_ascii(),
-                qtype: u16::from(question.question_type()),
-                qclass: u16::from(question.question_class()),
+                name: question.name().to_fqdn(),
+                qtype: u16::from(question.qtype()),
+                qclass: u16::from(question.qclass()),
             })
             .collect(),
         answers: message
@@ -415,19 +404,23 @@ fn snapshot_forgedns_message(message: &Message) -> MessageSnapshot {
             .map(snapshot_forgedns_record)
             .collect(),
         name_servers: message
-            .name_servers()
+            .authorities()
             .iter()
             .map(snapshot_forgedns_record)
             .collect(),
-        additionals,
-        edns,
+        additionals: message
+            .additionals()
+            .iter()
+            .map(snapshot_forgedns_record)
+            .collect(),
+        edns: message.edns().as_ref().map(snapshot_forgedns_edns),
     }
 }
 
 fn snapshot_forgedns_record(record: &Record) -> RecordSnapshot {
     RecordSnapshot {
-        name: record.name().to_ascii(),
-        dns_class: u16::from(record.dns_class()),
+        name: record.name().to_fqdn(),
+        dns_class: u16::from(record.class()),
         ttl: record.ttl(),
         data: snapshot_forgedns_rdata(record.data()),
     }
@@ -437,17 +430,22 @@ fn snapshot_forgedns_rdata(data: &RData) -> RDataSnapshot {
     match data {
         RData::A(rdata::A(addr)) => RDataSnapshot::A(*addr),
         RData::AAAA(rdata::AAAA(addr)) => RDataSnapshot::Aaaa(*addr),
-        RData::CNAME(value) => RDataSnapshot::Cname(value.0.to_ascii()),
-        RData::NS(value) => RDataSnapshot::Ns(value.0.to_ascii()),
-        RData::PTR(value) => RDataSnapshot::Ptr(value.0.to_ascii()),
+        RData::CNAME(value) => RDataSnapshot::Cname(value.0.to_fqdn()),
+        RData::NS(value) => RDataSnapshot::Ns(value.0.to_fqdn()),
+        RData::PTR(value) => RDataSnapshot::Ptr(value.0.to_fqdn()),
         RData::MX(value) => RDataSnapshot::Mx {
             preference: value.preference(),
-            exchange: value.exchange().to_ascii(),
+            exchange: value.exchange().to_fqdn(),
         },
-        RData::TXT(value) => RDataSnapshot::Txt(value.txt_data().to_vec()),
+        RData::TXT(value) => RDataSnapshot::Txt(
+            value
+                .txt_data_utf8()
+                .map(|part| part.expect("fixture txt chunk should be utf-8").to_string())
+                .collect(),
+        ),
         RData::SOA(value) => RDataSnapshot::Soa {
-            mname: value.mname().to_ascii(),
-            rname: value.rname().to_ascii(),
+            mname: value.mname().to_fqdn(),
+            rname: value.rname().to_fqdn(),
             serial: value.serial(),
             refresh: value.refresh(),
             retry: value.retry(),
@@ -472,14 +470,14 @@ fn snapshot_forgedns_edns(edns: &rdata::Edns) -> EdnsSnapshot {
     }
 }
 
-fn snapshot_forgedns_edns_option(option: &opt::EdnsOption) -> EdnsOptionSnapshot {
+fn snapshot_forgedns_edns_option(option: &EdnsOption) -> EdnsOptionSnapshot {
     match option {
-        opt::EdnsOption::Subnet(value) => EdnsOptionSnapshot::Subnet {
+        EdnsOption::Subnet(value) => EdnsOptionSnapshot::Subnet {
             addr: value.addr(),
             source_prefix: value.source_prefix(),
             scope_prefix: value.scope_prefix(),
         },
-        opt::EdnsOption::Unknown(code, data) => EdnsOptionSnapshot::Unknown {
+        EdnsOption::Unknown(code, data) => EdnsOptionSnapshot::Unknown {
             code: *code,
             data: data.clone(),
         },
@@ -600,87 +598,18 @@ fn snapshot_hickory_edns_option(option: &hp_rr::rdata::opt::EdnsOption) -> EdnsO
     }
 }
 
-fn snapshot_parsed_question(question: forgedns::message::QuestionRef<'_>) -> QuestionSnapshot {
-    QuestionSnapshot {
-        name: name_ref_to_ascii(question.name()),
-        qtype: question.qtype(),
-        qclass: question.qclass(),
+fn txt_wire(parts: &[&str]) -> Box<[u8]> {
+    let mut wire = Vec::new();
+    for part in parts {
+        let bytes = part.as_bytes();
+        wire.push(u8::try_from(bytes.len()).expect("fixture txt chunk should fit in u8"));
+        wire.extend_from_slice(bytes);
     }
-}
-
-fn snapshot_parsed_record(record: &forgedns::message::RecordView<'_>) -> Option<RecordSnapshot> {
-    let data = match record.rdata() {
-        RDataView::A(addr) => RDataSnapshot::A(*addr),
-        RDataView::Aaaa(addr) => RDataSnapshot::Aaaa(*addr),
-        RDataView::Cname(name) => RDataSnapshot::Cname(name_ref_to_ascii(name)),
-        RDataView::Ns(name) => RDataSnapshot::Ns(name_ref_to_ascii(name)),
-        RDataView::Ptr(name) => RDataSnapshot::Ptr(name_ref_to_ascii(name)),
-        RDataView::Mx(value) => RDataSnapshot::Mx {
-            preference: value.preference(),
-            exchange: name_ref_to_ascii(value.exchange()),
-        },
-        RDataView::Txt(value) => RDataSnapshot::Txt(
-            value
-                .chunks()
-                .map(|chunk| {
-                    String::from_utf8(chunk.to_vec()).expect("fixture txt chunk should be utf-8")
-                })
-                .collect(),
-        ),
-        RDataView::Soa(value) => RDataSnapshot::Soa {
-            mname: name_ref_to_ascii(value.mname()),
-            rname: name_ref_to_ascii(value.rname()),
-            serial: value.serial(),
-            refresh: value.refresh(),
-            retry: value.retry(),
-            expire: value.expire(),
-            minimum: value.minimum(),
-        },
-        RDataView::Opt(_) => return None,
-        other => panic!("unexpected parsed rdata in fixture: {other:?}"),
-    };
-
-    Some(RecordSnapshot {
-        name: name_ref_to_ascii(record.name()),
-        dns_class: record.class(),
-        ttl: record.ttl(),
-        data,
-    })
-}
-
-fn snapshot_parsed_edns(edns: forgedns::message::EdnsRef<'_>) -> EdnsSnapshot {
-    EdnsSnapshot {
-        udp_payload_size: edns.udp_payload_size(),
-        ext_rcode: edns.ext_rcode(),
-        version: edns.version(),
-        dnssec_ok: edns.dnssec_ok(),
-        options: edns
-            .options()
-            .map(|option| match option.client_subnet() {
-                Some(value) => EdnsOptionSnapshot::Subnet {
-                    addr: value.addr(),
-                    source_prefix: value.source_prefix(),
-                    scope_prefix: value.scope_prefix(),
-                },
-                None => EdnsOptionSnapshot::Unknown {
-                    code: option.code(),
-                    data: option.data().to_vec(),
-                },
-            })
-            .collect(),
-    }
-}
-
-fn name_ref_to_ascii(name: &forgedns::message::NameRef<'_>) -> String {
-    if name.is_root() {
-        ".".to_string()
-    } else {
-        format!("{}.", name.normalized())
-    }
+    wire.into_boxed_slice()
 }
 
 #[test]
-fn forgedns_message_roundtrip_matches_hickory_decode() {
+fn forgedns_fixture_roundtrip_matches_hickory_decode() {
     let message = build_forgedns_fixture();
     let expected = fixture_snapshot();
 
@@ -695,90 +624,37 @@ fn forgedns_message_roundtrip_matches_hickory_decode() {
 }
 
 #[test]
-fn hickory_message_roundtrip_matches_forgedns_owned_and_packet_decode() {
+fn hickory_fixture_roundtrip_matches_forgedns_decode() {
     let hickory = build_hickory_fixture();
     let bytes = hickory.to_bytes().expect("hickory fixture should encode");
-
-    let owned = Message::from_bytes(&bytes).expect("forgedns should decode hickory bytes");
-    let packet =
-        Message::from_packet(Packet::from_vec(bytes)).expect("packet-backed decode should work");
+    let decoded = Message::from_bytes(&bytes).expect("forgedns should decode hickory bytes");
 
     assert_eq!(snapshot_hickory_message(&hickory), fixture_snapshot());
-    assert_eq!(snapshot_forgedns_message(&owned), fixture_snapshot());
-    assert_eq!(snapshot_forgedns_message(&packet), fixture_snapshot());
-
-    assert!(packet.packet().is_some());
-    assert_eq!(packet.question_count(), 1);
-    assert_eq!(packet.max_payload(), 1400);
-
-    let question = packet
-        .first_question_access()
-        .expect("packet-backed message should expose first question");
-    assert_eq!(question.name().to_owned().to_ascii(), "example.com.");
-    assert_eq!(question.qtype(), 1);
-    assert_eq!(question.qclass(), 1);
-
-    let edns = packet
-        .edns_access()
-        .expect("packet-backed message should expose edns");
-    assert_eq!(edns.udp_payload_size(), 1400);
-    assert_eq!(edns.ext_rcode(), 1);
-    assert!(edns.dnssec_ok());
-    assert_eq!(
-        edns.client_subnet().expect("ecs should exist").addr(),
-        IpAddr::V4(Ipv4Addr::new(192, 0, 2, 0))
-    );
+    assert_eq!(snapshot_forgedns_message(&decoded), fixture_snapshot());
+    assert_eq!(decoded.question_count(), 1);
+    assert_eq!(decoded.max_payload(), 1400);
 }
 
 #[test]
-fn wire_parser_matches_hickory_sections_and_edns() {
+fn hickory_fixture_reencode_preserves_semantics() {
     let hickory = build_hickory_fixture();
     let bytes = hickory.to_bytes().expect("hickory fixture should encode");
-    let parsed = parse_message(&bytes).expect("wire parser should decode hickory bytes");
+    let decoded = Message::from_bytes(&bytes).expect("forgedns should decode hickory bytes");
+    let reencoded = decoded
+        .to_bytes()
+        .expect("forgedns should re-encode fixture");
 
-    assert_eq!(parsed.header().id(), 0x4242);
-    assert!(parsed.header().is_response());
-    assert_eq!(parsed.header().opcode(), 5);
-    assert!(parsed.header().authoritative());
-    assert!(parsed.header().recursion_desired());
-    assert!(parsed.header().recursion_available());
-    assert!(parsed.header().authentic_data());
-    assert!(parsed.header().checking_disabled());
+    let hickory_roundtrip =
+        hp_op::Message::from_bytes(&reencoded).expect("hickory should decode forgedns bytes");
+    let decoded_roundtrip =
+        Message::from_bytes(&reencoded).expect("forgedns should decode its own re-encoding");
 
     assert_eq!(
-        snapshot_parsed_question(parsed.first_question().expect("question should exist")),
-        fixture_snapshot().questions[0]
+        snapshot_hickory_message(&hickory_roundtrip),
+        fixture_snapshot()
     );
-
-    let answers = parsed
-        .records(RecordSection::Answer)
-        .map(|record| {
-            let record = record.expect("answer record should parse");
-            snapshot_parsed_record(&record).expect("answer should not be opt")
-        })
-        .collect::<Vec<_>>();
-    let name_servers = parsed
-        .records(RecordSection::Authority)
-        .map(|record| {
-            let record = record.expect("authority record should parse");
-            snapshot_parsed_record(&record).expect("authority should not be opt")
-        })
-        .collect::<Vec<_>>();
-
-    let mut additionals = Vec::new();
-    let mut edns = None;
-    for record in parsed.records(RecordSection::Additional) {
-        let record = record.expect("additional record should parse");
-        if let Some(snapshot) = snapshot_parsed_record(&record) {
-            additionals.push(snapshot);
-        } else if let RDataView::Opt(value) = record.rdata() {
-            edns = Some(snapshot_parsed_edns(value.clone()));
-        }
-    }
-
-    assert_eq!(answers, fixture_snapshot().answers);
-    assert_eq!(name_servers, fixture_snapshot().name_servers);
-    assert_eq!(additionals, fixture_snapshot().additionals);
-    assert_eq!(edns, fixture_snapshot().edns);
-    assert_eq!(snapshot_hickory_message(&hickory), fixture_snapshot());
+    assert_eq!(
+        snapshot_forgedns_message(&decoded_roundtrip),
+        fixture_snapshot()
+    );
 }

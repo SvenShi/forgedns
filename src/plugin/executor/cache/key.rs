@@ -7,8 +7,9 @@
 
 use crate::core::context::DnsContext;
 use crate::message::Message;
-use crate::message::rdata::opt::ClientSubnet as OwnedClientSubnet;
-use crate::message::{DNSClass, RecordType};
+use crate::message::{
+    ClientSubnet as OwnedClientSubnet, DNSClass, EdnsCode, EdnsOption, RecordType,
+};
 use std::net::IpAddr;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -94,22 +95,27 @@ fn build_ecs_scope_digest(subnet: &OwnedClientSubnet) -> EcsScopeDigest {
 #[inline]
 fn extract_any_ecs_scope(request: &Message) -> Option<EcsScopeDigest> {
     request
-        .edns_access()
-        .and_then(|edns| edns.client_subnet())
-        .map(|subnet| build_ecs_scope_digest(&subnet))
+        .edns()
+        .as_ref()
+        .and_then(|edns| match edns.option(EdnsCode::Subnet) {
+            Some(EdnsOption::Subnet(subnet)) => Some(subnet),
+            _ => None,
+        })
+        .map(build_ecs_scope_digest)
 }
 
 #[inline]
 pub(super) fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Option<CacheKey> {
-    let facts = context.request_facts().clone();
-    let question = facts.first_question()?;
-    let (domain, record_type, dns_class, do_bit, cd_bit) = (
-        question.normalized_name().to_string(),
-        RecordType::from(question.qtype()),
-        DNSClass::from(question.qclass()),
-        facts.do_bit(),
-        facts.cd_bit(),
-    );
+    let question = context.request.first_question()?;
+    let domain = question.name().normalized().to_string();
+    let record_type = question.qtype();
+    let dns_class = question.qclass();
+    let do_bit = context
+        .request
+        .edns()
+        .as_ref()
+        .is_some_and(|edns| edns.flags().dnssec_ok);
+    let cd_bit = context.request.checking_disabled();
 
     Some(CacheKey {
         domain,
@@ -128,8 +134,8 @@ pub(super) fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{Edns, Message, Question};
-    use crate::message::{Name, RecordType, rdata::opt::EdnsOption};
+    use crate::message::{DNSClass, Edns, Message, Question};
+    use crate::message::{EdnsOption, Name, RecordType};
     use crate::plugin::test_utils::test_registry;
     use std::net::SocketAddr;
 
@@ -138,6 +144,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii(name).expect("query name should be valid"),
             RecordType::A,
+            DNSClass::IN,
         ));
         DnsContext::new(
             SocketAddr::from(([127, 0, 0, 1], 5300)),

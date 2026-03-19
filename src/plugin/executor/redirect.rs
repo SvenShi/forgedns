@@ -21,8 +21,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::message::Question;
-use crate::message::rdata::name::CNAME;
-use crate::message::{DNSClass, Name, RData, Record};
+use crate::message::{CNAME, DNSClass, Name, RData, Record};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -100,14 +99,14 @@ impl Plugin for RedirectExecutor {
 #[async_trait]
 impl Executor for RedirectExecutor {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if context.request.question_count() != 1 {
-            return Ok(ExecStep::Next);
-        }
-
-        let Some(qclass) = context.request.first_question_class() else {
+        let Some(qclass) = context.request.first_qclass() else {
             return Ok(ExecStep::Next);
         };
-        let Some(original) = context.request.first_question_name_owned() else {
+        let Some(original) = context
+            .request
+            .first_question()
+            .map(|question| question.name().clone())
+        else {
             return Ok(ExecStep::Next);
         };
 
@@ -115,12 +114,12 @@ impl Executor for RedirectExecutor {
             return Ok(ExecStep::Next);
         }
 
-        let Some(question) = context.question() else {
+        let Some(question) = context.request.first_question() else {
             return Ok(ExecStep::Next);
         };
         let Some(rule) = self
             .index
-            .match_rule(&self.rules, question.normalized_name())
+            .match_rule(&self.rules, question.name().normalized())
         else {
             return Ok(ExecStep::Next);
         };
@@ -143,7 +142,7 @@ impl Executor for RedirectExecutor {
 
         set_query_name(context, state.original.clone())?;
 
-        let Some(response) = context.response_message_mut()? else {
+        let Some(response) = context.response_mut() else {
             return Ok(());
         };
 
@@ -153,16 +152,12 @@ impl Executor for RedirectExecutor {
             }
         }
 
-        let old_answers = std::mem::take(response.answers_mut());
-        let mut answers = Vec::with_capacity(old_answers.len() + 1);
+        let answers = response.answers_mut();
         answers.push(Record::from_rdata(
             state.original,
             1,
             RData::CNAME(CNAME(state.target)),
         ));
-        answers.extend(old_answers);
-        *response.answers_mut() = answers;
-
         Ok(())
     }
 }
@@ -381,9 +376,10 @@ impl RuleIndex {
 }
 
 fn set_query_name(context: &mut DnsContext, name: Name) -> Result<()> {
-    if !context.set_first_question_name(name) {
+    let Some(question) = context.request_mut().first_question_mut() else {
         return Err(DnsError::plugin("redirect requires one question"));
-    }
+    };
+    question.set_name(name);
     Ok(())
 }
 
@@ -425,9 +421,11 @@ mod tests {
 
     fn make_context(name: &str) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Question::new(Name::from_ascii(name).unwrap(), RecordType::A);
-        query.set_question_class(DNSClass::IN);
-        request.add_question(query);
+        request.add_question(Question::new(
+            Name::from_ascii(name).unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
         DnsContext::new(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
@@ -456,9 +454,10 @@ mod tests {
         };
         assert_eq!(
             ctx.request
-                .first_question_name_owned()
+                .first_question()
                 .expect("question should exist")
-                .to_utf8(),
+                .name()
+                .to_fqdn(),
             "target.example.com."
         );
 
@@ -466,13 +465,14 @@ mod tests {
         response.add_question(Question::new(
             Name::from_ascii("target.example.com.").unwrap(),
             RecordType::A,
+            DNSClass::IN,
         ));
         response.add_answer(Record::from_rdata(
             Name::from_ascii("target.example.com.").unwrap(),
             60,
             RData::A(A::new(1, 1, 1, 1)),
         ));
-        ctx.response.set_message(response);
+        ctx.set_response(response);
 
         plugin
             .post_execute(&mut ctx, state)
@@ -481,20 +481,21 @@ mod tests {
 
         assert_eq!(
             ctx.request
-                .first_question_name_owned()
+                .first_question()
                 .expect("question should exist")
-                .to_utf8(),
+                .name()
+                .to_fqdn(),
             "example.com."
         );
 
-        let response = ctx
-            .response
-            .current()
-            .expect("response should exist")
-            .to_message()
-            .expect("response should materialize");
-        assert_eq!(response.questions()[0].name().to_utf8(), "example.com.");
+        let response = ctx.response().expect("response should exist");
+        assert_eq!(response.questions()[0].name().to_fqdn(), "example.com.");
         assert_eq!(response.answers().len(), 2);
-        assert_eq!(response.answers()[0].record_type(), RecordType::CNAME);
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.rr_type() == RecordType::CNAME)
+        );
     }
 }

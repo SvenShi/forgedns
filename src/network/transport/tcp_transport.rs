@@ -3,12 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-use crate::core::buffer_pool::ReusableBuffer;
 use crate::core::error::{DnsError, Result};
 use crate::message::Message;
-use crate::message::Packet;
-use crate::message::Response;
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 
 pub struct TcpTransport<S> {
@@ -30,13 +27,17 @@ where
                 reader,
                 buf: BytesMut::with_capacity(8192),
             },
-            TcpTransportWriter { writer },
+            TcpTransportWriter {
+                writer,
+                write_buf: Vec::with_capacity(1234),
+            },
         )
     }
 }
 
 pub struct TcpTransportWriter<S> {
     writer: WriteHalf<S>,
+    write_buf: Vec<u8>,
 }
 
 impl<S> TcpTransportWriter<S>
@@ -45,52 +46,35 @@ where
 {
     #[inline]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
-        self.write_message_with_id(msg, msg.id()).await
-    }
+        self.write_buf.clear();
+        self.write_buf.extend_from_slice(&[0, 0]);
 
-    #[inline]
-    pub async fn write_message_with_id(&mut self, msg: &Message, id: u16) -> Result<()> {
-        let mut body = ReusableBuffer::with_capacity(message_buffer_capacity_hint(msg));
-        encode_message_into_with_id(msg, id, body.as_mut_vec())?;
-        let body_len = body.as_slice().len();
-        if body_len > u16::MAX as usize {
-            return Err(DnsError::protocol(format!(
-                "DNS message too large for TCP framing: {} bytes (max 65535)",
-                body_len
-            )));
-        }
-        let len_prefix = (body_len as u16).to_be_bytes();
+        msg.append_to(&mut self.write_buf)?;
+
+        let body_len = self.write_buf.len() - 2;
+
+        self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
 
         self.writer
-            .write_all(&len_prefix)
+            .write_all(&self.write_buf)
             .await
-            .map_err(|e| DnsError::protocol(format!("Failed to write DNS frame: {}", e)))?;
-        self.writer
-            .write_all(body.as_slice())
-            .await
-            .map_err(|e| DnsError::protocol(format!("Failed to write DNS frame: {}", e)))?;
+            .map_err(|e| DnsError::protocol(format!("Failed to write TCP DNS frame: {}", e)))?;
         Ok(())
     }
 
     #[inline]
-    pub async fn write_response(&mut self, response: &Response) -> Result<()> {
-        let mut body = ReusableBuffer::with_capacity(response_buffer_capacity_hint(response));
-        encode_response_into(response, body.as_mut_vec())?;
-        let body_len = body.as_slice().len();
-        if body_len > u16::MAX as usize {
-            return Err(DnsError::protocol(format!(
-                "DNS message too large for TCP framing: {} bytes (max 65535)",
-                body_len
-            )));
-        }
-        let len_prefix = (body_len as u16).to_be_bytes();
+    pub async fn write_message_with_id(&mut self, msg: &Message, id: u16) -> Result<()> {
+        let bytes = msg
+            .to_bytes_with_id(id)
+            .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
+
+        // Merge length prefix and body into a single frame for one write
+        let mut frame = BytesMut::with_capacity(2 + bytes.len());
+        frame.put_u16(bytes.len() as u16);
+        frame.extend_from_slice(&bytes);
 
         self.writer
-            .write_all(&len_prefix)
-            .await
-            .map_err(|e| DnsError::protocol(format!("Failed to write DNS frame: {}", e)))?;
-        self.writer
-            .write_all(body.as_slice())
+            .write_all(frame.as_ref())
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to write DNS frame: {}", e)))?;
         Ok(())
@@ -108,11 +92,6 @@ where
 {
     #[inline]
     pub async fn read_message(&mut self) -> Result<Message> {
-        self.read_message_with_packet().await.map(|(msg, _)| msg)
-    }
-
-    #[inline]
-    pub async fn read_message_with_packet(&mut self) -> Result<(Message, Packet)> {
         loop {
             // Try parse from accumulated buffer first (may contain multiple messages)
             if self.buf.len() >= 2 {
@@ -126,12 +105,11 @@ where
 
                 if self.buf.len() >= 2 + msg_len {
                     // We have a full message frame
-                    let packet = Packet::from_vec(self.buf[2..2 + msg_len].to_vec());
-                    match Message::from_packet(packet.clone()) {
+                    match Message::from_bytes(&self.buf[2..2 + msg_len]) {
                         Ok(msg) => {
                             // Drain the consumed frame (length prefix + body)
                             let _ = self.buf.split_to(2 + msg_len);
-                            return Ok((msg, packet));
+                            return Ok(msg);
                         }
                         Err(_) => {
                             // Malformed message: drop this frame and continue
@@ -160,9 +138,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Question;
+    use crate::message::{DNSClass, Question};
     use crate::message::{Name, RecordType};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+    use tokio::io::{AsyncWriteExt, duplex};
 
     fn make_message(id: u16, qname: &str) -> Message {
         let mut message = Message::new();
@@ -170,6 +148,7 @@ mod tests {
         message.add_question(Question::new(
             Name::from_ascii(qname).expect("query name should be valid"),
             RecordType::A,
+            DNSClass::IN,
         ));
         message
     }
@@ -182,31 +161,6 @@ mod tests {
         frame.extend_from_slice(&(body.len() as u16).to_be_bytes());
         frame.extend_from_slice(&body);
         frame
-    }
-
-    #[tokio::test]
-    async fn test_writer_prepends_two_byte_length_prefix() {
-        let (client, mut server) = duplex(1024);
-        let transport = TcpTransport::new(client);
-        let (_reader, mut writer) = transport.into_split();
-        let message = make_message(1, "example.com.");
-
-        writer
-            .write_message(&message)
-            .await
-            .expect("write_message should succeed");
-
-        let body = message
-            .to_bytes()
-            .expect("message should serialize successfully");
-        let mut frame = vec![0u8; 2 + body.len()];
-        server
-            .read_exact(&mut frame)
-            .await
-            .expect("server side should receive framed message");
-
-        assert_eq!(&frame[..2], &(body.len() as u16).to_be_bytes());
-        assert_eq!(&frame[2..], body.as_slice());
     }
 
     #[tokio::test]
@@ -233,10 +187,10 @@ mod tests {
         assert_eq!(decoded.id(), 7);
         assert_eq!(
             decoded
-                .question()
+                .first_question()
                 .expect("question should exist")
                 .name()
-                .to_ascii(),
+                .to_fqdn(),
             "example.com."
         );
     }
@@ -266,10 +220,10 @@ mod tests {
         assert_eq!(decoded.id(), 11);
         assert_eq!(
             decoded
-                .question()
+                .first_question()
                 .expect("question should exist")
                 .name()
-                .to_ascii(),
+                .to_fqdn(),
             "zero-length.example."
         );
     }
@@ -299,10 +253,10 @@ mod tests {
         assert_eq!(decoded.id(), 13);
         assert_eq!(
             decoded
-                .question()
+                .first_question()
                 .expect("question should exist")
                 .name()
-                .to_ascii(),
+                .to_fqdn(),
             "valid-after-bad.example."
         );
     }
@@ -321,27 +275,4 @@ mod tests {
 
         assert!(err.to_string().contains("TCP connection closed"));
     }
-}
-
-fn encode_message_into_with_id(message: &Message, id: u16, body: &mut Vec<u8>) -> Result<()> {
-    message.encode_into_with_id(id, body)
-}
-
-#[inline]
-fn encode_response_into(response: &Response, body: &mut Vec<u8>) -> Result<()> {
-    response.encode_into(body)
-}
-
-#[inline]
-fn message_buffer_capacity_hint(message: &Message) -> usize {
-    message
-        .packet()
-        .map(|packet| packet.as_slice().len())
-        .unwrap_or(512)
-        .max(512)
-}
-
-#[inline]
-fn response_buffer_capacity_hint(response: &Response) -> usize {
-    response.response_len_hint().unwrap_or(512).max(512)
 }

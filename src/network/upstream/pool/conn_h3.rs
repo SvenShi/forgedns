@@ -5,7 +5,6 @@
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::message::Message;
-use crate::message::Packet;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
     build_dns_get_request, build_doh_request_uri, connect_quic, connect_socket,
@@ -84,8 +83,7 @@ impl Connection for H3Connection {
 
         let result = match timeout(self.timeout, recv(request_stream)).await {
             Ok(Ok(bytes)) => {
-                let packet = Packet::from_bytes(bytes);
-                let mut resp = Message::from_packet(packet)?;
+                let mut resp = Message::from_bytes(&bytes)?;
                 resp.set_id(raw_id);
                 trace!(conn_id = self.id, raw_id, "Received H3 response");
                 Ok(resp)

@@ -33,7 +33,7 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::ResponseCode;
+use crate::message::Rcode;
 use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -422,24 +422,19 @@ fn extract_observation(
     context: &mut DnsContext,
     config: &MikrotikConfig,
 ) -> Option<(String, Vec<ObservedAddr>)> {
-    // Prefer normalized query view if available; fallback to raw request question.
     let domain = context
-        .question()
-        .map(|question| question.normalized_name().to_string())
-        .or_else(|| {
-            context
-                .request
-                .first_question_name_owned()
-                .map(|name| DnsContext::normalize_dns_name(&name))
-        })?;
+        .request
+        .first_question()
+        .map(|question| question.name().normalized().to_string())?;
 
-    if context.response.response_code()? != u16::from(ResponseCode::NoError) {
+    let response = context.response()?;
+    if response.rcode() != Rcode::NoError {
         return None;
     }
 
     // Collapse duplicated A/AAAA answers by IP and keep max TTL per IP.
     let mut dedup = AHashMap::<IpAddr, u32>::new();
-    for (ip, ttl_secs) in context.response.answer_ip_ttls() {
+    for (ip, ttl_secs) in response.answer_ip_ttls() {
         match ip {
             IpAddr::V4(_) if config.gateway4.is_none() => continue,
             IpAddr::V6(_) if config.gateway6.is_none() => continue,
@@ -1017,6 +1012,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
         DnsContext::new(
             "127.0.0.1:5353".parse::<SocketAddr>().unwrap(),
@@ -1027,7 +1023,7 @@ mod tests {
 
     fn response_with_records(records: Vec<Record>) -> Message {
         let mut resp = Message::new();
-        resp.set_response_code(ResponseCode::NoError);
+        resp.set_rcode(Rcode::NoError);
         for record in records {
             resp.answers_mut().push(record);
         }
@@ -1915,7 +1911,7 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response.set_message(response_with_records(vec![
+        ctx.set_response(response_with_records(vec![
             a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
             aaaa_record(Ipv6Addr::LOCALHOST, 300),
         ]));
@@ -1950,14 +1946,13 @@ persistent_route:
         let _ = executor.init().await;
 
         let mut ctx = make_context();
-        ctx.response
-            .set_message(response_with_records(vec![a_record(
-                Ipv4Addr::new(10, 0, 0, 1),
-                300,
-            )]));
+        ctx.set_response(response_with_records(vec![a_record(
+            Ipv4Addr::new(10, 0, 0, 1),
+            300,
+        )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         assert!(
-            ctx.response.has_response(),
+            ctx.response().is_some(),
             "DNS response should be kept unchanged"
         );
         let _ = executor.destroy().await;
@@ -1976,11 +1971,10 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response
-            .set_message(response_with_records(vec![a_record(
-                Ipv4Addr::new(6, 6, 6, 6),
-                300,
-            )]));
+        ctx.set_response(response_with_records(vec![a_record(
+            Ipv4Addr::new(6, 6, 6, 6),
+            300,
+        )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         yield_until("background manager route creation", || {
             api.route_count() > 0
@@ -2003,11 +1997,10 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response
-            .set_message(response_with_records(vec![a_record(
-                Ipv4Addr::new(11, 11, 11, 11),
-                300,
-            )]));
+        ctx.set_response(response_with_records(vec![a_record(
+            Ipv4Addr::new(11, 11, 11, 11),
+            300,
+        )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         yield_until("dynamic route creation before shutdown", || {
             api.route_count() > 0

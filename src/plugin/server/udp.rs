@@ -10,6 +10,7 @@
 //! task spawning with automatic cleanup.
 
 use crate::config::types::PluginConfig;
+use crate::core::context::RequestMeta;
 use crate::core::error::{DnsError, Result};
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::dependency::DependencySpec;
@@ -174,18 +175,18 @@ async fn run_server(
                     break;
                 }
             }
-            recv = transport.read_message_with_packet_from(&mut buf) => {
+            recv = transport.read_message_from(&mut buf) => {
                 match recv {
-                    Ok((msg, packet, src_addr)) => {
+                    Ok((msg, src_addr)) => {
                         let max_payload = msg.max_payload();
                         let handler = handler.clone();
                         let transport = transport.clone();
                         tasks.spawn(async move {
-                            let response = handler.handle_request_with_packet(msg, packet, src_addr).await;
+                            let response = handler.handle_request(msg, src_addr,RequestMeta{server_name: None,url_path: None}).await;
                             // Use requester-advertised UDP payload limit (EDNS) when encoding
                             // response so oversize replies become TC=1 DNS messages, not raw truncation.
                             if let Err(e) =
-                                transport.write_response_to(&response.response, src_addr, max_payload).await
+                                transport.write_message_to(&response.response, src_addr, max_payload).await
                             {
                                 warn!("Failed to send response to {}: {}", src_addr, e);
                             }

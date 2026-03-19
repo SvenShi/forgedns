@@ -16,8 +16,7 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
-use crate::message::response_answer_ip_ttls;
-use crate::message::{Message, MessageType, OpCode, Question};
+use crate::message::{DNSClass, Message, MessageType, Opcode, Question};
 use crate::message::{Name, RecordType};
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder};
 use rand::random;
@@ -91,7 +90,7 @@ impl Bootstrap {
         // This message template will be cloned for each actual query
         let mut message = Message::new();
         message.set_message_type(MessageType::Query);
-        message.set_op_code(OpCode::Query);
+        message.set_opcode(Opcode::Query);
         message.set_recursion_desired(true);
         // Set query type based on IP version: AAAA for IPv6, A for IPv4
         message.add_question(Question::new(
@@ -100,6 +99,7 @@ impl Bootstrap {
                 Some(6) => RecordType::AAAA,
                 _ => RecordType::A,
             },
+            DNSClass::IN,
         ));
 
         let bootstrap_info = ConnectionInfo::with_addr(bootstrap_server).map_err(|e| {
@@ -245,40 +245,34 @@ impl Bootstrap {
         message.set_id(random());
         match self.upstream.query(message).await {
             Ok(response) => {
-                if let Some(packet) = response.packet()
-                    && let Ok(answer_ttls) = response_answer_ip_ttls(packet)
-                {
-                    for (ip, ttl_seconds) in answer_ttls {
-                        let ttl = ttl_seconds as u64 * 1000;
-                        info!(
-                            domain = %self.domain,
-                            ip = %ip,
-                            ttl_seconds,
-                            "Bootstrap DNS resolution successful"
-                        );
+                for (ip, ttl_seconds) in response.answer_ip_ttls() {
+                    let ttl = ttl_seconds as u64 * 1000;
+                    info!(
+                        domain = %self.domain,
+                        ip = %ip,
+                        ttl_seconds,
+                        "Bootstrap DNS resolution successful"
+                    );
 
-                        let expires_at = AppClock::elapsed_millis() + ttl;
-                        *self.cache.write().await = Some(CacheData { ip, expires_at });
-                        self.state.store(STATE_CACHED, Ordering::Release);
-                        self.query_done.notify_waiters();
-                        return;
-                    }
+                    let expires_at = AppClock::elapsed_millis() + ttl;
+                    *self.cache.write().await = Some(CacheData { ip, expires_at });
+                    self.state.store(STATE_CACHED, Ordering::Release);
+                    self.query_done.notify_waiters();
+                    return;
                 }
 
                 let answers = response.answers();
 
                 // Find the first matching A (IPv4) or AAAA (IPv6) record
                 for answer in answers {
-                    if answer.record_type() == RecordType::A
-                        || answer.record_type() == RecordType::AAAA
-                    {
+                    if answer.rr_type() == RecordType::A || answer.rr_type() == RecordType::AAAA {
                         if let Some(ip) = answer.data().ip_addr() {
                             let ttl = answer.ttl() as u64 * 1000; // Convert seconds to milliseconds
                             info!(
                                 domain = %self.domain,
                                 ip = %ip,
                                 ttl_seconds = ttl / 1000,
-                                record_type = ?answer.record_type(),
+                                record_type = ?answer.rr_type(),
                                 "Bootstrap DNS resolution successful"
                             );
 
@@ -328,12 +322,12 @@ mod tests {
 
         let query = bootstrap
             .message
-            .question()
+            .first_question()
             .expect("question should be pre-built");
 
         assert_eq!(bootstrap.domain, "example.com.");
-        assert_eq!(query.question_type(), RecordType::A);
-        assert_eq!(query.name().to_utf8(), "example.com.");
+        assert_eq!(query.qtype(), RecordType::A);
+        assert_eq!(query.name().to_fqdn(), "example.com.");
     }
 
     #[tokio::test]
@@ -343,15 +337,15 @@ mod tests {
 
         let query = bootstrap
             .message
-            .question()
+            .first_question()
             .expect("question should be pre-built");
 
-        assert_eq!(query.question_type(), RecordType::AAAA);
+        assert_eq!(query.qtype(), RecordType::AAAA);
     }
 
     #[tokio::test]
     async fn test_new_rejects_invalid_target_domain() {
-        let result = Bootstrap::new("1.1.1.1:53", "not a domain", None);
+        let result = Bootstrap::new("1.1.1.1:53", "example..com.", None);
 
         assert!(result.is_err());
     }

@@ -19,7 +19,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
-use crate::message::{RecordType, Response, ResponseCode};
+use crate::message::{Rcode, RecordType};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -52,7 +52,7 @@ pub struct ForwardProbeResult {
 struct DualSelector {
     tag: String,
     preferred_type: RecordType,
-    cache: TtlCache<String, CachedPreferredState>,
+    cache: TtlCache<String, Arc<CachedPreferredState>>,
     cache_enabled: bool,
     cache_ttl_ms: u64,
     cleanup_started: AtomicBool,
@@ -130,7 +130,7 @@ impl Executor for DualSelector {
             return Ok(ExecStep::Next);
         }
 
-        let Some(qtype) = context.request.first_question_type() else {
+        let Some(qtype) = context.request.first_qtype() else {
             return Ok(ExecStep::Next);
         };
         if qtype != RecordType::A && qtype != RecordType::AAAA {
@@ -138,8 +138,9 @@ impl Executor for DualSelector {
         }
 
         let Some(domain) = context
-            .question()
-            .map(|question| question.normalized_name().to_string())
+            .request
+            .first_question()
+            .map(|question| question.name().normalized().to_string())
         else {
             return Ok(ExecStep::Next);
         };
@@ -154,10 +155,7 @@ impl Executor for DualSelector {
         if self.cache_enabled {
             if let Some(preferred_exists) = self.cache_get_preferred_state(&domain) {
                 if preferred_exists {
-                    context.response.set_response(Response::from_request(
-                        &context.request,
-                        ResponseCode::NoError,
-                    ));
+                    context.set_response(context.request().response(Rcode::NoError));
                     return Ok(ExecStep::Stop);
                 }
                 return Ok(ExecStep::Next);
@@ -188,8 +186,8 @@ impl Executor for DualSelector {
         match state.mode {
             PostMode::Preferred => {
                 let has_preferred_answer = context
-                    .response
-                    .has_answer_type(&[u16::from(self.preferred_type)]);
+                    .response()
+                    .is_some_and(|response| response.has_answer_type(self.preferred_type));
                 if has_preferred_answer {
                     self.cache_preferred(&state.domain);
                 }
@@ -211,7 +209,7 @@ impl DualSelector {
         // Probe errors mean preferred-type availability is unknown.
         // Never cache/block in this case to avoid false positive suppression.
         if probe.preferred_error.is_some() {
-            if !context.response.has_response() {
+            if context.response().is_none() {
                 if let Some(err) = probe.original_error {
                     return Err(DnsError::plugin(err));
                 }
@@ -223,10 +221,7 @@ impl DualSelector {
             if self.cache_enabled {
                 self.cache_probe_result(domain, true);
             }
-            context.response.set_response(Response::from_request(
-                &context.request,
-                ResponseCode::NoError,
-            ));
+            context.set_response(context.request().response(Rcode::NoError));
             return Ok(());
         }
 
@@ -234,7 +229,7 @@ impl DualSelector {
             self.cache_probe_result(domain, false);
         }
 
-        if !context.response.has_response() {
+        if context.response().is_none() {
             if let Some(err) = probe.original_error {
                 return Err(DnsError::plugin(err));
             }
@@ -255,7 +250,7 @@ impl DualSelector {
         let expire_at = now.saturating_add(self.cache_ttl_ms);
         self.cache.insert_or_update(
             domain.to_string(),
-            CachedPreferredState { preferred_exists },
+            Arc::new(CachedPreferredState { preferred_exists }),
             now,
             expire_at,
         );
@@ -346,9 +341,8 @@ impl PluginFactory for DualSelectorFactory {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
-    use crate::message::build_response_message_from_request;
     use crate::message::rdata::{A, AAAA};
-    use crate::message::{Message, Question};
+    use crate::message::{DNSClass, Message, Question};
     use crate::message::{Name, RData, Record};
     use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -357,6 +351,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             qtype,
+            DNSClass::IN,
         ));
         let mut context = DnsContext::new(
             "127.0.0.1:5533".parse().unwrap(),
@@ -382,10 +377,11 @@ mod tests {
     fn set_answer(context: &mut DnsContext, qtype: RecordType) {
         let qname = context
             .request
-            .first_question_name_owned()
-            .expect("question must exist");
-        let mut response =
-            build_response_message_from_request(&context.request, ResponseCode::NoError);
+            .first_question()
+            .expect("question must exist")
+            .name()
+            .clone();
+        let mut response = context.request.response(Rcode::NoError);
         match qtype {
             RecordType::A => response.answers_mut().push(Record::from_rdata(
                 qname,
@@ -399,17 +395,15 @@ mod tests {
             )),
             _ => {}
         }
-        context.response.set_message(response);
+        context.set_response(response);
     }
 
     fn has_answer_of_type(context: &DnsContext, qtype: RecordType) -> bool {
-        context.response.current().is_some_and(|response| {
+        context.response().is_some_and(|response| {
             response
-                .to_message()
-                .expect("response should materialize")
                 .answers()
                 .iter()
-                .any(|answer| answer.record_type() == qtype)
+                .any(|answer| answer.rr_type() == qtype)
         })
     }
 
@@ -572,7 +566,7 @@ mod tests {
                 original_error: Some("forward original query failed".to_string()),
             },
         );
-        context.response.clear();
+        context.clear_response();
 
         let err = selector
             .post_execute(&mut context, state)

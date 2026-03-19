@@ -5,19 +5,15 @@
 
 //! Owned DNS resource records.
 
-use crate::message::model::data::{DNSClass, Name, RData, RecordType};
+use crate::message::{DNSClass, Name, RData, RecordType};
 use std::net::IpAddr;
 
 /// Owned resource record.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Record {
-    /// Owner name of the record.
     name: Name,
-    /// Record class.
-    dns_class: DNSClass,
-    /// Record TTL in seconds.
+    class: DNSClass,
     ttl: u32,
-    /// Type-specific record payload.
     data: RData,
 }
 
@@ -28,10 +24,10 @@ impl Record {
     }
 
     /// Construct a record directly from owned RDATA and an explicit DNS class.
-    pub fn from_rdata_with_class(name: Name, ttl: u32, dns_class: DNSClass, data: RData) -> Self {
+    pub fn from_rdata_with_class(name: Name, ttl: u32, class: DNSClass, data: RData) -> Self {
         Self {
             name,
-            dns_class,
+            class,
             ttl,
             data,
         }
@@ -43,13 +39,13 @@ impl Record {
     }
 
     /// Return the record class.
-    pub fn dns_class(&self) -> DNSClass {
-        self.dns_class
+    pub fn class(&self) -> DNSClass {
+        self.class
     }
 
     /// Update the record class.
-    pub fn set_dns_class(&mut self, dns_class: DNSClass) {
-        self.dns_class = dns_class;
+    pub fn set_class(&mut self, class: DNSClass) {
+        self.class = class;
     }
 
     /// Return the TTL in seconds.
@@ -63,13 +59,18 @@ impl Record {
     }
 
     /// Return the record type derived from the payload.
-    pub fn record_type(&self) -> RecordType {
-        self.data.record_type()
+    pub fn rr_type(&self) -> RecordType {
+        self.data.rr_type()
     }
 
     /// Borrow the type-specific record payload.
     pub fn data(&self) -> &RData {
         &self.data
+    }
+
+    /// Mutably borrow the type-specific record payload.
+    pub fn data_mut(&mut self) -> &mut RData {
+        &mut self.data
     }
 
     /// Extract an IP address from `A` and `AAAA` records.
@@ -85,8 +86,14 @@ impl Record {
         }
     }
 
-    /// Mutably borrow the type-specific record payload.
-    pub fn data_mut(&mut self) -> &mut RData {
-        &mut self.data
+    /// Return encoded RR byte length at offset `off`.
+    pub(crate) fn bytes_len<'a>(
+        &'a self,
+        off: usize,
+        compression: &mut crate::message::codec::LenCompressionMap<'a>,
+    ) -> usize {
+        let owner_len = self.name.bytes_len_at(off, true, compression);
+        let rdata_off = off + owner_len + 10;
+        owner_len + 10 + self.data.bytes_len(rdata_off, compression)
     }
 }

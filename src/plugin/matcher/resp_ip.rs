@@ -113,8 +113,10 @@ impl Plugin for RespIpMatcher {
 
 impl Matcher for RespIpMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        context.response.has_answer_ip(|ip| {
-            self.ip_rules.contains_ip(ip) || self.ip_sets.iter().any(|set| set.contains_ip(ip))
+        context.response().is_some_and(|response| {
+            response.has_answer_ip(|ip| {
+                self.ip_rules.contains_ip(ip) || self.ip_sets.iter().any(|set| set.contains_ip(ip))
+            })
         })
     }
 }
@@ -134,6 +136,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
 
         DnsContext::new(
@@ -160,7 +163,7 @@ mod tests {
             60,
             RData::A(A(Ipv4Addr::new(1, 1, 1, 8))),
         ));
-        ctx.response.set_message(response);
+        ctx.set_response(response);
 
         assert!(!matcher.is_match(&mut ctx));
     }
@@ -182,7 +185,7 @@ mod tests {
             60,
             RData::A(A(Ipv4Addr::new(8, 8, 8, 8))),
         ));
-        ctx.response.set_message(response);
+        ctx.set_response(response);
 
         assert!(!matcher.is_match(&mut ctx));
     }
@@ -207,7 +210,7 @@ mod tests {
             60,
             RData::A(A(Ipv4Addr::new(8, 8, 8, 8))),
         ));
-        hit_ctx.response.set_message(response);
+        hit_ctx.set_response(response);
         assert!(matcher.is_match(&mut hit_ctx));
     }
 }

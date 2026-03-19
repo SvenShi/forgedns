@@ -3,15 +3,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Packet-backed DNS views and zero-copy wire parsing.
+//! Wire-level DNS message encoding, decoding, truncation, and length helpers.
 
-pub mod constants;
-pub mod edns;
-pub mod flags;
-pub mod header;
-pub(crate) mod meta;
-pub mod name;
-pub mod packet;
-pub mod parser;
-pub mod question;
-pub mod record;
+mod codec;
+mod compression;
+mod length;
+mod rdata;
+mod truncate;
+
+pub(crate) use codec::*;
+pub(crate) use compression::*;
+pub(crate) use length::*;
+pub(crate) use rdata::*;
+pub(crate) use truncate::*;

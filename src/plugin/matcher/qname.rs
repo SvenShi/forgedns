@@ -83,7 +83,6 @@ fn build_qname_matcher(
         domains,
         domain_set_tags,
         domain_sets: Vec::new(),
-        domain_sets_has_trie_rules: false,
         registry,
     })))
 }
@@ -94,7 +93,6 @@ struct QnameMatcher {
     domains: DomainRuleMatcher,
     domain_set_tags: Vec<String>,
     domain_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
-    domain_sets_has_trie_rules: bool,
     registry: Arc<PluginRegistry>,
 }
 
@@ -107,10 +105,6 @@ impl Plugin for QnameMatcher {
     async fn init(&mut self) -> DnsResult<()> {
         self.domain_sets =
             resolve_provider_tags(&self.registry, &self.domain_set_tags, "qname", &self.tag)?;
-        self.domain_sets_has_trie_rules = self
-            .domain_sets
-            .iter()
-            .any(|set| set.has_trie_domain_rules());
         Ok(())
     }
 
@@ -121,20 +115,13 @@ impl Plugin for QnameMatcher {
 
 impl Matcher for QnameMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(question) = context.question() else {
-            return false;
-        };
-        let query_name = question.normalized_name();
-        if query_name.is_empty() {
-            return false;
-        }
-        if self.domains.is_match_question(question) {
-            return true;
-        }
-
-        self.domain_sets
-            .iter()
-            .any(|set| set.contains_question(question))
+        context.request().questions().iter().any(|q| {
+            self.domains.is_match_name(q.name())
+                || self
+                    .domain_sets
+                    .iter()
+                    .any(|set| set.contains_name(q.name()))
+        })
     }
 }
 
@@ -149,9 +136,11 @@ mod tests {
 
     fn make_context(name: &str) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Question::new(Name::from_ascii(name).unwrap(), RecordType::A);
-        query.set_question_class(DNSClass::IN);
-        request.add_question(query);
+        request.add_question(Question::new(
+            Name::from_ascii(name).unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
 
         let mut context = DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
@@ -184,7 +173,6 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
         let mut ctx = make_context("www.example.com.");
@@ -209,7 +197,6 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
         let mut ctx = make_context("www.example.com.");
@@ -235,7 +222,6 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
 

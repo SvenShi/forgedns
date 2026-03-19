@@ -19,11 +19,7 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::ResponseCode;
-use crate::message::build_response_message_from_request;
-use crate::message::rdata::{A, AAAA};
-use crate::message::{RData, Record, RecordType};
-use crate::message::{TYPE_A, TYPE_AAAA, build_address_response_packet};
+use crate::message::RecordType;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -67,62 +63,27 @@ impl Plugin for BlackHole {
 #[async_trait]
 impl Executor for BlackHole {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if context.request.question_count() != 1 {
-            return Ok(ExecStep::Next);
-        }
-
-        let Some(question) = context.question() else {
+        let Some(question) = context.request.first_question() else {
             return Ok(ExecStep::Next);
         };
         let qtype = question.qtype();
 
         let mut addresses = SmallVec::<[IpAddr; 8]>::new();
         match qtype {
-            TYPE_A if !self.ipv4.is_empty() => {
+            RecordType::A if !self.ipv4.is_empty() => {
                 addresses.extend(self.ipv4.iter().copied().map(IpAddr::V4));
             }
-            TYPE_AAAA if !self.ipv6.is_empty() => {
+            RecordType::AAAA if !self.ipv6.is_empty() => {
                 addresses.extend(self.ipv6.iter().copied().map(IpAddr::V6));
             }
             _ => return Ok(ExecStep::Next),
         }
 
-        if let Some(packet) = context.request_packet() {
-            let response = build_address_response_packet(packet, 300, &addresses)?;
-            context.set_response_packet_with_answer_ips(response, addresses.clone())?;
-            return Ok(ExecStep::Next);
-        }
-
-        let Some(qname) = context.request.first_question_name_owned() else {
-            return Ok(ExecStep::Next);
-        };
-
-        let mut response =
-            build_response_message_from_request(&context.request, ResponseCode::NoError);
-        match RecordType::from(qtype) {
-            RecordType::A => {
-                for ip in &self.ipv4 {
-                    response.answers_mut().push(Record::from_rdata(
-                        qname.clone(),
-                        300,
-                        RData::A(A(*ip)),
-                    ));
-                }
-            }
-            RecordType::AAAA => {
-                for ip in &self.ipv6 {
-                    response.answers_mut().push(Record::from_rdata(
-                        qname.clone(),
-                        300,
-                        RData::AAAA(AAAA(*ip)),
-                    ));
-                }
-            }
-            _ => {}
-        }
-        if !response.answers().is_empty() {
-            context.set_response_message_with_answer_ips(response, addresses);
-        }
+        context.set_response(context.request.address_response(
+            question,
+            300,
+            addresses.as_slice(),
+        )?);
 
         Ok(ExecStep::Next)
     }
@@ -236,7 +197,6 @@ fn split_ips(ips: Vec<IpAddr>) -> (Vec<std::net::Ipv4Addr>, Vec<std::net::Ipv6Ad
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Packet;
     use crate::message::{DNSClass, Name};
     use crate::message::{Message, Question};
     use crate::plugin::executor::ExecStep;
@@ -245,9 +205,11 @@ mod tests {
 
     fn make_context(qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Question::new(Name::from_ascii("example.com.").unwrap(), qtype);
-        query.set_question_class(DNSClass::IN);
-        request.add_question(query);
+        request.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            qtype,
+            DNSClass::IN,
+        ));
 
         DnsContext::new(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
@@ -276,14 +238,9 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        let resp = ctx
-            .response
-            .current()
-            .expect("response should exist")
-            .to_message()
-            .expect("response should materialize");
+        let resp = ctx.response().expect("response should exist");
         assert_eq!(resp.answers().len(), 1);
-        assert_eq!(resp.answers()[0].record_type(), RecordType::A);
+        assert_eq!(resp.answers()[0].rr_type(), RecordType::A);
     }
 
     #[tokio::test]
@@ -299,40 +256,28 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        let resp = ctx
-            .response
-            .current()
-            .expect("response should exist")
-            .to_message()
-            .expect("response should materialize");
+        let resp = ctx.response().expect("response should exist");
         assert_eq!(resp.answers().len(), 1);
-        assert_eq!(resp.answers()[0].record_type(), RecordType::AAAA);
+        assert_eq!(resp.answers()[0].rr_type(), RecordType::AAAA);
     }
 
     #[tokio::test]
-    async fn test_black_hole_execute_builds_response_when_request_packet_exists() {
+    async fn test_black_hole_execute_builds_response_from_request_message() {
         let plugin = BlackHole {
             tag: "bh".to_string(),
             ipv4: vec![Ipv4Addr::new(1, 1, 1, 1)],
             ipv6: vec![],
         };
         let mut ctx = make_context(RecordType::A);
-        let request_packet = Packet::from_vec(ctx.request.to_bytes().unwrap());
-        ctx.set_request_packet(request_packet);
 
         let step = plugin
             .execute(&mut ctx)
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        let resp = ctx
-            .response
-            .current()
-            .expect("response should exist")
-            .to_message()
-            .expect("response should materialize");
+        let resp = ctx.response().expect("response should exist");
         assert_eq!(resp.answers().len(), 1);
-        assert_eq!(resp.answers()[0].record_type(), RecordType::A);
+        assert_eq!(resp.answers()[0].rr_type(), RecordType::A);
     }
 
     #[tokio::test]
@@ -346,6 +291,7 @@ mod tests {
         ctx.request.questions_mut().push(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            DNSClass::IN,
         ));
 
         let step = plugin
@@ -353,6 +299,8 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        assert!(!ctx.response.has_response());
+        let resp = ctx.response().expect("response should exist");
+        assert_eq!(resp.answers().len(), 1);
+        assert_eq!(resp.answers()[0].rr_type(), RecordType::A);
     }
 }

@@ -13,7 +13,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    parse_dns_class, parse_quick_setup_rules, parse_rules_from_value, parse_u16_rules,
+    parse_class, parse_quick_setup_rules, parse_rules_from_value, parse_u16_rules,
     validate_non_empty_rules,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -51,7 +51,7 @@ impl PluginFactory for QclassFactory {
 
 fn build_qclass_matcher(tag: String, rules: Vec<String>) -> DnsResult<UninitializedPlugin> {
     validate_non_empty_rules("qclass", &rules)?;
-    let qclasses = parse_u16_rules("qclass", &rules, parse_dns_class)?;
+    let qclasses = parse_u16_rules("qclass", &rules, parse_class)?;
     Ok(UninitializedPlugin::Matcher(Box::new(QclassMatcher {
         tag,
         qclasses,
@@ -81,32 +81,11 @@ impl Plugin for QclassMatcher {
 
 impl Matcher for QclassMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        if context.request.question_count() == 1
-            && let Some(qclass) = context.request.first_question_class()
-        {
-            return self.qclasses.contains(&u16::from(qclass));
-        }
-
-        if let Some(packet) = context.request.packet() {
-            let Ok(parsed) = packet.parse() else {
-                return false;
-            };
-            for question in parsed.question_records() {
-                let Ok(question) = question else {
-                    return false;
-                };
-                if self.qclasses.contains(&question.qclass()) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         context
             .request
             .questions()
             .iter()
-            .any(|q| self.qclasses.contains(&u16::from(q.question_class())))
+            .any(|q| self.qclasses.contains(&u16::from(q.qclass())))
     }
 }
 
@@ -120,8 +99,12 @@ mod tests {
 
     fn make_context(qclass: DNSClass) -> DnsContext {
         let mut request = Message::new();
-        let mut query = Question::new(Name::from_ascii("example.com.").unwrap(), RecordType::A);
-        query.set_question_class(qclass);
+        let mut query = Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            crate::message::DNSClass::IN,
+        );
+        query.set_qclass(qclass);
         request.add_question(query);
 
         DnsContext::new(

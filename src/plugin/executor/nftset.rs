@@ -280,7 +280,10 @@ impl Executor for NftSetExecutor {
             return Ok(ExecStep::Next);
         }
 
-        let answers = context.response.answer_ip_ttls();
+        let Some(response) = context.response() else {
+            return Ok(ExecStep::Next);
+        };
+        let answers = response.answer_ip_ttls();
         if answers.is_empty() {
             return Ok(ExecStep::Next);
         }

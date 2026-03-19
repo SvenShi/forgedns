@@ -2,13 +2,8 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-
-use crate::core::buffer_pool::ReusableBuffer;
 use crate::core::error::{DnsError, Result};
 use crate::message::Message;
-use crate::message::Packet;
-use crate::message::Response;
-use bytes::BytesMut;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 
 /// QUIC connection transport that can accept or open bidirectional streams
@@ -27,7 +22,13 @@ impl QuicTransport {
     #[inline]
     pub async fn accept_bi(&self) -> Result<(QuicTransportReader, QuicTransportWriter)> {
         match self.conn.accept_bi().await {
-            Ok((send, recv)) => Ok((QuicTransportReader { recv }, QuicTransportWriter { send })),
+            Ok((send, recv)) => Ok((
+                QuicTransportReader { recv },
+                QuicTransportWriter {
+                    send,
+                    write_buf: Vec::with_capacity(1234),
+                },
+            )),
             Err(e) => Err(DnsError::protocol(format!(
                 "Failed to accept QUIC bidirectional stream: {}",
                 e
@@ -40,7 +41,13 @@ impl QuicTransport {
     #[inline]
     pub async fn open_bi(&self) -> Result<(QuicTransportReader, QuicTransportWriter)> {
         match self.conn.open_bi().await {
-            Ok((send, recv)) => Ok((QuicTransportReader { recv }, QuicTransportWriter { send })),
+            Ok((send, recv)) => Ok((
+                QuicTransportReader { recv },
+                QuicTransportWriter {
+                    send,
+                    write_buf: Vec::with_capacity(1234),
+                },
+            )),
             Err(e) => Err(DnsError::protocol(format!(
                 "Failed to open QUIC bidirectional stream: {}",
                 e
@@ -65,57 +72,24 @@ impl QuicTransport {
 /// with 2-byte big-endian length prefix before writing.
 pub struct QuicTransportWriter {
     send: SendStream,
+    write_buf: Vec<u8>,
 }
 
 impl QuicTransportWriter {
     /// Write a single DNS message as a length-prefixed frame.
     #[inline]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
-        self.write_message_with_id(msg, msg.id()).await
-    }
+        self.write_buf.clear();
+        self.write_buf.extend_from_slice(&[0, 0]);
 
-    /// Write a single DNS message as a length-prefixed frame while overriding the wire ID.
-    #[inline]
-    pub async fn write_message_with_id(&mut self, msg: &Message, id: u16) -> Result<()> {
-        let mut body = ReusableBuffer::with_capacity(message_buffer_capacity_hint(msg));
-        encode_message_into_with_id(msg, id, body.as_mut_vec())?;
-        let body_len = body.as_slice().len();
-        if body_len > u16::MAX as usize {
-            return Err(DnsError::protocol(format!(
-                "DNS message too large for DoQ: {} bytes (max 65535)",
-                body_len
-            )));
-        }
-        let len_prefix = (body_len as u16).to_be_bytes();
-        self.send
-            .write_all(&len_prefix)
-            .await
-            .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
-        self.send
-            .write_all(body.as_slice())
-            .await
-            .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
-        Ok(())
-    }
+        msg.append_to(&mut self.write_buf)?;
 
-    #[inline]
-    pub async fn write_response(&mut self, response: &Response) -> Result<()> {
-        let mut body = ReusableBuffer::with_capacity(response_buffer_capacity_hint(response));
-        encode_response_into(response, body.as_mut_vec())?;
-        let body_len = body.as_slice().len();
-        if body_len > u16::MAX as usize {
-            return Err(DnsError::protocol(format!(
-                "DNS message too large for DoQ: {} bytes (max 65535)",
-                body_len
-            )));
-        }
-        let len_prefix = (body_len as u16).to_be_bytes();
+        let body_len = self.write_buf.len() - 2;
+
+        self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
+
         self.send
-            .write_all(&len_prefix)
-            .await
-            .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
-        self.send
-            .write_all(body.as_slice())
+            .write_all(&self.write_buf)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
         Ok(())
@@ -139,11 +113,6 @@ pub struct QuicTransportReader {
 impl QuicTransportReader {
     #[inline]
     pub async fn read_message(&mut self) -> Result<Message> {
-        self.read_message_with_packet().await.map(|(msg, _)| msg)
-    }
-
-    #[inline]
-    pub async fn read_message_with_packet(&mut self) -> Result<(Message, Packet)> {
         // Read 2-byte length prefix
         let mut len_prefix = [0u8; 2];
         self.recv
@@ -158,37 +127,13 @@ impl QuicTransportReader {
         }
 
         // Read DNS message body exactly
-        let mut bytes = BytesMut::with_capacity(msg_len);
+        let mut bytes = Vec::with_capacity(msg_len);
         self.recv
             .read_exact(&mut bytes)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to read QUIC DNS body: {}", e)))?;
-        let packet = Packet::from_vec(bytes.to_vec());
-        let msg = Message::from_packet(packet.clone())
+        let msg = Message::from_bytes(&bytes)
             .map_err(|e| DnsError::protocol(format!("Invalid DNS message over QUIC: {}", e)))?;
-        Ok((msg, packet))
+        Ok(msg)
     }
-}
-
-fn encode_message_into_with_id(message: &Message, id: u16, body: &mut Vec<u8>) -> Result<()> {
-    message.encode_into_with_id(id, body)
-}
-
-#[inline]
-fn encode_response_into(response: &Response, body: &mut Vec<u8>) -> Result<()> {
-    response.encode_into(body)
-}
-
-#[inline]
-fn message_buffer_capacity_hint(message: &Message) -> usize {
-    message
-        .packet()
-        .map(|packet| packet.as_slice().len())
-        .unwrap_or(512)
-        .max(512)
-}
-
-#[inline]
-fn response_buffer_capacity_hint(response: &Response) -> usize {
-    response.response_len_hint().unwrap_or(512).max(512)
 }

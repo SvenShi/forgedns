@@ -5,7 +5,7 @@
 
 //! Shared high-performance rule matchers used by providers and matchers.
 
-use crate::core::context::QuestionFacts;
+use crate::message::Name;
 use ahash::{AHashMap, AHashSet};
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::{RegexBuilder, RegexSet, RegexSetBuilder};
@@ -506,26 +506,10 @@ impl DomainTrie {
         }
     }
 
-    /// Match a parsed query label slice against domain suffix rules.
     #[inline]
-    pub(crate) fn contains_labels(&self, labels_rev: &[&str]) -> bool {
+    pub(crate) fn contains_name(&self, name: &Name) -> bool {
         let mut cursor = 0u32;
-        for label in labels_rev {
-            let Some(next) = self.nodes[cursor as usize].children.get(*label) else {
-                return false;
-            };
-            cursor = *next;
-            if self.nodes[cursor as usize].terminal {
-                return true;
-            }
-        }
-        false
-    }
-
-    #[inline]
-    pub(crate) fn contains_question(&self, question: &QuestionFacts) -> bool {
-        let mut cursor = 0u32;
-        for label in question.iter_labels_rev() {
+        for label in name.iter_labels_rev() {
             let Some(next) = self.nodes[cursor as usize].children.get(label) else {
                 return false;
             };
@@ -595,13 +579,8 @@ impl TrieDomainMatcher {
     }
 
     #[inline]
-    pub(crate) fn is_match(&self, labels_rev: &[&str]) -> bool {
-        self.trie.contains_labels(labels_rev)
-    }
-
-    #[inline]
-    pub(crate) fn is_match_question(&self, question: &QuestionFacts) -> bool {
-        self.trie.contains_question(question)
+    pub(crate) fn is_match(&self, name: &Name) -> bool {
+        self.trie.contains_name(name)
     }
 
     #[inline]
@@ -798,30 +777,12 @@ impl DomainRuleMatcher {
     }
 
     #[inline]
-    pub(crate) fn is_match_normalized(&self, domain: &str, labels_rev: &[&str]) -> bool {
+    pub(crate) fn is_match_name(&self, name: &Name) -> bool {
+        let domain = name.normalized();
         if self.full.as_ref().is_some_and(|m| m.is_match(domain)) {
             return true;
         }
-        if self.trie.as_ref().is_some_and(|m| m.is_match(labels_rev)) {
-            return true;
-        }
-        if self.keyword.as_ref().is_some_and(|m| m.is_match(domain)) {
-            return true;
-        }
-        self.regexp.as_ref().is_some_and(|m| m.is_match(domain))
-    }
-
-    #[inline]
-    pub(crate) fn is_match_question(&self, question: &QuestionFacts) -> bool {
-        let domain = question.normalized_name();
-        if self.full.as_ref().is_some_and(|m| m.is_match(domain)) {
-            return true;
-        }
-        if self
-            .trie
-            .as_ref()
-            .is_some_and(|m| m.is_match_question(question))
-        {
+        if self.trie.as_ref().is_some_and(|m| m.is_match(name)) {
             return true;
         }
         if self.keyword.as_ref().is_some_and(|m| m.is_match(domain)) {
@@ -863,12 +824,6 @@ pub(crate) fn normalize_domain_cow(domain: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(slice)
     }
-}
-
-#[inline]
-pub(crate) fn split_labels_rev<'a>(domain: &'a str, labels: &mut SmallVec<[&'a str; 8]>) {
-    labels.clear();
-    labels.extend(domain.rsplit('.').filter(|label| !label.is_empty()));
 }
 
 #[inline]
@@ -1024,10 +979,8 @@ mod tests {
             .add_expression("domain:example.com", "test source")
             .expect("expression should be accepted");
         matcher.finalize().expect("finalize should succeed");
-        let mut labels = SmallVec::<[&str; 8]>::new();
-        split_labels_rev("www.example.com", &mut labels);
-
-        let matched = matcher.is_match_normalized("www.example.com", &labels);
+        let name = Name::from_ascii("www.example.com.").unwrap();
+        let matched = matcher.is_match_name(&name);
 
         assert!(matched);
     }
