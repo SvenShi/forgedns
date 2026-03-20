@@ -6,7 +6,7 @@
 use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
 use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
 use crate::plugin::server::tcp;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,8 +18,7 @@ use tracing::{debug, error, info, warn};
 /// Main HTTP/2 server loop (over TCP)
 ///
 /// Creates an HTTP/2 stream, listens for incoming DNS queries, and spawns
-/// handler tasks for each request. Uses JoinSet to track and manage active
-/// connections, enabling graceful cleanup and resource management.
+/// handler tasks for each request.
 ///
 /// # Architecture
 /// - Accepts TCP connections (with optional TLS handshake)
@@ -30,10 +29,9 @@ use tracing::{debug, error, info, warn};
 /// # Parameters
 /// - `addr`: Listen address
 /// - `dispatcher`: HTTP request dispatcher for routing
-/// - `tls_acceptor`: Optional TLS acceptor for HTTPS
+/// - `server_config`: Optional TLS server config for HTTPS
 /// - `idle_timeout`: Connection idle timeout in seconds
 /// - `src_ip_header`: HTTP header name to extract real client IP
-///
 pub async fn run_server(
     addr: String,
     dispatcher: Arc<HttpDispatcher>,
@@ -45,6 +43,7 @@ pub async fn run_server(
 ) {
     let mut startup_tx = startup_tx;
     let timeout = Duration::from_secs(idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT));
+
     let listener = match tcp::build_tcp_listener(&addr, timeout) {
         Ok(s) => s,
         Err(e) => {
@@ -58,6 +57,7 @@ pub async fn run_server(
             return;
         }
     };
+
     if let Some(tx) = startup_tx.take() {
         let _ = tx.send(Ok(()));
     }
@@ -107,7 +107,9 @@ pub async fn run_server(
                                             .1
                                             .server_name()
                                             .map(Arc::<str>::from);
+
                                         debug!("TLS handshake completed for client {}", src);
+
                                         handle_http_stream(
                                             tls_stream,
                                             src,
@@ -134,7 +136,6 @@ pub async fn run_server(
                     }
                 }
             }
-
         }
     }
 
@@ -197,7 +198,7 @@ async fn handle_http_stream<S>(
             // Extract request metadata
             let method = request.method().clone();
             let uri = request.uri().clone();
-            let path = Arc::from(request.uri().path());
+            let path = Arc::from(uri.path());
             let query = uri.query().map(Arc::from);
             let headers = request.headers();
 
@@ -210,37 +211,20 @@ async fn handle_http_stream<S>(
                 method, path, src, client_addr
             );
 
-            // Read request body from h2::RecvStream
-            // HTTP/2 streams data in chunks for flow control
-            let mut recv_stream = request.into_body();
-            let mut body_bytes = Vec::new();
-
-            while let Some(chunk_result) = recv_stream.data().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        body_bytes.extend_from_slice(&chunk);
-                        // MUST call flow_control().release_capacity() to release flow control window
-                        // This allows the sender to continue sending more data
-                        let _ = recv_stream.flow_control().release_capacity(chunk.len());
-                    }
-                    Err(e) => {
-                        warn!("Failed to read request body chunk from {}: {}", src, e);
-                        break;
-                    }
+            let body = match read_h2_body(request.into_body(), src).await {
+                Ok(body) => body,
+                Err(status) => {
+                    let _ = send_h2_error_response(&mut respond, status, src);
+                    return;
                 }
-            }
+            };
 
-            let body = Bytes::from(body_bytes);
-
-            // Dispatch request to appropriate handler (using real client IP for logging and filtering)
             let response = dispatcher
                 .handle_request(method, path, query, body, client_addr, server_name)
                 .await;
 
-            // Convert response to HTTP/2 format
             let (parts, response_bytes) = response.into_parts();
 
-            // Build HTTP/2 response with empty body (body sent separately)
             let h2_response = match http::Response::builder()
                 .status(parts.status)
                 .version(parts.version)
@@ -252,11 +236,15 @@ async fn handle_http_stream<S>(
                 }
                 Err(e) => {
                     warn!("Failed to build HTTP/2 response: {}", e);
+                    let _ = send_h2_error_response(
+                        &mut respond,
+                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                        src,
+                    );
                     return;
                 }
             };
 
-            // Send response headers
             let mut send_stream = match respond.send_response(h2_response, false) {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -265,7 +253,6 @@ async fn handle_http_stream<S>(
                 }
             };
 
-            // Send response body (end_stream=true to close the stream)
             if let Err(e) = send_stream.send_data(response_bytes, true) {
                 warn!("Failed to send HTTP/2 response body to {}: {}", src, e);
                 return;
@@ -274,6 +261,74 @@ async fn handle_http_stream<S>(
             debug!("Response sent to {}", src);
         });
     }
+}
+
+const MAX_HTTP_BODY: usize = 64 * 1024;
+const INITIAL_HTTP_BODY_CAPACITY: usize = 2048;
+
+#[inline]
+async fn read_h2_body(
+    mut recv_stream: h2::RecvStream,
+    src: SocketAddr,
+) -> Result<Bytes, http::StatusCode> {
+    let mut buf = BytesMut::with_capacity(INITIAL_HTTP_BODY_CAPACITY);
+
+    while let Some(chunk_result) = recv_stream.data().await {
+        match chunk_result {
+            Ok(chunk) => {
+                if buf.len() + chunk.len() > MAX_HTTP_BODY {
+                    warn!(
+                        "HTTP/2 request body too large from {}: {}+{} bytes",
+                        src,
+                        buf.len(),
+                        chunk.len()
+                    );
+                    return Err(http::StatusCode::PAYLOAD_TOO_LARGE);
+                }
+
+                buf.put_slice(&chunk);
+
+                if let Err(e) = recv_stream.flow_control().release_capacity(chunk.len()) {
+                    debug!(
+                        "Failed to release HTTP/2 flow control capacity for {}: {}",
+                        src, e
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("Failed to read request body chunk from {}: {}", src, e);
+                return Err(http::StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+
+    Ok(buf.freeze())
+}
+
+#[inline]
+fn send_h2_error_response(
+    respond: &mut h2::server::SendResponse<Bytes>,
+    status: http::StatusCode,
+    src: SocketAddr,
+) -> Result<(), ()> {
+    let response = match http::Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_LENGTH, "0")
+        .body(())
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            warn!("Failed to build HTTP/2 error response for {}: {}", src, e);
+            return Err(());
+        }
+    };
+
+    if let Err(e) = respond.send_response(response, true) {
+        warn!("Failed to send HTTP/2 error response to {}: {}", src, e);
+        return Err(());
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -367,6 +422,7 @@ mod tests {
             Box::new(DnsPostHandler::new(request_handle)),
         );
         let dispatcher = Arc::new(dispatcher);
+
         let (client, server) = duplex(16 * 1024);
         let server_task = tokio::spawn(handle_http_stream(
             server,
@@ -382,10 +438,12 @@ mod tests {
         let client_task = tokio::spawn(async move {
             let _ = connection.await;
         });
+
         let dns_query = make_dns_query(55);
         let dns_bytes = dns_query
             .to_bytes()
             .expect("dns query should serialize successfully");
+
         let request = Request::builder()
             .method("POST")
             .uri("/dns-query")
@@ -396,6 +454,7 @@ mod tests {
         let (response_future, mut send_stream) = sender
             .send_request(request, false)
             .expect("send_request should succeed");
+
         send_stream
             .send_data(Bytes::from(dns_bytes), true)
             .expect("request body send should succeed");
@@ -403,13 +462,16 @@ mod tests {
         let response = response_future
             .await
             .expect("response future should resolve");
+
         let mut body = response.into_body();
         let mut response_bytes = Vec::new();
+
         while let Some(chunk) = body.data().await {
             let chunk = chunk.expect("response chunk should be readable");
             response_bytes.extend_from_slice(&chunk);
             let _ = body.flow_control().release_capacity(chunk.len());
         }
+
         let dns_response = Message::from_bytes(&response_bytes)
             .expect("response bytes should decode as DNS message");
 
@@ -453,6 +515,7 @@ mod tests {
             .await
             .expect("startup channel should resolve")
             .expect("startup sender should not be dropped");
+
         assert!(startup.is_err());
     }
 }

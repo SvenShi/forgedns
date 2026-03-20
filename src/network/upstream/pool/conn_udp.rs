@@ -107,7 +107,7 @@ impl Connection for UdpConnection {
             {
                 Ok(()) => {}
                 Err(e) => {
-                    self.request_map.take(query_id);
+                    self.request_map.remove(query_id);
                     error!(conn_id = self.id, err = %e, "Failed to send UDP query");
                     return Err(e);
                 }
@@ -122,7 +122,7 @@ impl Connection for UdpConnection {
                         return Ok(response);
                     }
                     Err(_canceled) => {
-                        self.request_map.take(query_id);
+                        self.request_map.remove(query_id);
                         trace!(
                             conn_id = self.id,
                             query_id, "Listener dropped channel, retrying"
@@ -132,7 +132,7 @@ impl Connection for UdpConnection {
                     }
                 },
                 Err(_elapsed) => {
-                    self.request_map.take(query_id);
+                    self.request_map.remove(query_id);
                     trace!(
                         conn_id = self.id,
                         query_id,

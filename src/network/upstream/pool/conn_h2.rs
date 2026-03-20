@@ -200,7 +200,7 @@ async fn recv(response_future: ResponseFuture) -> Result<Bytes> {
     let mut body = response.into_body();
 
     while let Some(Ok(partial_bytes)) = body.data().await {
-        response_bytes.put(partial_bytes);
+        response_bytes.put_slice(&partial_bytes);
     }
 
     if !status_code.is_success() {

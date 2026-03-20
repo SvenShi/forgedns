@@ -139,6 +139,22 @@ impl RequestMap {
         }
     }
 
+    #[inline(always)]
+    #[hotpath::measure]
+    pub fn remove(&self, id: u16) -> bool {
+        let slot = &self.slots[id as usize];
+        let ptr = slot.swap(ptr::null_mut(), Ordering::AcqRel);
+        if ptr.is_null() {
+            false
+        } else {
+            self.size.fetch_sub(1, Ordering::Relaxed);
+            unsafe {
+                drop(Box::from_raw(ptr));
+            }
+            true
+        }
+    }
+
     /// Get the current number of active requests
     pub fn size(&self) -> u16 {
         self.size.load(Ordering::Relaxed)
@@ -214,5 +230,28 @@ mod tests {
                 .id(),
             9
         );
+    }
+
+    #[test]
+    fn test_remove_drops_sender_and_updates_size() {
+        let map = RequestMap::new();
+        let (tx, rx) = oneshot::channel::<Message>();
+        let id = map.store(tx);
+
+        assert!(map.remove(id));
+        assert_eq!(map.size(), 0);
+        assert!(map.is_empty());
+        assert!(map.take(id).is_none());
+        assert!(rx.blocking_recv().is_err());
+    }
+
+    #[test]
+    fn test_remove_missing_id_returns_false_without_changing_size() {
+        let map = RequestMap::new();
+        let (tx, _rx) = oneshot::channel();
+        let _id = map.store(tx);
+
+        assert!(!map.remove(42));
+        assert_eq!(map.size(), 1);
     }
 }

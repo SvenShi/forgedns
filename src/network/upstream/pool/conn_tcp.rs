@@ -111,7 +111,7 @@ impl Connection for TcpConnection {
             message: request,
             query_id,
         }) {
-            self.request_map.take(query_id);
+            self.request_map.remove(query_id);
             error!(
                 conn_id = self.id,
                 query_id,
@@ -132,7 +132,7 @@ impl Connection for TcpConnection {
                 Ok(res)
             }
             Ok(Err(_)) => {
-                self.request_map.take(query_id);
+                self.request_map.remove(query_id);
                 warn!(
                     conn_id = self.id,
                     query_id, "DNS query canceled (response channel dropped)"
@@ -140,7 +140,7 @@ impl Connection for TcpConnection {
                 Err(DnsError::protocol("request canceled"))
             }
             Err(_) => {
-                self.request_map.take(query_id);
+                self.request_map.remove(query_id);
                 warn!(
                     conn_id = self.id,
                     query_id,
