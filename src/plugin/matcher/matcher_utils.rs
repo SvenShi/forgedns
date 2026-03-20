@@ -60,6 +60,10 @@ pub(crate) fn parse_class(raw: &str) -> Option<u16> {
         .map(u16::from)
 }
 
+/// Parse rcode matcher input.
+///
+/// Current config only accepts decimal numeric rcodes. Mnemonic tokens such as
+/// `NOERROR` or `SERVFAIL` are intentionally not mapped here.
 pub(crate) fn parse_rcode(raw: &str) -> Option<u16> {
     if let Ok(code) = raw.parse::<u16>() {
         return Some(u16::from(Rcode::from(code)));

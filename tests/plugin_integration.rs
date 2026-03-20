@@ -418,7 +418,7 @@ plugins:
     args:
       - matches:
           - $debug
-        exec: reject SERVFAIL
+        exec: reject 2
 "#;
 
     let config = parse_config(yaml)?;

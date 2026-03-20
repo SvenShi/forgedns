@@ -324,7 +324,7 @@ exec: accept
 matches:
   - "_true"
   - "qtype A"
-exec: reject SERVFAIL
+exec: reject 2
 "#,
         )
         .expect("matches sequence should deserialize");

@@ -32,7 +32,10 @@ enum BuiltinOp {
     Accept,
     /// Stop current sequence execution and return to caller.
     Return,
-    /// Build and set a DNS response with the specified rcode, then stop.
+    /// Build and set a DNS response with the specified numeric rcode, then stop.
+    ///
+    /// Sequence config currently accepts only decimal numeric rcode values such as
+    /// `reject 2`; mnemonic names like `SERVFAIL` are not parsed here.
     Reject(Rcode),
     /// Execute another sequence executor, then continue current program.
     Jump(Arc<dyn Executor>),
@@ -291,10 +294,14 @@ impl ChainBuilder {
                     if let Ok(code) = code.parse::<u16>() {
                         Ok(Some(BuiltinOp::Reject(Rcode::from(code))))
                     } else {
-                        Err(DnsError::plugin("invalid code argument"))
+                        Err(DnsError::plugin(
+                            "invalid code argument: reject expects a decimal numeric rcode",
+                        ))
                     }
                 } else {
-                    Err(DnsError::plugin("invalid code argument"))
+                    Err(DnsError::plugin(
+                        "invalid code argument: reject expects a decimal numeric rcode",
+                    ))
                 }
             }
             "mark" => Ok(Some(BuiltinOp::Mark(parse_mark_values(arg)?))),

@@ -7,6 +7,9 @@
 //!
 //! This plugin follows standard plugin lifecycle (`init/destroy`) and
 //! matches DNS response code from the generated upstream response.
+//!
+//! Config currently accepts only decimal numeric rcodes, for example `["0"]`
+//! or quick-setup syntax like `rcode 2`.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
