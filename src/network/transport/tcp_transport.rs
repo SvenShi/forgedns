@@ -4,8 +4,8 @@
  */
 
 use crate::core::error::{DnsError, Result};
-use crate::message::Message;
-use bytes::{BufMut, BytesMut};
+use crate::message::{Message, codec};
+use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 
 pub struct TcpTransport<S> {
@@ -64,17 +64,17 @@ where
 
     #[inline]
     pub async fn write_message_with_id(&mut self, msg: &Message, id: u16) -> Result<()> {
-        let bytes = msg
-            .to_bytes_with_id(id)
+        self.write_buf.clear();
+        self.write_buf.extend_from_slice(&[0, 0]);
+
+        msg.append_to_with_id(id, &mut self.write_buf)
             .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
 
-        // Merge length prefix and body into a single frame for one write
-        let mut frame = BytesMut::with_capacity(2 + bytes.len());
-        frame.put_u16(bytes.len() as u16);
-        frame.extend_from_slice(&bytes);
+        let body_len = self.write_buf.len() - 2;
+        self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
 
         self.writer
-            .write_all(frame.as_ref())
+            .write_all(&self.write_buf)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to write DNS frame: {}", e)))?;
         Ok(())
@@ -93,34 +93,31 @@ where
     #[inline]
     pub async fn read_message(&mut self) -> Result<Message> {
         loop {
-            // Try parse from accumulated buffer first (may contain multiple messages)
-            if self.buf.len() >= 2 {
-                let msg_len = u16::from_be_bytes([self.buf[0], self.buf[1]]) as usize;
+            let buf_len = self.buf.len();
+            if buf_len >= 2 {
+                let msg_len = codec::read_u16_be(&self.buf, 0) as usize;
+                let frame_len = 2 + msg_len;
 
                 if msg_len == 0 {
-                    // Skip zero-length and continue
                     let _ = self.buf.split_to(2);
                     continue;
                 }
 
-                if self.buf.len() >= 2 + msg_len {
-                    // We have a full message frame
-                    match Message::from_bytes(&self.buf[2..2 + msg_len]) {
+                if buf_len >= frame_len {
+                    let body = &self.buf[2..frame_len];
+                    match Message::from_bytes(body) {
                         Ok(msg) => {
-                            // Drain the consumed frame (length prefix + body)
-                            let _ = self.buf.split_to(2 + msg_len);
+                            let _ = self.buf.split_to(frame_len);
                             return Ok(msg);
                         }
                         Err(_) => {
-                            // Malformed message: drop this frame and continue
-                            let _ = self.buf.split_to(2 + msg_len);
+                            let _ = self.buf.split_to(frame_len);
                             continue;
                         }
                     }
                 }
             }
 
-            // Need more bytes; read from stream directly into buffer
             self.buf.reserve(4096);
             let n = self
                 .reader

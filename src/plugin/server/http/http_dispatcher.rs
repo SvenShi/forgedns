@@ -27,7 +27,7 @@ use tracing::{debug, warn};
 /// incoming HTTP requests to the appropriate handler based on the request
 /// method and path.
 pub struct HttpDispatcher {
-    routes: AHashMap<(Method, String), Box<dyn HttpHandler>>,
+    routes: AHashMap<(Method, Arc<str>), Box<dyn HttpHandler>>,
 }
 
 impl HttpDispatcher {
@@ -42,7 +42,12 @@ impl HttpDispatcher {
     ///
     /// Associates a specific HTTP method and path with a handler that will
     /// process requests matching that route.
-    pub fn register_route(&mut self, method: Method, path: String, handler: Box<dyn HttpHandler>) {
+    pub fn register_route(
+        &mut self,
+        method: Method,
+        path: Arc<str>,
+        handler: Box<dyn HttpHandler>,
+    ) {
         debug!("Registering route: {} {}", method, path);
         self.routes.insert((method, path), handler);
     }
@@ -54,11 +59,11 @@ impl HttpDispatcher {
     pub async fn handle_request(
         &self,
         method: Method,
-        path: String,
-        query: Option<String>,
+        path: Arc<str>,
+        query: Option<Arc<str>>,
         body: Bytes,
         src_addr: SocketAddr,
-        server_name: Option<String>,
+        server_name: Option<Arc<str>>,
     ) -> Response<Bytes> {
         debug!("Received request: {} {} from {}", method, path, src_addr);
 
@@ -102,11 +107,11 @@ pub trait HttpHandler: Send + Sync + 'static {
     async fn handle(
         &self,
         method: Method,
-        path: String,
-        query: Option<String>,
+        path: Arc<str>,
+        query: Option<Arc<str>>,
         body: Bytes,
         src_addr: SocketAddr,
-        server_name: Option<String>,
+        server_name: Option<Arc<str>>,
     ) -> Response<Bytes>;
 }
 
@@ -163,11 +168,11 @@ impl HttpHandler for DnsGetHandler {
     async fn handle(
         &self,
         _method: Method,
-        path: String,
-        query: Option<String>,
+        path: Arc<str>,
+        query: Option<Arc<str>>,
         _body: Bytes,
         src_addr: SocketAddr,
-        server_name: Option<String>,
+        server_name: Option<Arc<str>>,
     ) -> Response<Bytes> {
         // Parse DNS query from URL parameters
         let dns_query = match self.parse_dns_query(query.as_deref()) {
@@ -216,11 +221,11 @@ impl HttpHandler for DnsPostHandler {
     async fn handle(
         &self,
         _method: Method,
-        path: String,
-        _query: Option<String>,
+        path: Arc<str>,
+        _query: Option<Arc<str>>,
         body: Bytes,
         src_addr: SocketAddr,
-        server_name: Option<String>,
+        server_name: Option<Arc<str>>,
     ) -> Response<Bytes> {
         // Limit request size (RFC 8484 recommends maximum 65535 bytes)
         // This prevents memory exhaustion attacks
@@ -412,7 +417,7 @@ mod tests {
         let response = dispatcher
             .handle_request(
                 Method::GET,
-                "/missing".to_string(),
+                Arc::from("/missing"),
                 None,
                 Bytes::new(),
                 SocketAddr::from(([127, 0, 0, 1], 5400)),
@@ -430,18 +435,18 @@ mod tests {
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::GET,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsGetHandler::new(request_handle)),
         );
 
         let response = dispatcher
             .handle_request(
                 Method::GET,
-                "/dns-query".to_string(),
-                Some("foo=bar".to_string()),
+                Arc::from("/dns-query"),
+                Some(Arc::from("foo=bar")),
                 Bytes::new(),
                 SocketAddr::from(([127, 0, 0, 1], 5401)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
@@ -464,7 +469,7 @@ mod tests {
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::GET,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsGetHandler::new(request_handle)),
         );
         let query = make_dns_query(31, "www.example.test.");
@@ -473,11 +478,11 @@ mod tests {
         let response = dispatcher
             .handle_request(
                 Method::GET,
-                "/dns-query".to_string(),
-                Some(format!("foo=bar&dns={encoded_query}")),
+                Arc::from("/dns-query"),
+                Some(Arc::from(format!("foo=bar&dns={encoded_query}"))),
                 Bytes::new(),
                 SocketAddr::from(([127, 0, 0, 1], 5402)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
@@ -510,18 +515,18 @@ mod tests {
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsPostHandler::new(request_handle)),
         );
 
         let response = dispatcher
             .handle_request(
                 Method::POST,
-                "/dns-query".to_string(),
+                Arc::from("/dns-query"),
                 None,
                 Bytes::from(vec![0u8; 65536]),
                 SocketAddr::from(([127, 0, 0, 1], 5403)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
@@ -541,18 +546,18 @@ mod tests {
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsPostHandler::new(request_handle)),
         );
 
         let response = dispatcher
             .handle_request(
                 Method::POST,
-                "/dns-query".to_string(),
+                Arc::from("/dns-query"),
                 None,
                 Bytes::from_static(b"not-a-dns-message"),
                 SocketAddr::from(([127, 0, 0, 1], 5404)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
@@ -575,7 +580,7 @@ mod tests {
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsPostHandler::new(request_handle)),
         );
         let query = make_dns_query(41, "api.example.test.");
@@ -586,11 +591,11 @@ mod tests {
         let response = dispatcher
             .handle_request(
                 Method::POST,
-                "/dns-query".to_string(),
+                Arc::from("/dns-query"),
                 None,
                 Bytes::from(query_bytes),
                 SocketAddr::from(([127, 0, 0, 1], 5405)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 

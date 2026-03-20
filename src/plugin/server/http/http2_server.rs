@@ -12,7 +12,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
@@ -71,11 +70,9 @@ pub async fn run_server(
     );
 
     // Wrap header name in Arc to avoid cloning Strings per request
-    let src_ip_header = Arc::new(src_ip_header);
+    let src_ip_header = src_ip_header.map(Arc::from);
 
     // JoinSet to track all active connection tasks
-    let mut tasks: JoinSet<()> = JoinSet::new();
-    let mut active_connections = 0u64;
     let tls_acceptor = if let Some(mut server_config) = server_config {
         server_config.alpn_protocols = vec![b"h2".to_vec()];
         Some(Arc::new(TlsAcceptor::from(Arc::new(server_config))))
@@ -98,10 +95,9 @@ pub async fn run_server(
                         let src_ip_header = src_ip_header.clone();
                         let tls_acceptor = tls_acceptor.clone();
 
-                        active_connections += 1;
-                        debug!("New connection from {} (active: {})", src, active_connections);
+                        debug!("New connection from {}", src);
 
-                        tasks.spawn(async move {
+                        tokio::spawn(async move {
                             // Handle TLS handshake if TLS is enabled
                             if let Some(acceptor) = tls_acceptor {
                                 match acceptor.accept(stream).await {
@@ -110,7 +106,7 @@ pub async fn run_server(
                                             .get_ref()
                                             .1
                                             .server_name()
-                                            .map(str::to_ascii_lowercase);
+                                            .map(Arc::<str>::from);
                                         debug!("TLS handshake completed for client {}", src);
                                         handle_http_stream(
                                             tls_stream,
@@ -139,24 +135,9 @@ pub async fn run_server(
                 }
             }
 
-            // Clean up finished tasks
-            Some(result) = tasks.join_next() => {
-                active_connections = active_connections.saturating_sub(1);
-
-                if let Err(e) = result {
-                    warn!("Connection task panicked: {:?}", e);
-                }
-
-                // Log when connection count changes significantly
-                if active_connections % 10 == 0 && active_connections > 0 {
-                    debug!("Active connections: {}", active_connections);
-                }
-            }
         }
     }
 
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
     info!(listen = %addr, "HTTP/2 server stopped");
 }
 
@@ -177,8 +158,8 @@ async fn handle_http_stream<S>(
     stream: S,
     src: SocketAddr,
     dispatcher: Arc<HttpDispatcher>,
-    src_ip_header: Arc<Option<String>>,
-    tls_server_name: Option<String>,
+    src_ip_header: Option<Arc<str>>,
+    tls_server_name: Option<Arc<str>>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
@@ -208,22 +189,21 @@ async fn handle_http_stream<S>(
         };
 
         let dispatcher = dispatcher.clone();
-        let src_ip_header_clone = src_ip_header.clone();
+        let src_ip_header = src_ip_header.clone();
         let server_name = tls_server_name.clone();
-
         // Spawn a task to handle this request (non-blocking)
         // Each request is processed in its own task for maximum concurrency
         tokio::spawn(async move {
             // Extract request metadata
             let method = request.method().clone();
             let uri = request.uri().clone();
-            let path = uri.path().to_string();
-            let query = uri.query().map(|s| s.to_string());
+            let path = Arc::from(request.uri().path());
+            let query = uri.query().map(Arc::from);
             let headers = request.headers();
 
             // Try to extract real client IP from HTTP headers (e.g., X-Real-IP, X-Forwarded-For)
             // This is essential when running behind a reverse proxy
-            let client_addr = extract_client_ip(headers, &*src_ip_header_clone, src);
+            let client_addr = extract_client_ip(headers, &src_ip_header, src);
 
             debug!(
                 "Received {} {} from {} (real: {})",
@@ -383,7 +363,7 @@ mod tests {
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             http::Method::POST,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsPostHandler::new(request_handle)),
         );
         let dispatcher = Arc::new(dispatcher);
@@ -392,8 +372,8 @@ mod tests {
             server,
             SocketAddr::from(([127, 0, 0, 1], 443)),
             dispatcher,
-            Arc::new(Some("x-real-ip".to_string())),
-            Some("resolver.example".to_string()),
+            Some(Arc::from("x-real-ip")),
+            Some(Arc::from("resolver.example")),
         ));
 
         let (mut sender, connection) = h2::client::handshake(client)

@@ -25,7 +25,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 const UDP_RECV_BUFFER_SIZE: usize = 65_535;
@@ -167,7 +166,6 @@ async fn run_server(
 
     let transport = Arc::new(UdpTransport::new(socket));
     let mut buf = vec![0u8; UDP_RECV_BUFFER_SIZE];
-    let mut tasks: JoinSet<()> = JoinSet::new();
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -181,8 +179,8 @@ async fn run_server(
                         let max_payload = msg.max_payload();
                         let handler = handler.clone();
                         let transport = transport.clone();
-                        tasks.spawn(async move {
-                            let response = handler.handle_request(msg, src_addr,RequestMeta{server_name: None,url_path: None}).await;
+                        tokio::spawn(async move {
+                            let response = handler.handle_request(msg, src_addr, RequestMeta{server_name: None, url_path: None}).await;
                             // Use requester-advertised UDP payload limit (EDNS) when encoding
                             // response so oversize replies become TC=1 DNS messages, not raw truncation.
                             if let Err(e) =
@@ -197,16 +195,9 @@ async fn run_server(
                     }
                 }
             }
-            Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                if let Err(e) = result {
-                    warn!("UDP request task panicked: {:?}", e);
-                }
-            }
         }
     }
 
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
     info!(listen = %addr, "UDP server stopped");
 }
 

@@ -23,10 +23,13 @@ impl QuicTransport {
     pub async fn accept_bi(&self) -> Result<(QuicTransportReader, QuicTransportWriter)> {
         match self.conn.accept_bi().await {
             Ok((send, recv)) => Ok((
-                QuicTransportReader { recv },
+                QuicTransportReader {
+                    recv,
+                    read_buf: Vec::with_capacity(2048),
+                },
                 QuicTransportWriter {
                     send,
-                    write_buf: Vec::with_capacity(1234),
+                    write_buf: Vec::with_capacity(2048),
                 },
             )),
             Err(e) => Err(DnsError::protocol(format!(
@@ -42,10 +45,13 @@ impl QuicTransport {
     pub async fn open_bi(&self) -> Result<(QuicTransportReader, QuicTransportWriter)> {
         match self.conn.open_bi().await {
             Ok((send, recv)) => Ok((
-                QuicTransportReader { recv },
+                QuicTransportReader {
+                    recv,
+                    read_buf: Vec::with_capacity(2048),
+                },
                 QuicTransportWriter {
                     send,
-                    write_buf: Vec::with_capacity(1234),
+                    write_buf: Vec::with_capacity(2048),
                 },
             )),
             Err(e) => Err(DnsError::protocol(format!(
@@ -108,17 +114,17 @@ impl QuicTransportWriter {
 /// DNS message (2-byte big-endian length + body) and decodes it.
 pub struct QuicTransportReader {
     recv: RecvStream,
+    read_buf: Vec<u8>,
 }
-
 impl QuicTransportReader {
     #[inline]
     pub async fn read_message(&mut self) -> Result<Message> {
-        // Read 2-byte length prefix
         let mut len_prefix = [0u8; 2];
         self.recv
             .read_exact(&mut len_prefix)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to read QUIC length prefix: {}", e)))?;
+
         let msg_len = u16::from_be_bytes(len_prefix) as usize;
         if msg_len == 0 {
             return Err(DnsError::protocol(
@@ -126,14 +132,13 @@ impl QuicTransportReader {
             ));
         }
 
-        // Read DNS message body exactly
-        let mut bytes = Vec::with_capacity(msg_len);
+        self.read_buf.resize(msg_len, 0);
         self.recv
-            .read_exact(&mut bytes)
+            .read_exact(&mut self.read_buf[..msg_len])
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to read QUIC DNS body: {}", e)))?;
-        let msg = Message::from_bytes(&bytes)
-            .map_err(|e| DnsError::protocol(format!("Invalid DNS message over QUIC: {}", e)))?;
-        Ok(msg)
+
+        Message::from_bytes(&self.read_buf[..msg_len])
+            .map_err(|e| DnsError::protocol(format!("Invalid DNS message over QUIC: {}", e)))
     }
 }

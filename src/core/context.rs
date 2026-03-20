@@ -27,9 +27,9 @@ pub enum ExecFlowState {
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct RequestMeta {
     /// SNI or host-like server identifier carried by the server layer.
-    pub server_name: Option<String>,
+    pub server_name: Option<Arc<str>>,
     /// URL path carried by HTTP-based server layers.
-    pub url_path: Option<String>,
+    pub url_path: Option<Arc<str>>,
 }
 
 /// Metadata carried by the inbound transport layer.
@@ -354,8 +354,8 @@ mod tests {
     fn test_request_meta_is_typed() {
         let mut ctx = make_context();
         ctx.set_request_meta(RequestMeta {
-            server_name: Some("dns.example.com".to_string()),
-            url_path: Some("/dns-query".to_string()),
+            server_name: Some(Arc::from("dns.example.com")),
+            url_path: Some(Arc::from("/dns-query")),
         });
 
         assert_eq!(ctx.server_name(), Some("dns.example.com"));

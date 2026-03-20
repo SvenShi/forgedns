@@ -11,7 +11,6 @@ use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 /// Main HTTP/3 server loop (over QUIC)
@@ -65,10 +64,8 @@ pub async fn run_server(
     );
 
     // Wrap header name in Arc to avoid cloning Strings per request
-    let src_ip_header = Arc::new(src_ip_header);
+    let src_ip_header = src_ip_header.map(Arc::from);
 
-    let mut tasks: JoinSet<()> = JoinSet::new();
-    let mut active_connections = 0u64;
     loop {
         // Accept new connections
         tokio::select! {
@@ -80,36 +77,19 @@ pub async fn run_server(
             accept_result = endpoint.accept()  => {
                 match accept_result {
                     Some(connecting) => {
-                        active_connections += 1;
                         let dispatcher = dispatcher.clone();
                         let src_ip_header = src_ip_header.clone();
-                        tasks.spawn(async move {
+                        tokio::spawn(async move {
                             handle_h3_connection(connecting, dispatcher, src_ip_header).await;
                         });
-                        debug!("New QUIC connection started (active: {})", active_connections);
+                        debug!("New QUIC connection started");
                     }
                     _ => {}
                 }
             }
 
-            // Clean up finished tasks
-            Some(result) = tasks.join_next() => {
-                active_connections = active_connections.saturating_sub(1);
-
-                if let Err(e) = result {
-                    warn!("Connection task panicked: {:?}", e);
-                }
-
-                // Log when connection count changes significantly
-                if active_connections % 10 == 0 && active_connections > 0 {
-                    debug!("Active connections: {}", active_connections);
-                }
-            }
         }
     }
-
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
     info!(listen = %addr, "HTTP/3 server stopped");
 }
 
@@ -117,7 +97,7 @@ pub async fn run_server(
 async fn handle_h3_connection(
     connecting: quinn::Incoming,
     dispatcher: Arc<HttpDispatcher>,
-    src_ip_header: Arc<Option<String>>,
+    src_ip_header: Option<Arc<str>>,
 ) {
     let src = connecting.remote_address();
     let connection = match connecting.await {
@@ -127,7 +107,7 @@ async fn handle_h3_connection(
             return;
         }
     };
-    let server_name = extract_tls_server_name(&connection);
+    let server_name = extract_tls_server_name(&connection).map(Arc::from);
     debug!("HTTP/3 connection established with {}", src);
 
     let mut h3_conn: h3::server::Connection<h3_quinn::Connection, Bytes> =
@@ -159,18 +139,10 @@ async fn handle_h3_connection(
         };
 
         let dispatcher = dispatcher.clone();
-        let src_ip_header_clone = src_ip_header.clone();
+        let src_ip_header = src_ip_header.clone();
         let server_name = server_name.clone();
         tokio::spawn(async move {
-            handle_h3_request(
-                request,
-                stream,
-                dispatcher,
-                src,
-                src_ip_header_clone,
-                server_name,
-            )
-            .await;
+            handle_h3_request(request, stream, dispatcher, src, src_ip_header, server_name).await;
         });
     }
 }
@@ -181,16 +153,16 @@ async fn handle_h3_request(
     mut stream: h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
     dispatcher: Arc<HttpDispatcher>,
     src: SocketAddr,
-    src_ip_header: Arc<Option<String>>,
-    server_name: Option<String>,
+    src_ip_header: Option<Arc<str>>,
+    server_name: Option<Arc<str>>,
 ) {
     let method = request.method().clone();
-    let uri = request.uri().clone();
-    let path = uri.path().to_string();
-    let query = uri.query().map(|s| s.to_string());
+    let uri = request.uri();
+    let path = Arc::from(uri.path());
+    let query = uri.query().map(Arc::from);
     let headers = request.headers();
 
-    let client_addr = extract_client_ip(headers, &*src_ip_header, src);
+    let client_addr = extract_client_ip(headers, &src_ip_header, src);
     debug!(
         "Received {} {} from {} (real: {})",
         method, path, src, client_addr

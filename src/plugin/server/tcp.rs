@@ -35,7 +35,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
@@ -211,10 +210,6 @@ async fn run_server(
         "TCP server bound successfully"
     );
 
-    // JoinSet to track all active connection tasks
-    let mut tasks: JoinSet<()> = JoinSet::new();
-    let mut active_connections = 0u64;
-
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -228,10 +223,8 @@ async fn run_server(
                     Ok((stream, src)) => {
                         let handler = handler.clone();
                         let tls_acceptor = tls_acceptor.clone();
-
-                        active_connections += 1;
-                        debug!("New connection from {} (active: {})", src, active_connections);
-                        tasks.spawn(async move {
+                        debug!("New connection from {}", src);
+                        tokio::spawn(async move {
                             // Handle TLS handshake if TLS is enabled
                             if let Some(acceptor) = tls_acceptor {
                                 match acceptor.accept(stream).await {
@@ -240,7 +233,7 @@ async fn run_server(
                                             .get_ref()
                                             .1
                                             .server_name()
-                                            .map(str::to_ascii_lowercase);
+                                            .map(Arc::from);
                                         debug!("TLS handshake completed for client {}", src);
                                         handle_dns_stream(tls_stream, src, handler, server_name)
                                             .await;
@@ -262,24 +255,8 @@ async fn run_server(
                 }
             }
 
-            // Clean up finished tasks
-            Some(result) = tasks.join_next() => {
-                active_connections = active_connections.saturating_sub(1);
-
-                if let Err(e) = result {
-                    warn!("Connection task panicked: {:?}", e);
-                }
-
-                // Log when connection count changes significantly
-                if active_connections % 10 == 0 && active_connections > 0 {
-                    debug!("Active connections: {}", active_connections);
-                }
-            }
         }
     }
-
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
     info!(listen = %addr, "TCP server stopped");
 }
 
@@ -288,14 +265,14 @@ async fn handle_dns_stream<S>(
     stream: S,
     src: SocketAddr,
     handler: Arc<RequestHandle>,
-    server_name: Option<String>,
+    server_name: Option<Arc<str>>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
     let transport = TcpTransport::new(stream);
     let (mut reader, mut writer) = transport.into_split();
 
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Message>(4096);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Message>(128);
 
     let handle = tokio::spawn(async move {
         loop {

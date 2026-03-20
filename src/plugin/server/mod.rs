@@ -389,8 +389,8 @@ mod tests {
                 request,
                 SocketAddr::from(([127, 0, 0, 1], 5303)),
                 RequestMeta {
-                    server_name: Some("dns.example.test".to_string()),
-                    url_path: Some("/dns-query".to_string()),
+                    server_name: Some(Arc::from("dns.example.test")),
+                    url_path: Some(Arc::from("/dns-query")),
                 },
             )
             .await;

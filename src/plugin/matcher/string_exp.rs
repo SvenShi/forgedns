@@ -418,8 +418,8 @@ mod tests {
     async fn test_string_exp_supports_multiple_sources_and_operations() {
         let mut ctx = make_context();
         ctx.set_request_meta(crate::core::context::RequestMeta {
-            server_name: Some("dns.example.com".to_string()),
-            url_path: Some("/dns-query".to_string()),
+            server_name: Some(Arc::from("dns.example.com")),
+            url_path: Some(Arc::from("/dns-query")),
         });
         add_response_with_ip_and_rcode(&mut ctx, Ipv4Addr::new(8, 8, 8, 8), Rcode::NoError);
 

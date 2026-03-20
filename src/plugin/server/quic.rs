@@ -26,7 +26,6 @@ use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 /// QUIC server configuration
@@ -192,10 +191,6 @@ async fn run_server(
     // QUIC endpoint created successfully; enter the accept loop.
     debug!("QUIC server event loop started on {}", addr);
 
-    // Track all active connection tasks
-    let mut tasks: JoinSet<()> = JoinSet::new();
-    let mut active_connections = 0u64;
-
     // Accept QUIC connections and spawn a task per connection.
     loop {
         tokio::select! {
@@ -207,32 +202,18 @@ async fn run_server(
             maybe_connecting = endpoint.accept() => {
                 match maybe_connecting {
                     Some(connecting) => {
-                        active_connections += 1;
+                        debug!("New QUIC connection started");
                         let handler_clone = handler.clone();
-                        tasks.spawn(async move {
+                        tokio::spawn(async move {
                             handle_quic_connection(connecting, handler_clone).await;
                         });
-                        debug!("New QUIC connection started (active: {})", active_connections);
                     }
                     None => break,
                 }
             }
 
-            // Clean up finished tasks
-            Some(result) = tasks.join_next() => {
-                active_connections = active_connections.saturating_sub(1);
-                if let Err(e) = result {
-                    warn!("Connection task panicked: {:?}", e);
-                }
-                if active_connections % 10 == 0 && active_connections > 0 {
-                    debug!("Active connections: {}", active_connections);
-                }
-            }
         }
     }
-
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
     info!(listen = %addr, "QUIC server stopped");
 }
 
@@ -253,6 +234,8 @@ async fn handle_quic_connection(connecting: quinn::Incoming, handler: Arc<Reques
 
     let transport = QuicTransport::new(connection);
     // Accept bi-directional streams on this QUIC connection until it is closed.
+    let server_name = server_name.map(Arc::from);
+
     loop {
         match transport.accept_bi().await {
             Ok((reader, writer)) => {
@@ -287,7 +270,7 @@ async fn handle_doq_bi_stream(
     mut writer: QuicTransportWriter,
     handler: Arc<RequestHandle>,
     remote_addr: std::net::SocketAddr,
-    server_name: Option<String>,
+    server_name: Option<Arc<str>>,
 ) -> Result<()> {
     match reader.read_message().await {
         Ok(request_msg) => {
