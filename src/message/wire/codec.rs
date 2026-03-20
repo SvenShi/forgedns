@@ -24,31 +24,64 @@ const FLAG_RA: u16 = 0x0080;
 const FLAG_AD: u16 = 0x0020;
 const FLAG_CD: u16 = 0x0010;
 
-#[inline]
-fn push_u16(out: &mut Vec<u8>, value: u16) {
-    out.push((value >> 8) as u8);
-    out.push(value as u8);
+#[inline(always)]
+pub(crate) fn read_u16_be(packet: &[u8], offset: usize) -> u16 {
+    debug_assert!(offset + 1 < packet.len());
+    unsafe {
+        ((*packet.get_unchecked(offset) as u16) << 8) | (*packet.get_unchecked(offset + 1) as u16)
+    }
 }
 
-#[inline]
-fn push_u32(out: &mut Vec<u8>, value: u32) {
-    out.push((value >> 24) as u8);
-    out.push((value >> 16) as u8);
-    out.push((value >> 8) as u8);
-    out.push(value as u8);
+#[inline(always)]
+pub(crate) fn read_u32_be(packet: &[u8], offset: usize) -> u32 {
+    debug_assert!(offset + 3 < packet.len());
+    unsafe {
+        ((*packet.get_unchecked(offset) as u32) << 24)
+            | ((*packet.get_unchecked(offset + 1) as u32) << 16)
+            | ((*packet.get_unchecked(offset + 2) as u32) << 8)
+            | (*packet.get_unchecked(offset + 3) as u32)
+    }
 }
 
-#[inline]
-fn set_u16(buf: &mut [u8], offset: usize, value: u16) {
-    buf[offset] = (value >> 8) as u8;
-    buf[offset + 1] = value as u8;
+#[inline(always)]
+pub(crate) fn push_u16(out: &mut Vec<u8>, value: u16) {
+    let len = out.len();
+    out.reserve(2);
+    unsafe {
+        out.set_len(len + 2);
+        *out.get_unchecked_mut(len) = (value >> 8) as u8;
+        *out.get_unchecked_mut(len + 1) = value as u8;
+    }
 }
 
-#[inline]
+#[inline(always)]
+pub(crate) fn push_u32(out: &mut Vec<u8>, value: u32) {
+    let len = out.len();
+    out.reserve(4);
+    unsafe {
+        out.set_len(len + 4);
+        *out.get_unchecked_mut(len) = (value >> 24) as u8;
+        *out.get_unchecked_mut(len + 1) = (value >> 16) as u8;
+        *out.get_unchecked_mut(len + 2) = (value >> 8) as u8;
+        *out.get_unchecked_mut(len + 3) = value as u8;
+    }
+}
+
+#[inline(always)]
+pub(crate) fn set_u16(buf: &mut [u8], offset: usize, value: u16) {
+    unsafe {
+        *buf.get_unchecked_mut(offset) = (value >> 8) as u8;
+        *buf.get_unchecked_mut(offset + 1) = value as u8;
+    }
+}
+#[inline(always)]
 fn prepare_output_buffer_append(out: &mut Vec<u8>) -> usize {
     let start = out.len();
     out.reserve(DNS_HEADER_LEN);
-    out.resize(start + DNS_HEADER_LEN, 0);
+    unsafe {
+        out.set_len(start + DNS_HEADER_LEN);
+        std::ptr::write_bytes(out.as_mut_ptr().add(start), 0, DNS_HEADER_LEN);
+    }
     start
 }
 
@@ -206,15 +239,15 @@ fn parse_header(packet: &[u8]) -> Result<(Header, usize, u16, u16, u16, u16, u16
         return Err(DnsError::protocol("dns packet shorter than header"));
     }
 
-    let flags = u16::from_be_bytes([packet[2], packet[3]]);
-    let question_count = u16::from_be_bytes([packet[4], packet[5]]);
-    let answer_count = u16::from_be_bytes([packet[6], packet[7]]);
-    let authority_count = u16::from_be_bytes([packet[8], packet[9]]);
-    let additional_count = u16::from_be_bytes([packet[10], packet[11]]);
-    let header = Header::from_wire(u16::from_be_bytes([packet[0], packet[1]]), flags);
+    let id = read_u16_be(packet, 0);
+    let flags = read_u16_be(packet, 2);
+    let question_count = read_u16_be(packet, 4);
+    let answer_count = read_u16_be(packet, 6);
+    let authority_count = read_u16_be(packet, 8);
+    let additional_count = read_u16_be(packet, 10);
 
     Ok((
-        header,
+        Header::from_wire(id, flags),
         DNS_HEADER_LEN,
         flags & 0x000f,
         question_count,
@@ -231,15 +264,17 @@ fn parse_questions_into(
     count: u16,
     out: &mut Vec<Question>,
 ) -> Result<()> {
+    let mut off = *offset;
     for _ in 0..count {
-        let prev_offset = *offset;
-        let (question, next_offset) = parse_question(packet, *offset)?;
-        if next_offset <= prev_offset {
+        let prev = off;
+        let (question, next) = parse_question(packet, off)?;
+        if next <= prev {
             return Err(DnsError::protocol("parser did not advance"));
         }
         out.push(question);
-        *offset = next_offset;
+        off = next;
     }
+    *offset = off;
     Ok(())
 }
 
@@ -250,15 +285,17 @@ fn parse_records_into(
     count: u16,
     out: &mut Vec<Record>,
 ) -> Result<()> {
+    let mut off = *offset;
     for _ in 0..count {
-        let prev_offset = *offset;
-        let (record, next_offset) = parse_record(packet, *offset)?;
-        if next_offset <= prev_offset {
+        let prev = off;
+        let (record, next) = parse_record(packet, off)?;
+        if next <= prev {
             return Err(DnsError::protocol("parser did not advance"));
         }
         out.push(record);
-        *offset = next_offset;
+        off = next;
     }
+    *offset = off;
     Ok(())
 }
 
@@ -270,18 +307,10 @@ fn parse_question(packet: &[u8], offset: usize) -> Result<(Question, usize)> {
         return Err(DnsError::protocol("dns question exceeds packet length"));
     }
 
-    let question = Question::new(
-        name,
-        RecordType::from(u16::from_be_bytes([
-            packet[next_offset],
-            packet[next_offset + 1],
-        ])),
-        DNSClass::from(u16::from_be_bytes([
-            packet[next_offset + 2],
-            packet[next_offset + 3],
-        ])),
-    );
-    Ok((question, next_offset + 4))
+    let qtype = RecordType::from(read_u16_be(packet, next_offset));
+    let qclass = DNSClass::from(read_u16_be(packet, next_offset + 2));
+
+    Ok((Question::new(name, qtype, qclass), next_offset + 4))
 }
 
 #[hotpath::measure]
@@ -294,18 +323,11 @@ fn parse_record(packet: &[u8], offset: usize) -> Result<(Record, usize)> {
         ));
     }
 
-    let rr_type = RecordType::from(u16::from_be_bytes([
-        packet[next_offset],
-        packet[next_offset + 1],
-    ]));
-    let class = u16::from_be_bytes([packet[next_offset + 2], packet[next_offset + 3]]);
-    let ttl = u32::from_be_bytes([
-        packet[next_offset + 4],
-        packet[next_offset + 5],
-        packet[next_offset + 6],
-        packet[next_offset + 7],
-    ]);
-    let rdlen = u16::from_be_bytes([packet[next_offset + 8], packet[next_offset + 9]]) as usize;
+    let rr_type = RecordType::from(read_u16_be(packet, next_offset));
+    let class = read_u16_be(packet, next_offset + 2);
+    let ttl = read_u32_be(packet, next_offset + 4);
+    let rdlen = read_u16_be(packet, next_offset + 8) as usize;
+
     let rdata_start = next_offset + 10;
     let rdata_end = rdata_start + rdlen;
     if rdata_end > packet.len() {
@@ -573,9 +595,7 @@ fn encode_name_mode<'a>(
         return Ok(());
     }
 
-    if name.bytes_len() > 255 {
-        return Err(DnsError::protocol("dns name exceeds 255 bytes"));
-    }
+    debug_assert!(name.bytes_len() <= 255);
 
     let match_suffix = if compress_current {
         compression.pointer_for(name)
@@ -587,16 +607,13 @@ fn encode_name_mode<'a>(
         .unwrap_or_else(|| name.label_count());
 
     for index in 0..raw_label_count {
-        let label = name.wire_label_at(index);
-        let suffix = name.wire_suffix_from(index);
+        let (label_len, label, suffix) = name.wire_label_meta_at(index);
 
-        if label.len() > 63 {
-            return Err(DnsError::protocol("dns label exceeds 63 bytes"));
+        let out_len = out.len();
+        if out_len < 0x4000 {
+            compression.insert_suffix(suffix, out_len as u16);
         }
-
-        compression.insert_suffix(suffix, out.len() as u16);
-
-        out.push(label.len() as u8);
+        out.push(label_len);
         out.extend_from_slice(label);
     }
 
@@ -635,7 +652,7 @@ fn encode_record<'a>(
         encode_rdata(record.data(), out, &mut write_name)?;
     }
 
-    let rdlen = out.len().saturating_sub(rdata_start);
+    let rdlen = out.len() - rdata_start;
     let rdlen =
         u16::try_from(rdlen).map_err(|_| DnsError::protocol("dns rdata exceeds u16 length"))?;
     set_u16(out, rdlen_pos, rdlen);

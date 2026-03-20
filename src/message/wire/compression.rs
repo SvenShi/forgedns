@@ -1,10 +1,3 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
-
-//! DNS name compression helpers for wire encoding and length estimation.
-
 use crate::message::Name;
 use ahash::{AHashMap, AHashSet};
 
@@ -20,7 +13,11 @@ impl<'a> LenCompressionMap<'a> {
     pub(crate) fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            set: AHashSet::with_capacity(32),
+            set: if enabled {
+                AHashSet::with_capacity(32)
+            } else {
+                AHashSet::default()
+            },
         }
     }
 }
@@ -35,17 +32,16 @@ pub(crate) fn domain_name_len<'a>(
         return 1;
     }
 
-    if name.bytes_len() > 255 {
-        return name.wire().len();
+    let wire_len = name.bytes_len();
+    if wire_len > 255 || !compression.enabled {
+        return wire_len;
     }
 
-    if !compression.enabled {
-        return name.wire().len();
-    }
-
+    let label_count = name.label_count();
     let mut prefix_len = 0usize;
-    for index in 0..name.label_count() {
-        let suffix = name.wire_suffix_from(index);
+
+    for index in 0..label_count {
+        let (label_len, suffix) = name.wire_label_len_and_suffix_at(index);
 
         if compress && compression.set.contains(suffix) {
             return prefix_len + 2;
@@ -55,7 +51,7 @@ pub(crate) fn domain_name_len<'a>(
             compression.set.insert(suffix);
         }
 
-        prefix_len += 1 + name.wire_label_at(index).len();
+        prefix_len += 1 + label_len as usize;
     }
 
     prefix_len + 1
@@ -80,8 +76,10 @@ impl<'a> CompressionState<'a> {
             return None;
         }
         let map = self.suffix_map.as_ref()?;
-        for index in 0..name.label_count() {
-            let suffix = name.wire_suffix_from(index);
+        let label_count = name.label_count();
+
+        for index in 0..label_count {
+            let (_, suffix) = name.wire_label_len_and_suffix_at(index);
             if let Some(&offset) = map.get(suffix) {
                 return Some((index, offset));
             }

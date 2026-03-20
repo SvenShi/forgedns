@@ -12,26 +12,13 @@ mod service;
 
 use crate::core::error::{DnsError, Result};
 use crate::message::rdata::*;
+use crate::message::wire::{push_u16, push_u32, read_u16_be};
 use crate::message::{Name, RData, RecordType};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 #[inline]
 fn copy_boxed(packet: &[u8], start: usize, end: usize) -> Box<[u8]> {
     Box::<[u8]>::from(&packet[start..end])
-}
-
-#[inline]
-fn push_u16(out: &mut Vec<u8>, value: u16) {
-    out.push((value >> 8) as u8);
-    out.push(value as u8);
-}
-
-#[inline]
-fn push_u32(out: &mut Vec<u8>, value: u32) {
-    out.push((value >> 24) as u8);
-    out.push((value >> 16) as u8);
-    out.push((value >> 8) as u8);
-    out.push(value as u8);
 }
 
 /// Decode typed RDATA according to the RR-specific wire format defined by the corresponding RFC.
@@ -148,11 +135,14 @@ pub(crate) fn parse_rdata(
 }
 
 /// Encode typed RDATA according to the RR-specific wire format defined by the corresponding RFC.
-pub(crate) fn encode_rdata<'a>(
+pub(crate) fn encode_rdata<'a, F>(
     rdata: &'a RData,
     out: &mut Vec<u8>,
-    write_name: &mut dyn FnMut(&mut Vec<u8>, &'a Name, bool) -> Result<()>,
-) -> Result<()> {
+    write_name: &mut F,
+) -> Result<()>
+where
+    F: FnMut(&mut Vec<u8>, &'a Name, bool) -> Result<()>,
+{
     match rdata {
         RData::A(value) => {
             basic::encode_a(value, out);
@@ -415,7 +405,7 @@ pub(crate) fn encode_edns_record(out: &mut Vec<u8>, edns: &Edns, ext_rcode: u8) 
         basic::encode_edns_option(out, option)?;
     }
 
-    let rdlen = out.len().saturating_sub(rdata_start);
+    let rdlen = out.len() - rdata_start;
     let rdlen =
         u16::try_from(rdlen).map_err(|_| DnsError::protocol("dns rdata exceeds u16 length"))?;
     out[rdlen_pos] = (rdlen >> 8) as u8;
@@ -496,7 +486,7 @@ fn parse_u16_name(packet: &[u8], start: usize, end: usize, kind: &str) -> Result
     if start + 2 > end {
         return Err(DnsError::protocol(format!("invalid {kind} rdata length")));
     }
-    let value = u16::from_be_bytes([packet[start], packet[start + 1]]);
+    let value = read_u16_be(packet, start);
     let (name, next) = Name::parse(packet, start + 2)?;
     if next != end {
         return Err(DnsError::protocol(format!("invalid {kind} rdata length")));

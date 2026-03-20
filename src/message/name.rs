@@ -17,7 +17,6 @@ const MAX_NAME_WIRE_OCTETS: usize = 255;
 const MAX_COMPRESSION_POINTERS: usize = (MAX_NAME_WIRE_OCTETS + 1) / 2 - 2;
 
 type WireBuf = SmallVec<[u8; 96]>;
-type LabelBuf = SmallVec<[u8; 24]>;
 type CanonicalFqdnBuf = SmallVec<[u8; 128]>;
 type FqdnLabelOffsets = SmallVec<[u16; 8]>;
 type WireLabelOffsets = SmallVec<[u8; 8]>;
@@ -103,6 +102,7 @@ impl Clone for Name {
 #[allow(dead_code)]
 impl Name {
     /// Parse an ASCII domain name and normalize it into canonical form.
+    #[inline]
     pub fn from_ascii(raw: &str) -> Result<Self> {
         let trimmed = raw.trim();
         if trimmed.is_empty() || trimmed == "." {
@@ -115,48 +115,109 @@ impl Name {
         }
 
         let bytes = trimmed.as_bytes();
+        let len = bytes.len();
+
         let mut wire = WireBuf::new();
         let mut wire_label_offsets = WireLabelOffsets::new();
-        let mut label_buf = LabelBuf::new();
+
         let mut idx = 0usize;
+        let mut label_len = 0usize;
+        let mut saw_any_label = false;
         let mut saw_trailing_root = false;
 
-        while idx < bytes.len() {
-            match bytes[idx] {
+        // 当前 label 的长度字节所在位置
+        let mut label_len_pos = wire.len();
+        wire_label_offsets.push(0);
+        wire.push(0);
+
+        while idx < len {
+            let b = bytes[idx];
+
+            match b {
                 b'.' => {
-                    if label_buf.is_empty() {
+                    if label_len == 0 {
                         return Err(DnsError::protocol("dns name contains empty label"));
                     }
-                    push_label(&mut wire, &mut wire_label_offsets, &label_buf)?;
-                    label_buf.clear();
+
+                    wire[label_len_pos] = label_len as u8;
+                    saw_any_label = true;
+
                     idx += 1;
-                    if idx == bytes.len() {
+                    label_len = 0;
+
+                    if idx == len {
                         saw_trailing_root = true;
                         break;
                     }
+
+                    if wire.len() > u8::MAX as usize {
+                        return Err(DnsError::protocol("dns name exceeds 255 bytes"));
+                    }
+
+                    label_len_pos = wire.len();
+                    wire_label_offsets.push(label_len_pos as u8);
+                    wire.push(0);
                 }
+
                 b'\\' => {
-                    let octet = parse_escape(bytes, &mut idx)?;
-                    if label_buf.len() >= 63 {
+                    idx += 1;
+                    if idx >= len {
+                        return Err(DnsError::protocol("dns name ends with incomplete escape"));
+                    }
+
+                    let b0 = bytes[idx];
+                    let d0 = b0.wrapping_sub(b'0');
+
+                    let octet = if d0 <= 9 && idx + 2 < len {
+                        let b1 = bytes[idx + 1];
+                        let b2 = bytes[idx + 2];
+                        let d1 = b1.wrapping_sub(b'0');
+                        let d2 = b2.wrapping_sub(b'0');
+
+                        if d1 <= 9 && d2 <= 9 {
+                            let value = d0 as u32 * 100 + d1 as u32 * 10 + d2 as u32;
+                            if value > 255 {
+                                return Err(DnsError::protocol(format!(
+                                    "dns name decimal escape exceeds 255: \\{value:03}"
+                                )));
+                            }
+                            idx += 3;
+                            value as u8
+                        } else {
+                            idx += 1;
+                            b0
+                        }
+                    } else {
+                        idx += 1;
+                        b0
+                    };
+
+                    if label_len >= 63 {
                         return Err(DnsError::protocol("dns label exceeds 63 bytes"));
                     }
-                    label_buf.push(octet);
+
+                    wire.push(octet);
+                    label_len += 1;
                 }
-                octet => {
-                    if label_buf.len() >= 63 {
+
+                _ => {
+                    if label_len >= 63 {
                         return Err(DnsError::protocol("dns label exceeds 63 bytes"));
                     }
-                    label_buf.push(octet);
+
+                    wire.push(b);
+                    label_len += 1;
                     idx += 1;
                 }
             }
         }
 
-        if !label_buf.is_empty() {
-            push_label(&mut wire, &mut wire_label_offsets, &label_buf)?;
+        if label_len != 0 {
+            wire[label_len_pos] = label_len as u8;
+            saw_any_label = true;
         }
 
-        if wire_label_offsets.is_empty() {
+        if !saw_any_label {
             if saw_trailing_root {
                 return Ok(Self::root());
             }
@@ -224,6 +285,7 @@ impl Name {
         NameLabels {
             name: self,
             index: 0,
+            len: self.label_count(),
         }
     }
 
@@ -235,12 +297,29 @@ impl Name {
         }
     }
 
-    /// Iterate raw label bytes in presentation order.
-    pub(crate) fn iter_raw_labels(&self) -> NameLabelBytes<'_> {
-        NameLabelBytes {
+    /// Iterate wire label bytes in presentation order.
+    pub(crate) fn iter_wire_labels(&self) -> WireLabels<'_> {
+        WireLabels {
             name: self,
             index: 0,
+            len: self.label_count(),
         }
+    }
+
+    #[inline]
+    pub(crate) fn wire_label_meta_at(&self, index: usize) -> (u8, &[u8], &[u8]) {
+        let len_pos = self.wire_label_offsets[index] as usize;
+        let len = self.wire[len_pos];
+        let start = len_pos + 1;
+        let end = start + len as usize;
+        (len, &self.wire[start..end], &self.wire[len_pos..])
+    }
+
+    #[inline]
+    pub(crate) fn wire_label_len_and_suffix_at(&self, index: usize) -> (u8, &[u8]) {
+        let len_pos = self.wire_label_offsets[index] as usize;
+        let len = self.wire[len_pos];
+        (len, &self.wire[len_pos..])
     }
 
     /// Number of labels in this name.
@@ -383,9 +462,10 @@ impl Name {
         let mut wire_budget = MAX_NAME_WIRE_OCTETS;
 
         loop {
-            let len = *packet
-                .get(cursor)
-                .ok_or_else(|| DnsError::protocol("dns name exceeds packet length"))?;
+            if cursor >= packet.len() {
+                return Err(DnsError::protocol("dns name exceeds packet length"));
+            }
+            let len = unsafe { *packet.get_unchecked(cursor) };
 
             match len & 0xC0 {
                 0x00 => {
@@ -433,7 +513,10 @@ impl Name {
                     );
 
                     wire.push(len);
-                    let label = &packet[label_start..label_end];
+                    if label_end > packet.len() {
+                        return Err(DnsError::protocol("dns name label exceeds packet length"));
+                    }
+                    let label = unsafe { packet.get_unchecked(label_start..label_end) };
                     wire.extend_from_slice(label);
 
                     cursor = label_end;
@@ -473,29 +556,6 @@ impl Name {
     }
 }
 
-#[inline]
-fn push_label(
-    wire: &mut WireBuf,
-    wire_label_offsets: &mut WireLabelOffsets,
-    label: &[u8],
-) -> Result<()> {
-    if label.is_empty() {
-        return Err(DnsError::protocol("dns name contains empty label"));
-    }
-    if label.len() > 63 {
-        return Err(DnsError::protocol("dns label exceeds 63 bytes"));
-    }
-    wire_label_offsets.push(
-        u8::try_from(wire.len()).map_err(|_| DnsError::protocol("dns name exceeds 255 bytes"))?,
-    );
-
-    wire.push(
-        u8::try_from(label.len()).map_err(|_| DnsError::protocol("dns label exceeds 63 bytes"))?,
-    );
-    wire.extend_from_slice(label);
-    Ok(())
-}
-
 impl Name {
     #[inline]
     fn presentation(&self) -> &PresentationData {
@@ -529,8 +589,12 @@ fn build_presentation_from_wire(
         let len = wire[len_pos] as usize;
         let start = len_pos + 1;
         let end = start + len;
-        for &byte in &wire[start..end] {
-            append_presentation_octet(&mut fqdn, ASCII_LOWERCASE_TABLE[byte as usize]);
+        let mut i = start;
+        while i < end {
+            let byte = unsafe { *wire.get_unchecked(i) };
+            let lower = unsafe { *ASCII_LOWERCASE_TABLE.get_unchecked(byte as usize) };
+            append_presentation_octet_unchecked(&mut fqdn, lower);
+            i += 1;
         }
     }
     PresentationData {
@@ -540,50 +604,19 @@ fn build_presentation_from_wire(
 }
 
 #[inline(always)]
-fn parse_escape(bytes: &[u8], idx: &mut usize) -> Result<u8> {
-    *idx += 1;
-    if *idx >= bytes.len() {
-        return Err(DnsError::protocol("dns name ends with incomplete escape"));
-    }
-
-    if is_ddd(&bytes[*idx..]) {
-        let octet = ddd_to_byte(&bytes[*idx..]);
-        *idx += 3;
-        return Ok(octet);
-    }
-
-    let octet = bytes[*idx];
-    *idx += 1;
-    Ok(octet)
-}
-
-#[inline(always)]
-fn append_presentation_octet(out: &mut CanonicalFqdnBuf, byte: u8) {
+fn append_presentation_octet_unchecked(out: &mut CanonicalFqdnBuf, byte: u8) {
     if byte >= b' ' && byte <= b'~' {
-        if SPECIAL_TABLE[byte as usize] {
+        let special = unsafe { *SPECIAL_TABLE.get_unchecked(byte as usize) };
+        if special {
             out.push(b'\\');
             out.push(byte);
         } else {
             out.push(byte);
         }
     } else {
-        out.extend_from_slice(&DECIMAL_ESCAPE_TABLE[byte as usize]);
+        let escaped = unsafe { DECIMAL_ESCAPE_TABLE.get_unchecked(byte as usize) };
+        out.extend_from_slice(escaped);
     }
-}
-
-#[inline(always)]
-fn is_digit(byte: u8) -> bool {
-    byte.is_ascii_digit()
-}
-
-#[inline(always)]
-fn is_ddd(bytes: &[u8]) -> bool {
-    bytes.len() >= 3 && is_digit(bytes[0]) && is_digit(bytes[1]) && is_digit(bytes[2])
-}
-
-#[inline(always)]
-fn ddd_to_byte(bytes: &[u8]) -> u8 {
-    (bytes[0] - b'0') * 100 + (bytes[1] - b'0') * 10 + (bytes[2] - b'0')
 }
 
 impl PartialEq for Name {
@@ -618,6 +651,7 @@ impl FromStr for Name {
 pub struct NameLabels<'a> {
     name: &'a Name,
     index: usize,
+    len: usize,
 }
 
 impl<'a> Iterator for NameLabels<'a> {
@@ -625,7 +659,7 @@ impl<'a> Iterator for NameLabels<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let index = self.index;
-        if index >= self.name.label_count() {
+        if index >= self.len {
             return None;
         }
         self.index += 1;
@@ -634,18 +668,19 @@ impl<'a> Iterator for NameLabels<'a> {
     }
 }
 
-/// Iterator over raw label bytes from owned names.
-pub(crate) struct NameLabelBytes<'a> {
+/// Iterator over wire label bytes from owned names.
+pub(crate) struct WireLabels<'a> {
     name: &'a Name,
     index: usize,
+    len: usize,
 }
 
-impl<'a> Iterator for NameLabelBytes<'a> {
+impl<'a> Iterator for WireLabels<'a> {
     type Item = &'a [u8];
 
     fn next(&mut self) -> Option<Self::Item> {
         let index = self.index;
-        if index >= self.name.label_count() {
+        if index >= self.len {
             return None;
         }
         self.index += 1;
@@ -772,6 +807,22 @@ mod tests {
             if let Ok((parsed, _)) = result {
                 assert_eq!(parsed.to_fqdn(), "www.example.com.");
             }
+        }
+    }
+
+    #[test]
+    fn from_ascii_accepts_decimal_escape_upper_bound() {
+        let name = Name::from_ascii("bad\\255char.example.").expect("255 escape should parse");
+
+        assert_eq!(name.wire_label_at(0), b"bad\xffchar");
+        assert_eq!(name.to_fqdn(), "bad\\255char.example.");
+    }
+
+    #[test]
+    fn from_ascii_rejects_decimal_escape_above_u8_range() {
+        for raw in ["bad\\256char.example.", "bad\\999char.example."] {
+            let err = Name::from_ascii(raw).expect_err("overflowing decimal escape must fail");
+            assert!(err.to_string().contains("decimal escape exceeds 255"));
         }
     }
 }
