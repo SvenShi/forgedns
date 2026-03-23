@@ -58,9 +58,8 @@ impl Question {
     /// Return encoded byte length at offset `off`, including QTYPE and QCLASS.
     pub(crate) fn bytes_len<'a>(
         &'a self,
-        off: usize,
         compression: &mut crate::message::codec::LenCompressionMap<'a>,
     ) -> usize {
-        self.name.bytes_len_at(off, true, compression) + 4
+        self.name.bytes_len_at(true, compression) + 4
     }
 }

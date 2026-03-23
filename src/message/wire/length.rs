@@ -6,7 +6,6 @@
 //! Wire-length helpers for DNS message encoding.
 
 use crate::message::{Edns, EdnsOption};
-use std::net::IpAddr;
 
 pub(crate) fn edns_record_len(edns: &Edns) -> usize {
     let mut rdlen = 0usize;
@@ -18,19 +17,8 @@ pub(crate) fn edns_record_len(edns: &Edns) -> usize {
 
 /// Return the full encoded size of one EDNS option:
 /// `[code:2][length:2][data:N]`.
-fn edns_option_len(option: &EdnsOption) -> usize {
-    match option {
-        EdnsOption::Subnet(value) => {
-            let max_prefix = match value.addr() {
-                IpAddr::V4(_) => 32u8,
-                IpAddr::V6(_) => 128u8,
-            };
-            let source_prefix = value.source_prefix().min(max_prefix);
-            let required_len = usize::from(source_prefix).div_ceil(8);
-            2 + 2 + 2 + 1 + 1 + required_len
-        }
-        EdnsOption::Unknown(_, data) => 2 + 2 + data.len(),
-    }
+pub(crate) fn edns_option_len(option: &EdnsOption) -> usize {
+    2 + 2 + option.payload_len()
 }
 
 #[cfg(test)]
@@ -50,8 +38,8 @@ mod tests {
         ));
         assert_eq!(edns_option_len(&subnet), 11);
 
-        let unknown = EdnsOption::Unknown(65001, vec![1, 2, 3]);
-        assert_eq!(edns_option_len(&unknown), 7);
+        let local = EdnsOption::Local(crate::message::EdnsLocal::new(65001, vec![1, 2, 3]));
+        assert_eq!(edns_option_len(&local), 7);
     }
 
     #[test]
@@ -59,7 +47,10 @@ mod tests {
     fn edns_record_len_matches_encoded_opt_rr_size() {
         let mut edns = Edns::new();
         edns.set_udp_payload_size(1400);
-        edns.insert(EdnsOption::Unknown(65001, vec![1, 2, 3]));
+        edns.insert(EdnsOption::Local(crate::message::EdnsLocal::new(
+            65001,
+            vec![1, 2, 3],
+        )));
 
         assert_eq!(edns_record_len(&edns), 11 + 7);
     }

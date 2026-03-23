@@ -1,6 +1,6 @@
 use forgedns::message::{
     DNSClass, Message, MessageType, Opcode, Question, RData, Rcode, Record, RecordType,
-    rdata::{self, ClientSubnet, EdnsOption},
+    rdata::{self, ClientSubnet, EdnsCode, EdnsOption},
 };
 use hickory_proto::{
     op as hp_op, rr as hp_rr,
@@ -274,7 +274,10 @@ fn build_forgedns_fixture() -> Message {
         24,
         0,
     )));
-    edns.insert(EdnsOption::Unknown(65001, vec![1, 2, 3, 4]));
+    edns.insert(EdnsOption::Local(rdata::EdnsLocal::new(
+        65001,
+        vec![1, 2, 3, 4],
+    )));
     message.set_edns(edns);
     message.set_rcode(Rcode::BADCOOKIE);
 
@@ -477,9 +480,9 @@ fn snapshot_forgedns_edns_option(option: &EdnsOption) -> EdnsOptionSnapshot {
             source_prefix: value.source_prefix(),
             scope_prefix: value.scope_prefix(),
         },
-        EdnsOption::Unknown(code, data) => EdnsOptionSnapshot::Unknown {
-            code: *code,
-            data: data.clone(),
+        _ => EdnsOptionSnapshot::Unknown {
+            code: u16::from(EdnsCode::from(option)),
+            data: option.data().to_vec(),
         },
     }
 }

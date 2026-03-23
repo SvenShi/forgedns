@@ -47,7 +47,11 @@ fn add_standard_edns(message: &mut Message, payload_size: u16) {
         24,
         0,
     )));
-    edns.insert(rdata::EdnsOption::Unknown(65001, vec![1, 2, 3, 4]));
+
+    edns.insert(rdata::EdnsOption::Local(rdata::EdnsLocal::new(
+        65001,
+        vec![1, 2, 3, 4],
+    )));
     message.set_edns(edns);
 }
 

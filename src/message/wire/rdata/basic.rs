@@ -407,10 +407,70 @@ fn parse_opt_rdata(packet: &[u8], class: u16, ttl: u32, start: usize, end: usize
 
 fn parse_edns_option(code: u16, data: &[u8]) -> EdnsOption {
     match EdnsCode::from(code) {
+        EdnsCode::Llq => parse_llq(data)
+            .map(EdnsOption::Llq)
+            .unwrap_or_else(|| EdnsOption::Local(EdnsLocal::new(code, data.to_vec()))),
+        EdnsCode::UpdateLease => parse_update_lease(data)
+            .map(EdnsOption::UpdateLease)
+            .unwrap_or_else(|| EdnsOption::Local(EdnsLocal::new(code, data.to_vec()))),
+        EdnsCode::Nsid => EdnsOption::Nsid(EdnsNsid::new(data.to_vec())),
+        EdnsCode::Esu => EdnsOption::Esu(EdnsEsu::new(data.to_vec())),
+        EdnsCode::Dau => EdnsOption::Dau(EdnsAlgorithmList::new(data.to_vec())),
+        EdnsCode::Dhu => EdnsOption::Dhu(EdnsAlgorithmList::new(data.to_vec())),
+        EdnsCode::N3u => EdnsOption::N3u(EdnsAlgorithmList::new(data.to_vec())),
         EdnsCode::Subnet => parse_client_subnet(data)
             .map(EdnsOption::Subnet)
-            .unwrap_or_else(|| EdnsOption::Unknown(code, data.to_vec())),
-        EdnsCode::Unknown(other) => EdnsOption::Unknown(other, data.to_vec()),
+            .unwrap_or_else(|| EdnsOption::Local(EdnsLocal::new(code, data.to_vec()))),
+        EdnsCode::Expire => parse_expire(data)
+            .map(EdnsOption::Expire)
+            .unwrap_or_else(|| EdnsOption::Local(EdnsLocal::new(code, data.to_vec()))),
+        EdnsCode::Cookie => EdnsOption::Cookie(EdnsCookie::new(data.to_vec())),
+        EdnsCode::TcpKeepalive => parse_tcp_keepalive(data)
+            .map(EdnsOption::TcpKeepalive)
+            .unwrap_or_else(|| EdnsOption::Local(EdnsLocal::new(code, data.to_vec()))),
+        EdnsCode::Padding => EdnsOption::Padding(EdnsPadding::new(data.to_vec())),
+        EdnsCode::ExtendedDnsError => parse_extended_dns_error(data)
+            .map(EdnsOption::ExtendedDnsError)
+            .unwrap_or_else(|| EdnsOption::Local(EdnsLocal::new(code, data.to_vec()))),
+        EdnsCode::ReportChannel => parse_report_channel(data)
+            .map(EdnsOption::ReportChannel)
+            .unwrap_or_else(|| EdnsOption::Local(EdnsLocal::new(code, data.to_vec()))),
+        EdnsCode::ZoneVersion => parse_zone_version(data)
+            .map(EdnsOption::ZoneVersion)
+            .unwrap_or_else(|| EdnsOption::Local(EdnsLocal::new(code, data.to_vec()))),
+        EdnsCode::Reserved
+        | EdnsCode::Chain
+        | EdnsCode::KeyTag
+        | EdnsCode::ClientTag
+        | EdnsCode::ServerTag
+        | EdnsCode::Unknown(_) => EdnsOption::Local(EdnsLocal::new(code, data.to_vec())),
+    }
+}
+
+fn parse_llq(data: &[u8]) -> Option<EdnsLlq> {
+    if data.len() < 18 {
+        return None;
+    }
+    Some(EdnsLlq::new(
+        read_u16_be(data, 0),
+        read_u16_be(data, 2),
+        read_u16_be(data, 4),
+        u64::from_be_bytes(data[6..14].try_into().ok()?),
+        u32::from_be_bytes(data[14..18].try_into().ok()?),
+    ))
+}
+
+fn parse_update_lease(data: &[u8]) -> Option<EdnsUpdateLease> {
+    match data.len() {
+        4 => Some(EdnsUpdateLease::new(
+            u32::from_be_bytes(data[0..4].try_into().ok()?),
+            None,
+        )),
+        8 => Some(EdnsUpdateLease::new(
+            u32::from_be_bytes(data[0..4].try_into().ok()?),
+            Some(u32::from_be_bytes(data[4..8].try_into().ok()?)),
+        )),
+        _ => None,
     }
 }
 
@@ -460,9 +520,90 @@ fn parse_subnet_addr(family: u16, address: &[u8]) -> Option<IpAddr> {
     }
 }
 
+fn parse_expire(data: &[u8]) -> Option<EdnsExpire> {
+    match data.len() {
+        0 => Some(EdnsExpire::empty()),
+        4 => Some(EdnsExpire::new(u32::from_be_bytes(
+            data[0..4].try_into().ok()?,
+        ))),
+        _ => None,
+    }
+}
+
+fn parse_tcp_keepalive(data: &[u8]) -> Option<EdnsTcpKeepalive> {
+    match data.len() {
+        0 => Some(EdnsTcpKeepalive::new(None)),
+        2 => Some(EdnsTcpKeepalive::new(Some(read_u16_be(data, 0)))),
+        _ => None,
+    }
+}
+
+fn parse_extended_dns_error(data: &[u8]) -> Option<EdnsExtendedDnsError> {
+    if data.len() < 2 {
+        return None;
+    }
+    Some(EdnsExtendedDnsError::new(
+        read_u16_be(data, 0),
+        data[2..].to_vec(),
+    ))
+}
+
+fn parse_report_channel(data: &[u8]) -> Option<EdnsReportChannel> {
+    let (agent_domain, next) = Name::parse(data, 0).ok()?;
+    if next != data.len() {
+        return None;
+    }
+    Some(EdnsReportChannel::new(agent_domain))
+}
+
+fn parse_zone_version(data: &[u8]) -> Option<EdnsZoneVersion> {
+    if data.len() < 2 {
+        return None;
+    }
+    Some(EdnsZoneVersion::new(data[0], data[1], data[2..].to_vec()))
+}
+
 /// Encode a single EDNS option as code, length, and option payload per RFC 6891 section 6.1.2.
 pub(super) fn encode_edns_option(out: &mut Vec<u8>, option: &EdnsOption) -> Result<()> {
     match option {
+        EdnsOption::Llq(value) => {
+            push_u16(out, u16::from(EdnsCode::Llq));
+            push_u16(out, 18);
+            push_u16(out, value.version());
+            push_u16(out, value.opcode());
+            push_u16(out, value.error());
+            out.extend_from_slice(&value.id().to_be_bytes());
+            push_u32(out, value.lease_life());
+        }
+        EdnsOption::UpdateLease(value) => {
+            push_u16(out, u16::from(EdnsCode::UpdateLease));
+            push_u16(out, if value.key_lease().is_some() { 8 } else { 4 });
+            push_u32(out, value.lease());
+            if let Some(key_lease) = value.key_lease() {
+                push_u32(out, key_lease);
+            }
+        }
+        EdnsOption::Nsid(value) => {
+            push_u16(out, u16::from(EdnsCode::Nsid));
+            push_u16(
+                out,
+                u16::try_from(value.nsid().len())
+                    .map_err(|_| DnsError::protocol("edns option payload too long"))?,
+            );
+            out.extend_from_slice(value.nsid());
+        }
+        EdnsOption::Esu(value) => {
+            push_u16(out, u16::from(EdnsCode::Esu));
+            push_u16(
+                out,
+                u16::try_from(value.uri().len())
+                    .map_err(|_| DnsError::protocol("edns option payload too long"))?,
+            );
+            out.extend_from_slice(value.uri());
+        }
+        EdnsOption::Dau(value) => encode_edns_algorithm_option(out, EdnsCode::Dau, value)?,
+        EdnsOption::Dhu(value) => encode_edns_algorithm_option(out, EdnsCode::Dhu, value)?,
+        EdnsOption::N3u(value) => encode_edns_algorithm_option(out, EdnsCode::N3u, value)?,
         EdnsOption::Subnet(value) => {
             push_u16(out, u16::from(EdnsCode::Subnet));
             let (family, max_prefix) = match value.addr() {
@@ -492,16 +633,103 @@ pub(super) fn encode_edns_option(out: &mut Vec<u8>, option: &EdnsOption) -> Resu
                 }
             }
         }
-        EdnsOption::Unknown(code, data) => {
-            push_u16(out, *code);
+        EdnsOption::Expire(value) => {
+            push_u16(out, u16::from(EdnsCode::Expire));
+            if value.is_empty() {
+                push_u16(out, 0);
+            } else {
+                push_u16(out, 4);
+                push_u32(out, value.expire());
+            }
+        }
+        EdnsOption::Cookie(value) => {
+            push_u16(out, u16::from(EdnsCode::Cookie));
             push_u16(
                 out,
-                u16::try_from(data.len())
+                u16::try_from(value.cookie().len())
                     .map_err(|_| DnsError::protocol("edns option payload too long"))?,
             );
-            out.extend_from_slice(data);
+            out.extend_from_slice(value.cookie());
+        }
+        EdnsOption::TcpKeepalive(value) => {
+            push_u16(out, u16::from(EdnsCode::TcpKeepalive));
+            if let Some(timeout) = value.timeout() {
+                push_u16(out, 2);
+                push_u16(out, timeout);
+            } else {
+                push_u16(out, 0);
+            }
+        }
+        EdnsOption::Padding(value) => {
+            push_u16(out, u16::from(EdnsCode::Padding));
+            push_u16(
+                out,
+                u16::try_from(value.padding().len())
+                    .map_err(|_| DnsError::protocol("edns option payload too long"))?,
+            );
+            out.extend_from_slice(value.padding());
+        }
+        EdnsOption::ExtendedDnsError(value) => {
+            push_u16(out, u16::from(EdnsCode::ExtendedDnsError));
+            let data_len = 2usize
+                .checked_add(value.extra_text().len())
+                .ok_or_else(|| DnsError::protocol("edns option payload too long"))?;
+            push_u16(
+                out,
+                u16::try_from(data_len)
+                    .map_err(|_| DnsError::protocol("edns option payload too long"))?,
+            );
+            push_u16(out, value.info_code());
+            out.extend_from_slice(value.extra_text());
+        }
+        EdnsOption::ReportChannel(value) => {
+            push_u16(out, u16::from(EdnsCode::ReportChannel));
+            push_u16(
+                out,
+                u16::try_from(value.agent_domain().bytes_len())
+                    .map_err(|_| DnsError::protocol("edns option payload too long"))?,
+            );
+            out.extend_from_slice(value.agent_domain().wire());
+        }
+        EdnsOption::ZoneVersion(value) => {
+            push_u16(out, u16::from(EdnsCode::ZoneVersion));
+            let data_len = 2usize
+                .checked_add(value.version().len())
+                .ok_or_else(|| DnsError::protocol("edns option payload too long"))?;
+            push_u16(
+                out,
+                u16::try_from(data_len)
+                    .map_err(|_| DnsError::protocol("edns option payload too long"))?,
+            );
+            out.push(value.label_count());
+            out.push(value.version_type());
+            out.extend_from_slice(value.version());
+        }
+        EdnsOption::Local(local) => {
+            push_u16(out, local.code());
+            push_u16(
+                out,
+                u16::try_from(local.data().len())
+                    .map_err(|_| DnsError::protocol("edns option payload too long"))?,
+            );
+            out.extend_from_slice(local.data());
         }
     }
+    Ok(())
+}
+
+fn encode_edns_algorithm_option(
+    out: &mut Vec<u8>,
+    code: EdnsCode,
+    value: &EdnsAlgorithmList,
+) -> Result<()> {
+    push_u16(out, u16::from(code));
+    push_u16(
+        out,
+        u16::try_from(value.algorithms().len())
+            .map_err(|_| DnsError::protocol("edns option payload too long"))?,
+    );
+    out.extend_from_slice(value.algorithms());
     Ok(())
 }
 

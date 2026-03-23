@@ -7,9 +7,7 @@
 
 use crate::core::error::{DnsError, Result};
 use crate::message::wire::CompressionState;
-use crate::message::wire::{
-    encode_edns_record, encode_edns_record_into_vec, encode_rdata, parse_rdata,
-};
+use crate::message::wire::{encode_edns_record, encode_rdata, parse_rdata};
 use crate::message::{
     DNSClass, Header, Message, MessageType, Name, Question, RData, Rcode, Record, RecordType,
 };
@@ -345,28 +343,19 @@ fn parse_record(packet: &[u8], offset: usize) -> Result<(Record, usize)> {
 
 /// Encode a complete DNS message using the standard RFC 1035 section ordering.
 pub(crate) fn encode_message_into(message: &Message, id: u16, out: &mut Vec<u8>) -> Result<()> {
-    encode_message_into_mode(
-        message,
-        id,
-        out,
-        is_compressible(message),
-        message.truncated(),
-    )
+    encode_message_into_mode(message, id, out, is_compressible(message))?;
+    Ok(())
 }
 
-/// Encode the full message body after the header reservation slot.
-///
-/// Questions, answers, authorities, additionals, OPT, and signatures are emitted in DNS section
-/// order, with owner-name compression controlled by the `use_compression` switch.
-fn encode_message_into_mode(
+/// Encode a complete DNS message using the standard RFC 1035 section ordering.
+pub(crate) fn encode_message_into_mode(
     message: &Message,
     id: u16,
     out: &mut Vec<u8>,
-    use_compression: bool,
-    truncated: bool,
+    compress: bool,
 ) -> Result<()> {
     let header_offset = prepare_output_buffer_append(out);
-    let mut compression = CompressionState::new(use_compression);
+    let mut compression = CompressionState::new(compress);
 
     for question in message.questions() {
         encode_name(out, question.name(), &mut compression)?;
@@ -399,7 +388,7 @@ fn encode_message_into_mode(
         &mut out[header_offset..header_offset + DNS_HEADER_LEN],
         message,
         id,
-        truncated,
+        message.truncated(),
         ancount,
         nscount,
         arcount,
@@ -409,113 +398,104 @@ fn encode_message_into_mode(
 
 /// Encode a complete DNS message while respecting a size budget.
 ///
-/// Truncation behavior follows RFC 1035 section 4.2.1 and keeps OPT handling aligned with
-/// RFC 6891 so that an EDNS pseudo-RR is retained only when it still fits in the packet.
-pub(crate) fn encode_message_with_limit_into(
+/// When the full message does not fit, this path reserves budget for the detached trailer
+/// (OPT plus signature records), emits prefix records from Answer, Authority, and Additional,
+/// then writes the trailer with name compression disabled.
+pub(crate) fn encode_message_with_limit(
     message: &Message,
     max_size: Option<usize>,
     id: u16,
     out: &mut Vec<u8>,
 ) -> Result<()> {
-    if message.signature().len() > 0 {
-        return encode_message_into(message, id, out);
-    }
-
-    let limit = max_size.unwrap_or(usize::MAX).max(512);
-    if message.bytes_len_with_compression(false) <= limit {
-        return encode_message_into_mode(message, id, out, false, message.truncated());
-    }
-
-    let start = prepare_output_buffer_append(out);
-
-    let mut compression = CompressionState::new(true);
-
-    for question in message.questions() {
-        encode_name(out, question.name(), &mut compression)?;
-        push_u16(out, u16::from(question.qtype()));
-        push_u16(out, u16::from(question.qclass()));
-    }
-
-    let mut ancount = 0u16;
-    let mut nscount = 0u16;
-    let mut arcount = 0u16;
-    let mut truncated = message.truncated();
-
-    let opt_wire = if let Some(edns) = message.edns() {
-        encode_edns_record_into_vec(edns, (u16::from(message.rcode()) >> 4) as u8)?
-    } else {
-        Vec::new()
-    };
-
-    let non_opt_limit = if !opt_wire.is_empty() {
-        limit.saturating_sub(opt_wire.len())
-    } else {
-        limit
-    };
-
-    if !encode_section_with_limit(
-        out,
-        message.answers(),
-        non_opt_limit,
-        &mut ancount,
-        &mut compression,
-    )? {
-        truncated = true;
-    } else if !encode_section_with_limit(
-        out,
-        message.authorities(),
-        non_opt_limit,
-        &mut nscount,
-        &mut compression,
-    )? {
-        truncated = true;
-    } else {
-        let mut truncated_non_opt = false;
-        for record in message.additionals() {
-            let start = out.len();
-            encode_record(out, record, &mut compression)?;
-            if out.len() > non_opt_limit {
-                out.truncate(start);
-                truncated_non_opt = true;
-                break;
-            }
-            arcount += 1;
+    if let Some(limit) = max_size {
+        // Fast path 1: the full uncompressed message already fits the requested budget.
+        if message.bytes_len_with_compression(false) <= limit {
+            encode_message_into(message, id, out)?;
+            return Ok(());
         }
-        if truncated_non_opt {
-            truncated = true;
-        } else {
-            for record in message.signature() {
-                let start = out.len();
-                encode_record(out, record, &mut compression)?;
-                if out.len() > non_opt_limit {
-                    out.truncate(start);
+
+        // Fast path 2: the compressed full message still fits, so no truncation is required.
+        let lens = message.compute_truncation_lens(true);
+        if lens.total_len <= limit {
+            encode_message_into_mode(message, id, out, true)?;
+            return Ok(());
+        }
+
+        let header_offset = prepare_output_buffer_append(out);
+        let mut compression = CompressionState::new(true);
+
+        for question in message.questions() {
+            encode_name(out, question.name(), &mut compression)?;
+            push_u16(out, u16::from(question.qtype()));
+            push_u16(out, u16::from(question.qclass()));
+        }
+
+        // The main sections may consume only the remaining space after reserving the fixed
+        // trailer block calculated by `compute_truncation_lens`.
+        let with_trailer_limit = limit - lens.trailer_len;
+
+        let mut ancount = 0u16;
+        let mut nscount = 0u16;
+        let mut arcount = 0u16;
+        let mut truncated = false;
+
+        if encode_section_with_limit(
+            out,
+            message.answers(),
+            with_trailer_limit,
+            &mut ancount,
+            &mut compression,
+        )? {
+            if encode_section_with_limit(
+                out,
+                message.authorities(),
+                with_trailer_limit,
+                &mut nscount,
+                &mut compression,
+            )? {
+                if !encode_section_with_limit(
+                    out,
+                    message.additionals(),
+                    with_trailer_limit,
+                    &mut arcount,
+                    &mut compression,
+                )? {
                     truncated = true;
-                    break;
                 }
-                arcount += 1;
+            } else {
+                truncated = true;
             }
-        }
-    }
-
-    if !opt_wire.is_empty() {
-        if out.len() + opt_wire.len() <= limit {
-            out.extend_from_slice(&opt_wire);
-            arcount += 1;
         } else {
             truncated = true;
         }
-    }
+        // The trailer is intentionally emitted without compression so it cannot reference
+        // names introduced by RR data that may have been omitted during truncation.
+        compression.disable();
 
-    set_header(
-        &mut out[start..start + DNS_HEADER_LEN],
-        message,
-        id,
-        truncated,
-        ancount,
-        nscount,
-        arcount,
-    )?;
-    Ok(())
+        if let Some(edns) = message.edns() {
+            arcount += 1;
+            encode_edns_record(out, edns, (u16::from(message.rcode()) >> 4) as u8)?;
+        }
+
+        for record in message.signature() {
+            arcount += 1;
+            encode_record(out, record, &mut compression)?;
+        }
+
+        set_header(
+            &mut out[header_offset..header_offset + DNS_HEADER_LEN],
+            message,
+            id,
+            truncated || message.truncated(),
+            ancount,
+            nscount,
+            arcount,
+        )?;
+
+        Ok(())
+    } else {
+        encode_message_into(message, id, out)
+    }
 }
 
 pub(crate) fn is_compressible(message: &Message) -> bool {
@@ -543,6 +523,10 @@ fn encode_section<'a>(
 }
 
 /// Encode a section until the packet would exceed `limit`, truncating at record boundaries.
+///
+/// The caller passes a budget that already excludes the fixed trailer size. When a record
+/// would overflow that budget, its partially written wire bytes are discarded and the
+/// section terminates immediately.
 fn encode_section_with_limit<'a>(
     out: &mut Vec<u8>,
     records: &'a [Record],
@@ -798,7 +782,7 @@ mod tests {
         let mut edns = Edns::new();
         edns.set_udp_payload_size(1400);
         edns.set_dnssec_ok(true);
-        edns.insert(EdnsOption::Unknown(65001, vec![1, 2, 3]));
+        edns.insert(EdnsOption::Local(EdnsLocal::new(65001, vec![1, 2, 3])));
         response_with_edns.set_edns(edns);
 
         let mut compressed = response_with_edns.clone();
@@ -1082,7 +1066,7 @@ mod tests {
             24,
             0,
         )));
-        opt.insert(EdnsOption::Unknown(65001, vec![1, 2, 3]));
+        opt.insert(EdnsOption::Local(EdnsLocal::new(65001, vec![1, 2, 3])));
 
         let cases = vec![
             RData::A(A::new(1, 2, 3, 4)),
@@ -1363,6 +1347,131 @@ mod tests {
         let encoded = message.to_bytes().expect("message should encode");
         let decoded = Message::from_bytes(&encoded).expect("message should decode");
         assert_eq!(decoded.rcode(), Rcode::BADVERS);
+    }
+
+    #[test]
+    fn extended_rcode_survives_udp_truncation_with_opt_retained() {
+        let mut message = Message::new();
+        message.set_message_type(MessageType::Response);
+        message.set_rcode(Rcode::BADCOOKIE);
+        message.add_question(Question::new(
+            Name::from_ascii("large.example.com.").unwrap(),
+            RecordType::TXT,
+            DNSClass::IN,
+        ));
+        for index in 0..48 {
+            message.add_answer(Record::from_rdata(
+                Name::from_ascii("large.example.com.").unwrap(),
+                60,
+                RData::TXT(TXT::new(
+                    std::iter::once(120u8)
+                        .chain(std::iter::repeat_n(b'a' + (index as u8 % 26), 120))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                )),
+            ));
+        }
+
+        let mut edns = Edns::new();
+        edns.set_udp_payload_size(512);
+        message.set_edns(edns);
+
+        let encoded = message
+            .to_bytes_with_limit(512)
+            .expect("message should truncate and encode");
+        let decoded = Message::from_bytes(&encoded).expect("message should decode");
+
+        assert!(encoded.len() <= 512);
+        assert!(decoded.truncated());
+        assert!(decoded.edns().is_some());
+        assert_eq!(decoded.rcode(), Rcode::BADCOOKIE);
+    }
+
+    #[test]
+    fn limited_encode_trailer_disables_name_compression() {
+        let mut message = Message::new();
+        message.set_message_type(MessageType::Response);
+        message.set_compress(true);
+        message.add_question(Question::new(
+            Name::from_ascii("shared.example.com.").unwrap(),
+            RecordType::TXT,
+            DNSClass::IN,
+        ));
+        for index in 0..32 {
+            message.add_answer(Record::from_rdata(
+                Name::from_ascii("shared.example.com.").unwrap(),
+                60,
+                RData::TXT(TXT::new(
+                    std::iter::once(80u8)
+                        .chain(std::iter::repeat_n(b'a' + (index as u8 % 26), 80))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                )),
+            ));
+        }
+        message.signature_mut().push(Record::from_rdata(
+            Name::from_ascii("tail.shared.example.com.").unwrap(),
+            0,
+            RData::SIG(SIG(RRSIG::new(
+                u16::from(RecordType::TXT),
+                8,
+                2,
+                300,
+                400,
+                200,
+                1234,
+                Name::from_ascii("sig.shared.example.com.").unwrap(),
+                vec![1, 2, 3, 4].into_boxed_slice(),
+            ))),
+        ));
+
+        let encoded = message
+            .to_bytes_with_limit(512)
+            .expect("message should encode within udp limit");
+
+        let (_, mut offset, _, qdcount, ancount, nscount, arcount) =
+            parse_header(&encoded).unwrap();
+        assert_eq!(qdcount, 1);
+        assert_eq!(arcount, 1);
+
+        let (_, next) = Name::parse(&encoded, offset).unwrap();
+        offset = next + 4;
+
+        for _ in 0..ancount {
+            let (_, rr_name_end) = Name::parse(&encoded, offset).unwrap();
+            let rdlen = usize::from(read_u16_be(&encoded, rr_name_end + 2 + 2 + 4));
+            offset = rr_name_end + 2 + 2 + 4 + 2 + rdlen;
+        }
+        for _ in 0..nscount {
+            let (_, rr_name_end) = Name::parse(&encoded, offset).unwrap();
+            let rdlen = usize::from(read_u16_be(&encoded, rr_name_end + 2 + 2 + 4));
+            offset = rr_name_end + 2 + 2 + 4 + 2 + rdlen;
+        }
+
+        let owner_start = offset;
+        let (_, owner_end) = Name::parse(&encoded, owner_start).unwrap();
+        assert!(
+            !encoded[owner_start..owner_end].contains(&0xC0),
+            "signature owner name should not use compression pointers"
+        );
+
+        offset = owner_end;
+        offset += 2; // type
+        offset += 2; // class
+        offset += 4; // ttl
+        let rdlen = usize::from(read_u16_be(&encoded, offset));
+        offset += 2;
+
+        let signer_name_offset = offset + 2 + 1 + 1 + 4 + 4 + 4 + 2;
+        let (_, signer_name_end) = Name::parse(&encoded, signer_name_offset).unwrap();
+        assert!(
+            signer_name_end <= offset + rdlen,
+            "signer name must stay within the SIG RDATA"
+        );
+        assert!(
+            !encoded[signer_name_offset..signer_name_end].contains(&0xC0),
+            "signature signer name should not use compression pointers"
+        );
     }
 
     #[test]

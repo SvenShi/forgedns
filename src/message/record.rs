@@ -89,11 +89,9 @@ impl Record {
     /// Return encoded RR byte length at offset `off`.
     pub(crate) fn bytes_len<'a>(
         &'a self,
-        off: usize,
         compression: &mut crate::message::codec::LenCompressionMap<'a>,
     ) -> usize {
-        let owner_len = self.name.bytes_len_at(off, true, compression);
-        let rdata_off = off + owner_len + 10;
-        owner_len + 10 + self.data.bytes_len(rdata_off, compression)
+        let owner_len = self.name.bytes_len_at(true, compression);
+        owner_len + 10 + self.data.bytes_len(compression)
     }
 }

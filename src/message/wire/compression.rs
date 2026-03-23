@@ -20,11 +20,17 @@ impl<'a> LenCompressionMap<'a> {
             },
         }
     }
+
+    /// Stop recording new suffixes once the trailer-length calculation reaches the
+    /// detached signature block. This mirrors the limited encoder, where trailer names
+    /// are intentionally emitted without compression.
+    pub(crate) fn disable(&mut self) {
+        self.enabled = false;
+    }
 }
 
 pub(crate) fn domain_name_len<'a>(
     name: &'a Name,
-    off: usize,
     compression: &mut LenCompressionMap<'a>,
     compress: bool,
 ) -> usize {
@@ -47,9 +53,7 @@ pub(crate) fn domain_name_len<'a>(
             return prefix_len + 2;
         }
 
-        if off + prefix_len < MAX_COMPRESSION_POINTER_OFFSET {
-            compression.set.insert(suffix);
-        }
+        compression.set.insert(suffix);
 
         prefix_len += 1 + label_len as usize;
     }
@@ -98,5 +102,13 @@ impl<'a> CompressionState<'a> {
             .suffix_map
             .get_or_insert_with(|| AHashMap::with_capacity(32));
         map.entry(suffix).or_insert(position);
+    }
+
+    /// Disable name compression for all subsequent encodes.
+    ///
+    /// The limited UDP path switches compression off before writing the trailer so the
+    /// detached signature block cannot reference names introduced by truncated RR data.
+    pub(crate) fn disable(&mut self) {
+        self.enabled = false;
     }
 }

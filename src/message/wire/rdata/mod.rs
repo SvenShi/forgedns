@@ -12,7 +12,7 @@ mod service;
 
 use crate::core::error::{DnsError, Result};
 use crate::message::rdata::*;
-use crate::message::wire::{push_u16, push_u32, read_u16_be};
+use crate::message::wire::{push_u16, push_u32, read_u16_be, set_u16};
 use crate::message::{Name, RData, RecordType};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -378,14 +378,6 @@ where
     }
 }
 
-/// Encode an OPT pseudo-RR into a dedicated buffer following RFC 6891 section 6.1.
-pub(crate) fn encode_edns_record_into_vec(edns: &Edns, ext_rcode: u8) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(32);
-    encode_edns_record(&mut out, edns, ext_rcode)?;
-    Ok(out)
-}
-
-/// Encode an OPT pseudo-RR following RFC 6891 section 6.1.2.
 pub(crate) fn encode_edns_record(out: &mut Vec<u8>, edns: &Edns, ext_rcode: u8) -> Result<()> {
     out.push(0);
     push_u16(out, u16::from(RecordType::OPT));
@@ -408,8 +400,7 @@ pub(crate) fn encode_edns_record(out: &mut Vec<u8>, edns: &Edns, ext_rcode: u8) 
     let rdlen = out.len() - rdata_start;
     let rdlen =
         u16::try_from(rdlen).map_err(|_| DnsError::protocol("dns rdata exceeds u16 length"))?;
-    out[rdlen_pos] = (rdlen >> 8) as u8;
-    out[rdlen_pos + 1] = rdlen as u8;
+    set_u16(out, rdlen_pos, rdlen);
     Ok(())
 }
 
@@ -537,15 +528,15 @@ mod tests {
         let mut edns = Edns::new();
         edns.set_udp_payload_size(1400);
         edns.set_dnssec_ok(true);
-        edns.insert(EdnsOption::Unknown(65001, vec![1, 2, 3]));
+        edns.insert(EdnsOption::Local(EdnsLocal::new(65001, vec![1, 2, 3])));
 
         let direct = {
             let mut out = Vec::new();
             encode_edns_record(&mut out, &edns, 1).unwrap();
             out
         };
-        let via_vec = encode_edns_record_into_vec(&edns, 1).unwrap();
-
+        let mut via_vec = Vec::with_capacity(32);
+        encode_edns_record(&mut via_vec, &edns, 1).unwrap();
         assert_eq!(direct, via_vec);
     }
 

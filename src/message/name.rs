@@ -386,11 +386,10 @@ impl Name {
     #[inline]
     pub(crate) fn bytes_len_at<'a>(
         &'a self,
-        off: usize,
         compress: bool,
         compression: &mut crate::message::codec::LenCompressionMap<'a>,
     ) -> usize {
-        crate::message::codec::domain_name_len(self, off, compression, compress)
+        crate::message::codec::domain_name_len(self, compression, compress)
     }
 
     /// Parse `in-addr.arpa` and `ip6.arpa` names into concrete IP addresses.

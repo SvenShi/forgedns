@@ -8,7 +8,7 @@
 use crate::core::error::{DnsError, Result};
 use crate::message::rdata::{A, AAAA, Edns};
 use crate::message::wire::{
-    decode_message, edns_record_len, encode_message_into, encode_message_with_limit_into,
+    decode_message, edns_record_len, encode_message_into, encode_message_with_limit,
 };
 use crate::message::{
     DNSClass, Header, MessageType, Name, Opcode, Question, RData, Rcode, Record, RecordType,
@@ -114,90 +114,127 @@ impl Message {
     /// Encode the message into a newly allocated byte vector while honoring `max_size`.
     pub fn to_bytes_with_limit(&self, max_size: usize) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(512);
-        encode_message_with_limit_into(self, Some(max_size), self.id(), &mut out)?;
+        encode_message_with_limit(self, Some(max_size), self.id(), &mut out)?;
         Ok(out)
     }
 
     /// Encode the message into a newly allocated byte vector with an overridden ID and size cap.
     pub fn to_bytes_with_limit_and_id(&self, max_size: usize, id: u16) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(512);
-        encode_message_with_limit_into(self, Some(max_size), id, &mut out)?;
+        encode_message_with_limit(self, Some(max_size), id, &mut out)?;
         Ok(out)
     }
 
     /// Truncate this message in-place to the requested UDP payload budget.
     ///
     /// Behavior:
-    /// - skips truncation when a signature RR is present,
     /// - treats sizes below 512 as 512,
     /// - disables compression when the uncompressed payload already fits,
-    /// - otherwise truncates `Answer`, then `Authority`, then `Additional`,
-    /// - preserves a single OPT RR at the end when present,
-    /// - sets TC if any RR is omitted.
-    pub fn truncate(&mut self, max_size: usize) {
-        if !self.signature.is_empty() {
-            return;
+    /// - otherwise prefers compressed full message if it fits,
+    /// - otherwise keeps prefix records while dropping from `Additional`, then `Authority`,
+    ///   then `Answer`,
+    /// - always preserves the EDNS OPT pseudo-RR when present,
+    /// - always preserves detached signature records in the trailer block,
+    /// - sets TC if any RR is omitted,
+    /// - returns an error if the required trailer (OPT/signature) cannot fit.
+    pub fn truncate(&mut self, max_size: usize) -> Result<()> {
+        let size = max_size.max(512);
+
+        // Fast path 1: the full uncompressed message already fits the UDP budget.
+        if self.bytes_len_with_compression(false) <= size {
+            self.compress = false;
+            self.header.set_truncated(false);
+            return Ok(());
         }
 
-        let mut size = max_size.max(512);
-        let uncompressed_len = self.bytes_len_with_compression(false);
-        if uncompressed_len <= size {
-            self.set_compress(false);
-            self.set_truncated(false);
-            return;
+        // Fast path 2: the fully compressed message fits, so no RR elision is needed.
+        let lens = self.compute_truncation_lens(true);
+        if lens.total_len <= size {
+            self.compress = true;
+            self.header.set_truncated(false);
+            return Ok(());
         }
 
-        self.set_compress(true);
+        self.compress = true;
 
-        if let Some(edns) = self.edns.as_ref() {
-            size = size.saturating_sub(edns_record_len(edns));
+        let answer_len_full = Self::prefix_total(
+            &lens.answers_prefix_lens,
+            self.answers.len(),
+            lens.questions_end_len,
+        );
+        let authority_len_full = Self::prefix_total(
+            &lens.authorities_prefix_lens,
+            self.authorities.len(),
+            answer_len_full,
+        );
+
+        let _ = Self::prefix_total(
+            &lens.additionals_prefix_lens,
+            self.additionals.len(),
+            authority_len_full,
+        );
+
+        // Even the smallest valid truncated response must keep the header, questions,
+        // and the trailer block (OPT plus detached signature records).
+        let minimal_len = lens.questions_end_len + lens.trailer_len;
+        if minimal_len > size {
+            return Err(DnsError::protocol(
+                "dns message cannot fit within UDP payload while preserving EDNS/signature trailer",
+            ));
         }
 
-        let mut compression = crate::message::codec::LenCompressionMap::new(true);
+        // Preserve a contiguous prefix of each section while dropping from the tail in
+        // DNS truncation priority order: Additional, then Authority, then Answer.
+        //
+        // The search therefore tries, in order:
+        // 1. all answers + all authorities + the largest fitting additional prefix,
+        // 2. all answers + the largest fitting authority prefix,
+        // 3. the largest fitting answer prefix.
 
-        let mut len = crate::message::codec::DNS_HEADER_LEN;
-        for question in self.questions() {
-            len += question.bytes_len(len, &mut compression);
-        }
+        let trailer_len = lens.trailer_len;
 
-        let mut answer_count = 0usize;
-        if len < size {
-            answer_count = crate::message::wire::truncate_loop(
-                self.answers(),
-                size,
-                &mut len,
-                &mut compression,
-            );
-        }
+        let (answer_count, authority_count, additional_count) =
+            if authority_len_full + trailer_len <= size {
+                let additional_count = Self::max_fitting_prefix_count(
+                    &lens.additionals_prefix_lens,
+                    authority_len_full,
+                    size - trailer_len,
+                )
+                .unwrap_or(0);
 
-        let mut authority_count = 0usize;
-        if len < size {
-            authority_count = crate::message::wire::truncate_loop(
-                self.authorities(),
-                size,
-                &mut len,
-                &mut compression,
-            );
-        }
+                (self.answers.len(), self.authorities.len(), additional_count)
+            } else if answer_len_full + trailer_len <= size {
+                let authority_count = Self::max_fitting_prefix_count(
+                    &lens.authorities_prefix_lens,
+                    answer_len_full,
+                    size - trailer_len,
+                )
+                .unwrap_or(0);
 
-        let mut additional_count = 0usize;
-        if len < size {
-            additional_count = crate::message::wire::truncate_loop(
-                self.additionals(),
-                size,
-                &mut len,
-                &mut compression,
-            );
-        }
+                (self.answers.len(), authority_count, 0)
+            } else {
+                let answer_count = Self::max_fitting_prefix_count(
+                    &lens.answers_prefix_lens,
+                    lens.questions_end_len,
+                    size - trailer_len,
+                )
+                .unwrap_or(0);
 
-        let omitted = self.answers().len() > answer_count
-            || self.authorities().len() > authority_count
-            || self.additionals().len() > additional_count;
-        self.set_truncated(omitted);
+                (answer_count, 0, 0)
+            };
+
+        let omitted = answer_count < self.answers.len()
+            || authority_count < self.authorities.len()
+            || additional_count < self.additionals.len();
 
         self.answers.truncate(answer_count);
         self.authorities.truncate(authority_count);
         self.additionals.truncate(additional_count);
+        self.header.set_truncated(omitted);
+
+        debug_assert!(self.bytes_len_with_compression(true) <= size);
+
+        Ok(())
     }
 
     /// Return whether name compression is enabled when encoding.
@@ -577,27 +614,143 @@ impl Message {
         let mut len = crate::message::codec::DNS_HEADER_LEN;
 
         for question in self.questions() {
-            len += question.bytes_len(len, &mut compression);
+            len += question.bytes_len(&mut compression);
         }
 
         for record in self.answers() {
-            len += record.bytes_len(len, &mut compression);
+            len += record.bytes_len(&mut compression);
         }
         for record in self.authorities() {
-            len += record.bytes_len(len, &mut compression);
+            len += record.bytes_len(&mut compression);
         }
         for record in self.additionals() {
-            len += record.bytes_len(len, &mut compression);
+            len += record.bytes_len(&mut compression);
         }
         if let Some(edns) = self.edns() {
             len += edns_record_len(edns);
         }
         for record in self.signature() {
-            len += record.bytes_len(len, &mut compression);
+            len += record.bytes_len(&mut compression);
         }
 
         len
     }
+
+    #[inline]
+    fn prefix_total(prefix_lens: &[usize], count: usize, empty_base: usize) -> usize {
+        if count == 0 {
+            empty_base
+        } else {
+            prefix_lens[count - 1]
+        }
+    }
+
+    #[inline]
+    fn max_fitting_prefix_count(
+        prefix_lens: &[usize],
+        empty_base: usize,
+        limit: usize,
+    ) -> Option<usize> {
+        if empty_base > limit {
+            return None;
+        }
+        if prefix_lens.is_empty() {
+            return Some(0);
+        }
+        if prefix_lens[0] > limit {
+            return Some(0);
+        }
+
+        let mut left = 0usize;
+        let mut right = prefix_lens.len(); // exclusive
+
+        while left < right {
+            let mid = (left + right) >> 1;
+            if prefix_lens[mid] <= limit {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        Some(left)
+    }
+
+    pub(crate) fn compute_truncation_lens(&self, compress_enabled: bool) -> TruncationLens {
+        let can_compress = compress_enabled
+            && (self.questions.len() > 1
+                || !self.answers.is_empty()
+                || !self.authorities.is_empty()
+                || !self.additionals.is_empty()
+                || !self.signature.is_empty()
+                || self.edns.is_some());
+
+        let mut compression = crate::message::codec::LenCompressionMap::new(can_compress);
+        let mut len = crate::message::codec::DNS_HEADER_LEN;
+
+        for question in &self.questions {
+            len += question.bytes_len(&mut compression);
+        }
+        let questions_end_len = len;
+
+        let mut answers_prefix_lens = Vec::with_capacity(self.answers.len());
+        for record in &self.answers {
+            len += record.bytes_len(&mut compression);
+            answers_prefix_lens.push(len);
+        }
+
+        let mut authorities_prefix_lens = Vec::with_capacity(self.authorities.len());
+        for record in &self.authorities {
+            len += record.bytes_len(&mut compression);
+            authorities_prefix_lens.push(len);
+        }
+
+        let mut additionals_prefix_lens = Vec::with_capacity(self.additionals.len());
+        for record in &self.additionals {
+            len += record.bytes_len(&mut compression);
+            additionals_prefix_lens.push(len);
+        }
+
+        let before_trailer_len = len;
+
+        if let Some(edns) = &self.edns {
+            len += edns_record_len(edns);
+        }
+
+        compression.disable();
+
+        for record in &self.signature {
+            len += record.bytes_len(&mut compression);
+        }
+
+        let trailer_len = len - before_trailer_len;
+
+        TruncationLens {
+            questions_end_len,
+            answers_prefix_lens,
+            authorities_prefix_lens,
+            additionals_prefix_lens,
+            trailer_len,
+            total_len: len,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct TruncationLens {
+    /// Total length after encoding the header and all questions.
+    pub questions_end_len: usize,
+    /// Total length after keeping the first `i + 1` answers, excluding later sections.
+    pub answers_prefix_lens: Vec<usize>,
+    /// Total length after keeping all answers and the first `i + 1` authority records.
+    pub authorities_prefix_lens: Vec<usize>,
+    /// Total length after keeping all answers, all authorities, and the first `i + 1`
+    /// additional records.
+    pub additionals_prefix_lens: Vec<usize>,
+    /// Fixed trailer length contributed by EDNS and detached signature records.
+    pub trailer_len: usize,
+    /// Full message length when encoded with compression enabled.
+    pub total_len: usize,
 }
 
 #[cfg(test)]
@@ -630,7 +783,7 @@ mod tests {
         }
         message.set_edns(Edns::new());
 
-        message.truncate(512);
+        message.truncate(512).unwrap();
 
         assert!(message.truncated());
         assert!(message.edns().is_some());
@@ -647,7 +800,7 @@ mod tests {
         ));
         message.set_truncated(true);
 
-        message.truncate(4096);
+        message.truncate(4096).unwrap();
 
         assert!(!message.truncated());
         assert!(!message.compress());
@@ -679,7 +832,7 @@ mod tests {
         edns.set_dnssec_ok(true);
         message.set_edns(edns);
 
-        message.truncate(1232);
+        message.truncate(1232).unwrap();
         let encoded = message.to_bytes().unwrap();
 
         assert!(message.truncated());
@@ -762,7 +915,7 @@ mod tests {
 
         for limit in [512usize, 600, 700, 900, 1232, 1400] {
             let mut copy = message.clone();
-            copy.truncate(limit);
+            copy.truncate(limit).unwrap();
             let encoded = copy.to_bytes().unwrap();
             assert!(encoded.len() <= limit.max(512), "limit {limit} exceeded");
             if copy.edns().is_some() {
@@ -770,6 +923,56 @@ mod tests {
                 assert!(decoded.edns().is_some(), "edns missing for limit {limit}");
             }
         }
+    }
+
+    #[test]
+    fn truncate_preserves_signature_records_within_udp_limit() {
+        let mut message = Message::new();
+        message.set_message_type(MessageType::Response);
+        message.add_question(Question::new(
+            Name::from_ascii("large.example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+
+        for index in 0..48 {
+            message.add_answer(Record::from_rdata(
+                Name::from_ascii("large.example.com.").unwrap(),
+                60,
+                RData::TXT(TXT::new(
+                    std::iter::once(120u8)
+                        .chain(std::iter::repeat_n(b'a' + (index as u8 % 26), 120))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                )),
+            ));
+        }
+
+        message.signature_mut().push(Record::from_rdata(
+            Name::from_ascii("large.example.com.").unwrap(),
+            0,
+            RData::SIG(crate::message::rdata::SIG(
+                crate::message::rdata::RRSIG::new(
+                    u16::from(RecordType::A),
+                    8,
+                    2,
+                    300,
+                    400,
+                    200,
+                    1234,
+                    Name::from_ascii("sig.example.com.").unwrap(),
+                    vec![1, 2, 3, 4].into_boxed_slice(),
+                ),
+            )),
+        ));
+
+        message.truncate(512).unwrap();
+        let encoded = message.to_bytes().unwrap();
+        let decoded = Message::from_bytes(&encoded).unwrap();
+
+        assert!(message.truncated());
+        assert!(encoded.len() <= 512);
+        assert_eq!(decoded.signature().len(), 1);
     }
 }
 

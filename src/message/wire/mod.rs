@@ -9,10 +9,8 @@ mod codec;
 mod compression;
 mod length;
 mod rdata;
-mod truncate;
 
 pub(crate) use codec::*;
 pub(crate) use compression::*;
 pub(crate) use length::*;
 pub(crate) use rdata::*;
-pub(crate) use truncate::*;

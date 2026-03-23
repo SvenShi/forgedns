@@ -59,16 +59,76 @@ pub struct NS(pub Name);
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PTR(pub Name);
 
+/// Named EDNS option codes carried inside an OPT pseudo-record.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum EdnsCode {
+    /// Option code 0, reserved by RFC 6891.
+    Reserved,
+    /// Long-Lived Queries option (code 1).
+    Llq,
+    /// Update Lease option (code 2).
+    UpdateLease,
+    /// Name Server Identifier option (code 3).
+    Nsid,
+    /// ENUM Source-URI option (code 4).
+    Esu,
+    /// DNSSEC Algorithm Understood option (code 5).
+    Dau,
+    /// DS Hash Understood option (code 6).
+    Dhu,
+    /// NSEC3 Hash Understood option (code 7).
+    N3u,
+    /// EDNS Client Subnet option (code 8).
     Subnet,
+    /// EDNS EXPIRE option (code 9).
+    Expire,
+    /// DNS COOKIE option (code 10).
+    Cookie,
+    /// edns-tcp-keepalive option (code 11).
+    TcpKeepalive,
+    /// Padding option (code 12).
+    Padding,
+    /// CHAIN option (code 13).
+    Chain,
+    /// edns-key-tag option (code 14).
+    KeyTag,
+    /// Extended DNS Error option (code 15).
+    ExtendedDnsError,
+    /// Client Tag option (code 16).
+    ClientTag,
+    /// Server Tag option (code 17).
+    ServerTag,
+    /// Report Channel option (code 18).
+    ReportChannel,
+    /// Zone Version option (code 19).
+    ZoneVersion,
+    /// Any unmodeled or currently unknown option code.
     Unknown(u16),
 }
 
 impl From<u16> for EdnsCode {
     fn from(value: u16) -> Self {
         match value {
+            0 => Self::Reserved,
+            1 => Self::Llq,
+            2 => Self::UpdateLease,
+            3 => Self::Nsid,
+            4 => Self::Esu,
+            5 => Self::Dau,
+            6 => Self::Dhu,
+            7 => Self::N3u,
             8 => Self::Subnet,
+            9 => Self::Expire,
+            10 => Self::Cookie,
+            11 => Self::TcpKeepalive,
+            12 => Self::Padding,
+            13 => Self::Chain,
+            14 => Self::KeyTag,
+            15 => Self::ExtendedDnsError,
+            16 => Self::ClientTag,
+            17 => Self::ServerTag,
+            18 => Self::ReportChannel,
+            19 => Self::ZoneVersion,
             other => Self::Unknown(other),
         }
     }
@@ -77,7 +137,26 @@ impl From<u16> for EdnsCode {
 impl From<EdnsCode> for u16 {
     fn from(value: EdnsCode) -> Self {
         match value {
+            EdnsCode::Reserved => 0,
+            EdnsCode::Llq => 1,
+            EdnsCode::UpdateLease => 2,
+            EdnsCode::Nsid => 3,
+            EdnsCode::Esu => 4,
+            EdnsCode::Dau => 5,
+            EdnsCode::Dhu => 6,
+            EdnsCode::N3u => 7,
             EdnsCode::Subnet => 8,
+            EdnsCode::Expire => 9,
+            EdnsCode::Cookie => 10,
+            EdnsCode::TcpKeepalive => 11,
+            EdnsCode::Padding => 12,
+            EdnsCode::Chain => 13,
+            EdnsCode::KeyTag => 14,
+            EdnsCode::ExtendedDnsError => 15,
+            EdnsCode::ClientTag => 16,
+            EdnsCode::ServerTag => 17,
+            EdnsCode::ReportChannel => 18,
+            EdnsCode::ZoneVersion => 19,
             EdnsCode::Unknown(other) => other,
         }
     }
@@ -153,19 +232,343 @@ impl FromStr for ClientSubnet {
     }
 }
 
+/// Structured EDNS Name Server Identifier payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsNsid {
+    nsid: Vec<u8>,
+}
+
+impl EdnsNsid {
+    pub fn new(nsid: Vec<u8>) -> Self {
+        Self { nsid }
+    }
+
+    pub fn nsid(&self) -> &[u8] {
+        &self.nsid
+    }
+}
+
+/// Structured EDNS COOKIE payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsCookie {
+    cookie: Vec<u8>,
+}
+
+impl EdnsCookie {
+    pub fn new(cookie: Vec<u8>) -> Self {
+        Self { cookie }
+    }
+
+    pub fn cookie(&self) -> &[u8] {
+        &self.cookie
+    }
+}
+
+/// Structured Update Lease payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsUpdateLease {
+    lease: u32,
+    key_lease: Option<u32>,
+}
+
+impl EdnsUpdateLease {
+    pub fn new(lease: u32, key_lease: Option<u32>) -> Self {
+        Self { lease, key_lease }
+    }
+
+    pub fn lease(&self) -> u32 {
+        self.lease
+    }
+
+    pub fn key_lease(&self) -> Option<u32> {
+        self.key_lease
+    }
+}
+
+/// Structured Long-Lived Queries payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsLlq {
+    version: u16,
+    opcode: u16,
+    error: u16,
+    id: u64,
+    lease_life: u32,
+}
+
+impl EdnsLlq {
+    pub fn new(version: u16, opcode: u16, error: u16, id: u64, lease_life: u32) -> Self {
+        Self {
+            version,
+            opcode,
+            error,
+            id,
+            lease_life,
+        }
+    }
+
+    pub fn version(&self) -> u16 {
+        self.version
+    }
+
+    pub fn opcode(&self) -> u16 {
+        self.opcode
+    }
+
+    pub fn error(&self) -> u16 {
+        self.error
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn lease_life(&self) -> u32 {
+        self.lease_life
+    }
+}
+
+/// Shared algorithm-list model used by DAU/DHU/N3U.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsAlgorithmList {
+    algorithms: Vec<u8>,
+}
+
+impl EdnsAlgorithmList {
+    pub fn new(algorithms: Vec<u8>) -> Self {
+        Self { algorithms }
+    }
+
+    pub fn algorithms(&self) -> &[u8] {
+        &self.algorithms
+    }
+}
+
+/// Structured EXPIRE payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsExpire {
+    expire: u32,
+    empty: bool,
+}
+
+impl EdnsExpire {
+    pub fn new(expire: u32) -> Self {
+        Self {
+            expire,
+            empty: false,
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            expire: 0,
+            empty: true,
+        }
+    }
+
+    pub fn expire(&self) -> u32 {
+        self.expire
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.empty
+    }
+}
+
+/// Structured TCP keepalive payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsTcpKeepalive {
+    timeout: Option<u16>,
+}
+
+impl EdnsTcpKeepalive {
+    pub fn new(timeout: Option<u16>) -> Self {
+        Self { timeout }
+    }
+
+    pub fn timeout(&self) -> Option<u16> {
+        self.timeout
+    }
+}
+
+/// Structured Padding payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsPadding {
+    padding: Vec<u8>,
+}
+
+impl EdnsPadding {
+    pub fn new(padding: Vec<u8>) -> Self {
+        Self { padding }
+    }
+
+    pub fn padding(&self) -> &[u8] {
+        &self.padding
+    }
+}
+
+/// Structured Extended DNS Error payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsExtendedDnsError {
+    info_code: u16,
+    extra_text: Vec<u8>,
+}
+
+impl EdnsExtendedDnsError {
+    pub fn new(info_code: u16, extra_text: Vec<u8>) -> Self {
+        Self {
+            info_code,
+            extra_text,
+        }
+    }
+
+    pub fn info_code(&self) -> u16 {
+        self.info_code
+    }
+
+    pub fn extra_text(&self) -> &[u8] {
+        &self.extra_text
+    }
+}
+
+/// Structured ENUM Source-URI payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsEsu {
+    uri: Vec<u8>,
+}
+
+impl EdnsEsu {
+    pub fn new(uri: Vec<u8>) -> Self {
+        Self { uri }
+    }
+
+    pub fn uri(&self) -> &[u8] {
+        &self.uri
+    }
+}
+
+/// Structured Report Channel payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsReportChannel {
+    agent_domain: Name,
+}
+
+impl EdnsReportChannel {
+    pub fn new(agent_domain: Name) -> Self {
+        Self { agent_domain }
+    }
+
+    pub fn agent_domain(&self) -> &Name {
+        &self.agent_domain
+    }
+}
+
+/// Structured Zone Version payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsZoneVersion {
+    label_count: u8,
+    version_type: u8,
+    version: Vec<u8>,
+}
+
+impl EdnsZoneVersion {
+    pub fn new(label_count: u8, version_type: u8, version: Vec<u8>) -> Self {
+        Self {
+            label_count,
+            version_type,
+            version,
+        }
+    }
+
+    pub fn label_count(&self) -> u8 {
+        self.label_count
+    }
+
+    pub fn version_type(&self) -> u8 {
+        self.version_type
+    }
+
+    pub fn version(&self) -> &[u8] {
+        &self.version
+    }
+}
+
+/// Structured local/experimental EDNS payload mirroring miekg/dns's `EDNS0_LOCAL`.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EdnsLocal {
+    code: u16,
+    data: Vec<u8>,
+}
+
+impl EdnsLocal {
+    pub fn new(code: u16, data: Vec<u8>) -> Self {
+        Self { code, data }
+    }
+
+    pub fn code(&self) -> u16 {
+        self.code
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+/// Structured EDNS options modeled one-for-one after miekg/dns's EDNS0 option types.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum EdnsOption {
+    /// Long-Lived Queries option (code 1).
+    Llq(EdnsLlq),
+    /// Update Lease option (code 2).
+    UpdateLease(EdnsUpdateLease),
+    /// Name Server Identifier option (code 3).
+    Nsid(EdnsNsid),
+    /// ENUM Source-URI option (code 4).
+    Esu(EdnsEsu),
+    /// DNSSEC Algorithm Understood option (code 5).
+    Dau(EdnsAlgorithmList),
+    /// DS Hash Understood option (code 6).
+    Dhu(EdnsAlgorithmList),
+    /// NSEC3 Hash Understood option (code 7).
+    N3u(EdnsAlgorithmList),
     /// EDNS Client Subnet option (code 8, RFC 7871).
     Subnet(ClientSubnet),
-    /// Unknown or currently unmodeled EDNS option stored as raw bytes.
-    Unknown(u16, Vec<u8>),
+    /// EDNS EXPIRE option (code 9).
+    Expire(EdnsExpire),
+    /// DNS COOKIE option (code 10).
+    Cookie(EdnsCookie),
+    /// edns-tcp-keepalive option (code 11).
+    TcpKeepalive(EdnsTcpKeepalive),
+    /// Padding option (code 12).
+    Padding(EdnsPadding),
+    /// Extended DNS Error option (code 15).
+    ExtendedDnsError(EdnsExtendedDnsError),
+    /// Report Channel option (code 18).
+    ReportChannel(EdnsReportChannel),
+    /// Zone Version option (code 19).
+    ZoneVersion(EdnsZoneVersion),
+    /// Local/experimental or otherwise unmodeled option payload.
+    Local(EdnsLocal),
 }
 
 impl From<&EdnsOption> for EdnsCode {
     fn from(value: &EdnsOption) -> Self {
         match value {
+            EdnsOption::Llq(_) => EdnsCode::Llq,
+            EdnsOption::UpdateLease(_) => EdnsCode::UpdateLease,
+            EdnsOption::Nsid(_) => EdnsCode::Nsid,
+            EdnsOption::Esu(_) => EdnsCode::Esu,
+            EdnsOption::Dau(_) => EdnsCode::Dau,
+            EdnsOption::Dhu(_) => EdnsCode::Dhu,
+            EdnsOption::N3u(_) => EdnsCode::N3u,
             EdnsOption::Subnet(_) => EdnsCode::Subnet,
-            EdnsOption::Unknown(code, _) => EdnsCode::Unknown(*code),
+            EdnsOption::Expire(_) => EdnsCode::Expire,
+            EdnsOption::Cookie(_) => EdnsCode::Cookie,
+            EdnsOption::TcpKeepalive(_) => EdnsCode::TcpKeepalive,
+            EdnsOption::Padding(_) => EdnsCode::Padding,
+            EdnsOption::ExtendedDnsError(_) => EdnsCode::ExtendedDnsError,
+            EdnsOption::ReportChannel(_) => EdnsCode::ReportChannel,
+            EdnsOption::ZoneVersion(_) => EdnsCode::ZoneVersion,
+            EdnsOption::Local(local) => EdnsCode::from(local.code()),
         }
     }
 }
@@ -173,6 +576,70 @@ impl From<&EdnsOption> for EdnsCode {
 impl From<EdnsOption> for EdnsCode {
     fn from(value: EdnsOption) -> Self {
         EdnsCode::from(&value)
+    }
+}
+
+impl EdnsOption {
+    /// Return the encoded payload length of this option, excluding the 4-byte TL header.
+    pub fn payload_len(&self) -> usize {
+        match self {
+            EdnsOption::Llq(_) => 18,
+            EdnsOption::UpdateLease(value) => {
+                if value.key_lease().is_some() {
+                    8
+                } else {
+                    4
+                }
+            }
+            EdnsOption::Nsid(value) => value.nsid().len(),
+            EdnsOption::Esu(value) => value.uri().len(),
+            EdnsOption::Dau(value) | EdnsOption::Dhu(value) | EdnsOption::N3u(value) => {
+                value.algorithms().len()
+            }
+            EdnsOption::Subnet(value) => {
+                let max_prefix = match value.addr() {
+                    V4(_) => 32u8,
+                    V6(_) => 128u8,
+                };
+                4 + usize::from(value.source_prefix().min(max_prefix)).div_ceil(8)
+            }
+            EdnsOption::Expire(value) => {
+                if value.is_empty() {
+                    0
+                } else {
+                    4
+                }
+            }
+            EdnsOption::Cookie(value) => value.cookie().len(),
+            EdnsOption::TcpKeepalive(value) => value.timeout().map(|_| 2).unwrap_or(0),
+            EdnsOption::Padding(value) => value.padding().len(),
+            EdnsOption::ExtendedDnsError(value) => 2 + value.extra_text().len(),
+            EdnsOption::ReportChannel(value) => value.agent_domain().bytes_len(),
+            EdnsOption::ZoneVersion(value) => 2 + value.version().len(),
+            EdnsOption::Local(local) => local.data().len(),
+        }
+    }
+
+    /// Return the raw payload bytes for options whose model is still byte-oriented.
+    pub fn data(&self) -> &[u8] {
+        match self {
+            EdnsOption::Nsid(value) => value.nsid(),
+            EdnsOption::Esu(value) => value.uri(),
+            EdnsOption::Dau(value) | EdnsOption::Dhu(value) | EdnsOption::N3u(value) => {
+                value.algorithms()
+            }
+            EdnsOption::Cookie(value) => value.cookie(),
+            EdnsOption::Padding(value) => value.padding(),
+            EdnsOption::ExtendedDnsError(value) => value.extra_text(),
+            EdnsOption::ZoneVersion(value) => value.version(),
+            EdnsOption::Local(local) => local.data(),
+            EdnsOption::Llq(_)
+            | EdnsOption::UpdateLease(_)
+            | EdnsOption::Subnet(_)
+            | EdnsOption::Expire(_)
+            | EdnsOption::TcpKeepalive(_)
+            | EdnsOption::ReportChannel(_) => &[],
+        }
     }
 }
 
@@ -634,5 +1101,44 @@ impl SOA {
 
     pub fn minimum(&self) -> u32 {
         self.minimum
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edns_code_roundtrip_covers_named_registry_values() {
+        let cases = [
+            (0u16, EdnsCode::Reserved),
+            (1, EdnsCode::Llq),
+            (2, EdnsCode::UpdateLease),
+            (3, EdnsCode::Nsid),
+            (4, EdnsCode::Esu),
+            (5, EdnsCode::Dau),
+            (6, EdnsCode::Dhu),
+            (7, EdnsCode::N3u),
+            (8, EdnsCode::Subnet),
+            (9, EdnsCode::Expire),
+            (10, EdnsCode::Cookie),
+            (11, EdnsCode::TcpKeepalive),
+            (12, EdnsCode::Padding),
+            (13, EdnsCode::Chain),
+            (14, EdnsCode::KeyTag),
+            (15, EdnsCode::ExtendedDnsError),
+            (16, EdnsCode::ClientTag),
+            (17, EdnsCode::ServerTag),
+            (18, EdnsCode::ReportChannel),
+            (19, EdnsCode::ZoneVersion),
+        ];
+
+        for (wire, named) in cases {
+            assert_eq!(EdnsCode::from(wire), named);
+            assert_eq!(u16::from(named), wire);
+        }
+
+        assert_eq!(EdnsCode::from(65001), EdnsCode::Unknown(65001));
+        assert_eq!(u16::from(EdnsCode::Unknown(65001)), 65001);
     }
 }

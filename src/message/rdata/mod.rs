@@ -318,59 +318,49 @@ impl RData {
     /// Return encoded RDATA byte length at offset `off`.
     pub(crate) fn bytes_len<'a>(
         &'a self,
-        off: usize,
         compression: &mut crate::message::codec::LenCompressionMap<'a>,
     ) -> usize {
         match self {
             RData::A(_) => 4,
             RData::AAAA(_) => 16,
-            RData::CNAME(value) => value.0.bytes_len_at(off, true, compression),
-            RData::NS(value) => value.0.bytes_len_at(off, true, compression),
-            RData::MD(value) => value.0.bytes_len_at(off, true, compression),
-            RData::MF(value) => value.0.bytes_len_at(off, true, compression),
-            RData::PTR(value) => value.0.bytes_len_at(off, true, compression),
-            RData::MB(value) => value.0.bytes_len_at(off, true, compression),
-            RData::MG(value) => value.0.bytes_len_at(off, true, compression),
-            RData::MR(value) => value.0.bytes_len_at(off, true, compression),
+            RData::CNAME(value) => value.0.bytes_len_at(true, compression),
+            RData::NS(value) => value.0.bytes_len_at(true, compression),
+            RData::MD(value) => value.0.bytes_len_at(true, compression),
+            RData::MF(value) => value.0.bytes_len_at(true, compression),
+            RData::PTR(value) => value.0.bytes_len_at(true, compression),
+            RData::MB(value) => value.0.bytes_len_at(true, compression),
+            RData::MG(value) => value.0.bytes_len_at(true, compression),
+            RData::MR(value) => value.0.bytes_len_at(true, compression),
             RData::NULL(value) => value.data().len(),
             RData::HINFO(value) => 1 + value.cpu().len() + 1 + value.os().len(),
             RData::MINFO(value) => {
-                let rmail_len = value.rmail().bytes_len_at(off, true, compression);
-                rmail_len
-                    + value
-                        .email()
-                        .bytes_len_at(off + rmail_len, true, compression)
+                let rmail_len = value.rmail().bytes_len_at(true, compression);
+                rmail_len + value.email().bytes_len_at(true, compression)
             }
-            RData::MX(value) => 2 + value.exchange().bytes_len_at(off + 2, true, compression),
+            RData::MX(value) => 2 + value.exchange().bytes_len_at(true, compression),
             RData::RP(value) => {
-                let mbox_len = value.mbox().bytes_len_at(off, false, compression);
-                mbox_len + value.txt().bytes_len_at(off + mbox_len, false, compression)
+                let mbox_len = value.mbox().bytes_len_at(false, compression);
+                mbox_len + value.txt().bytes_len_at(false, compression)
             }
-            RData::AFSDB(value) => 2 + value.hostname().bytes_len_at(off + 2, false, compression),
+            RData::AFSDB(value) => 2 + value.hostname().bytes_len_at(false, compression),
             RData::X25(value) => 1 + value.psdn_address().len(),
             RData::WKS(value) => 5 + value.bitmap().len(),
             RData::NSAP(value) => value.0.len(),
             RData::ISDN(value) => {
                 1 + value.address().len() + value.sub_address().map(|v| 1 + v.len()).unwrap_or(0)
             }
-            RData::RT(value) => 2 + value.host().bytes_len_at(off + 2, false, compression),
+            RData::RT(value) => 2 + value.host().bytes_len_at(false, compression),
             RData::EID(value) => value.0.len(),
             RData::NIMLOC(value) => value.0.len(),
-            RData::NSAPPTR(value) => value.0.bytes_len_at(off, false, compression),
+            RData::NSAPPTR(value) => value.0.bytes_len_at(false, compression),
             RData::SIG(value) => {
-                18 + value
-                    .0
-                    .signer_name()
-                    .bytes_len_at(off + 18, false, compression)
+                18 + value.0.signer_name().bytes_len_at(false, compression)
                     + value.0.signature().len()
             }
             RData::KEY(value) => 4 + value.0.public_key().len(),
             RData::PX(value) => {
-                let map822_len = value.map822().bytes_len_at(off + 2, false, compression);
-                2 + map822_len
-                    + value
-                        .mapx400()
-                        .bytes_len_at(off + 2 + map822_len, false, compression)
+                let map822_len = value.map822().bytes_len_at(false, compression);
+                2 + map822_len + value.mapx400().bytes_len_at(false, compression)
             }
             RData::GPOS(value) => {
                 1 + value.longitude().len()
@@ -381,10 +371,9 @@ impl RData {
             }
             RData::LOC(_) => 16,
             RData::NXT(value) => {
-                value.0.next_domain().bytes_len_at(off, false, compression)
-                    + value.0.type_bitmap().len()
+                value.0.next_domain().bytes_len_at(false, compression) + value.0.type_bitmap().len()
             }
-            RData::SRV(value) => 6 + value.target().bytes_len_at(off + 6, false, compression),
+            RData::SRV(value) => 6 + value.target().bytes_len_at(false, compression),
             RData::NAPTR(value) => {
                 let fixed_len = 2
                     + 2
@@ -394,39 +383,25 @@ impl RData {
                     + value.services().len()
                     + 1
                     + value.regexp().len();
-                fixed_len
-                    + value
-                        .replacement()
-                        .bytes_len_at(off + fixed_len, false, compression)
+                fixed_len + value.replacement().bytes_len_at(false, compression)
             }
-            RData::KX(value) => 2 + value.exchanger().bytes_len_at(off + 2, false, compression),
+            RData::KX(value) => 2 + value.exchanger().bytes_len_at(false, compression),
             RData::CERT(value) => 5 + value.certificate().len(),
             RData::ATMA(value) => value.0.len(),
             RData::A6(value) => {
                 let suffix_len = value.suffix().len();
                 let prefix_len = value
                     .prefix_name()
-                    .map(|name| name.bytes_len_at(off + 1 + suffix_len, true, compression))
+                    .map(|name| name.bytes_len_at(true, compression))
                     .unwrap_or(0);
                 1 + suffix_len + prefix_len
             }
             RData::SINK(value) => 2 + value.data().len(),
-            RData::DNAME(value) => value.0.bytes_len_at(off, true, compression),
+            RData::DNAME(value) => value.0.bytes_len_at(true, compression),
             RData::OPT(value) => value
                 .options()
                 .iter()
-                .map(|opt| {
-                    4 + match opt {
-                        EdnsOption::Subnet(subnet) => {
-                            4 + usize::from(subnet.source_prefix().min(match subnet.addr() {
-                                IpAddr::V4(_) => 32,
-                                IpAddr::V6(_) => 128,
-                            }))
-                            .div_ceil(8)
-                        }
-                        EdnsOption::Unknown(_, data) => data.len(),
-                    }
-                })
+                .map(|opt| 4 + opt.payload_len())
                 .sum(),
             RData::APL(value) => value
                 .prefixes()
@@ -437,14 +412,10 @@ impl RData {
             RData::SSHFP(value) => 2 + value.fingerprint().len(),
             RData::IPSECKEY(value) => 3 + value.gateway().len() + value.public_key().len(),
             RData::RRSIG(value) => {
-                18 + value
-                    .signer_name()
-                    .bytes_len_at(off + 18, false, compression)
-                    + value.signature().len()
+                18 + value.signer_name().bytes_len_at(false, compression) + value.signature().len()
             }
             RData::NSEC(value) => {
-                value.next_domain().bytes_len_at(off, false, compression)
-                    + value.type_bitmap().len()
+                value.next_domain().bytes_len_at(false, compression) + value.type_bitmap().len()
             }
             RData::DNSKEY(value) => 4 + value.public_key().len(),
             RData::DHCID(value) => value.0.len(),
@@ -457,7 +428,7 @@ impl RData {
             RData::HIP(value) => {
                 let mut len = 4 + value.hit().len() + value.public_key().len();
                 for rendezvous in value.rendezvous_servers() {
-                    let name_wire_len = rendezvous.bytes_len_at(off + len, false, compression);
+                    let name_wire_len = rendezvous.bytes_len_at(false, compression);
                     len += name_wire_len;
                 }
                 len
@@ -465,11 +436,8 @@ impl RData {
             RData::NINFO(value) => value.0.len(),
             RData::RKEY(value) => value.0.len(),
             RData::TALINK(value) => {
-                let prev_len = value.previous_name().bytes_len_at(off, true, compression);
-                prev_len
-                    + value
-                        .next_name()
-                        .bytes_len_at(off + prev_len, true, compression)
+                let prev_len = value.previous_name().bytes_len_at(true, compression);
+                prev_len + value.next_name().bytes_len_at(true, compression)
             }
             RData::CDS(value) => 4 + value.0.digest().len(),
             RData::CDNSKEY(value) => 4 + value.0.public_key().len(),
@@ -477,7 +445,7 @@ impl RData {
             RData::CSYNC(value) => 6 + value.type_bitmap().len(),
             RData::ZONEMD(value) => 6 + value.digest().len(),
             RData::SVCB(value) => {
-                2 + value.target().bytes_len_at(off + 2, false, compression)
+                2 + value.target().bytes_len_at(false, compression)
                     + value
                         .params()
                         .iter()
@@ -485,7 +453,7 @@ impl RData {
                         .sum::<usize>()
             }
             RData::HTTPS(value) => {
-                2 + value.0.target().bytes_len_at(off + 2, false, compression)
+                2 + value.0.target().bytes_len_at(false, compression)
                     + value
                         .0
                         .params()
@@ -501,10 +469,10 @@ impl RData {
             RData::NID(_) => 10,
             RData::L32(_) => 6,
             RData::L64(_) => 10,
-            RData::LP(value) => 2 + value.fqdn().bytes_len_at(off + 2, false, compression),
+            RData::LP(value) => 2 + value.fqdn().bytes_len_at(false, compression),
             RData::EUI48(_) => 6,
             RData::EUI64(_) => 8,
-            RData::ANAME(value) => value.0.bytes_len_at(off, true, compression),
+            RData::ANAME(value) => value.0.bytes_len_at(true, compression),
             RData::URI(value) => 4 + value.target().len(),
             RData::CAA(value) => 2 + value.tag().len() + value.value().len(),
             RData::AVC(value) => value.0.wire_data().len(),
@@ -512,7 +480,7 @@ impl RData {
             RData::AMTRELAY(value) => 2 + value.gateway().len(),
             RData::RESINFO(value) => value.0.wire_data().len(),
             RData::TKEY(value) => {
-                value.algorithm().bytes_len_at(off, false, compression)
+                value.algorithm().bytes_len_at(false, compression)
                     + 4
                     + 4
                     + 2
@@ -523,7 +491,7 @@ impl RData {
                     + value.other_data().len()
             }
             RData::TSIG(value) => {
-                value.algorithm().bytes_len_at(off, false, compression)
+                value.algorithm().bytes_len_at(false, compression)
                     + 6
                     + 2
                     + 2
@@ -540,12 +508,8 @@ impl RData {
             RData::DLV(value) => 4 + value.0.digest().len(),
             RData::TXT(value) => value.wire_data().len(),
             RData::SOA(value) => {
-                let mname_len = value.mname().bytes_len_at(off, true, compression);
-                mname_len
-                    + value
-                        .rname()
-                        .bytes_len_at(off + mname_len, true, compression)
-                    + 20
+                let mname_len = value.mname().bytes_len_at(true, compression);
+                mname_len + value.rname().bytes_len_at(true, compression) + 20
             }
             RData::Unknown { data, .. } => data.len(),
         }
