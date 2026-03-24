@@ -92,6 +92,8 @@ impl QuicTransportWriter {
 
         let body_len = self.write_buf.len() - 2;
 
+        debug_assert!(body_len < u16::MAX as usize);
+
         self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
 
         self.send
