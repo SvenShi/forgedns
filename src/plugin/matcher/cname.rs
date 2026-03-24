@@ -10,9 +10,8 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{response_records, rr_to_cname};
 use crate::core::error::Result as DnsResult;
-use crate::core::rule_matcher::{DomainRuleMatcher, split_labels_rev};
+use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
@@ -22,7 +21,6 @@ use crate::plugin::matcher::matcher_utils::{
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -90,7 +88,6 @@ fn build_cname_matcher(
         cname_rules,
         domain_set_tags,
         domain_sets: Vec::new(),
-        domain_sets_has_trie_rules: false,
         registry,
     })))
 }
@@ -101,7 +98,6 @@ struct CnameMatcher {
     cname_rules: DomainRuleMatcher,
     domain_set_tags: Vec<String>,
     domain_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
-    domain_sets_has_trie_rules: bool,
     registry: Arc<PluginRegistry>,
 }
 
@@ -114,10 +110,6 @@ impl Plugin for CnameMatcher {
     async fn init(&mut self) -> DnsResult<()> {
         self.domain_sets =
             resolve_provider_tags(&self.registry, &self.domain_set_tags, "cname", &self.tag)?;
-        self.domain_sets_has_trie_rules = self
-            .domain_sets
-            .iter()
-            .any(|set| set.has_trie_domain_rules());
         Ok(())
     }
 
@@ -128,23 +120,12 @@ impl Plugin for CnameMatcher {
 
 impl Matcher for CnameMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(response) = context.response.as_ref() else {
-            return false;
-        };
-
-        response_records(response).any(|record| {
-            rr_to_cname(record).is_some_and(|cname| {
-                let mut labels = SmallVec::<[&str; 8]>::new();
-                if self.cname_rules.has_trie_rules() || self.domain_sets_has_trie_rules {
-                    split_labels_rev(&cname, &mut labels);
-                }
-                if self.cname_rules.is_match_normalized(&cname, &labels) {
+        context.response().is_some_and(|response| {
+            response.cnames().into_iter().any(|cname| {
+                if self.cname_rules.is_match_name(&cname) {
                     return true;
                 }
-
-                self.domain_sets
-                    .iter()
-                    .any(|set| set.contains_domain_prepared(&cname, &labels))
+                self.domain_sets.iter().any(|set| set.contains_name(&cname))
             })
         })
     }
@@ -153,31 +134,27 @@ impl Matcher for CnameMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
+    use crate::message::rdata::{A, CNAME};
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::{A, CNAME};
-    use hickory_proto::rr::{Name, RData, Record, RecordType};
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[tokio::test]
@@ -192,18 +169,17 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut ctx = make_context();
         let mut response = Message::new();
-        response.add_name_server(Record::from_rdata(
+        response.add_authority(Record::from_rdata(
             Name::from_ascii("alias.example.com.").unwrap(),
             60,
             RData::CNAME(CNAME(Name::from_ascii("target.example.com.").unwrap())),
         ));
-        ctx.response = Some(response);
+        ctx.set_response(response);
 
         assert!(matcher.is_match(&mut ctx));
     }
@@ -226,18 +202,17 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut ctx = make_context();
         let mut response = Message::new();
-        response.add_name_server(Record::from_rdata(
+        response.add_authority(Record::from_rdata(
             Name::from_ascii("alias.example.com.").unwrap(),
             60,
             RData::CNAME(CNAME(Name::from_ascii("target.example.com.").unwrap())),
         ));
-        ctx.response = Some(response);
+        ctx.set_response(response);
         assert!(matcher.is_match(&mut ctx));
     }
 
@@ -253,7 +228,6 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            domain_sets_has_trie_rules: false,
             registry: Arc::new(PluginRegistry::new()),
         };
 
@@ -267,7 +241,7 @@ mod tests {
             60,
             RData::A(A(Ipv4Addr::new(1, 1, 1, 1))),
         ));
-        non_cname_response.response = Some(response);
+        non_cname_response.set_response(response);
         assert!(!matcher.is_match(&mut non_cname_response));
     }
 }

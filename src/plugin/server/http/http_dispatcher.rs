@@ -9,14 +9,13 @@
 //! - GET method: DNS query passed via URL parameter (base64url encoded)
 //! - POST method: DNS query passed in request body (binary format)
 
+use crate::message::Message;
 use crate::plugin::server::{RequestHandle, RequestMeta};
 use ahash::AHashMap;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
-use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use http::{Method, Response, StatusCode};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -28,7 +27,7 @@ use tracing::{debug, warn};
 /// incoming HTTP requests to the appropriate handler based on the request
 /// method and path.
 pub struct HttpDispatcher {
-    routes: AHashMap<(Method, String), Box<dyn HttpHandler>>,
+    routes: AHashMap<(Method, Arc<str>), Box<dyn HttpHandler>>,
 }
 
 impl HttpDispatcher {
@@ -43,7 +42,12 @@ impl HttpDispatcher {
     ///
     /// Associates a specific HTTP method and path with a handler that will
     /// process requests matching that route.
-    pub fn register_route(&mut self, method: Method, path: String, handler: Box<dyn HttpHandler>) {
+    pub fn register_route(
+        &mut self,
+        method: Method,
+        path: Arc<str>,
+        handler: Box<dyn HttpHandler>,
+    ) {
         debug!("Registering route: {} {}", method, path);
         self.routes.insert((method, path), handler);
     }
@@ -55,11 +59,11 @@ impl HttpDispatcher {
     pub async fn handle_request(
         &self,
         method: Method,
-        path: String,
-        query: Option<String>,
+        path: Arc<str>,
+        query: Option<Arc<str>>,
         body: Bytes,
         src_addr: SocketAddr,
-        server_name: Option<String>,
+        server_name: Option<Arc<str>>,
     ) -> Response<Bytes> {
         debug!("Received request: {} {} from {}", method, path, src_addr);
 
@@ -103,11 +107,11 @@ pub trait HttpHandler: Send + Sync + 'static {
     async fn handle(
         &self,
         method: Method,
-        path: String,
-        query: Option<String>,
+        path: Arc<str>,
+        query: Option<Arc<str>>,
         body: Bytes,
         src_addr: SocketAddr,
-        server_name: Option<String>,
+        server_name: Option<Arc<str>>,
     ) -> Response<Bytes>;
 }
 
@@ -136,19 +140,16 @@ impl DnsGetHandler {
             if let Some(value) = param.strip_prefix("dns=") {
                 // Decode base64url
                 return match URL_SAFE_NO_PAD.decode(value) {
-                    Ok(dns_bytes) => {
-                        // Parse DNS message
-                        match Message::from_bytes(&dns_bytes) {
-                            Ok(msg) => {
-                                debug!("Successfully parsed GET DNS query, ID: {}", msg.id());
-                                Some(msg)
-                            }
-                            Err(e) => {
-                                warn!("Failed to parse DNS message: {}", e);
-                                None
-                            }
+                    Ok(dns_bytes) => match Message::from_bytes(&dns_bytes) {
+                        Ok(msg) => {
+                            debug!("Successfully parsed GET DNS query, ID: {}", msg.id());
+                            Some(msg)
                         }
-                    }
+                        Err(e) => {
+                            warn!("Failed to parse DNS message: {}", e);
+                            None
+                        }
+                    },
                     Err(e) => {
                         warn!("Failed to decode base64: {}", e);
                         None
@@ -167,15 +168,15 @@ impl HttpHandler for DnsGetHandler {
     async fn handle(
         &self,
         _method: Method,
-        path: String,
-        query: Option<String>,
+        path: Arc<str>,
+        query: Option<Arc<str>>,
         _body: Bytes,
         src_addr: SocketAddr,
-        server_name: Option<String>,
+        server_name: Option<Arc<str>>,
     ) -> Response<Bytes> {
         // Parse DNS query from URL parameters
         let dns_query = match self.parse_dns_query(query.as_deref()) {
-            Some(msg) => msg,
+            Some(parsed) => parsed,
             None => {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -188,7 +189,7 @@ impl HttpHandler for DnsGetHandler {
         // Process DNS query through the executor
         let dns_result = self
             .request_handle
-            .handle_request_with_meta(
+            .handle_request(
                 dns_query,
                 src_addr,
                 RequestMeta {
@@ -197,7 +198,7 @@ impl HttpHandler for DnsGetHandler {
                 },
             )
             .await;
-        msg_to_response(dns_result.response)
+        msg_response(dns_result.response)
     }
 }
 
@@ -220,11 +221,11 @@ impl HttpHandler for DnsPostHandler {
     async fn handle(
         &self,
         _method: Method,
-        path: String,
-        _query: Option<String>,
+        path: Arc<str>,
+        _query: Option<Arc<str>>,
         body: Bytes,
         src_addr: SocketAddr,
-        server_name: Option<String>,
+        server_name: Option<Arc<str>>,
     ) -> Response<Bytes> {
         // Limit request size (RFC 8484 recommends maximum 65535 bytes)
         // This prevents memory exhaustion attacks
@@ -265,7 +266,7 @@ impl HttpHandler for DnsPostHandler {
         // Process DNS query through the executor
         let dns_result = self
             .request_handle
-            .handle_request_with_meta(
+            .handle_request(
                 dns_query,
                 src_addr,
                 RequestMeta {
@@ -274,12 +275,12 @@ impl HttpHandler for DnsPostHandler {
                 },
             )
             .await;
-        msg_to_response(dns_result.response)
+        msg_response(dns_result.response)
     }
 }
 
 #[inline]
-fn msg_to_response(dns_response: Message) -> Response<Bytes> {
+fn msg_response(dns_response: Message) -> Response<Bytes> {
     // Serialize DNS response to binary format
     match dns_response.to_bytes() {
         Ok(response_bytes) => {
@@ -306,14 +307,13 @@ fn msg_to_response(dns_response: Message) -> Response<Bytes> {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::core::dns_utils::build_response_from_request;
     use crate::core::error::Result;
+    use crate::message::{Name, RecordType};
+    use crate::message::{Question, Rcode};
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
     use async_trait::async_trait;
-    use hickory_proto::op::{Query, ResponseCode};
-    use hickory_proto::rr::{Name, RecordType};
     use std::sync::Mutex;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,7 +327,7 @@ mod tests {
     #[derive(Debug)]
     struct RecordingExecutor {
         observed: Arc<Mutex<Option<ObservedRequest>>>,
-        response_code: ResponseCode,
+        response_code: Rcode,
     }
 
     #[async_trait]
@@ -349,34 +349,29 @@ mod tests {
     impl Executor for RecordingExecutor {
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
             let query_name = context
-                .query_view()
+                .request
+                .first_question()
                 .expect("request should contain one query")
-                .normalized_name()
+                .name()
+                .normalized()
                 .to_string();
             let observed = ObservedRequest {
                 query_name,
                 query_id: context.request.id(),
-                server_name: context
-                    .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
-                    .cloned(),
-                url_path: context
-                    .get_attr::<String>(DnsContext::ATTR_URL_PATH)
-                    .cloned(),
+                server_name: context.server_name().map(str::to_string),
+                url_path: context.url_path().map(str::to_string),
             };
             self.observed
                 .lock()
                 .expect("request observation lock should not be poisoned")
                 .replace(observed);
-            context.response = Some(build_response_from_request(
-                &context.request,
-                self.response_code,
-            ));
+            context.set_response(context.request.response(self.response_code));
             Ok(ExecStep::Next)
         }
     }
 
     fn make_request_handle(
-        response_code: ResponseCode,
+        response_code: Rcode,
     ) -> (Arc<RequestHandle>, Arc<Mutex<Option<ObservedRequest>>>) {
         let observed = Arc::new(Mutex::new(None));
         let executor = Arc::new(RecordingExecutor {
@@ -395,9 +390,10 @@ mod tests {
     fn make_dns_query(id: u16, qname: &str) -> Message {
         let mut request = Message::new();
         request.set_id(id);
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii(qname).expect("query name should be valid"),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
         request
     }
@@ -421,7 +417,7 @@ mod tests {
         let response = dispatcher
             .handle_request(
                 Method::GET,
-                "/missing".to_string(),
+                Arc::from("/missing"),
                 None,
                 Bytes::new(),
                 SocketAddr::from(([127, 0, 0, 1], 5400)),
@@ -435,22 +431,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_get_handler_returns_bad_request_when_dns_param_is_missing() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let (request_handle, observed) = make_request_handle(Rcode::NoError);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::GET,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsGetHandler::new(request_handle)),
         );
 
         let response = dispatcher
             .handle_request(
                 Method::GET,
-                "/dns-query".to_string(),
-                Some("foo=bar".to_string()),
+                Arc::from("/dns-query"),
+                Some(Arc::from("foo=bar")),
                 Bytes::new(),
                 SocketAddr::from(([127, 0, 0, 1], 5401)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
@@ -469,11 +465,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_get_handler_processes_valid_query_and_forwards_meta() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::Refused);
+        let (request_handle, observed) = make_request_handle(Rcode::Refused);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::GET,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsGetHandler::new(request_handle)),
         );
         let query = make_dns_query(31, "www.example.test.");
@@ -482,11 +478,11 @@ mod tests {
         let response = dispatcher
             .handle_request(
                 Method::GET,
-                "/dns-query".to_string(),
-                Some(format!("foo=bar&dns={encoded_query}")),
+                Arc::from("/dns-query"),
+                Some(Arc::from(format!("foo=bar&dns={encoded_query}"))),
                 Bytes::new(),
                 SocketAddr::from(([127, 0, 0, 1], 5402)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
@@ -498,7 +494,7 @@ mod tests {
         );
         assert_eq!(response.headers()["Cache-Control"], "max-age=300");
         assert_eq!(dns_response.id(), 31);
-        assert_eq!(dns_response.response_code(), ResponseCode::Refused);
+        assert_eq!(dns_response.rcode(), Rcode::Refused);
         assert_eq!(
             observed
                 .lock()
@@ -515,22 +511,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_post_handler_returns_payload_too_large_for_oversized_body() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let (request_handle, observed) = make_request_handle(Rcode::NoError);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsPostHandler::new(request_handle)),
         );
 
         let response = dispatcher
             .handle_request(
                 Method::POST,
-                "/dns-query".to_string(),
+                Arc::from("/dns-query"),
                 None,
                 Bytes::from(vec![0u8; 65536]),
                 SocketAddr::from(([127, 0, 0, 1], 5403)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
@@ -546,22 +542,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_post_handler_returns_bad_request_for_invalid_dns_body() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::NoError);
+        let (request_handle, observed) = make_request_handle(Rcode::NoError);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsPostHandler::new(request_handle)),
         );
 
         let response = dispatcher
             .handle_request(
                 Method::POST,
-                "/dns-query".to_string(),
+                Arc::from("/dns-query"),
                 None,
                 Bytes::from_static(b"not-a-dns-message"),
                 SocketAddr::from(([127, 0, 0, 1], 5404)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
@@ -580,11 +576,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_dns_post_handler_processes_valid_body_and_forwards_meta() {
-        let (request_handle, observed) = make_request_handle(ResponseCode::NXDomain);
+        let (request_handle, observed) = make_request_handle(Rcode::NXDomain);
         let mut dispatcher = HttpDispatcher::new();
         dispatcher.register_route(
             Method::POST,
-            "/dns-query".to_string(),
+            Arc::from("/dns-query"),
             Box::new(DnsPostHandler::new(request_handle)),
         );
         let query = make_dns_query(41, "api.example.test.");
@@ -595,18 +591,18 @@ mod tests {
         let response = dispatcher
             .handle_request(
                 Method::POST,
-                "/dns-query".to_string(),
+                Arc::from("/dns-query"),
                 None,
                 Bytes::from(query_bytes),
                 SocketAddr::from(([127, 0, 0, 1], 5405)),
-                Some("dns.example.test".to_string()),
+                Some(Arc::from("dns.example.test")),
             )
             .await;
 
         let dns_response = decode_response(&response);
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(dns_response.id(), 41);
-        assert_eq!(dns_response.response_code(), ResponseCode::NXDomain);
+        assert_eq!(dns_response.rcode(), Rcode::NXDomain);
         assert_eq!(
             observed
                 .lock()

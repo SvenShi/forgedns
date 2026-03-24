@@ -21,17 +21,15 @@
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{build_response_from_request, rr_to_ip};
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
+use crate::message::Rcode;
+use crate::message::{Name, PTR, RData, Record, RecordType};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::op::ResponseCode;
-use hickory_proto::rr::rdata::name::PTR;
-use hickory_proto::rr::{Name, RData, Record, RecordType};
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -61,7 +59,7 @@ struct CacheEntry {
 #[derive(Debug)]
 struct ReverseLookup {
     tag: String,
-    cache: TtlCache<IpAddr, CacheEntry>,
+    cache: TtlCache<IpAddr, Arc<CacheEntry>>,
     size: usize,
     ttl: u32,
     handle_ptr: bool,
@@ -126,7 +124,7 @@ impl Executor for ReverseLookup {
         if self.handle_ptr
             && let Some(response) = self.try_handle_ptr(&context.request)
         {
-            context.response = Some(response);
+            context.set_response(response);
             return Ok(ExecStep::Stop);
         }
 
@@ -136,14 +134,16 @@ impl Executor for ReverseLookup {
     async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
         let _ = state;
 
-        let Some(response) = context.response.as_mut() else {
+        let query_name = context
+            .request
+            .first_question()
+            .map(|question| question.name().clone());
+        let Some(response) = context.response_mut() else {
             return Ok(());
         };
-
-        let query_name = context.request.query().map(|q| q.name().clone());
         let now = AppClock::elapsed_millis();
         for record in response.answers_mut() {
-            let Some(ip) = rr_to_ip(record) else {
+            let Some(ip) = record.ip_addr() else {
                 continue;
             };
 
@@ -155,8 +155,12 @@ impl Executor for ReverseLookup {
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| record.name().clone());
-            self.cache
-                .insert_or_update(normalize_ip(ip), CacheEntry { domain }, now, expire_at_ms);
+            self.cache.insert_or_update(
+                normalize_ip(ip),
+                Arc::new(CacheEntry { domain }),
+                now,
+                expire_at_ms,
+            );
         }
 
         Ok(())
@@ -164,25 +168,22 @@ impl Executor for ReverseLookup {
 }
 
 impl ReverseLookup {
-    fn try_handle_ptr(
-        &self,
-        request: &hickory_proto::op::Message,
-    ) -> Option<hickory_proto::op::Message> {
-        let query = request.query()?;
-        if query.query_type != RecordType::PTR {
+    fn try_handle_ptr(&self, request: &crate::message::Message) -> Option<crate::message::Message> {
+        if request.question_count() != 1 || request.first_qtype()? != RecordType::PTR {
             return None;
         }
 
-        let ip = parse_ptr_name(query.name())?;
+        let qname = request.first_question()?.name().clone();
+        let ip = parse_ptr_name(&qname)?;
         let ip = normalize_ip(ip);
         let now = AppClock::elapsed_millis();
         let entry = self.cache.get_fresh_cloned(&ip, now, 1000)?;
 
-        let mut response = build_response_from_request(request, ResponseCode::NoError);
+        let mut response = request.response(Rcode::NoError);
         response.answers_mut().push(Record::from_rdata(
-            query.name().clone(),
+            qname,
             5,
-            RData::PTR(PTR(entry.value.domain)),
+            RData::PTR(PTR(entry.value.domain.clone())),
         ));
         Some(response)
     }
@@ -239,12 +240,12 @@ fn parse_ptr_name(name: &Name) -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
+    use crate::message::rdata::A;
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RData, Record};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::A;
-    use hickory_proto::rr::{Name, RData, Record};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
@@ -261,17 +262,16 @@ mod tests {
 
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(Name::from_ascii(name).unwrap(), qtype));
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        request.add_question(Question::new(
+            Name::from_ascii(name).unwrap(),
+            qtype,
+            crate::message::DNSClass::IN,
+        ));
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     #[tokio::test]
@@ -293,19 +293,14 @@ mod tests {
             300,
             RData::A(A(Ipv4Addr::new(8, 8, 4, 4))),
         ));
-        a_ctx.response = Some(response);
+        a_ctx.set_response(response);
 
         plugin
             .post_execute(&mut a_ctx, None)
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            a_ctx
-                .response
-                .as_ref()
-                .expect("response should exist")
-                .answers()[0]
-                .ttl(),
+            a_ctx.response().expect("response should exist").answers()[0].ttl(),
             120
         );
 
@@ -316,8 +311,39 @@ mod tests {
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Stop));
 
-        let ptr_resp = ptr_ctx.response.expect("PTR response should be returned");
+        let ptr_resp = ptr_ctx.response().expect("PTR response should be returned");
         assert_eq!(ptr_resp.answers().len(), 1);
-        assert_eq!(ptr_resp.answers()[0].record_type(), RecordType::PTR);
+        assert_eq!(ptr_resp.answers()[0].rr_type(), RecordType::PTR);
+    }
+
+    #[tokio::test]
+    async fn test_reverse_lookup_rewrites_response() {
+        let plugin = ReverseLookup {
+            tag: "reverse_lookup".to_string(),
+            cache: TtlCache::with_capacity(64),
+            size: 64,
+            ttl: 120,
+            handle_ptr: false,
+            cleanup_started: AtomicBool::new(false),
+            cleanup_task_id: None,
+        };
+
+        let mut ctx = make_context("www.example.com.", RecordType::A);
+        let mut response = Message::new();
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("www.example.com.").unwrap(),
+            300,
+            RData::A(A(Ipv4Addr::new(8, 8, 4, 4))),
+        ));
+        ctx.set_response(response);
+
+        plugin
+            .post_execute(&mut ctx, None)
+            .await
+            .expect("post_execute should succeed");
+        assert_eq!(
+            ctx.response().expect("response should exist").answers()[0].ttl(),
+            120
+        );
     }
 }

@@ -287,6 +287,28 @@ register_plugin_factory!("http_server", HttpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for HttpServerFactory {
+    /// Get dependencies (the entry executor plugins)
+    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
+        let http_config = match plugin_config.args.clone() {
+            Some(args) => match serde_yml::from_value::<HttpServerConfig>(args) {
+                Ok(config) => config,
+                Err(_) => return vec![],
+            },
+            None => return vec![],
+        };
+
+        // Return all entry executors as dependencies
+        // This ensures executors are initialized before the HTTP server
+        http_config
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                DependencySpec::executor(format!("args.entries[{}].exec", idx), entry.exec.clone())
+            })
+            .collect()
+    }
+
     fn create(
         &self,
         plugin_config: &PluginConfig,
@@ -330,7 +352,7 @@ impl PluginFactory for HttpServerFactory {
             );
             dispatcher.register_route(
                 Method::GET,
-                entry.path.clone(),
+                Arc::from(entry.path.clone()),
                 Box::new(DnsGetHandler::new(request_handle.clone())),
             );
 
@@ -341,7 +363,7 @@ impl PluginFactory for HttpServerFactory {
             );
             dispatcher.register_route(
                 Method::POST,
-                entry.path.clone(),
+                Arc::from(entry.path.clone()),
                 Box::new(DnsPostHandler::new(request_handle.clone())),
             );
         }
@@ -367,28 +389,6 @@ impl PluginFactory for HttpServerFactory {
             },
         )))
     }
-
-    /// Get dependencies (the entry executor plugins)
-    fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
-        let http_config = match plugin_config.args.clone() {
-            Some(args) => match serde_yml::from_value::<HttpServerConfig>(args) {
-                Ok(config) => config,
-                Err(_) => return vec![],
-            },
-            None => return vec![],
-        };
-
-        // Return all entry executors as dependencies
-        // This ensures executors are initialized before the HTTP server
-        http_config
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| {
-                DependencySpec::executor(format!("args.entries[{}].exec", idx), entry.exec.clone())
-            })
-            .collect()
-    }
 }
 
 /// Extract real client IP address from HTTP headers
@@ -405,11 +405,11 @@ impl PluginFactory for HttpServerFactory {
 /// Returns the TCP source address if header is not configured or parsing fails.
 pub fn extract_client_ip(
     headers: &http::HeaderMap,
-    src_ip_header: &Option<String>,
+    src_ip_header: &Option<Arc<str>>,
     tcp_src: SocketAddr,
 ) -> SocketAddr {
     if let Some(header_name) = src_ip_header {
-        if let Some(header_value) = headers.get(header_name.as_str()) {
+        if let Some(header_value) = headers.get(header_name.as_ref()) {
             if let Ok(ip_str) = header_value.to_str() {
                 // Try to parse as complete SocketAddr (IP:Port)
                 if let Ok(addr) = SocketAddr::from_str(ip_str) {
@@ -497,7 +497,7 @@ listen: 127.0.0.1:443
         );
         let src = SocketAddr::from(([127, 0, 0, 1], 443));
 
-        let client = extract_client_ip(&headers, &Some("x-real-ip".to_string()), src);
+        let client = extract_client_ip(&headers, &Some(Arc::from("x-real-ip")), src);
 
         assert_eq!(client, SocketAddr::from(([198, 51, 100, 10], 8443)));
     }
@@ -511,7 +511,7 @@ listen: 127.0.0.1:443
         );
         let src = SocketAddr::from(([127, 0, 0, 1], 443));
 
-        let client = extract_client_ip(&headers, &Some("x-real-ip".to_string()), src);
+        let client = extract_client_ip(&headers, &Some(Arc::from("x-real-ip")), src);
 
         assert_eq!(
             client,
@@ -530,7 +530,7 @@ listen: 127.0.0.1:443
         );
         let src = SocketAddr::from(([127, 0, 0, 1], 443));
 
-        let client = extract_client_ip(&headers, &Some("x-forwarded-for".to_string()), src);
+        let client = extract_client_ip(&headers, &Some(Arc::from("x-forwarded-for")), src);
 
         assert_eq!(client, SocketAddr::from(([203, 0, 113, 10], 443)));
     }
@@ -544,7 +544,7 @@ listen: 127.0.0.1:443
         );
         let src = SocketAddr::from(([127, 0, 0, 1], 443));
 
-        let client = extract_client_ip(&headers, &Some("x-real-ip".to_string()), src);
+        let client = extract_client_ip(&headers, &Some(Arc::from("x-real-ip")), src);
 
         assert_eq!(client, src);
     }

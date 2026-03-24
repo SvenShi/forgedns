@@ -14,14 +14,14 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::message::RecordType;
+use crate::message::{Message, Rcode};
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::dual_selector::{ForwardProbeRequest, ForwardProbeResult};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::op::{Message, ResponseCode};
-use hickory_proto::rr::RecordType;
 use rand::RngExt;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -65,11 +65,15 @@ impl Plugin for SingleDnsForwarder {
 #[async_trait]
 impl Executor for SingleDnsForwarder {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if let Some(probe) = context
-            .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
-            .copied()
-        {
-            return self.execute_with_probe(context, probe).await;
+        if context.contains_attr(DnsContext::ATTR_FORWARD_PROBE_REQUEST) {
+            return if let Some(probe) = context
+                .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
+                .copied()
+            {
+                self.execute_with_probe(context, probe).await
+            } else {
+                self.execute_standard(context).await
+            };
         }
         self.execute_standard(context).await
     }
@@ -80,13 +84,13 @@ impl SingleDnsForwarder {
     async fn execute_standard(&self, context: &mut DnsContext) -> Result<ExecStep> {
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
-                context.response = Some(res);
+                context.set_response(res);
             }
             Err(e) => {
                 warn!(
                     "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
-                    context.src_addr,
-                    context.request.queries(),
+                    context.peer_addr(),
+                    context.request.questions(),
                     context.request.id(),
                     e
                 );
@@ -105,7 +109,7 @@ impl SingleDnsForwarder {
         probe: ForwardProbeRequest,
     ) -> Result<ExecStep> {
         let mut preferred_request = context.request.clone();
-        if !set_message_first_query_type(&mut preferred_request, probe.preferred_type) {
+        if !set_message_first_qtype(&mut preferred_request, probe.preferred_type) {
             return self.execute_standard(context).await;
         }
         let original_request = context.request.clone();
@@ -125,7 +129,7 @@ impl SingleDnsForwarder {
 
         match original_result {
             Ok(response) => {
-                context.response = Some(response);
+                context.set_response(response);
             }
             Err(e) => {
                 let original_error = format!("forward plugin '{}' query failed: {}", self.tag, e);
@@ -139,8 +143,8 @@ impl SingleDnsForwarder {
                 );
                 warn!(
                     "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
-                    context.src_addr,
-                    context.request.queries(),
+                    context.peer_addr(),
+                    context.request.questions(),
                     context.request.id(),
                     e
                 );
@@ -228,11 +232,15 @@ impl Plugin for ConcurrentForwarder {
 #[async_trait]
 impl Executor for ConcurrentForwarder {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if let Some(probe) = context
-            .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
-            .copied()
-        {
-            return self.execute_with_probe(context, probe).await;
+        if context.contains_attr(DnsContext::ATTR_FORWARD_PROBE_REQUEST) {
+            return if let Some(probe) = context
+                .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
+                .copied()
+            {
+                self.execute_with_probe(context, probe).await
+            } else {
+                self.execute_standard(context).await
+            };
         }
         self.execute_standard(context).await
     }
@@ -271,9 +279,7 @@ impl ConcurrentForwarder {
             completed += 1;
             match joined {
                 Ok(Ok(response)) => {
-                    if completed < self.active_concurrent
-                        && !is_preferred_response_code(response.response_code())
-                    {
+                    if completed < self.active_concurrent && !is_preferred_rcode(response.rcode()) {
                         continue;
                     }
                     join_set.abort_all();
@@ -295,7 +301,7 @@ impl ConcurrentForwarder {
     async fn execute_standard(&self, context: &mut DnsContext) -> Result<ExecStep> {
         let (response, last_error) = self.query_any_upstream(context.request.clone()).await;
         if let Some(response) = response {
-            context.response = Some(response);
+            context.set_response(response);
             return Ok(ExecStep::Next);
         }
 
@@ -316,7 +322,7 @@ impl ConcurrentForwarder {
         probe: ForwardProbeRequest,
     ) -> Result<ExecStep> {
         let mut preferred_request = context.request.clone();
-        if !set_message_first_query_type(&mut preferred_request, probe.preferred_type) {
+        if !set_message_first_qtype(&mut preferred_request, probe.preferred_type) {
             return self.execute_standard(context).await;
         }
         let original_request = context.request.clone();
@@ -353,7 +359,7 @@ impl ConcurrentForwarder {
                 self.tag, err
             )));
         };
-        context.response = Some(response);
+        context.set_response(response);
 
         let preferred_outcome = if let Some(result) = preferred_early {
             Some(result)
@@ -412,25 +418,18 @@ impl ConcurrentForwarder {
 }
 
 #[inline]
-fn set_message_first_query_type(message: &mut Message, qtype: RecordType) -> bool {
-    let Some(query) = message.queries_mut().first_mut() else {
-        return false;
-    };
-    query.query_type = qtype;
-    true
+fn set_message_first_qtype(message: &mut Message, qtype: RecordType) -> bool {
+    message.set_first_qtype(qtype)
 }
 
 #[inline]
 fn response_has_answer_of_type(message: &Message, qtype: RecordType) -> bool {
-    message
-        .answers()
-        .iter()
-        .any(|answer| answer.record_type() == qtype)
+    message.has_answer_type(qtype)
 }
 
 #[inline]
-fn is_preferred_response_code(code: ResponseCode) -> bool {
-    code == ResponseCode::NoError || code == ResponseCode::NXDomain
+fn is_preferred_rcode(code: Rcode) -> bool {
+    code == Rcode::NoError || code == Rcode::NXDomain
 }
 
 fn parse_forward_config(plugin_config: &PluginConfig) -> Result<ForwardConfig> {
@@ -623,25 +622,23 @@ impl PluginFactory for ForwardFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
-    use ahash::{AHashMap, AHashSet};
-    use hickory_proto::op::{Query, ResponseCode};
-    use hickory_proto::rr::Name;
+    use crate::message::Name;
+    use crate::message::{Question, Rcode};
 
     #[derive(Debug)]
     struct MockUpstream {
         connection_info: ConnectionInfo,
-        response_code: Option<ResponseCode>,
+        response_code: Option<Rcode>,
         fail_message: Option<String>,
         delay: Duration,
     }
 
     impl MockUpstream {
         fn ok() -> Self {
-            Self::response(ResponseCode::NoError, Duration::ZERO)
+            Self::response(Rcode::NoError, Duration::ZERO)
         }
 
-        fn response(response_code: ResponseCode, delay: Duration) -> Self {
+        fn response(response_code: Rcode, delay: Duration) -> Self {
             Self {
                 connection_info: ConnectionInfo::with_addr("1.1.1.1")
                     .expect("mock upstream addr must be valid"),
@@ -671,11 +668,8 @@ mod tests {
             if let Some(err) = self.fail_message.as_ref() {
                 return Err(DnsError::plugin(err.clone()));
             }
-            let response_code = self.response_code.unwrap_or(ResponseCode::NoError);
-            Ok(crate::core::dns_utils::build_response_from_request(
-                &request,
-                response_code,
-            ))
+            let response_code = self.response_code.unwrap_or(Rcode::NoError);
+            Ok(request.response(response_code))
         }
 
         fn connection_info(&self) -> &ConnectionInfo {
@@ -685,20 +679,16 @@ mod tests {
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
-        DnsContext {
-            src_addr: "127.0.0.1:5533".parse().unwrap(),
+        DnsContext::new(
+            "127.0.0.1:5533".parse().unwrap(),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: AHashSet::new(),
-            attributes: AHashMap::new(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     fn make_plugin_config(args: &str) -> PluginConfig {
@@ -727,7 +717,7 @@ mod tests {
             err.to_string()
                 .contains("failed across all concurrent upstreams")
         );
-        assert!(context.response.is_none());
+        assert!(context.response().is_none());
     }
 
     #[test]
@@ -808,7 +798,7 @@ upstreams:
         let mut context = make_context();
         let step = forwarder.execute(&mut context).await.unwrap();
         assert!(matches!(step, ExecStep::Next));
-        assert!(context.response.is_some());
+        assert!(context.response().is_some());
     }
 
     #[tokio::test(start_paused = true)]
@@ -817,12 +807,9 @@ upstreams:
             tag: "forward-test".to_string(),
             active_concurrent: 2,
             upstreams: vec![
+                Arc::new(MockUpstream::response(Rcode::ServFail, Duration::ZERO)),
                 Arc::new(MockUpstream::response(
-                    ResponseCode::ServFail,
-                    Duration::ZERO,
-                )),
-                Arc::new(MockUpstream::response(
-                    ResponseCode::NoError,
+                    Rcode::NoError,
                     Duration::from_millis(20),
                 )),
             ],
@@ -832,12 +819,8 @@ upstreams:
         let step = forwarder.execute(&mut context).await.unwrap();
         assert!(matches!(step, ExecStep::Next));
         assert_eq!(
-            context
-                .response
-                .as_ref()
-                .expect("response must exist")
-                .response_code(),
-            ResponseCode::NoError
+            context.response().expect("response must exist").rcode(),
+            Rcode::NoError
         );
     }
 
@@ -847,12 +830,9 @@ upstreams:
             tag: "forward-test".to_string(),
             active_concurrent: 2,
             upstreams: vec![
+                Arc::new(MockUpstream::response(Rcode::ServFail, Duration::ZERO)),
                 Arc::new(MockUpstream::response(
-                    ResponseCode::ServFail,
-                    Duration::ZERO,
-                )),
-                Arc::new(MockUpstream::response(
-                    ResponseCode::Refused,
+                    Rcode::Refused,
                     Duration::from_millis(20),
                 )),
             ],
@@ -862,12 +842,8 @@ upstreams:
         let step = forwarder.execute(&mut context).await.unwrap();
         assert!(matches!(step, ExecStep::Next));
         assert_eq!(
-            context
-                .response
-                .as_ref()
-                .expect("response must exist")
-                .response_code(),
-            ResponseCode::Refused
+            context.response().expect("response must exist").rcode(),
+            Rcode::Refused
         );
     }
 }

@@ -1,0 +1,18 @@
+log:
+  level: error
+
+plugins:
+  - tag: forward_main
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: "223.5.5.5"
+        - addr: "119.29.29.29"
+        - addr: "114.114.114.114"
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "forward_main"
+      listen: "127.0.0.1:5304"

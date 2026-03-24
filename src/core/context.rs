@@ -3,294 +3,419 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! DNS request/response context management
-//!
-//! Provides a container for DNS queries as they flow through the plugin pipeline.
-//! Each context carries the request, response, metadata, and custom states.
+//! DNS request/response context management.
 
+use crate::message::Message;
 use crate::plugin::PluginRegistry;
-use ahash::AHashMap;
-use ahash::AHashSet;
-use hickory_proto::op::Message;
-use hickory_proto::rr::Name;
-use smallvec::SmallVec;
+use ahash::{AHashMap, AHashSet};
 use std::any::Any;
 use std::net::SocketAddr;
-use std::ops::Range;
 use std::sync::Arc;
 
+/// High-level execution state of the current plugin chain.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExecFlowState {
+    /// Normal execution is still traversing the current chain.
     Running,
+    /// Execution reached the natural end of the chain.
     ReachedTail,
+    /// Execution stopped early due to control flow such as `accept` or `reject`.
     Broken,
 }
 
-/// Lazily-built view of the first DNS question name.
-#[derive(Debug, Clone)]
-pub struct QueryView {
-    /// Original query name from request.
-    raw_name: Name,
-    normalized_name: String,
-    label_ranges_rev: SmallVec<[Range<u16>; 8]>,
+/// Typed metadata attached to the request by the inbound server layer.
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct RequestMeta {
+    /// SNI or host-like server identifier carried by the server layer.
+    pub server_name: Option<Arc<str>>,
+    /// URL path carried by HTTP-based server layers.
+    pub url_path: Option<Arc<str>>,
 }
 
-impl QueryView {
-    #[inline]
-    pub fn raw_name(&self) -> &Name {
-        &self.raw_name
-    }
+/// Metadata carried by the inbound transport layer.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct IngressContext {
+    peer_addr: SocketAddr,
+    request_meta: RequestMeta,
+}
 
-    #[inline]
-    pub fn normalized_name(&self) -> &str {
-        &self.normalized_name
-    }
-
-    #[inline]
-    pub fn labels_rev(&self) -> SmallVec<[&str; 8]> {
-        let mut out = SmallVec::<[&str; 8]>::with_capacity(self.label_ranges_rev.len());
-        for range in &self.label_ranges_rev {
-            out.push(&self.normalized_name[range.start as usize..range.end as usize]);
+impl Default for IngressContext {
+    fn default() -> Self {
+        Self {
+            peer_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+            request_meta: RequestMeta::default(),
         }
-        out
     }
 }
 
-/// Context object for a DNS request/response lifecycle
-///
-/// This object is passed through the plugin pipeline, carrying:
-/// - Source client address
-/// - DNS request message
-/// - Optional DNS response
-/// - Marks for plugin decision tracking
-/// - Custom attributes for plugin communication
-/// - Reference to the plugin registry for runtime plugin access
-#[allow(unused)]
+impl IngressContext {
+    #[inline]
+    pub fn new(peer_addr: SocketAddr) -> Self {
+        Self {
+            peer_addr,
+            request_meta: RequestMeta::default(),
+        }
+    }
+
+    #[inline]
+    pub fn peer_addr(&self) -> SocketAddr {
+        self.peer_addr
+    }
+
+    #[inline]
+    pub fn set_peer_addr(&mut self, peer_addr: SocketAddr) {
+        self.peer_addr = peer_addr;
+    }
+
+    #[inline]
+    pub fn request_meta(&self) -> &RequestMeta {
+        &self.request_meta
+    }
+
+    #[inline]
+    pub fn set_request_meta(&mut self, meta: RequestMeta) {
+        self.request_meta = meta;
+    }
+
+    #[inline]
+    pub fn server_name(&self) -> Option<&str> {
+        self.request_meta.server_name.as_deref()
+    }
+
+    #[inline]
+    pub fn url_path(&self) -> Option<&str> {
+        self.request_meta.url_path.as_deref()
+    }
+}
+
+/// Runtime-only mutable execution state.
+#[derive(Debug)]
+pub struct RuntimeContext {
+    flow: ExecFlowState,
+    marks: AHashSet<String>,
+    extensions: AHashMap<String, Box<dyn Any + Send + Sync>>,
+}
+
+impl Default for RuntimeContext {
+    fn default() -> Self {
+        Self {
+            flow: ExecFlowState::Running,
+            marks: AHashSet::new(),
+            extensions: AHashMap::new(),
+        }
+    }
+}
+
+impl RuntimeContext {
+    #[inline]
+    pub fn flow(&self) -> ExecFlowState {
+        self.flow
+    }
+
+    #[inline]
+    pub fn set_flow(&mut self, flow: ExecFlowState) {
+        self.flow = flow;
+    }
+
+    #[inline]
+    pub fn marks(&self) -> &AHashSet<String> {
+        &self.marks
+    }
+
+    #[inline]
+    pub fn marks_mut(&mut self) -> &mut AHashSet<String> {
+        &mut self.marks
+    }
+
+    pub fn set_attr<T>(&mut self, name: impl Into<String>, value: T)
+    where
+        T: Send + Sync + 'static,
+    {
+        self.extensions.insert(name.into(), Box::new(value));
+    }
+
+    pub fn get_attr<T>(&self, name: &str) -> Option<&T>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.extensions
+            .get(name)
+            .and_then(|value| value.downcast_ref())
+    }
+
+    pub fn contains_attr(&self, name: &str) -> bool {
+        self.extensions.contains_key(name)
+    }
+
+    pub fn remove_attr<T>(&mut self, name: &str) -> Option<T>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.extensions
+            .remove(name)
+            .and_then(|value| value.downcast::<T>().ok())
+            .map(|boxed| *boxed)
+    }
+}
+
+/// Context object for a DNS request/response lifecycle.
 pub struct DnsContext {
-    /// Client's socket address
-    pub src_addr: SocketAddr,
-
-    /// DNS request message from the client
+    pub ingress: IngressContext,
     pub request: Message,
-
-    /// DNS response message (populated by plugins)
     pub response: Option<Message>,
-
-    /// Current chain execution flow state for request exit classification.
-    ///
-    /// - `Running`: normal traversal
-    /// - `ReachedTail`: execution naturally reached the chain tail
-    /// - `Broken`: control flow requested early stop (e.g. `accept`/`reject`)
-    pub exec_flow_state: ExecFlowState,
-
-    /// Marks/tags added by plugins for decision tracking.
-    /// Hash-set layout reduces repeated membership checks on hot path.
-    pub marks: AHashSet<String>,
-
-    /// Typed state bag for inter-plugin communication.
-    pub attributes: AHashMap<String, Box<dyn Any + Send + Sync>>,
-
-    /// Cached first-query view shared by matchers/executors.
-    pub query_view: Option<QueryView>,
-
-    /// Reference to the plugin registry for runtime plugin lookup
-    ///
-    /// Allows plugins to access other plugins during execution without
-    /// relying on global state.
+    pub runtime: RuntimeContext,
     pub registry: Arc<PluginRegistry>,
 }
 
-#[allow(unused)]
 impl DnsContext {
-    /// Context attribute key: TLS SNI server name (DoH/DoT/DoQ).
-    pub const ATTR_SERVER_NAME: &'static str = "server_name";
-
-    /// Context attribute key: HTTP URL path for DoH request.
-    pub const ATTR_URL_PATH: &'static str = "url_path";
-
     /// Context attribute key: dual_selector requests extra preferred-type probe in forward.
     pub const ATTR_FORWARD_PROBE_REQUEST: &'static str = "dual_selector.forward_probe_request";
 
     /// Context attribute key: forward returns probe result back to dual_selector.
     pub const ATTR_FORWARD_PROBE_RESULT: &'static str = "dual_selector.forward_probe_result";
 
-    /// Set a custom attribute in the context
-    ///
-    /// Allows plugins to store typed data for later retrieval
+    #[inline]
+    pub fn new(peer_addr: SocketAddr, request: Message, registry: Arc<PluginRegistry>) -> Self {
+        Self {
+            ingress: IngressContext::new(peer_addr),
+            request,
+            response: None,
+            runtime: RuntimeContext::default(),
+            registry,
+        }
+    }
+
+    #[inline]
+    pub fn peer_addr(&self) -> SocketAddr {
+        self.ingress.peer_addr()
+    }
+
+    #[inline]
+    pub fn set_peer_addr(&mut self, peer_addr: SocketAddr) {
+        self.ingress.set_peer_addr(peer_addr);
+    }
+
+    #[inline]
+    pub fn set_request_meta(&mut self, meta: RequestMeta) {
+        self.ingress.set_request_meta(meta);
+    }
+
+    #[inline]
+    pub fn request_meta(&self) -> &RequestMeta {
+        self.ingress.request_meta()
+    }
+
+    #[inline]
+    pub fn server_name(&self) -> Option<&str> {
+        self.ingress.server_name()
+    }
+
+    #[inline]
+    pub fn url_path(&self) -> Option<&str> {
+        self.ingress.url_path()
+    }
+
+    #[inline]
+    pub fn request(&self) -> &Message {
+        &self.request
+    }
+
+    #[inline]
+    pub fn request_mut(&mut self) -> &mut Message {
+        &mut self.request
+    }
+
+    #[inline]
+    pub fn replace_request(&mut self, request: Message) {
+        self.request = request;
+    }
+
+    #[inline]
+    pub fn response(&self) -> Option<&Message> {
+        self.response.as_ref()
+    }
+
+    #[inline]
+    pub fn response_mut(&mut self) -> Option<&mut Message> {
+        self.response.as_mut()
+    }
+
+    #[inline]
+    pub fn set_response(&mut self, response: Message) {
+        self.response = Some(response);
+    }
+
+    #[inline]
+    pub fn clear_response(&mut self) {
+        self.response = None;
+    }
+
+    #[inline]
+    pub fn take_response(&mut self) -> Option<Message> {
+        self.response.take()
+    }
+
+    #[inline]
+    pub fn flow(&self) -> ExecFlowState {
+        self.runtime.flow()
+    }
+
+    #[inline]
+    pub fn set_flow(&mut self, flow: ExecFlowState) {
+        self.runtime.set_flow(flow);
+    }
+
+    #[inline]
+    pub fn marks(&self) -> &AHashSet<String> {
+        self.runtime.marks()
+    }
+
+    #[inline]
+    pub fn marks_mut(&mut self) -> &mut AHashSet<String> {
+        self.runtime.marks_mut()
+    }
+
+    #[inline]
+    pub fn contains_attr(&self, name: &str) -> bool {
+        self.runtime.contains_attr(name)
+    }
+
+    #[inline]
     pub fn set_attr<T>(&mut self, name: impl Into<String>, value: T)
     where
         T: Send + Sync + 'static,
     {
-        self.attributes.insert(name.into(), Box::new(value));
+        self.runtime.set_attr(name, value);
     }
 
-    /// Get a reference to a custom attribute
-    ///
-    /// Returns None if the attribute doesn't exist or has a different type
+    #[inline]
     pub fn get_attr<T>(&self, name: &str) -> Option<&T>
     where
         T: Send + Sync + 'static,
     {
-        self.attributes.get(name).and_then(|a| a.downcast_ref())
+        self.runtime.get_attr(name)
     }
 
-    /// Remove a custom attribute from the context
+    #[inline]
     pub fn remove_attr<T>(&mut self, name: &str) -> Option<T>
     where
         T: Send + Sync + 'static,
     {
-        self.attributes
-            .remove(name)
-            .and_then(|a| a.downcast::<T>().ok())
-            .map(|boxed| *boxed)
+        self.runtime.remove_attr(name)
     }
 
-    /// Build a sub-query context clone for recursive plugin execution.
-    ///
-    /// Typed attributes cannot be cloned generically, so only known string
-    /// metadata required by server/executor plugins is preserved.
-    pub fn clone_for_subquery(&self) -> DnsContext {
-        let mut cloned = DnsContext {
-            src_addr: self.src_addr,
+    pub fn copy_for_subquery(&self) -> DnsContext {
+        DnsContext {
+            ingress: self.ingress.clone(),
             request: self.request.clone(),
             response: self.response.clone(),
-            exec_flow_state: ExecFlowState::Running,
-            marks: self.marks.clone(),
-            attributes: AHashMap::new(),
-            query_view: self.query_view.clone(),
+            runtime: RuntimeContext {
+                flow: ExecFlowState::Running,
+                marks: self.runtime.marks.clone(),
+                extensions: AHashMap::new(),
+            },
             registry: self.registry.clone(),
-        };
-
-        if let Some(v) = self.get_attr::<String>(DnsContext::ATTR_SERVER_NAME) {
-            cloned.set_attr(DnsContext::ATTR_SERVER_NAME, v.clone());
         }
-        if let Some(v) = self.get_attr::<String>(DnsContext::ATTR_URL_PATH) {
-            cloned.set_attr(DnsContext::ATTR_URL_PATH, v.clone());
-        }
-        cloned
     }
 
-    /// Replace mutable request state with result produced by a sub-query context.
-    pub fn replace_with_subquery_result(&mut self, sub_ctx: DnsContext) {
+    pub fn apply_subquery_result(&mut self, sub_ctx: DnsContext) {
+        self.ingress = sub_ctx.ingress;
         self.request = sub_ctx.request;
         self.response = sub_ctx.response;
-        self.exec_flow_state = sub_ctx.exec_flow_state;
-        self.marks = sub_ctx.marks;
-        self.attributes = sub_ctx.attributes;
-        self.query_view = sub_ctx.query_view;
-    }
-
-    /// Invalidate cached query view after query name mutation.
-    pub fn invalidate_query_view(&mut self) {
-        self.query_view = None;
-    }
-
-    /// Set first query name and invalidate query view cache.
-    ///
-    /// Returns false when request has no question.
-    pub fn set_first_query_name(&mut self, name: Name) -> bool {
-        let Some(query) = self.request.queries_mut().first_mut() else {
-            return false;
-        };
-        query.set_name(name);
-        self.invalidate_query_view();
-        true
-    }
-
-    /// Get first-query view from context cache.
-    pub fn query_view(&mut self) -> Option<&QueryView> {
-        if self.query_view.is_none() {
-            let query = self.request.query()?;
-            self.query_view = Some(Self::build_query_view(query.name()));
-        }
-        self.query_view.as_ref()
-    }
-
-    /// Normalize DNS name for domain-rule matching.
-    ///
-    /// # Examples
-    /// ```
-    /// use forgedns::core::context::DnsContext;
-    /// use hickory_proto::rr::Name;
-    ///
-    /// let name = Name::from_ascii("WWW.Example.COM.").unwrap();
-    /// assert_eq!(DnsContext::normalize_dns_name(&name), "www.example.com");
-    /// ```
-    pub fn normalize_dns_name(name: &Name) -> String {
-        let mut s = name.to_lowercase().to_utf8();
-        if s.ends_with('.') {
-            s.pop();
-        }
-        s
-    }
-
-    fn build_query_view(name: &Name) -> QueryView {
-        let raw_name = name.clone();
-        let normalized_name = Self::normalize_dns_name(name);
-        let mut label_ranges_rev = SmallVec::<[Range<u16>; 8]>::new();
-        let base = normalized_name.as_ptr() as usize;
-        for label in normalized_name.rsplit('.') {
-            if label.is_empty() {
-                continue;
-            }
-            let start = (label.as_ptr() as usize).saturating_sub(base) as u16;
-            let end = start.saturating_add(label.len() as u16);
-            label_ranges_rev.push(start..end);
-        }
-        QueryView {
-            raw_name,
-            normalized_name,
-            label_ranges_rev,
-        }
+        self.runtime.flow = sub_ctx.runtime.flow;
+        self.runtime.marks = sub_ctx.runtime.marks;
+        self.runtime.extensions = sub_ctx.runtime.extensions;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::PluginRegistry;
-    use hickory_proto::op::Query;
-    use hickory_proto::rr::RecordType;
-    use std::net::{Ipv4Addr, SocketAddr};
-    use std::sync::Arc;
+    use crate::message::rdata::A;
+    use crate::message::{DNSClass, Question};
+    use crate::message::{Message, Name, RData, Record, RecordType};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("WWW.Example.COM.").unwrap(),
             RecordType::A,
+            DNSClass::IN,
         ));
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: AHashMap::new(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[test]
-    fn test_query_view_normalization_and_labels() {
+    fn test_request_meta_is_typed() {
         let mut ctx = make_context();
-        let view = ctx.query_view().expect("query view should exist");
-        assert_eq!(view.normalized_name(), "www.example.com");
-        assert_eq!(view.labels_rev().as_slice(), ["com", "example", "www"]);
+        ctx.set_request_meta(RequestMeta {
+            server_name: Some(Arc::from("dns.example.com")),
+            url_path: Some(Arc::from("/dns-query")),
+        });
+
+        assert_eq!(ctx.server_name(), Some("dns.example.com"));
+        assert_eq!(ctx.url_path(), Some("/dns-query"));
     }
 
     #[test]
-    fn test_set_first_query_name_invalidates_view() {
+    fn test_request_helpers_replace_message() {
         let mut ctx = make_context();
-        let _ = ctx.query_view();
-        assert!(ctx.query_view.is_some());
+        let packet = vec![
+            0x12, 0x34, 0x01, 0x10, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'a',
+            b'p', b'i', 0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm',
+            0x00, 0x00, 0x1c, 0x00, 0x01,
+        ];
 
-        assert!(ctx.set_first_query_name(Name::from_ascii("api.example.com.").unwrap()));
-        assert!(ctx.query_view.is_none());
-        assert_eq!(
-            ctx.query_view().unwrap().normalized_name(),
-            "api.example.com"
+        ctx.replace_request(Message::from_bytes(&packet).expect("packet should parse"));
+        let question = ctx.request.first_question().expect("question should exist");
+        assert_eq!(question.name().normalized(), "api.example.com");
+        assert_eq!(question.qtype(), RecordType::AAAA);
+        assert!(ctx.request.checking_disabled());
+    }
+
+    #[test]
+    fn test_response_is_mutated_directly() {
+        let mut ctx = make_context();
+        let mut response = Message::new();
+        response.set_message_type(crate::message::MessageType::Response);
+        response.add_question(Question::new(
+            Name::from_ascii("www.example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("www.example.com.").unwrap(),
+            60,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 1))),
+        ));
+        ctx.set_response(response);
+
+        assert!(
+            ctx.response
+                .as_ref()
+                .unwrap()
+                .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)))
+        );
+
+        ctx.response
+            .as_mut()
+            .unwrap()
+            .add_answer(Record::from_rdata(
+                Name::from_ascii("www.example.com.").unwrap(),
+                60,
+                RData::A(A(Ipv4Addr::new(198, 51, 100, 2))),
+            ));
+
+        assert!(
+            ctx.response
+                .as_ref()
+                .unwrap()
+                .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2)))
         );
     }
 }

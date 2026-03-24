@@ -100,7 +100,7 @@ impl Plugin for MarkMatcher {
 
 impl Matcher for MarkMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        !context.marks.is_disjoint(&self.marks)
+        !context.marks().is_disjoint(&self.marks)
     }
 }
 
@@ -128,10 +128,10 @@ mod tests {
         };
 
         let mut ctx = test_context();
-        ctx.marks.insert("3".to_string());
+        ctx.marks_mut().insert("3".to_string());
         assert!(!matcher.is_match(&mut ctx));
 
-        ctx.marks.insert("1".to_string());
+        ctx.marks_mut().insert("1".to_string());
         assert!(matcher.is_match(&mut ctx));
     }
 }

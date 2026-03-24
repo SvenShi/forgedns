@@ -10,10 +10,9 @@ use super::{CacheItem, CacheMap};
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 use crate::core::ttl_cache::TtlCacheEntry;
-use hickory_proto::op::Message;
-use hickory_proto::rr::{DNSClass, RecordType};
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use crate::message::{DNSClass, Message, RecordType};
 use std::path::Path;
+use std::sync::Arc;
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -62,7 +61,10 @@ pub(super) async fn dump_cache_to_file(cache_map: &CacheMap, dump_path: &str) ->
         let resp_bytes = match value.resp.to_bytes() {
             Ok(bytes) => bytes,
             Err(e) => {
-                warn!("Failed to serialize DNS message for {}: {}", key.domain, e);
+                warn!(
+                    "Failed to encode cached DNS message for {}: {}",
+                    key.domain, e
+                );
                 continue;
             }
         };
@@ -190,7 +192,7 @@ pub(super) async fn load_cache_from_file(
         };
 
         let resp = match Message::from_bytes(&entry.resp_bytes) {
-            Ok(message) => message,
+            Ok(resp) => resp,
             Err(e) => {
                 warn!(
                     "Failed to parse cached DNS message for {}: {}",
@@ -206,10 +208,7 @@ pub(super) async fn load_cache_from_file(
 
         cache_map.insert_or_update_with_meta(
             key,
-            CacheItem {
-                resp,
-                ttl: entry.ttl,
-            },
+            Arc::new(CacheItem::new(resp, entry.ttl)),
             cache_time,
             expire_time,
             last_access_time,

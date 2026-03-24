@@ -1,0 +1,16 @@
+log:
+  level: error
+
+plugins:
+  - tag: forward_main
+    type: forward
+    args:
+      upstreams:
+        - addr: "https://dns.alidns.com/dns-query"
+          dial_addr: "223.5.5.5"
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "forward_main"
+      listen: "127.0.0.1:5307"

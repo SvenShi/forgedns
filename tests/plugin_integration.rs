@@ -6,12 +6,12 @@
 use forgedns::config::types::Config;
 use forgedns::core::context::{DnsContext, ExecFlowState};
 use forgedns::core::error::{DnsError, Result};
+use forgedns::message::{DNSClass, Message, Question, Rcode};
+use forgedns::message::{Name, RecordType};
 use forgedns::network::transport::udp_transport::UdpTransport;
 use forgedns::plugin;
 use forgedns::plugin::executor::ExecStep;
 use forgedns::plugin::{PluginRegistry, PluginType};
-use hickory_proto::op::{Message, Query, ResponseCode};
-use hickory_proto::rr::{Name, RecordType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -25,21 +25,17 @@ fn parse_config(yaml: &str) -> Result<Config> {
 
 fn make_context(registry: Arc<PluginRegistry>, qname: &str) -> DnsContext {
     let mut request = Message::new();
-    request.add_query(Query::query(
+    request.add_question(Question::new(
         Name::from_ascii(qname).expect("query name should be valid"),
         RecordType::A,
+        DNSClass::IN,
     ));
 
-    DnsContext {
-        src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+    DnsContext::new(
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
         request,
-        response: None,
-        exec_flow_state: ExecFlowState::Running,
-        marks: Default::default(),
-        attributes: Default::default(),
-        query_view: None,
         registry,
-    }
+    )
 }
 
 fn reserve_local_udp_addr() -> Result<SocketAddr> {
@@ -56,12 +52,15 @@ async fn exchange_udp_query(server_addr: SocketAddr, qname: &str) -> Result<Mess
 
     let mut request = Message::new();
     request.set_id(0x1234);
-    request.add_query(Query::query(
+    request.add_question(Question::new(
         Name::from_ascii(qname).expect("query name should be valid"),
         RecordType::A,
+        DNSClass::IN,
     ));
 
-    transport.write_message(&request).await?;
+    transport
+        .write_message_with_id(&request, request.id())
+        .await?;
 
     let mut buf = [0u8; 4096];
     timeout(Duration::from_secs(1), transport.read_message(&mut buf))
@@ -160,7 +159,7 @@ plugins:
     args:
       - matches: $allow_all
         exec: mark 100
-      - exec: reject SERVFAIL
+      - exec: reject 2
 "#;
 
     let config = parse_config(yaml)?;
@@ -175,15 +174,14 @@ plugins:
     let step = sequence.execute(&mut context).await?;
 
     assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
-    assert!(context.marks.contains("100"));
+    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(context.marks().contains("100"));
     assert_eq!(
         context
-            .response
-            .as_ref()
+            .response()
             .expect("reject should set a response")
-            .response_code(),
-        ResponseCode::ServFail
+            .rcode(),
+        Rcode::ServFail
     );
 
     registry.destroy_plugins().await;
@@ -254,7 +252,7 @@ plugins:
       - matches:
           - _true
         exec: mark 100 200
-      - exec: reject SERVFAIL
+      - exec: reject 2
 "#;
 
     let config = parse_config(yaml)?;
@@ -269,16 +267,15 @@ plugins:
     let step = sequence.execute(&mut context).await?;
 
     assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
-    assert!(context.marks.contains("100"));
-    assert!(context.marks.contains("200"));
+    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(context.marks().contains("100"));
+    assert!(context.marks().contains("200"));
     assert_eq!(
         context
-            .response
-            .as_ref()
+            .response()
             .expect("reject should set a response")
-            .response_code(),
-        ResponseCode::ServFail
+            .rcode(),
+        Rcode::ServFail
     );
 
     registry.destroy_plugins().await;
@@ -326,9 +323,9 @@ plugins:
     let response = response_result?;
 
     assert_eq!(response.id(), 0x1234);
-    assert_eq!(response.response_code(), ResponseCode::NoError);
+    assert_eq!(response.rcode(), Rcode::NoError);
     assert_eq!(response.answers().len(), 1);
-    assert_eq!(response.answers()[0].record_type(), RecordType::A);
+    assert_eq!(response.answers()[0].rr_type(), RecordType::A);
     assert_eq!(
         response.answers()[0].data().ip_addr(),
         Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)))
@@ -364,9 +361,9 @@ plugins:
         .expect("combined domain provider should exist")
         .to_provider();
 
-    assert!(provider.contains_domain("local.example"));
-    assert!(provider.contains_domain("www.shared.example"));
-    assert!(!provider.contains_domain("missing.example"));
+    assert!(provider.contains_name(&Name::from_ascii("local.example").unwrap()));
+    assert!(provider.contains_name(&Name::from_ascii("www.shared.example").unwrap()));
+    assert!(!provider.contains_name(&Name::from_ascii("missing.example").unwrap()));
 
     registry.destroy_plugins().await;
     Ok(())
@@ -421,7 +418,7 @@ plugins:
     args:
       - matches:
           - $debug
-        exec: reject SERVFAIL
+        exec: reject 2
 "#;
 
     let config = parse_config(yaml)?;

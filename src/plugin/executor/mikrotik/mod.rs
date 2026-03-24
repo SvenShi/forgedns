@@ -32,15 +32,13 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::rr_to_ip;
 use crate::core::error::{DnsError, Result};
+use crate::message::Rcode;
 use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::{AHashMap, AHashSet};
 use async_trait::async_trait;
-use hickory_proto::op::ResponseCode;
-use hickory_proto::rr::RecordType;
 use serde::Deserialize;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -424,32 +422,19 @@ fn extract_observation(
     context: &mut DnsContext,
     config: &MikrotikConfig,
 ) -> Option<(String, Vec<ObservedAddr>)> {
-    // Prefer normalized query view if available; fallback to raw request question.
     let domain = context
-        .query_view()
-        .map(|view| view.normalized_name().to_string())
-        .or_else(|| {
-            context
-                .request
-                .query()
-                .map(|q| DnsContext::normalize_dns_name(q.name()))
-        })?;
+        .request
+        .first_question()
+        .map(|question| question.name().normalized().to_string())?;
 
-    let response = context.response.as_ref()?;
-    if response.response_code() != ResponseCode::NoError {
+    let response = context.response()?;
+    if response.rcode() != Rcode::NoError {
         return None;
     }
 
     // Collapse duplicated A/AAAA answers by IP and keep max TTL per IP.
     let mut dedup = AHashMap::<IpAddr, u32>::new();
-    for answer in response.answers() {
-        if !matches!(answer.record_type(), RecordType::A | RecordType::AAAA) {
-            continue;
-        }
-        let Some(ip) = rr_to_ip(answer) else {
-            continue;
-        };
-
+    for (ip, ttl_secs) in response.answer_ip_ttls() {
         match ip {
             IpAddr::V4(_) if config.gateway4.is_none() => continue,
             IpAddr::V6(_) if config.gateway6.is_none() => continue,
@@ -458,8 +443,8 @@ fn extract_observation(
 
         dedup
             .entry(ip)
-            .and_modify(|ttl| *ttl = (*ttl).max(answer.ttl()))
-            .or_insert(answer.ttl());
+            .and_modify(|ttl| *ttl = (*ttl).max(ttl_secs))
+            .or_insert(ttl_secs);
     }
 
     if dedup.is_empty() {
@@ -797,15 +782,14 @@ fn is_persistent_ip_family_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
+    use crate::message::rdata::{A, AAAA};
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::PluginRegistry;
     use crate::plugin::executor::mikrotik::api::RouterRoute;
     use crate::plugin::executor::mikrotik::manager::{
         RouteCommentCodec, RouteEntry, RouteFamily, RouteKey, SyncState,
     };
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::{A, AAAA};
-    use hickory_proto::rr::{Name, RData, Record};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::str::FromStr;
 
@@ -1025,25 +1009,21 @@ mod tests {
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
-        DnsContext {
-            src_addr: "127.0.0.1:5353".parse::<SocketAddr>().unwrap(),
+        DnsContext::new(
+            "127.0.0.1:5353".parse::<SocketAddr>().unwrap(),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: AHashSet::new(),
-            attributes: AHashMap::new(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     fn response_with_records(records: Vec<Record>) -> Message {
         let mut resp = Message::new();
-        resp.set_response_code(ResponseCode::NoError);
+        resp.set_rcode(Rcode::NoError);
         for record in records {
             resp.answers_mut().push(record);
         }
@@ -1931,7 +1911,7 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response = Some(response_with_records(vec![
+        ctx.set_response(response_with_records(vec![
             a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
             aaaa_record(Ipv6Addr::LOCALHOST, 300),
         ]));
@@ -1966,13 +1946,13 @@ persistent_route:
         let _ = executor.init().await;
 
         let mut ctx = make_context();
-        ctx.response = Some(response_with_records(vec![a_record(
+        ctx.set_response(response_with_records(vec![a_record(
             Ipv4Addr::new(10, 0, 0, 1),
             300,
         )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
         assert!(
-            ctx.response.is_some(),
+            ctx.response().is_some(),
             "DNS response should be kept unchanged"
         );
         let _ = executor.destroy().await;
@@ -1991,7 +1971,7 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response = Some(response_with_records(vec![a_record(
+        ctx.set_response(response_with_records(vec![a_record(
             Ipv4Addr::new(6, 6, 6, 6),
             300,
         )]));
@@ -2017,7 +1997,7 @@ persistent_route:
         );
         let _ = executor.init().await;
         let mut ctx = make_context();
-        ctx.response = Some(response_with_records(vec![a_record(
+        ctx.set_response(response_with_records(vec![a_record(
             Ipv4Addr::new(11, 11, 11, 11),
             300,
         )]));

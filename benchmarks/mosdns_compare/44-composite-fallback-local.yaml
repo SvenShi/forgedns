@@ -1,0 +1,28 @@
+log:
+  level: error
+
+plugins:
+  - tag: primary_seq
+    type: sequence
+    args:
+      - exec: sleep 1
+      - exec: black_hole 192.0.2.10
+
+  - tag: secondary_seq
+    type: sequence
+    args:
+      - exec: black_hole 192.0.2.11
+
+  - tag: fallback_main
+    type: fallback
+    args:
+      primary: "primary_seq"
+      secondary: "secondary_seq"
+      threshold: 0
+      always_standby: true
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: "fallback_main"
+      listen: "127.0.0.1:5344"

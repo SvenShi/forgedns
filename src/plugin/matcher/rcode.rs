@@ -7,6 +7,9 @@
 //!
 //! This plugin follows standard plugin lifecycle (`init/destroy`) and
 //! matches DNS response code from the generated upstream response.
+//!
+//! Config currently accepts only decimal numeric rcodes, for example `["0"]`
+//! or quick-setup syntax like `rcode 2`.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -81,52 +84,48 @@ impl Plugin for RcodeMatcher {
 
 impl Matcher for RcodeMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(response) = context.response.as_ref() else {
+        let Some(rcode) = context.response().map(|response| response.rcode()) else {
             return false;
         };
-        self.rcodes.contains(&u16::from(response.response_code()))
+        self.rcodes.contains(&u16::from(rcode))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
+    use crate::message::{Message, Question, Rcode};
+    use crate::message::{Name, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query, ResponseCode};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::SocketAddr;
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[tokio::test]
     async fn test_rcode_matcher_only_checks_rcode() {
         let matcher = RcodeMatcher {
             tag: "rcode".into(),
-            rcodes: [u16::from(ResponseCode::ServFail)].into_iter().collect(),
+            rcodes: [u16::from(Rcode::ServFail)].into_iter().collect(),
         };
 
         let mut ctx = make_context();
         let mut response = Message::new();
-        response.set_response_code(ResponseCode::NoError);
-        ctx.response = Some(response);
+        response.set_rcode(Rcode::NoError);
+        ctx.set_response(response);
 
         assert!(!matcher.is_match(&mut ctx));
     }
@@ -135,7 +134,7 @@ mod tests {
     async fn test_rcode_matcher_matches_expected_code_and_requires_response() {
         let matcher = RcodeMatcher {
             tag: "rcode".into(),
-            rcodes: [u16::from(ResponseCode::ServFail)].into_iter().collect(),
+            rcodes: [u16::from(Rcode::ServFail)].into_iter().collect(),
         };
 
         let mut no_response_ctx = make_context();
@@ -143,8 +142,8 @@ mod tests {
 
         let mut match_ctx = make_context();
         let mut response = Message::new();
-        response.set_response_code(ResponseCode::ServFail);
-        match_ctx.response = Some(response);
+        response.set_rcode(Rcode::ServFail);
+        match_ctx.set_response(response);
         assert!(matcher.is_match(&mut match_ctx));
     }
 }

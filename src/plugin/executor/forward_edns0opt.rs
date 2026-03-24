@@ -22,14 +22,12 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::message::{EdnsCode, EdnsOption};
 use crate::plugin::executor::{ExecState, ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
-use hickory_proto::rr::RData;
-use hickory_proto::rr::rdata::OPT;
-use hickory_proto::rr::rdata::opt::{EdnsCode, EdnsOption};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -88,7 +86,7 @@ impl Executor for ForwardEdns0Opt {
             return Ok(());
         }
 
-        if let Some(response) = context.response.as_mut() {
+        if let Some(response) = context.response_mut() {
             let mut existing_codes = collect_selected_codes(response, &self.code_set);
             let opt = ensure_opt_record(response);
             for option in selected {
@@ -166,68 +164,43 @@ fn parse_codes_from_value(args: Option<serde_yml::Value>) -> Result<AHashSet<u16
 }
 
 fn collect_selected_options(
-    message: &hickory_proto::op::Message,
+    message: &crate::message::Message,
     code_set: &AHashSet<u16>,
 ) -> Vec<EdnsOption> {
+    let Some(edns) = message.edns() else {
+        return Vec::new();
+    };
+
     let mut selected = Vec::new();
-    for record in message.additionals() {
-        let RData::OPT(opt) = record.data() else {
-            continue;
-        };
-        for (_, option) in opt.as_ref() {
-            let code = u16::from(EdnsCode::from(option));
-            if code_set.contains(&code) {
-                selected.push(option.clone());
-            }
+    for option in edns.options() {
+        let code = u16::from(EdnsCode::from(option));
+        if code_set.contains(&code) {
+            selected.push(option.clone());
         }
     }
     selected
 }
 
 fn collect_selected_codes(
-    message: &hickory_proto::op::Message,
+    message: &crate::message::Message,
     code_set: &AHashSet<u16>,
 ) -> AHashSet<u16> {
+    let Some(edns) = message.edns() else {
+        return AHashSet::new();
+    };
+
     let mut out = AHashSet::new();
-    for record in message.additionals() {
-        let RData::OPT(opt) = record.data() else {
-            continue;
-        };
-        for (_, option) in opt.as_ref() {
-            let code = u16::from(EdnsCode::from(option));
-            if code_set.contains(&code) {
-                out.insert(code);
-            }
+    for option in edns.options() {
+        let code = u16::from(EdnsCode::from(option));
+        if code_set.contains(&code) {
+            out.insert(code);
         }
     }
     out
 }
 
-fn ensure_opt_record(message: &mut hickory_proto::op::Message) -> &mut OPT {
-    let mut opt_idx = None;
-    for (idx, record) in message.additionals().iter().enumerate() {
-        if matches!(record.data(), RData::OPT(_)) {
-            opt_idx = Some(idx);
-            break;
-        }
-    }
-
-    let idx = match opt_idx {
-        Some(idx) => idx,
-        None => {
-            message.add_additional(hickory_proto::rr::Record::from_rdata(
-                hickory_proto::rr::Name::root(),
-                0,
-                RData::OPT(OPT::default()),
-            ));
-            message.additionals().len() - 1
-        }
-    };
-
-    match message.additionals_mut()[idx].data_mut() {
-        RData::OPT(opt) => opt,
-        _ => unreachable!("OPT record must contain OPT rdata"),
-    }
+fn ensure_opt_record(message: &mut crate::message::Message) -> &mut crate::message::Edns {
+    message.ensure_edns_mut()
 }
 
 fn split_tokens(raw: &str) -> Vec<&str> {
@@ -240,12 +213,11 @@ fn split_tokens(raw: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
+    use crate::message::{ClientSubnet, DNSClass, Message, Question};
+    use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::opt::ClientSubnet;
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     #[test]
@@ -258,20 +230,16 @@ mod tests {
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            DNSClass::IN,
         ));
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     fn add_ecs(message: &mut Message, ip: Ipv4Addr, mask: u8) {
@@ -284,28 +252,26 @@ mod tests {
     }
 
     fn count_code(message: &Message, code: u16) -> usize {
-        let mut total = 0usize;
-        for record in message.additionals() {
-            let RData::OPT(opt) = record.data() else {
-                continue;
-            };
-            for (_, option) in opt.as_ref() {
-                if u16::from(EdnsCode::from(option)) == code {
-                    total += 1;
-                }
-            }
-        }
-        total
+        message
+            .edns()
+            .as_ref()
+            .map(|edns| {
+                edns.options()
+                    .iter()
+                    .filter(|option| u16::from(EdnsCode::from(*option)) == code)
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     #[tokio::test]
-    async fn test_forward_edns0opt_moves_selected_request_options_to_response() {
+    async fn test_forward_edns0opt_moves_selected_request_options_response() {
         let plugin = ForwardEdns0Opt {
             tag: "forward_opt".to_string(),
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -316,13 +282,13 @@ mod tests {
             _ => panic!("expected NextWithPost"),
         };
 
-        ctx.response = Some(Message::new());
+        ctx.set_response(Message::new());
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            count_code(ctx.response().expect("response should exist"), 8),
             1
         );
     }
@@ -334,7 +300,7 @@ mod tests {
             code_set: [8u16].into_iter().collect(),
         };
         let mut ctx = make_context();
-        add_ecs(&mut ctx.request, Ipv4Addr::new(1, 1, 1, 1), 24);
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
         let step = plugin
             .execute(&mut ctx)
@@ -347,14 +313,140 @@ mod tests {
 
         let mut response = Message::new();
         add_ecs(&mut response, Ipv4Addr::new(2, 2, 2, 2), 24);
-        ctx.response = Some(response);
+        ctx.set_response(response);
 
         plugin
             .post_execute(&mut ctx, state)
             .await
             .expect("post_execute should succeed");
         assert_eq!(
-            count_code(ctx.response.as_ref().expect("response should exist"), 8),
+            count_code(ctx.response().expect("response should exist"), 8),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forward_edns0opt_reads_selected_options_from_request() {
+        let plugin = ForwardEdns0Opt {
+            tag: "forward_opt".to_string(),
+            code_set: [8u16].into_iter().collect(),
+        };
+        let mut ctx = make_context();
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        ctx.set_response(Message::new());
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+        assert_eq!(
+            count_code(ctx.response().expect("response should exist"), 8),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forward_edns0opt_keeps_single_existing_rcode() {
+        let plugin = ForwardEdns0Opt {
+            tag: "forward_opt".to_string(),
+            code_set: [8u16].into_iter().collect(),
+        };
+        let mut ctx = make_context();
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        let mut response = Message::new();
+        add_ecs(&mut response, Ipv4Addr::new(2, 2, 2, 2), 24);
+        ctx.set_response(response);
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+        assert_eq!(
+            count_code(ctx.response().expect("response should exist"), 8),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forward_edns0opt_appends_to_existing_response_opt() {
+        let plugin = ForwardEdns0Opt {
+            tag: "forward_opt".to_string(),
+            code_set: [8u16].into_iter().collect(),
+        };
+        let mut ctx = make_context();
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        let mut response = Message::new();
+        let _ = ensure_opt_record(&mut response);
+        ctx.set_response(response);
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+        assert_eq!(
+            count_code(ctx.response().expect("response should exist"), 8),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forward_edns0opt_creates_response_opt_when_missing() {
+        let plugin = ForwardEdns0Opt {
+            tag: "forward_opt".to_string(),
+            code_set: [8u16].into_iter().collect(),
+        };
+        let mut ctx = make_context();
+        add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        let state = match step {
+            ExecStep::NextWithPost(state) => state,
+            _ => panic!("expected NextWithPost"),
+        };
+
+        ctx.set_response(Message::new());
+
+        plugin
+            .post_execute(&mut ctx, state)
+            .await
+            .expect("post_execute should succeed");
+
+        let updated = ctx.response().expect("response should exist");
+        assert!(updated.edns().is_some());
+        assert_eq!(
+            count_code(ctx.response().expect("response should exist"), 8),
             1
         );
     }

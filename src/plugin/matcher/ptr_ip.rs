@@ -11,6 +11,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::IpPrefixMatcher;
+use crate::message::RecordType;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 #[cfg(test)]
@@ -22,7 +23,6 @@ use crate::plugin::matcher::matcher_utils::{
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::rr::RecordType;
 use std::fmt::Debug;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -114,8 +114,8 @@ impl Plugin for PtrIpMatcher {
 
 impl Matcher for PtrIpMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        context.request.queries().iter().any(|query| {
-            if query.query_type() != RecordType::PTR {
+        context.request.questions().iter().any(|query| {
+            if query.qtype() != RecordType::PTR {
                 return false;
             }
             let Some(ip) = parse_ptr_name_ip(query.name()) else {
@@ -126,7 +126,7 @@ impl Matcher for PtrIpMatcher {
     }
 }
 
-fn parse_ptr_name_ip(name: &hickory_proto::rr::Name) -> Option<IpAddr> {
+fn parse_ptr_name_ip(name: &crate::message::Name) -> Option<IpAddr> {
     name.parse_arpa_name()
         .ok()
         .map(|net| normalize_ip(net.addr()))
@@ -145,29 +145,25 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::SocketAddr;
 
     #[tokio::test]
     async fn test_ptr_ip_match_ipv4_arpa() {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("1.0.168.192.in-addr.arpa.").unwrap(),
             RecordType::PTR,
+            crate::message::DNSClass::IN,
         ));
-        let mut ctx = DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        let mut ctx = DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        };
+            Arc::new(PluginRegistry::new()),
+        );
 
         let matcher = PtrIpMatcher {
             tag: "ptr_ip".into(),
@@ -191,37 +187,29 @@ mod tests {
         };
 
         let mut non_ptr_request = Message::new();
-        non_ptr_request.add_query(Query::query(
+        non_ptr_request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
-        let mut non_ptr_ctx = DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request: non_ptr_request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        };
+        let mut non_ptr_ctx = DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+            non_ptr_request,
+            Arc::new(PluginRegistry::new()),
+        );
         assert!(!matcher.is_match(&mut non_ptr_ctx));
 
         let mut invalid_ptr_request = Message::new();
-        invalid_ptr_request.add_query(Query::query(
+        invalid_ptr_request.add_question(Question::new(
             Name::from_ascii("bad.ptr.example.com.").unwrap(),
             RecordType::PTR,
+            crate::message::DNSClass::IN,
         ));
-        let mut invalid_ptr_ctx = DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request: invalid_ptr_request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        };
+        let mut invalid_ptr_ctx = DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+            invalid_ptr_request,
+            Arc::new(PluginRegistry::new()),
+        );
         assert!(!matcher.is_match(&mut invalid_ptr_ctx));
     }
 }

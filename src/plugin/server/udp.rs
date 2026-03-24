@@ -10,6 +10,7 @@
 //! task spawning with automatic cleanup.
 
 use crate::config::types::PluginConfig;
+use crate::core::context::RequestMeta;
 use crate::core::error::{DnsError, Result};
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::dependency::DependencySpec;
@@ -24,8 +25,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinSet;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
+
+const UDP_RECV_BUFFER_SIZE: usize = 65_535;
 
 /// UDP server configuration
 #[derive(Deserialize)]
@@ -137,7 +140,8 @@ impl Server for UdpServer {
 /// Main UDP server loop
 ///
 /// Creates a UDP stream, listens for incoming DNS queries, and spawns
-/// handler tasks for each request. Performs periodic cleanup of finished tasks.
+/// handler tasks for each request. Uses a task tracker to manage request
+/// lifetimes without polling completed tasks from the hot path.
 async fn run_server(
     addr: String,
     handler: Arc<RequestHandle>,
@@ -163,8 +167,8 @@ async fn run_server(
     debug!("UDP server event loop started on {}", addr);
 
     let transport = Arc::new(UdpTransport::new(socket));
-    let mut buf = [0u8; 4096];
-    let mut tasks: JoinSet<()> = JoinSet::new();
+    let mut buf = vec![0u8; UDP_RECV_BUFFER_SIZE];
+    let tasks = TaskTracker::new();
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -179,12 +183,11 @@ async fn run_server(
                         let handler = handler.clone();
                         let transport = transport.clone();
                         tasks.spawn(async move {
-                            let response = handler.handle_request(msg, src_addr).await;
+                            let response = handler.handle_request(msg, src_addr, RequestMeta{server_name: None, url_path: None}).await;
                             // Use requester-advertised UDP payload limit (EDNS) when encoding
                             // response so oversize replies become TC=1 DNS messages, not raw truncation.
-                            if let Err(e) = transport
-                                .write_message_to(&response.response, src_addr, max_payload)
-                                .await
+                            if let Err(e) =
+                                transport.write_message_to(&response.response, src_addr, max_payload).await
                             {
                                 warn!("Failed to send response to {}: {}", src_addr, e);
                             }
@@ -195,16 +198,11 @@ async fn run_server(
                     }
                 }
             }
-            Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                if let Err(e) = result {
-                    warn!("UDP request task panicked: {:?}", e);
-                }
-            }
         }
     }
 
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
+    tasks.close();
+    tasks.wait().await;
     info!(listen = %addr, "UDP server stopped");
 }
 

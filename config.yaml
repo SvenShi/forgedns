@@ -84,7 +84,8 @@ plugins:
   #
   # - tag: only_noerror
   #   type: rcode
-  #   args: ["NOERROR"]
+  #   # rcode matcher 当前只支持数字映射值，例如 NOERROR=0、SERVFAIL=2
+  #   args: ["0"]
 
   - tag: "udp_server"
     type: "udp_server"

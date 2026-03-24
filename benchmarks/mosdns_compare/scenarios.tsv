@@ -1,0 +1,59 @@
+# label|forgedns_config|mosdns_config|query_file|mode|family|warmup_query_file|tags|description|notes
+# Core macro scenarios with the highest selection value.
+01-baseline-udp-forward|01-baseline-udp-forward.yaml|01-baseline-udp-forward.yaml|queries/forward.txt|udp|macro-forward|-|core,macro,stable|Pure UDP forward baseline|Closest to a real recursive or proxy hot path.
+02-cache-hotpath|02-cache-hotpath.yaml|02-cache-hotpath.yaml|queries/cache-hotpath.txt|udp|macro-cache|-|core,macro,stable|Warm cache hit path|Use with 01 to separate in-memory hit cost from network forward cost.
+03-dual-entry-udp|03-dual-entry-udp-tcp.yaml|03-dual-entry-udp-tcp.yaml|queries/forward.txt|udp|macro-entry|-|core,macro,stable|Shared dual-listener config under UDP load|Entry path compare without changing business logic.
+03-dual-entry-tcp|03-dual-entry-udp-tcp.yaml|03-dual-entry-udp-tcp.yaml|queries/forward.txt|tcp|macro-entry|-|core,macro,stable|Shared dual-listener config under TCP load|Highlights TCP accept, session, and response path overhead.
+04-concurrent-upstreams|04-concurrent-upstreams.yaml|04-concurrent-upstreams.yaml|queries/forward.txt|udp|macro-upstream|-|core,macro,stable|Concurrent upstream race path|Good for multi-upstream hedged request compare.
+05-fallback-standby|05-fallback-standby.yaml|05-fallback-standby.yaml|queries/forward.txt|udp|macro-fallback|-|extended,macro,stable|Standby fallback path|Useful when failover and concurrent standby matter more than pure proxy throughput.
+06-local-answers|06-local-answers.yaml|06-local-answers.yaml|queries/local-answers.txt|udp|macro-local|-|core,macro,stable|Hosts and arbitrary local answers|Represents local interception and synthetic answer workloads.
+07-doh-upstream-h2|07-doh-upstream-h2.yaml|07-doh-upstream-h2.yaml|queries/forward.txt|udp|macro-doh|-|edge,macro,unstable|DoH upstream over HTTP/2|Treat as an edge scenario unless upstream success rate is known to be stable.
+08-domain-set|08-domain-set.yaml|08-domain-set.yaml|queries/domain-set-mixed.txt|udp|macro-domain-set|-|core,macro,stable|Domain-set match against geosite-like data with hit and miss mix|More representative than a 100 percent positive-match dataset walk.
+09-ip-set|09-ip-set.yaml|09-ip-set.yaml|queries/ip-set.txt|udp|macro-ip-set|-|core,macro,stable|Response-side IP-set match with hit and miss mix|Represents response filtering under both accepted and rejected answers.
+
+# Plugin microbenchmarks for isolated matcher and executor overhead.
+10-sequence-base|10-sequence-base.yaml|10-sequence-base.yaml|queries/plugin-a.txt|udp|plugin-sequence|-|micro,baseline,stable|Bare sequence dispatch baseline|Reference point for isolated plugin overhead.
+11-match-true|11-match-true.yaml|11-match-true.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Always-true matcher|Branch cost floor for matcher dispatch.
+12-match-false|12-match-false.yaml|12-match-false.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Always-false matcher|Measures negative matcher branch cost.
+13-match-qname|13-match-qname.yaml|13-match-qname.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|QNAME exact matcher|Useful when domain routing dominates.
+14-match-qtype|14-match-qtype.yaml|14-match-qtype.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|QTYPE matcher|Isolates record-type branch cost.
+15-match-qclass|15-match-qclass.yaml|15-match-qclass.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|QCLASS matcher|Mostly for completeness or regression checks.
+16-match-client-ip|16-match-client-ip.yaml|16-match-client-ip.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Client IP matcher|Measures request metadata lookup overhead.
+17-match-mark|17-match-mark.yaml|17-match-mark.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Context mark matcher|Useful when sequence stages communicate through marks.
+18-match-env|18-match-env.yaml|18-match-env.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Environment matcher|Reads BENCH_PLUGIN_FLAG from the runner environment.
+19-match-random|19-match-random.yaml|19-match-random.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Random rollout matcher|Relevant for canary or percentage rollout logic.
+20-match-rate-limiter|20-match-rate-limiter.yaml|20-match-rate-limiter.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Rate-limit matcher|Adds stateful per-request accounting.
+21-match-string-exp|21-match-string-exp.yaml|21-match-string-exp.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|String expression matcher|Covers expression parsing and evaluation overhead.
+22-match-has-resp|22-match-has-resp.yaml|22-match-has-resp.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Has-response matcher|Useful around local answer short-circuit paths.
+23-match-has-wanted-ans|23-match-has-wanted-ans.yaml|23-match-has-wanted-ans.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Has-wanted-answer matcher|Response-aware match path after answer construction.
+24-match-resp-ip|24-match-resp-ip.yaml|24-match-resp-ip.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Response IP matcher|Focuses on response-side IP inspection.
+25-match-cname|25-match-cname.yaml|25-match-cname.yaml|queries/plugin-cname.txt|udp|plugin-matchers|-|micro,matchers,stable|CNAME matcher|Useful when rewrite or alias chains are common.
+26-match-ptr-ip|26-match-ptr-ip.yaml|26-match-ptr-ip.yaml|queries/plugin-ptr.txt|udp|plugin-matchers|-|micro,matchers,stable|PTR IP matcher|Reverse lookup path for address-driven logic.
+27-exec-black-hole|27-exec-black-hole.yaml|27-exec-black-hole.yaml|queries/plugin-a.txt|udp|plugin-executors|-|micro,executors,stable|Black-hole executor|Fast synthetic negative-style response path.
+28-exec-ttl|28-exec-ttl.yaml|28-exec-ttl.yaml|queries/plugin-a.txt|udp|plugin-executors|-|micro,executors,stable|TTL rewrite executor|Measures response mutation overhead.
+29-exec-drop-resp|29-exec-drop-resp.yaml|29-exec-drop-resp.yaml|queries/plugin-a.txt|udp|plugin-executors|-|micro,executors,stable|Drop-response executor|Useful for policy stages that suppress answers.
+30-exec-debug-print|30-exec-debug-print.yaml|30-exec-debug-print.yaml|queries/plugin-a.txt|udp|plugin-observers|-|micro,observer,io-heavy|Debug print observer|Logging I/O dominates and should not be read as pure request-path cost.
+31-exec-query-summary|31-exec-query-summary.yaml|31-exec-query-summary.yaml|queries/plugin-a.txt|udp|plugin-observers|-|micro,observer,io-heavy|Query summary observer|Observer benchmark with extra formatting and output work.
+32-exec-metrics-collector|32-exec-metrics-collector.yaml|32-exec-metrics-collector.yaml|queries/plugin-a.txt|udp|plugin-observers|-|micro,observer,stable|Metrics collector observer|Focuses on instrumentation overhead rather than DNS semantics.
+33-exec-sleep|33-exec-sleep.yaml|33-exec-sleep.yaml|queries/plugin-a.txt|udp|plugin-executors|-|micro,executors,artificial|Sleep executor|Artificial latency injector, only useful as a control experiment.
+34-exec-ecs|34-exec-ecs.yaml|34-exec-ecs.yaml|queries/plugin-a.txt|udp|plugin-executors|-|micro,executors,stable|ECS executor|Relevant when EDNS client subnet is part of request shaping.
+35-exec-forward-edns0opt|35-exec-forward-edns0opt.yaml|35-exec-forward-edns0opt.yaml|queries/plugin-a.txt|udp|plugin-executors|-|micro,executors,stable|EDNS0 option forward executor|Covers request option mutation before upstream forward.
+36-exec-prefer-ipv4|36-exec-prefer-ipv4.yaml|36-exec-prefer-ipv4.yaml|queries/plugin-a.txt|udp|plugin-executors|-|micro,executors,stable|Prefer IPv4 executor|Dual-stack answer shaping path biased to A.
+37-exec-prefer-ipv6|37-exec-prefer-ipv6.yaml|37-exec-prefer-ipv6.yaml|queries/plugin-aaaa.txt|udp|plugin-executors|-|micro,executors,stable|Prefer IPv6 executor|Dual-stack answer shaping path biased to AAAA.
+38-exec-redirect|38-exec-redirect.yaml|38-exec-redirect.yaml|queries/plugin-a.txt|udp|plugin-rewrite|-|micro,rewrite,stable|Redirect executor|Measures direct qname rewrite or local redirect cost.
+39-exec-reverse-lookup|39-exec-reverse-lookup.yaml|39-exec-reverse-lookup.yaml|queries/plugin-ptr.txt|udp|plugin-rewrite|queries/plugin-a.txt|micro,rewrite,stable|Reverse lookup executor|Uses a forward-query warmup to avoid cold-start artifacts.
+40-match-rcode|40-match-rcode.yaml|40-match-rcode.yaml|queries/nxdomain.txt|udp|plugin-matchers|-|micro,matchers,stable|RCODE matcher|Useful when policy depends on NXDOMAIN or SERVFAIL handling.
+
+# Composite paths that combine several plugins into integrated request flows.
+41-composite-cache-forward|41-composite-cache-forward.yaml|41-composite-cache-forward.yaml|queries/cache-mixed.txt|udp|composite|queries/cache-hotpath.txt|extended,composite,stable|Cache plus forward pipeline with partial warm hits|Uses warmup and mixed request set so both cache hit and forward miss paths appear in the measured run.
+42-composite-local-rewrite|42-composite-local-rewrite.yaml|42-composite-local-rewrite.yaml|queries/local-rewrite.txt|udp|composite|-|extended,composite,stable|Local rewrite pipeline|Combines redirect, arbitrary answer generation, and TTL rewrite without observer noise.
+43-composite-provider-chain|43-composite-provider-chain.yaml|43-composite-provider-chain.yaml|queries/provider-chain.txt|udp|composite|-|core,composite,stable|Provider-backed matcher chain with real datasets|Uses actual domain-set and IP-set files instead of single inline rules.
+44-composite-fallback-local|44-composite-fallback-local.yaml|44-composite-fallback-local.yaml|queries/plugin-a.txt|udp|composite|-|extended,composite,stable|Fallback to local response chain|Integrated failover plus local answer path.
+
+# Standalone provider-focused scenarios.
+45-provider-domain-set-data|45-provider-domain-set-data.yaml|45-provider-domain-set-data.yaml|queries/domain-set.txt|udp|plugin-providers|-|extended,provider,stable|Domain-set provider with dataset-backed lookups|Pure positive-match provider walk for isolating dataset lookup cost.
+46-provider-ip-set-data|46-provider-ip-set-data.yaml|46-provider-ip-set-data.yaml|queries/ip-set-positive.txt|udp|plugin-providers|-|extended,provider,stable|IP-set provider with dataset-backed lookups|Pure positive-match provider walk to separate lookup cost from accept or reject branching.
+
+# Server-path scenarios focused on listener and transport overhead with minimal business logic.
+47-server-local-udp|47-server-local-udp-tcp.yaml|47-server-local-udp-tcp.yaml|queries/plugin-a.txt|udp|server|-|extended,server,micro,stable|Minimal UDP server path with local synthetic answer|Isolates UDP socket receive, decode, dispatch, encode, and send cost from upstream variance.
+48-server-local-tcp|47-server-local-udp-tcp.yaml|47-server-local-udp-tcp.yaml|queries/plugin-a.txt|tcp|server|-|extended,server,micro,stable|Minimal TCP server path with local synthetic answer|Highlights TCP accept, session read-write, and response framing overhead with almost no executor cost.

@@ -26,7 +26,6 @@ use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use hickory_proto::rr::RecordType;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -88,19 +87,16 @@ impl Plugin for TtlExecutor {
 #[async_trait]
 impl Executor for TtlExecutor {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if let Some(response) = context.response.as_mut() {
+        if let Some(response) = context.response_mut() {
             for record in response.answers_mut() {
                 let ttl = self.policy.apply(record.ttl());
                 record.set_ttl(ttl);
             }
-            for record in response.name_servers_mut() {
+            for record in response.authorities_mut() {
                 let ttl = self.policy.apply(record.ttl());
                 record.set_ttl(ttl);
             }
             for record in response.additionals_mut() {
-                if record.record_type() == RecordType::OPT {
-                    continue;
-                }
                 let ttl = self.policy.apply(record.ttl());
                 record.set_ttl(ttl);
             }
@@ -210,10 +206,10 @@ fn parse_policy_from_expr(raw: &str) -> Result<TtlPolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::rdata::{A, Edns};
+    use crate::message::{Name, RData, Record};
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
-    use hickory_proto::rr::rdata::{A, OPT};
-    use hickory_proto::rr::{Name, RData, Record};
 
     #[test]
     fn test_parse_policy_from_expr_supports_fix_and_range() {
@@ -237,13 +233,13 @@ mod tests {
             },
         };
 
-        let mut response = hickory_proto::op::Message::new();
+        let mut response = crate::message::Message::new();
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             120,
             RData::A(A::new(1, 1, 1, 1)),
         ));
-        response.add_name_server(Record::from_rdata(
+        response.add_authority(Record::from_rdata(
             Name::from_ascii("ns.example.com.").unwrap(),
             30,
             RData::A(A::new(2, 2, 2, 2)),
@@ -253,14 +249,10 @@ mod tests {
             45,
             RData::A(A::new(3, 3, 3, 3)),
         ));
-        response.add_additional(Record::from_rdata(
-            Name::root(),
-            0,
-            RData::OPT(OPT::default()),
-        ));
+        response.set_edns(Edns::new());
 
         let mut ctx = test_context();
-        ctx.response = Some(response);
+        ctx.set_response(response);
 
         let step = plugin
             .execute(&mut ctx)
@@ -268,15 +260,45 @@ mod tests {
             .expect("ttl execute should work");
         assert!(matches!(step, ExecStep::Next));
 
-        let updated = ctx.response.expect("response should remain present");
+        let updated = ctx.response().expect("response should remain present");
         assert_eq!(updated.answers()[0].ttl(), 60);
-        assert_eq!(updated.name_servers()[0].ttl(), 60);
+        assert_eq!(updated.authorities()[0].ttl(), 60);
         assert_eq!(updated.additionals()[0].ttl(), 60);
-        assert_eq!(
-            updated.additionals()[1].ttl(),
-            0,
-            "OPT ttl should not change"
+        assert!(
+            updated.edns().is_some(),
+            "OPT should remain in the EDNS field"
         );
+    }
+
+    #[tokio::test]
+    async fn test_execute_rewrites_response_ttls() {
+        let plugin = TtlExecutor {
+            tag: "ttl_test".to_string(),
+            policy: TtlPolicy {
+                fix: Some(60),
+                min: None,
+                max: None,
+            },
+        };
+
+        let mut response = crate::message::Message::new();
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            120,
+            RData::A(A::new(1, 1, 1, 1)),
+        ));
+
+        let mut ctx = test_context();
+        ctx.set_response(response);
+
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("ttl execute should work");
+        assert!(matches!(step, ExecStep::Next));
+
+        let updated = ctx.response().expect("response should remain present");
+        assert_eq!(updated.answers()[0].ttl(), 60);
     }
 
     #[test]

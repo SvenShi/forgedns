@@ -11,18 +11,17 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::build_response_from_request;
 use crate::core::error::{DnsError, Result};
+use crate::message::Rcode;
+use crate::message::rdata::{A, AAAA, MX, TXT};
+use crate::message::{CNAME, DNSClass, NS, Name, PTR, RData, Record, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashMap;
 use async_trait::async_trait;
-use hickory_proto::op::ResponseCode;
-use hickory_proto::rr::rdata::name::{CNAME, NS, PTR};
-use hickory_proto::rr::rdata::{A, AAAA, MX, TXT};
-use hickory_proto::rr::{Name, RData, Record, RecordType};
 use serde::Deserialize;
+use smallvec::SmallVec;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -49,8 +48,33 @@ struct Arbitrary {
 
 #[derive(Debug, Default)]
 struct NameRecords {
-    by_type: AHashMap<RecordType, Vec<Record>>,
-    any: Vec<Record>,
+    by_type: AHashMap<RecordType, StoredAnswers>,
+    any: StoredAnswers,
+}
+
+#[derive(Debug, Clone, Default)]
+struct StoredAnswers {
+    records: Vec<Record>,
+    answer_ips: SmallVec<[IpAddr; 8]>,
+    fast_address: Option<FastAddressAnswer>,
+}
+
+#[derive(Debug, Clone)]
+struct FastAddressAnswer {
+    ttl: u32,
+    addresses: SmallVec<[IpAddr; 8]>,
+}
+
+impl StoredAnswers {
+    #[inline]
+    fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    fn finalize(&mut self) {
+        self.answer_ips = self.records.iter().filter_map(Record::ip_addr).collect();
+        self.fast_address = build_fast_address_answer(&self.records);
+    }
 }
 
 #[async_trait]
@@ -71,30 +95,48 @@ impl Plugin for Arbitrary {
 #[async_trait]
 impl Executor for Arbitrary {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let Some(qtype) = context.request.query().map(|q| q.query_type) else {
+        let Some(question) = context.request.first_question() else {
             return Ok(ExecStep::Next);
         };
-
-        let Some(query_view) = context.query_view() else {
-            return Ok(ExecStep::Next);
-        };
-        let qname = query_view.normalized_name();
+        let qclass = question.qclass();
+        let qtype = question.qtype();
+        let qname = question.name().normalized();
 
         let Some(name_records) = self.records.get(qname) else {
             return Ok(ExecStep::Next);
         };
 
-        let mut answers = Vec::new();
-        if qtype == RecordType::ANY {
-            answers.extend(name_records.any.iter().cloned());
-        } else if let Some(records) = name_records.by_type.get(&qtype) {
-            answers.extend(records.iter().cloned());
-        }
+        let answers = if qtype == RecordType::ANY {
+            &name_records.any
+        } else {
+            let Some(records) = name_records.by_type.get(&qtype) else {
+                return Ok(ExecStep::Next);
+            };
+            records
+        };
+        let answer_count = answers.len();
 
-        if !answers.is_empty() {
-            let mut response = build_response_from_request(&context.request, ResponseCode::NoError);
-            *response.answers_mut() = answers;
-            context.response = Some(response);
+        if answer_count > 0 {
+            if qtype != RecordType::ANY
+                && qclass == DNSClass::IN
+                && let Some(fast_address) = answers.fast_address.as_ref()
+            {
+                let response = context.request.address_response(
+                    question,
+                    fast_address.ttl,
+                    fast_address.addresses.as_slice(),
+                )?;
+                context.set_response(response);
+                return Ok(ExecStep::Next);
+            }
+
+            let mut response = context.request().response(Rcode::NoError);
+            response.answers_mut().reserve(answer_count);
+            response
+                .answers_mut()
+                .extend(answers.records.iter().cloned());
+
+            context.set_response(response);
         }
 
         Ok(ExecStep::Next)
@@ -138,14 +180,16 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
         let record = parse_zone_line(line).map_err(|e| {
             DnsError::plugin(format!("invalid arbitrary rule #{} '{}': {}", idx, line, e))
         })?;
-        let key = normalize_name(record.name());
-        let entry = map.entry(key).or_default();
+        let entry = map
+            .entry(record.name().normalized().to_string())
+            .or_default();
         entry
             .by_type
-            .entry(record.record_type())
+            .entry(record.rr_type())
             .or_default()
+            .records
             .push(record.clone());
-        entry.any.push(record);
+        entry.any.records.push(record);
     }
 
     for path in &cfg.files {
@@ -184,18 +228,50 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
                     path, line_no, raw, e
                 ))
             })?;
-            let key = normalize_name(record.name());
-            let entry = map.entry(key).or_default();
+            let entry = map
+                .entry(record.name().normalized().to_string())
+                .or_default();
             entry
                 .by_type
-                .entry(record.record_type())
+                .entry(record.rr_type())
                 .or_default()
+                .records
                 .push(record.clone());
-            entry.any.push(record);
+            entry.any.records.push(record);
+        }
+    }
+
+    for name_records in map.values_mut() {
+        name_records.any.finalize();
+        for answers in name_records.by_type.values_mut() {
+            answers.finalize();
         }
     }
 
     Ok(map)
+}
+
+fn build_fast_address_answer(records: &[Record]) -> Option<FastAddressAnswer> {
+    let first = records.first()?;
+    let record_type = first.rr_type();
+    if !matches!(record_type, RecordType::A | RecordType::AAAA) {
+        return None;
+    }
+    if first.class() != DNSClass::IN {
+        return None;
+    }
+
+    let ttl = first.ttl();
+    let mut addresses = SmallVec::<[IpAddr; 8]>::with_capacity(records.len());
+    for record in records {
+        if record.rr_type() != record_type || record.class() != DNSClass::IN || record.ttl() != ttl
+        {
+            return None;
+        }
+        addresses.push(record.ip_addr()?);
+    }
+
+    Some(FastAddressAnswer { ttl, addresses })
 }
 
 fn parse_zone_line(raw: &str) -> std::result::Result<Record, String> {
@@ -270,11 +346,18 @@ fn parse_rdata(record_type: RecordType, fields: &[&str]) -> std::result::Result<
             Ok(RData::MX(MX::new(preference, exchange)))
         }
         RecordType::TXT => {
-            let text = fields
-                .iter()
-                .map(|f| f.trim_matches('"').to_string())
-                .collect::<Vec<_>>();
-            Ok(RData::TXT(TXT::new(text)))
+            let mut wire = Vec::new();
+
+            for field in fields {
+                let part = field.trim_matches('"').as_bytes();
+                if part.len() > u8::MAX as usize {
+                    return Err(format!("TXT chunk exceeds 255 bytes: '{}'", field));
+                }
+                wire.push(part.len() as u8);
+                wire.extend_from_slice(part);
+            }
+
+            Ok(RData::TXT(TXT::new(wire.into_boxed_slice())))
         }
         _ => Err(format!(
             "record type '{}' is not supported by arbitrary plugin",
@@ -292,19 +375,13 @@ fn parse_name(raw: &str) -> std::result::Result<Name, String> {
     Name::from_ascii(&fqdn).map_err(|e| format!("invalid name '{}': {}", raw, e))
 }
 
-#[inline]
-fn normalize_name(name: &Name) -> String {
-    crate::core::context::DnsContext::normalize_dns_name(name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
@@ -315,17 +392,16 @@ mod tests {
 
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(Name::from_ascii(name).unwrap(), qtype));
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        request.add_question(Question::new(
+            Name::from_ascii(name).unwrap(),
+            qtype,
+            DNSClass::IN,
+        ));
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: test_registry(),
-        }
+            test_registry(),
+        )
     }
 
     #[tokio::test]
@@ -348,9 +424,9 @@ mod tests {
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        let response = ctx.response.expect("response should exist");
+        let response = ctx.response().expect("response should exist");
         assert_eq!(response.answers().len(), 1);
-        assert_eq!(response.answers()[0].record_type(), RecordType::A);
+        assert_eq!(response.answers()[0].rr_type(), RecordType::A);
     }
 
     #[tokio::test]
@@ -372,7 +448,30 @@ mod tests {
             .execute(&mut ctx)
             .await
             .expect("execute should succeed");
-        let response = ctx.response.expect("response should exist");
+        let response = ctx.response().expect("response should exist");
         assert_eq!(response.answers().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_arbitrary_execute_uses_message_static_address_answer() {
+        let cfg = ArbitraryConfig {
+            rules: vec!["example.com. 60 IN A 1.1.1.1".to_string()],
+            files: vec![],
+        };
+        let plugin = Arbitrary {
+            tag: "arbitrary".to_string(),
+            records: build_records(&cfg).expect("records should parse"),
+        };
+
+        let mut ctx = make_context("example.com.", RecordType::A);
+        plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+
+        assert!(ctx.response().is_some());
+        assert!(ctx.response().is_some_and(|response| {
+            response.has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))
+        }));
     }
 }

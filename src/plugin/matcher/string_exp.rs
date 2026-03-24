@@ -18,7 +18,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{response_records, rr_to_ip};
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -166,49 +165,47 @@ impl StringSource {
     fn read<'a>(&self, context: &'a mut DnsContext) -> Cow<'a, str> {
         match self {
             StringSource::Qname => context
-                .query_view()
-                .map(|view| Cow::Borrowed(view.normalized_name()))
+                .request
+                .first_question()
+                .map(|question| Cow::Borrowed(question.name().normalized()))
                 .unwrap_or_else(|| Cow::Borrowed("")),
             StringSource::Qtype => Cow::Owned(
                 context
                     .request
-                    .queries()
-                    .first()
-                    .map(|q| u16::from(q.query_type()).to_string())
+                    .first_qtype()
+                    .map(|qtype| u16::from(qtype).to_string())
                     .unwrap_or_default(),
             ),
             StringSource::Qclass => Cow::Owned(
                 context
                     .request
-                    .queries()
-                    .first()
-                    .map(|q| u16::from(q.query_class()).to_string())
+                    .first_qclass()
+                    .map(|qclass| u16::from(qclass).to_string())
                     .unwrap_or_default(),
             ),
             StringSource::Rcode => Cow::Owned(
                 context
-                    .response
-                    .as_ref()
-                    .map(|r| u16::from(r.response_code()).to_string())
+                    .response()
+                    .map(|response| response.rcode())
+                    .map(|rcode| u16::from(rcode).to_string())
                     .unwrap_or_default(),
             ),
             StringSource::RespIp => {
-                let Some(response) = context.response.as_ref() else {
-                    return Cow::Borrowed("");
-                };
                 let mut out = String::new();
-                for ip in response_records(response).filter_map(rr_to_ip) {
-                    if !out.is_empty() {
-                        out.push(',');
+                if let Some(response) = context.response() {
+                    for ip in response.answer_ips() {
+                        if !out.is_empty() {
+                            out.push(',');
+                        }
+                        // Writing directly avoids temporary Vec allocations.
+                        let _ = write!(&mut out, "{}", ip);
                     }
-                    // Writing directly avoids temporary Vec allocations.
-                    let _ = write!(&mut out, "{}", ip);
                 }
                 Cow::Owned(out)
             }
             StringSource::Mark => {
                 let mut out = String::new();
-                for mark in &context.marks {
+                for mark in context.marks() {
                     if !out.is_empty() {
                         out.push(',');
                     }
@@ -216,14 +213,14 @@ impl StringSource {
                 }
                 Cow::Owned(out)
             }
-            StringSource::ClientIp => Cow::Owned(context.src_addr.ip().to_string()),
+            StringSource::ClientIp => Cow::Owned(context.peer_addr().ip().to_string()),
             StringSource::ServerName => context
-                .get_attr::<String>(DnsContext::ATTR_SERVER_NAME)
-                .map(|v| Cow::Borrowed(v.as_str()))
+                .server_name()
+                .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Borrowed("")),
             StringSource::UrlPath => context
-                .get_attr::<String>(DnsContext::ATTR_URL_PATH)
-                .map(|v| Cow::Borrowed(v.as_str()))
+                .url_path()
+                .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Borrowed("")),
             StringSource::Env(_) => Cow::Borrowed(""),
         }
@@ -361,41 +358,38 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
+    use crate::message::rdata::A;
+    use crate::message::{Message, Question, Rcode};
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query, ResponseCode};
-    use hickory_proto::rr::rdata::A;
-    use hickory_proto::rr::{Name, RData, Record, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("www.example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
-
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        let mut context = DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: ["1".to_string()].into_iter().collect(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        );
+        context.marks_mut().insert("1".to_string());
+        context
     }
 
-    fn add_response_with_ip_and_rcode(ctx: &mut DnsContext, ip: Ipv4Addr, rcode: ResponseCode) {
+    fn add_response_with_ip_and_rcode(ctx: &mut DnsContext, ip: Ipv4Addr, rcode: Rcode) {
         let mut response = Message::new();
-        response.set_response_code(rcode);
+        response.set_rcode(rcode);
         response.add_answer(Record::from_rdata(
             Name::from_ascii("www.example.com.").unwrap(),
             60,
             RData::A(A(ip)),
         ));
-        ctx.response = Some(response);
+        ctx.set_response(response);
     }
 
     #[tokio::test]
@@ -423,9 +417,11 @@ mod tests {
     #[tokio::test]
     async fn test_string_exp_supports_multiple_sources_and_operations() {
         let mut ctx = make_context();
-        ctx.set_attr(DnsContext::ATTR_SERVER_NAME, "dns.example.com".to_string());
-        ctx.set_attr(DnsContext::ATTR_URL_PATH, "/dns-query".to_string());
-        add_response_with_ip_and_rcode(&mut ctx, Ipv4Addr::new(8, 8, 8, 8), ResponseCode::NoError);
+        ctx.set_request_meta(crate::core::context::RequestMeta {
+            server_name: Some(Arc::from("dns.example.com")),
+            url_path: Some(Arc::from("/dns-query")),
+        });
+        add_response_with_ip_and_rcode(&mut ctx, Ipv4Addr::new(8, 8, 8, 8), Rcode::NoError);
 
         let qtype_matcher = StringExpMatcher {
             tag: "string_exp".into(),

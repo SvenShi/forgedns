@@ -50,10 +50,6 @@ pub enum DnsError {
     #[error("DNS protocol error: {0}")]
     Protocol(String),
 
-    /// DNS protocol error
-    #[error("DNS Hickory protocol error: {0}")]
-    HickoryProtocol(#[from] hickory_proto::ProtoError),
-
     /// Quic connect error
     #[error("quic connect error: {0}")]
     QuicConnectError(#[from] quinn::ConnectError),
@@ -61,6 +57,14 @@ pub enum DnsError {
     /// No initial cipher error
     #[error("No initial cipher error: {0}")]
     NoInitialCipherSuiteError(#[from] quinn::crypto::rustls::NoInitialCipherSuite),
+
+    /// An unknown dns class was found
+    #[error("dns class string unknown: {0}")]
+    UnknownDnsClassStr(String),
+
+    /// An unknown record type string was found
+    #[error("record type string unknown: {0}")]
+    UnknownRecordTypeStr(String),
 
     #[error("integer bounds exceeded error: {0}")]
     VarIntBoundsExceeded(#[from] quinn::VarIntBoundsExceeded),

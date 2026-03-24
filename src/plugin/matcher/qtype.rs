@@ -13,7 +13,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    parse_quick_setup_rules, parse_record_type, parse_rules_from_value, parse_u16_rules,
+    parse_quick_setup_rules, parse_rr_type, parse_rules_from_value, parse_u16_rules,
     validate_non_empty_rules,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -51,7 +51,7 @@ impl PluginFactory for QtypeFactory {
 
 fn build_qtype_matcher(tag: String, rules: Vec<String>) -> DnsResult<UninitializedPlugin> {
     validate_non_empty_rules("qtype", &rules)?;
-    let qtypes = parse_u16_rules("qtype", &rules, parse_record_type)?;
+    let qtypes = parse_u16_rules("qtype", &rules, parse_rr_type)?;
     Ok(UninitializedPlugin::Matcher(Box::new(QtypeMatcher {
         tag,
         qtypes,
@@ -83,39 +83,38 @@ impl Matcher for QtypeMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context
             .request
-            .queries()
+            .questions()
             .iter()
-            .any(|q| self.qtypes.contains(&u16::from(q.query_type())))
+            .any(|q| self.qtypes.contains(&u16::from(q.qtype())))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
+    use crate::message::{DNSClass, Name, RecordType};
+    use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{DNSClass, Name, RecordType};
     use std::net::SocketAddr;
 
     fn make_context(qtypes: &[RecordType]) -> DnsContext {
         let mut request = Message::new();
         for qtype in qtypes {
-            let mut query = Query::query(Name::from_ascii("example.com.").unwrap(), *qtype);
-            query.set_query_class(DNSClass::IN);
-            request.add_query(query);
+            let mut query = Question::new(
+                Name::from_ascii("example.com.").unwrap(),
+                *qtype,
+                crate::message::DNSClass::IN,
+            );
+            query.set_qclass(DNSClass::IN);
+            request.add_question(query);
         }
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[tokio::test]

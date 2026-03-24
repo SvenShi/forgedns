@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
-use crate::core::dns_utils::{build_response_from_request, parse_named_response_code};
 use crate::core::error::{DnsError, Result};
+use crate::message::Rcode;
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{
@@ -14,7 +14,6 @@ use crate::plugin::executor::{ExecState, ExecStep, Executor, execute_with_post};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
 use ahash::AHashSet;
-use hickory_proto::op::ResponseCode;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::debug;
@@ -33,8 +32,11 @@ enum BuiltinOp {
     Accept,
     /// Stop current sequence execution and return to caller.
     Return,
-    /// Build and set a DNS response with the specified rcode, then stop.
-    Reject(ResponseCode),
+    /// Build and set a DNS response with the specified numeric rcode, then stop.
+    ///
+    /// Sequence config currently accepts only decimal numeric rcode values such as
+    /// `reject 2`; mnemonic names like `SERVFAIL` are not parsed here.
+    Reject(Rcode),
     /// Execute another sequence executor, then continue current program.
     Jump(Arc<dyn Executor>),
     /// Execute another sequence executor and stop current program immediately.
@@ -44,7 +46,7 @@ enum BuiltinOp {
 }
 
 #[derive(Debug)]
-enum OpCode {
+enum InstructionOp {
     /// Normal executor plugin dispatch.
     Executor(Arc<dyn Executor>),
     /// Builtin control-flow operation.
@@ -56,7 +58,7 @@ struct Instruction {
     /// All matchers that must pass before the op is executed.
     matchers: Vec<MatcherRef>,
     /// The operation to run once matchers pass.
-    op: OpCode,
+    op: InstructionOp,
 }
 
 #[derive(Debug)]
@@ -94,7 +96,7 @@ impl ChainProgram {
             }
 
             match &instruction.op {
-                OpCode::Executor(executor) => match executor.execute(context).await {
+                InstructionOp::Executor(executor) => match executor.execute(context).await {
                     Ok(step) => match step {
                         ExecStep::Next => pc += 1,
                         ExecStep::NextWithPost(state) => {
@@ -108,16 +110,15 @@ impl ChainProgram {
                         break;
                     }
                 },
-                OpCode::Builtin(op) => match op {
+                InstructionOp::Builtin(op) => match op {
                     BuiltinOp::Accept => {
-                        context.exec_flow_state = ExecFlowState::Broken;
+                        context.set_flow(ExecFlowState::Broken);
                         break;
                     }
                     BuiltinOp::Return => break,
                     BuiltinOp::Reject(rcode) => {
-                        context.response =
-                            Some(build_response_from_request(&context.request, *rcode));
-                        context.exec_flow_state = ExecFlowState::Broken;
+                        context.set_response(context.request().response(*rcode));
+                        context.set_flow(ExecFlowState::Broken);
                         break;
                     }
                     BuiltinOp::Jump(executor) => {
@@ -131,11 +132,11 @@ impl ChainProgram {
                         match step {
                             ExecStep::Stop => break,
                             ExecStep::Next => {
-                                if context.exec_flow_state == ExecFlowState::Broken {
+                                if context.flow() == ExecFlowState::Broken {
                                     break;
                                 }
-                                if context.exec_flow_state == ExecFlowState::ReachedTail {
-                                    context.exec_flow_state = ExecFlowState::Running;
+                                if context.flow() == ExecFlowState::ReachedTail {
+                                    context.set_flow(ExecFlowState::Running);
                                 }
                                 pc += 1;
                             }
@@ -154,7 +155,7 @@ impl ChainProgram {
                         break;
                     }
                     BuiltinOp::Mark(marks) => {
-                        context.marks.extend(marks.iter().cloned());
+                        context.marks_mut().extend(marks.iter().cloned());
                         pc += 1;
                     }
                 },
@@ -272,9 +273,9 @@ impl ChainBuilder {
 
         // Builtin syntax has priority; otherwise resolve as normal executor reference.
         let op = if let Some(op) = self.parse_builtin(exec, node_index).await? {
-            OpCode::Builtin(op)
+            InstructionOp::Builtin(op)
         } else {
-            OpCode::Executor(self.resolve_executor_ref(exec, node_index).await?)
+            InstructionOp::Executor(self.resolve_executor_ref(exec, node_index).await?)
         };
 
         Ok(Instruction { matchers, op })
@@ -288,7 +289,21 @@ impl ChainBuilder {
         match op {
             "accept" => Ok(Some(BuiltinOp::Accept)),
             "return" => Ok(Some(BuiltinOp::Return)),
-            "reject" => Ok(Some(BuiltinOp::Reject(parse_reject_rcode(arg)?))),
+            "reject" => {
+                if let Some(code) = arg {
+                    if let Ok(code) = code.parse::<u16>() {
+                        Ok(Some(BuiltinOp::Reject(Rcode::from(code))))
+                    } else {
+                        Err(DnsError::plugin(
+                            "invalid code argument: reject expects a decimal numeric rcode",
+                        ))
+                    }
+                } else {
+                    Err(DnsError::plugin(
+                        "invalid code argument: reject expects a decimal numeric rcode",
+                    ))
+                }
+            }
             "mark" => Ok(Some(BuiltinOp::Mark(parse_mark_values(arg)?))),
             "jump" => Ok(Some(BuiltinOp::Jump(
                 self.resolve_jump_or_goto_executor("jump", arg, node_index)
@@ -394,25 +409,6 @@ impl ChainBuilder {
     }
 }
 
-/// Parse optional `reject` argument into DNS rcode.
-///
-/// Supported inputs:
-/// - numeric code (e.g. `5`)
-/// - symbolic names (e.g. `REFUSED`, `SERVFAIL`)
-/// - omitted argument defaults to `REFUSED`
-fn parse_reject_rcode(arg: Option<&str>) -> Result<ResponseCode> {
-    let Some(rcode_raw) = arg else {
-        return Ok(ResponseCode::Refused);
-    };
-
-    if let Ok(code) = rcode_raw.parse::<u16>() {
-        return Ok(code.into());
-    }
-
-    parse_named_response_code(rcode_raw)
-        .ok_or_else(|| DnsError::plugin(format!("invalid reject rcode argument: {}", rcode_raw)))
-}
-
 /// Parse matcher expression and optional reverse prefix (`!`).
 ///
 /// Examples:
@@ -468,12 +464,11 @@ fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<String>> {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
     use crate::plugin::executor::ExecResult;
-    use ahash::AHashMap;
     use async_trait::async_trait;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::{Name, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Mutex;
 
@@ -536,7 +531,7 @@ mod tests {
                 self.log.lock().unwrap().push(label);
             }
             if let Some(state) = self.next_flow_state {
-                context.exec_flow_state = state;
+                context.set_flow(state);
             }
 
             match self.behavior {
@@ -561,34 +556,30 @@ mod tests {
     fn make_context() -> DnsContext {
         let mut request = Message::new();
         request.set_id(42);
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
 
-        DnsContext {
-            src_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: AHashMap::new(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     fn executor_instruction(executor: Arc<dyn Executor>) -> Instruction {
         Instruction {
             matchers: Vec::new(),
-            op: OpCode::Executor(executor),
+            op: InstructionOp::Executor(executor),
         }
     }
 
     fn builtin_instruction(op: BuiltinOp) -> Instruction {
         Instruction {
             matchers: Vec::new(),
-            op: OpCode::Builtin(op),
+            op: InstructionOp::Builtin(op),
         }
     }
 
@@ -677,7 +668,7 @@ mod tests {
         ));
         let program = Arc::new(ChainProgram {
             instructions: vec![
-                builtin_instruction(BuiltinOp::Reject(ResponseCode::ServFail)),
+                builtin_instruction(BuiltinOp::Reject(Rcode::ServFail)),
                 executor_instruction(skipped),
             ],
         });
@@ -687,11 +678,26 @@ mod tests {
         program.run(&mut context).await.unwrap();
 
         // Assert
-        let response = context.response.expect("reject should build a response");
+        let response = context.response().expect("reject should build a response");
         assert_eq!(response.id(), 42);
-        assert_eq!(response.response_code(), ResponseCode::ServFail);
-        assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
+        assert_eq!(response.rcode(), Rcode::ServFail);
+        assert_eq!(context.flow(), ExecFlowState::Broken);
         assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_reject_builds_response_from_request_message() {
+        let program = Arc::new(ChainProgram {
+            instructions: vec![builtin_instruction(BuiltinOp::Reject(Rcode::ServFail))],
+        });
+        let mut context = make_context();
+
+        program.run(&mut context).await.unwrap();
+
+        let response = context.response().expect("reject should build response");
+        assert_eq!(response.id(), 42);
+        assert_eq!(response.rcode(), Rcode::ServFail);
+        assert_eq!(context.flow(), ExecFlowState::Broken);
     }
 
     #[tokio::test]
@@ -718,8 +724,8 @@ mod tests {
         program.run(&mut context).await.unwrap();
 
         // Assert
-        assert!(context.response.is_none());
-        assert_eq!(context.exec_flow_state, ExecFlowState::Broken);
+        assert!(context.response().is_none());
+        assert_eq!(context.flow(), ExecFlowState::Broken);
         assert!(log.lock().unwrap().is_empty());
     }
 
@@ -747,8 +753,8 @@ mod tests {
         program.run(&mut context).await.unwrap();
 
         // Assert
-        assert!(context.response.is_none());
-        assert_eq!(context.exec_flow_state, ExecFlowState::Running);
+        assert!(context.response().is_none());
+        assert_eq!(context.flow(), ExecFlowState::Running);
         assert!(log.lock().unwrap().is_empty());
     }
 
@@ -788,6 +794,6 @@ mod tests {
             log.lock().unwrap().clone(),
             vec!["execute:jumped", "execute:after_jump"]
         );
-        assert_eq!(context.exec_flow_state, ExecFlowState::Running);
+        assert_eq!(context.flow(), ExecFlowState::Running);
     }
 }

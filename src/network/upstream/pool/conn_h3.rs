@@ -4,6 +4,7 @@
  */
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::message::Message;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
     build_dns_get_request, build_doh_request_uri, connect_quic, connect_socket,
@@ -15,8 +16,6 @@ use bytes::{BufMut, Bytes};
 use futures::future::poll_fn;
 use h3::client::{RequestStream, SendRequest};
 use h3_quinn::{BidiStream, OpenStreams};
-use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::BinEncodable;
 use http::Version;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
@@ -54,7 +53,7 @@ impl Connection for H3Connection {
     }
 
     #[hotpath::measure]
-    async fn query(&self, mut request: Message) -> Result<Message> {
+    async fn query(&self, request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("H3 connection closed"));
         }
@@ -63,8 +62,7 @@ impl Connection for H3Connection {
             .store(AppClock::elapsed_millis(), Ordering::Relaxed);
 
         let raw_id = request.id();
-        request.set_id(0);
-        let body_bytes = request.to_bytes()?;
+        let body_bytes = request.to_bytes_with_id(0)?;
 
         let request = build_dns_get_request(self.request_uri.clone(), body_bytes, Version::HTTP_3);
 
@@ -85,7 +83,7 @@ impl Connection for H3Connection {
 
         let result = match timeout(self.timeout, recv(request_stream)).await {
             Ok(Ok(bytes)) => {
-                let mut resp = Message::from_vec(&bytes)?;
+                let mut resp = Message::from_bytes(&bytes)?;
                 resp.set_id(raw_id);
                 trace!(conn_id = self.id, raw_id, "Received H3 response");
                 Ok(resp)

@@ -1,0 +1,8 @@
+265.com A
+apps.mzstatic.com A
+azure.microsoft.com A
+android.googlesource.com A
+bench-provider-miss-01.example A
+bench-provider-miss-02.example A
+bench-provider-miss-03.example A
+bench-provider-miss-04.example A

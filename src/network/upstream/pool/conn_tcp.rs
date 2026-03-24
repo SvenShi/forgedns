@@ -5,6 +5,7 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::message::Message;
 use crate::network::transport::tcp_transport::{
     TcpTransport, TcpTransportReader, TcpTransportWriter,
 };
@@ -13,7 +14,6 @@ use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::{connect_stream, connect_tls};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
 use async_trait::async_trait;
-use hickory_proto::op::Message;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -36,7 +36,7 @@ pub struct TcpConnection {
     /// Unique connection ID for logging/tracing.
     id: u16,
     /// Sender for the unbounded outgoing TCP message channel.
-    sender: UnboundedSender<Message>,
+    sender: UnboundedSender<QueuedQuery>,
     /// Notifier that signals connection closure to background tasks.
     close_notify: Notify,
     /// Map of active DNS queries (query_id → response channel sender).
@@ -49,6 +49,12 @@ pub struct TcpConnection {
     writeable: AtomicBool,
     /// Timestamp (ms) of last successful activity.
     last_used: AtomicU64,
+}
+
+#[derive(Debug)]
+struct QueuedQuery {
+    message: Message,
+    query_id: u16,
 }
 
 #[async_trait]
@@ -79,7 +85,7 @@ impl Connection for TcpConnection {
     ///
     /// # Performance
     /// Uses TCP length-prefixed framing (2-byte BE length header) as per RFC 1035
-    async fn query(&self, mut request: Message) -> Result<Message> {
+    async fn query(&self, request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol(format!(
                 "Cannot query on closed TCP connection (id={})",
@@ -98,13 +104,14 @@ impl Connection for TcpConnection {
             "Sending DNS query over TCP"
         );
 
-        // Prepare query buffer with TCP 2-byte big-endian length prefix (RFC 1035 Section 4.2.2)
         let raw_id = request.id();
-        request.set_id(query_id);
 
         // Queue Message for background sender task (TcpTransportWriter will frame it)
-        if let Err(e) = self.sender.send(request) {
-            self.request_map.take(query_id);
+        if let Err(e) = self.sender.send(QueuedQuery {
+            message: request,
+            query_id,
+        }) {
+            self.request_map.remove(query_id);
             error!(
                 conn_id = self.id,
                 query_id,
@@ -125,7 +132,7 @@ impl Connection for TcpConnection {
                 Ok(res)
             }
             Ok(Err(_)) => {
-                self.request_map.take(query_id);
+                self.request_map.remove(query_id);
                 warn!(
                     conn_id = self.id,
                     query_id, "DNS query canceled (response channel dropped)"
@@ -133,7 +140,7 @@ impl Connection for TcpConnection {
                 Err(DnsError::protocol("request canceled"))
             }
             Err(_) => {
-                self.request_map.take(query_id);
+                self.request_map.remove(query_id);
                 warn!(
                     conn_id = self.id,
                     query_id,
@@ -165,7 +172,7 @@ impl TcpConnection {
     /// * `conn_id` - Unique connection identifier for logging and debugging
     /// * `sender` - Unbounded channel for queuing outbound DNS messages
     /// * `timeout` - Maximum time to wait for a DNS response
-    fn new(conn_id: u16, sender: UnboundedSender<Message>, timeout: Duration) -> Self {
+    fn new(conn_id: u16, sender: UnboundedSender<QueuedQuery>, timeout: Duration) -> Self {
         debug!(
             conn_id,
             "Initialized TCP connection wrapper with async I/O tasks"
@@ -192,7 +199,7 @@ impl TcpConnection {
     async fn send_dns_request<S: AsyncWrite + Unpin>(
         self: Arc<Self>,
         mut writer: TcpTransportWriter<S>,
-        mut receiver: UnboundedReceiver<Message>,
+        mut receiver: UnboundedReceiver<QueuedQuery>,
     ) {
         let mut closing = false;
         debug!(
@@ -202,8 +209,11 @@ impl TcpConnection {
 
         while !closing {
             select! {
-                Some(msg) = receiver.recv() => {
-                    if let Err(e) = writer.write_message(&msg).await {
+                Some(queued) = receiver.recv() => {
+                    if let Err(e) = writer
+                        .write_message_with_id(&queued.message, queued.query_id)
+                        .await
+                    {
                         error!(
                             conn_id = self.id,
                             error = ?e,
@@ -273,7 +283,7 @@ impl TcpConnection {
                                 trace!(
                                     conn_id = self.id,
                                     query_id = id,
-                                    "Discarded DNS response (no matching query or already timed out)"
+                                    "Discarded DNS response (no matching query or fingerprint mismatch)"
                                 );
                             }
                         }

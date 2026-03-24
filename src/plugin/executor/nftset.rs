@@ -21,7 +21,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::rr_to_ip;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -281,18 +280,18 @@ impl Executor for NftSetExecutor {
             return Ok(ExecStep::Next);
         }
 
-        let Some(response) = context.response.as_ref() else {
+        let Some(response) = context.response() else {
             return Ok(ExecStep::Next);
         };
+        let answers = response.answer_ip_ttls();
+        if answers.is_empty() {
+            return Ok(ExecStep::Next);
+        }
 
         let mut ipv4_prefixes = AHashSet::new();
         let mut ipv6_prefixes = AHashSet::new();
 
-        for record in response.answers() {
-            let Some(ip) = rr_to_ip(record) else {
-                continue;
-            };
-
+        for (ip, _) in answers {
             match ip {
                 IpAddr::V4(v4) => {
                     if let Some(set) = self.ipv4.as_ref() {

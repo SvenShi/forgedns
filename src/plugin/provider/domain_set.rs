@@ -18,7 +18,8 @@
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result as DnsResult};
-use crate::core::rule_matcher::{DomainRuleMatcher, normalize_domain_cow, split_labels_rev};
+use crate::core::rule_matcher::DomainRuleMatcher;
+use crate::message::Name;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::plugin::provider::provider_utils::{for_each_nonempty_rule_line, push_unique_matcher};
@@ -27,7 +28,6 @@ use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
-use smallvec::SmallVec;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -112,21 +112,8 @@ impl DomainMatcher {
     }
 
     #[inline]
-    fn contains_normalized(&self, domain: &str, labels_rev: &[&str]) -> bool {
-        self.rules.is_match_normalized(domain, labels_rev)
-    }
-
-    #[cfg(test)]
-    #[inline]
-    fn contains(&self, domain: &str) -> bool {
-        let normalized = normalize_domain_cow(domain);
-        let domain = normalized.as_ref();
-        if domain.is_empty() {
-            return false;
-        }
-        let mut labels = SmallVec::<[&str; 8]>::new();
-        split_labels_rev(domain, &mut labels);
-        self.contains_normalized(domain, &labels)
+    fn contains_name(&self, name: &Name) -> bool {
+        self.rules.is_match_name(name)
     }
 }
 
@@ -136,7 +123,6 @@ pub struct DomainSet {
     /// Flattened matcher list from self + referenced sets.
     /// This avoids recursive provider calls on the hot path.
     matchers: Vec<Arc<DomainMatcher>>,
-    has_domain_rules: bool,
 }
 
 #[async_trait]
@@ -161,52 +147,18 @@ impl Provider for DomainSet {
     }
 
     #[inline]
-    fn contains_domain(&self, domain: &str) -> bool {
-        let normalized = normalize_domain_cow(domain);
-        let domain = normalized.as_ref();
-        if domain.is_empty() {
+    fn contains_name(&self, name: &Name) -> bool {
+        if self.matchers.is_empty() {
             return false;
         }
 
-        let mut labels = SmallVec::<[&str; 8]>::new();
-        if self.has_domain_rules {
-            split_labels_rev(domain, &mut labels);
-        }
-
-        self.contains_domain_prepared(domain, &labels)
-    }
-
-    #[inline]
-    fn contains_domain_prepared(&self, domain: &str, labels_rev: &[&str]) -> bool {
-        if domain.is_empty() || self.matchers.is_empty() {
-            return false;
-        }
-
-        let mut labels_buf = SmallVec::<[&str; 8]>::new();
-        let labels = if self.has_domain_rules && labels_rev.is_empty() {
-            // Build labels locally when caller does not provide pre-split labels.
-            split_labels_rev(domain, &mut labels_buf);
-            labels_buf.as_slice()
-        } else {
-            labels_rev
-        };
-
-        // Fast path for the common one-set case.
         if self.matchers.len() == 1 {
-            return self.matchers[0].contains_normalized(domain, labels);
+            return self.matchers[0].contains_name(name);
         }
 
-        for matcher in &self.matchers {
-            if matcher.contains_normalized(domain, labels) {
-                return true;
-            }
-        }
-        false
-    }
-
-    #[inline]
-    fn has_trie_domain_rules(&self) -> bool {
-        self.has_domain_rules
+        self.matchers
+            .iter()
+            .any(|matcher| matcher.contains_name(name))
     }
 }
 
@@ -319,7 +271,6 @@ impl PluginFactory for DomainSetFactory {
         Ok(UninitializedPlugin::Provider(Box::new(DomainSet {
             tag: plugin_config.tag.clone(),
             matchers,
-            has_domain_rules,
         })))
     }
 }
@@ -327,6 +278,7 @@ impl PluginFactory for DomainSetFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::Name;
     use crate::plugin::provider::provider_utils::for_each_nonempty_rule_text;
     use std::net::IpAddr;
 
@@ -350,11 +302,11 @@ mod tests {
         m.add_exp("regexp:^re.+\\.com$", "test").unwrap();
         m.finalize().unwrap();
 
-        assert!(m.contains("exact.com."));
-        assert!(m.contains("www.example.com"));
-        assert!(m.contains("re123.com"));
-        assert!(m.contains("xabcx.org"));
-        assert!(!m.contains("none.org"));
+        assert!(m.contains_name(&Name::from_ascii("exact.com.").unwrap()));
+        assert!(m.contains_name(&Name::from_ascii("www.example.com").unwrap()));
+        assert!(m.contains_name(&Name::from_ascii("re123.com").unwrap()));
+        assert!(m.contains_name(&Name::from_ascii("xabcx.org").unwrap()));
+        assert!(!m.contains_name(&Name::from_ascii("none.org").unwrap()));
     }
 
     #[test]
@@ -363,10 +315,10 @@ mod tests {
         m.add_exp("google.com", "test").unwrap();
         m.finalize().unwrap();
 
-        assert!(m.contains("google.com"));
-        assert!(m.contains("www.google.com"));
-        assert!(!m.contains("google"));
-        assert!(!m.contains("google.cn"));
+        assert!(m.contains_name(&Name::from_ascii("google.com").unwrap()));
+        assert!(m.contains_name(&Name::from_ascii("www.google.com").unwrap()));
+        assert!(!m.contains_name(&Name::from_ascii("google").unwrap()));
+        assert!(!m.contains_name(&Name::from_ascii("google.cn").unwrap()));
     }
 
     #[test]
@@ -386,8 +338,8 @@ mod tests {
         let mut m = DomainMatcher::default();
         m.add_exp("full:Google.Com", "test").unwrap();
         m.finalize().unwrap();
-        assert!(m.contains("google.com."));
-        assert!(m.contains("GOOGLE.COM"));
+        assert!(m.contains_name(&Name::from_ascii("google.com.").unwrap()));
+        assert!(m.contains_name(&Name::from_ascii("GOOGLE.COM").unwrap()));
     }
 
     #[derive(Debug)]
@@ -416,8 +368,8 @@ mod tests {
             self
         }
 
-        fn contains_domain(&self, domain: &str) -> bool {
-            normalize_domain_cow(domain).as_ref() == self.domain
+        fn contains_name(&self, name: &Name) -> bool {
+            name.as_str().eq_ignore_ascii_case(&self.domain)
         }
 
         fn contains_ip(&self, _ip: IpAddr) -> bool {
@@ -438,10 +390,9 @@ mod tests {
         let ds = DomainSet {
             tag: "test".to_string(),
             matchers: vec![Arc::new(local)],
-            has_domain_rules: true,
         };
-        assert!(ds.contains_domain("local.example"));
-        assert!(!ds.contains_domain("none.example"));
-        assert!(shared.contains_domain("shared.example"));
+        assert!(ds.contains_name(&Name::from_ascii("local.example").unwrap()));
+        assert!(!ds.contains_name(&Name::from_ascii("none.example").unwrap()));
+        assert!(shared.contains_name(&Name::from_ascii("shared.example").unwrap()));
     }
 }

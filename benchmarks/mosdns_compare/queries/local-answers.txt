@@ -1,0 +1,14 @@
+bench.local A
+bench.local AAAA
+svc.bench.local A
+svc.bench.local AAAA
+api.bench.local A
+api.bench.local AAAA
+cdn.bench.local A
+cdn.bench.local AAAA
+metrics.bench.local A
+metrics.bench.local AAAA
+txt.bench.local TXT
+status.bench.local TXT
+target.bench.local A
+alias.bench.local CNAME

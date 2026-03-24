@@ -9,7 +9,7 @@
 //!
 //! This plugin is useful when a previous executor produced a response but a
 //! later policy requires re-querying or rebuilding output. It only resets
-//! `context.response` and keeps request metadata/marks untouched.
+//! `context.response`/final packet output and keeps request metadata/marks untouched.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -43,7 +43,7 @@ impl Plugin for DropResp {
 #[async_trait]
 impl Executor for DropResp {
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        context.response = None;
+        context.clear_response();
         Ok(ExecStep::Next)
     }
 }
@@ -88,13 +88,13 @@ mod tests {
             tag: "drop_resp".to_string(),
         };
         let mut ctx = test_context();
-        ctx.response = Some(hickory_proto::op::Message::new());
+        ctx.set_response(crate::message::Message::new());
 
         let step = plugin
             .execute(&mut ctx)
             .await
             .expect("execute should succeed");
         assert!(matches!(step, ExecStep::Next));
-        assert!(ctx.response.is_none());
+        assert!(ctx.response().is_none());
     }
 }

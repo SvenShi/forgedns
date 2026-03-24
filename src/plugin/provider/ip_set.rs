@@ -105,6 +105,10 @@ impl IpMatcher {
         Ok(())
     }
 
+    fn finalize(&mut self) {
+        self.matcher.finalize();
+    }
+
     #[inline]
     fn contains_ip(&self, ip: IpAddr) -> bool {
         self.matcher.contains_ip(ip)
@@ -214,6 +218,7 @@ impl PluginFactory for IpSetFactory {
         let mut local_matcher = IpMatcher::default();
         local_matcher.load_ips(&args.ips)?;
         local_matcher.load_files(&args.files)?;
+        local_matcher.finalize();
 
         // Build a flattened matcher list (local + referenced sets), with dedup.
         let mut matchers = Vec::with_capacity(1 + args.sets.len());

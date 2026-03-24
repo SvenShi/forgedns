@@ -2,12 +2,12 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-**⚡ Performance-first programmable DNS for modern networks.**
+**⚡ A programmable DNS server for modern networks, built with performance boundaries and policy orchestration in mind.**
 
-ForgeDNS is a high-performance DNS server written in Rust.
-It is being built for users who want DNS to be fast, controllable, and architecturally clean, not just feature-rich.
+ForgeDNS is a high-performance DNS project written in Rust.
+It is not trying to be a "feature bucket" DNS utility. The goal is to become a DNS core that is genuinely suitable for long-term infrastructure use: fast, stable, controllable, and able to keep evolving cleanly.
 
-Inspired by mosdns and built on Tokio plus hickory-dns, ForgeDNS is designed around one idea:
+Inspired by mosdns and built on Tokio plus a custom DNS message stack, ForgeDNS separates the owned message model from the wire codec layer and is designed around one idea:
 
 **DNS should remain fast even when it becomes your policy engine.**
 
@@ -17,12 +17,12 @@ The project is under active development.
 
 > **A faster DNS path, a cleaner policy model, and a more modern transport stack.**
 >
-> ForgeDNS is not only about forwarding queries. It is about keeping DNS efficient even when it also needs to handle cache, filtering, fallback, rewriting, and system-facing side effects.
+> ForgeDNS is not only about forwarding queries. It is about keeping DNS efficient even when it also needs to handle cache, filtering, fallback, rewriting, local answers, and system-facing side effects.
 
 | Dimension | What ForgeDNS Optimizes For |
 | --- | --- |
-| ⚡ Performance | Keep DNS away from becoming the bottleneck as features grow |
-| 🧩 Orchestration | Express resolver behavior through one policy pipeline |
+| ⚡ Performance | Keep the hot path short and avoid letting features turn DNS into the bottleneck |
+| 🧩 Orchestration | Express resolver behavior through one matcher / executor / provider pipeline |
 | 🔐 Protocols | Cover both classic DNS and modern encrypted DNS transports |
 | 🛰️ Integration | Let DNS participate in system and network control, not only resolution |
 
@@ -54,6 +54,7 @@ For a serious DNS server, performance means:
 - better tail behavior under concurrency
 - lower CPU and memory overhead on the hottest path in the network
 - more room for cache, filtering, routing, and observability without turning DNS into the bottleneck
+- keeping DNS itself from becoming the limiting factor in the stack
 
 A DNS server that is only fast in trivial cases is not enough.
 Modern deployments need performance under real policy complexity.
@@ -67,9 +68,9 @@ ForgeDNS is structured to reduce avoidable overhead:
 - Rust for low runtime overhead and predictable memory behavior
 - Tokio for concurrent, I/O-heavy workloads
 - protocol-aware upstream connection pooling, reuse, and pipelining
-- TTL-aware cache primitives for hot-path efficiency
+- TTL-aware cache and negative-cache support for hot-path efficiency
 - flattened provider lookups to avoid recursive policy overhead
-- post-stage side effects to keep the main response path cleaner
+- `post_execute` hooks to keep observability and side effects away from the tightest response path
 
 Performance here is not a late optimization pass.
 It is a design constraint.
@@ -79,11 +80,13 @@ It is a design constraint.
 ForgeDNS does not bury behavior inside transport-specific code paths.
 It separates concerns clearly:
 
-- `server` plugins accept traffic
+- `server` accepts traffic
+- `message` provides the custom DNS message model, RDATA model, and wire codec
+- `network` handles upstream transports, pooling, bootstrap, and protocol-specific reuse
 - `sequence` orchestrates policy
-- `matcher` plugins decide when rules apply
-- `executor` plugins perform actions
-- `provider` plugins supply reusable domain and IP data
+- `matcher` decides when rules apply
+- `executor` performs actions
+- `provider` supplies reusable domain and IP data
 
 That separation makes the system easier to extend, reason about, and keep fast as features grow.
 
@@ -97,7 +100,12 @@ ForgeDNS already supports a modern transport stack on both ingress and egress:
 - DoQ
 - DoH
 
-It also supports bootstrap resolution, SOCKS5 dialing, multi-upstream concurrency, and transport-appropriate connection reuse.
+It also supports:
+
+- bootstrap resolution
+- SOCKS5 upstream dialing
+- multi-upstream concurrency
+- transport-aware connection reuse and pipelining
 
 A modern DNS system should not force users to choose between flexibility and protocol coverage.
 
@@ -123,6 +131,91 @@ ForgeDNS is still early, but the direction is already visible:
 - add capability through clean modules instead of core-loop sprawl
 
 That gives ForgeDNS a stronger long-term shape than software that grows by accumulating special cases.
+
+## Why The Custom Message Stack Matters
+
+ForgeDNS does not build its entire DNS data path directly on top of a third-party message object model.
+Instead, it maintains its own message stack.
+That is not about reinventing DNS for its own sake. It is about letting the message model, wire codec, performance work, and policy pipeline evolve together.
+
+At a high level, the current design has two layers:
+
+- an owned model used by the policy pipeline, centered on `Message`, `Name`, `Record`, and `RData`
+- a dedicated wire layer under `message/wire` for codec, compression, length calculation, truncation, and RR-specific wire rules
+
+That separation gives ForgeDNS several concrete advantages.
+
+### 1. It enables targeted hot-path optimization
+
+Because the message stack is under project control, ForgeDNS can optimize around its own real bottlenecks instead of inheriting the object layout and abstraction boundaries of a general-purpose library.
+
+That already shows up in areas such as:
+
+- `Name` keeping a wire-oriented representation while lazily building presentation data
+- targeted handling for `TXT`, `OPT`, compression maps, and length estimation
+- controlled behavior around truncation, `EDNS`, and extended `rcode`
+
+For a DNS server that cares about cache, fallback, rewriting, local answers, and system-facing side effects, that level of control matters a lot.
+
+### 2. It fits the policy layer more naturally
+
+ForgeDNS matchers and executors do more than just inspect packets.
+They often need to:
+
+- read qname, qtype, and qclass
+- change `rcode`
+- build local answers
+- preserve or restore `EDNS`
+- rewrite, truncate, or post-process responses
+
+If the policy layer sits on top of an external abstraction that does not map cleanly to those needs, code becomes more indirect and conversions start to accumulate.
+The current message stack lets policy code work directly with ForgeDNS's own semantics.
+
+### 3. It keeps protocol correctness and server semantics in one place
+
+For a DNS server, the hard part is rarely just "can this packet be parsed".
+The harder questions are things like:
+
+- whether truncation behavior is correct
+- whether `OPT`, `TSIG`, and `SIG0` are ordered and preserved correctly
+- whether complex structures such as `SVCB/HTTPS`, `NSEC/NSEC3`, and EDNS options follow strict wire rules
+- whether compression, length prediction, and final encoding stay consistent
+
+The custom message stack makes it easier to keep those concerns aligned:
+
+- the model layer expresses service semantics
+- the wire layer expresses protocol rules
+- tests can cover both byte-level roundtrips and high-level message behavior
+
+That is much easier to keep coherent over time than splitting policy behavior and wire behavior across unrelated object systems.
+
+### 4. It can grow with ForgeDNS's plugin architecture
+
+ForgeDNS is not just a resolver. It is a policy system built around:
+
+`server -> context -> matcher/executor/provider -> upstream`
+
+That means the message layer has to keep supporting:
+
+- more executors that reshape responses
+- more matchers that inspect query and answer content
+- more integration plugins that observe or extract message results
+- more complex RDATA and EDNS semantics over time
+
+Owning the message layer makes that growth much easier to manage than constantly adapting around someone else's original abstraction boundaries.
+
+### 5. It makes testing and benchmarking more direct
+
+The current `message` package can be tested and benchmarked independently with:
+
+- byte-level roundtrip tests for `Name`, `RData`, and `Message`
+- focused protocol tests for `SVCB`, `NSEC`, `EDNS`, and truncation behavior
+- the `message_codec` benchmark suite
+
+That gives ForgeDNS a much tighter loop for validating both correctness and performance at the message-layer boundary.
+
+From an engineering perspective, this is a long-term investment:
+the message stack is not only there to work today, but to preserve control over correctness and performance as the DNS core keeps growing.
 
 ## 🚀 Performance Design Principles
 
@@ -203,7 +296,7 @@ subgraph D[🧠 Sequence Policy Pipeline]
     D1[🔎 Matcher<br/>decide when rules apply]
     D2[⚙️ Executor<br/>forward / cache / rewrite / fallback]
     D3[📚 Provider<br/>reusable domain/ip data]
-    
+
     D1 --> D2
     D3 --> D2
 end
@@ -318,9 +411,11 @@ The most representative components today are:
 
 - `sequence`: policy orchestration core
 - `forward`: unified upstream forwarding executor
-- `cache`: hot-path response cache
+- `forward_edns0opt`: policy-controlled EDNS0 option forwarding and response reinjection
+- `cache`: hot-path response cache with TTL and negative-cache semantics
 - `fallback`: primary/standby failover composition
 - `hosts`, `arbitrary`, `redirect`, `black_hole`: local answer and rewrite primitives
+- `dual_selector`, `ecs_handler`, `ttl`: response shaping and policy-enhancement helpers
 - `domain_set`, `ip_set`: reusable rule-set providers
 - `qname`, `client_ip`, `resp_ip`, `rcode`, `rate_limiter`: common policy matchers
 - `ipset`, `nftset`, `mikrotik`, `reverse_lookup`: DNS-to-system integration plugins
@@ -341,7 +436,7 @@ ForgeDNS is a strong fit if you want:
 ```bash
 cargo build --release
 cargo run -- -c config.yaml
-cargo run -- -l debug
+cargo run -- -c config.yaml -l debug
 ```
 
 The sample `config.yaml` is the best starting point for understanding how ForgeDNS is assembled today.
@@ -363,8 +458,10 @@ Note: ForgeDNS already includes `http_server` for DoH. The roadmap item above re
 
 ForgeDNS is deeply influenced by:
 
-- [mosdns](https://github.com/IrineSistiana/mosdns), the original Go project that inspired much of the policy and plugin direction
-- [hickory-dns](https://github.com/hickory-dns/hickory-dns), which provides the protocol foundation used by this project
+- [mosdns](https://github.com/IrineSistiana/mosdns)
+  - the original Go project that inspired much of the policy and plugin direction
+- [hickory-dns](https://github.com/hickory-dns/hickory-dns)
+  - an important Rust project that helped shape the protocol side of ForgeDNS
 
 ## License
 

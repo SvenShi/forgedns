@@ -16,17 +16,21 @@ use crate::network::transport::quic_transport::{
     QuicTransport, QuicTransportReader, QuicTransportWriter,
 };
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::server::{RequestHandle, RequestMeta, Server, normalize_listen_addr, udp};
+use crate::plugin::server::{
+    ConnectionGuard, RequestHandle, RequestMeta, Server, normalize_listen_addr, udp,
+};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
 use rustls::ServerConfig;
 use serde::Deserialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 /// QUIC server configuration
@@ -192,9 +196,9 @@ async fn run_server(
     // QUIC endpoint created successfully; enter the accept loop.
     debug!("QUIC server event loop started on {}", addr);
 
-    // Track all active connection tasks
-    let mut tasks: JoinSet<()> = JoinSet::new();
-    let mut active_connections = 0u64;
+    let tasks = TaskTracker::new();
+    let shutdown_token = CancellationToken::new();
+    let active_connections = Arc::new(AtomicU64::new(0));
 
     // Accept QUIC connections and spawn a task per connection.
     loop {
@@ -207,32 +211,29 @@ async fn run_server(
             maybe_connecting = endpoint.accept() => {
                 match maybe_connecting {
                     Some(connecting) => {
-                        active_connections += 1;
+                        let active = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
                         let handler_clone = handler.clone();
+                        let task_shutdown = shutdown_token.clone();
+                        let active_connections = active_connections.clone();
                         tasks.spawn(async move {
-                            handle_quic_connection(connecting, handler_clone).await;
+                            let _connection_guard =
+                                ConnectionGuard::new(active_connections.clone(), connecting.remote_address(), "QUIC");
+                            tokio::select! {
+                                _ = task_shutdown.cancelled() => {}
+                                _ = handle_quic_connection(connecting, handler_clone) => {}
+                            }
                         });
-                        debug!("New QUIC connection started (active: {})", active_connections);
+                        debug!("New QUIC connection started (active: {})", active);
                     }
                     None => break,
-                }
-            }
-
-            // Clean up finished tasks
-            Some(result) = tasks.join_next() => {
-                active_connections = active_connections.saturating_sub(1);
-                if let Err(e) = result {
-                    warn!("Connection task panicked: {:?}", e);
-                }
-                if active_connections % 10 == 0 && active_connections > 0 {
-                    debug!("Active connections: {}", active_connections);
                 }
             }
         }
     }
 
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
+    shutdown_token.cancel();
+    tasks.close();
+    tasks.wait().await;
     info!(listen = %addr, "QUIC server stopped");
 }
 
@@ -253,6 +254,8 @@ async fn handle_quic_connection(connecting: quinn::Incoming, handler: Arc<Reques
 
     let transport = QuicTransport::new(connection);
     // Accept bi-directional streams on this QUIC connection until it is closed.
+    let server_name = server_name.map(Arc::from);
+
     loop {
         match transport.accept_bi().await {
             Ok((reader, writer)) => {
@@ -287,12 +290,12 @@ async fn handle_doq_bi_stream(
     mut writer: QuicTransportWriter,
     handler: Arc<RequestHandle>,
     remote_addr: std::net::SocketAddr,
-    server_name: Option<String>,
+    server_name: Option<Arc<str>>,
 ) -> Result<()> {
     match reader.read_message().await {
         Ok(request_msg) => {
             let response = handler
-                .handle_request_with_meta(
+                .handle_request(
                     request_msg,
                     remote_addr,
                     RequestMeta {

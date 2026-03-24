@@ -4,13 +4,13 @@
  */
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::message::Message;
 use crate::network::transport::quic_transport::QuicTransport;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
 use crate::network::upstream::{Connection, ConnectionInfo};
 
 use async_trait::async_trait;
-use hickory_proto::op::Message;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -73,7 +73,7 @@ impl Connection for QuicConnection {
     ///
     /// This follows RFC 9250 (DNS over Dedicated QUIC Connections)
     #[hotpath::measure]
-    async fn query(&self, mut request: Message) -> Result<Message> {
+    async fn query(&self, request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("Cannot query on closed QUIC connection"));
         }
@@ -99,8 +99,6 @@ impl Connection for QuicConnection {
         };
 
         let raw_id = request.id();
-        request.set_id(0); // RFC 9250: query ID SHOULD be set to 0
-
         if let Err(e) = writer.write_message(&request).await {
             self.using_count.fetch_sub(1, Ordering::Relaxed);
             return Err(DnsError::protocol(format!(

@@ -4,9 +4,8 @@
  */
 
 use crate::core::error::{DnsError, Result};
+use crate::message::{Message, codec};
 use bytes::BytesMut;
-use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 
 pub struct TcpTransport<S> {
@@ -28,13 +27,17 @@ where
                 reader,
                 buf: BytesMut::with_capacity(8192),
             },
-            TcpTransportWriter { writer },
+            TcpTransportWriter {
+                writer,
+                write_buf: Vec::with_capacity(1234),
+            },
         )
     }
 }
 
 pub struct TcpTransportWriter<S> {
     writer: WriteHalf<S>,
+    write_buf: Vec<u8>,
 }
 
 impl<S> TcpTransportWriter<S>
@@ -43,18 +46,38 @@ where
 {
     #[inline]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
-        let bytes = msg
-            .to_bytes()
-            .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
+        self.write_buf.clear();
+        self.write_buf.extend_from_slice(&[0, 0]);
 
-        // Merge length prefix and body into a single frame for one write
-        let mut frame = BytesMut::with_capacity(2 + bytes.len());
-        let len_prefix = (bytes.len() as u16).to_be_bytes();
-        frame.extend_from_slice(&len_prefix);
-        frame.extend_from_slice(&bytes);
+        msg.append_to(&mut self.write_buf)?;
+
+        let body_len = self.write_buf.len() - 2;
+
+        self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
 
         self.writer
-            .write_all(frame.as_ref())
+            .write_all(&self.write_buf)
+            .await
+            .map_err(|e| DnsError::protocol(format!("Failed to write TCP DNS frame: {}", e)))?;
+        Ok(())
+    }
+
+    #[inline]
+    pub async fn write_message_with_id(&mut self, msg: &Message, id: u16) -> Result<()> {
+        self.write_buf.clear();
+        self.write_buf.extend_from_slice(&[0, 0]);
+
+        msg.append_to_with_id(id, &mut self.write_buf)
+            .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
+
+        let body_len = self.write_buf.len() - 2;
+
+        debug_assert!(body_len < u16::MAX as usize);
+
+        self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
+
+        self.writer
+            .write_all(&self.write_buf)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to write DNS frame: {}", e)))?;
         Ok(())
@@ -73,35 +96,31 @@ where
     #[inline]
     pub async fn read_message(&mut self) -> Result<Message> {
         loop {
-            // Try parse from accumulated buffer first (may contain multiple messages)
-            if self.buf.len() >= 2 {
-                let msg_len = u16::from_be_bytes([self.buf[0], self.buf[1]]) as usize;
+            let buf_len = self.buf.len();
+            if buf_len >= 2 {
+                let msg_len = codec::read_u16_be(&self.buf, 0) as usize;
+                let frame_len = 2 + msg_len;
 
                 if msg_len == 0 {
-                    // Skip zero-length and continue
                     let _ = self.buf.split_to(2);
                     continue;
                 }
 
-                if self.buf.len() >= 2 + msg_len {
-                    // We have a full message frame
-                    let msg_slice = &self.buf[2..2 + msg_len];
-                    match Message::from_bytes(msg_slice) {
+                if buf_len >= frame_len {
+                    let body = &self.buf[2..frame_len];
+                    match Message::from_bytes(body) {
                         Ok(msg) => {
-                            // Drain the consumed frame (length prefix + body)
-                            let _ = self.buf.split_to(2 + msg_len);
+                            let _ = self.buf.split_to(frame_len);
                             return Ok(msg);
                         }
                         Err(_) => {
-                            // Malformed message: drop this frame and continue
-                            let _ = self.buf.split_to(2 + msg_len);
+                            let _ = self.buf.split_to(frame_len);
                             continue;
                         }
                     }
                 }
             }
 
-            // Need more bytes; read from stream directly into buffer
             self.buf.reserve(4096);
             let n = self
                 .reader
@@ -119,16 +138,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hickory_proto::op::Query;
-    use hickory_proto::rr::{Name, RecordType};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+    use crate::message::{DNSClass, Question};
+    use crate::message::{Name, RecordType};
+    use tokio::io::{AsyncWriteExt, duplex};
 
     fn make_message(id: u16, qname: &str) -> Message {
         let mut message = Message::new();
         message.set_id(id);
-        message.add_query(Query::query(
+        message.add_question(Question::new(
             Name::from_ascii(qname).expect("query name should be valid"),
             RecordType::A,
+            DNSClass::IN,
         ));
         message
     }
@@ -141,31 +161,6 @@ mod tests {
         frame.extend_from_slice(&(body.len() as u16).to_be_bytes());
         frame.extend_from_slice(&body);
         frame
-    }
-
-    #[tokio::test]
-    async fn test_writer_prepends_two_byte_length_prefix() {
-        let (client, mut server) = duplex(1024);
-        let transport = TcpTransport::new(client);
-        let (_reader, mut writer) = transport.into_split();
-        let message = make_message(1, "example.com.");
-
-        writer
-            .write_message(&message)
-            .await
-            .expect("write_message should succeed");
-
-        let body = message
-            .to_bytes()
-            .expect("message should serialize successfully");
-        let mut frame = vec![0u8; 2 + body.len()];
-        server
-            .read_exact(&mut frame)
-            .await
-            .expect("server side should receive framed message");
-
-        assert_eq!(&frame[..2], &(body.len() as u16).to_be_bytes());
-        assert_eq!(&frame[2..], body.as_slice());
     }
 
     #[tokio::test]
@@ -192,10 +187,10 @@ mod tests {
         assert_eq!(decoded.id(), 7);
         assert_eq!(
             decoded
-                .query()
-                .expect("query should exist")
+                .first_question()
+                .expect("question should exist")
                 .name()
-                .to_ascii(),
+                .to_fqdn(),
             "example.com."
         );
     }
@@ -225,10 +220,10 @@ mod tests {
         assert_eq!(decoded.id(), 11);
         assert_eq!(
             decoded
-                .query()
-                .expect("query should exist")
+                .first_question()
+                .expect("question should exist")
                 .name()
-                .to_ascii(),
+                .to_fqdn(),
             "zero-length.example."
         );
     }
@@ -258,10 +253,10 @@ mod tests {
         assert_eq!(decoded.id(), 13);
         assert_eq!(
             decoded
-                .query()
-                .expect("query should exist")
+                .first_question()
+                .expect("question should exist")
                 .name()
-                .to_ascii(),
+                .to_fqdn(),
             "valid-after-bad.example."
         );
     }

@@ -1,0 +1,3 @@
+bench.test A
+bench-alt.test A
+bench-v6.test AAAA

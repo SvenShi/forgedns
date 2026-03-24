@@ -24,7 +24,6 @@ use tracing_subscriber::{EnvFilter, Registry, fmt};
 
 pub mod app_clock;
 pub mod context;
-pub mod dns_utils;
 pub mod error;
 pub mod rule_matcher;
 pub mod task_center;
@@ -94,13 +93,10 @@ pub fn init_log(log: LogConfig) -> WorkerGuard {
             .with_writer(writer)
     });
 
-    let (mut filter, invalid_level) = match EnvFilter::try_new(&log.level) {
+    let (filter, invalid_level) = match EnvFilter::try_new(&log.level) {
         Ok(filter) => (filter, false),
         Err(_) => (EnvFilter::new("info"), true),
     };
-
-    // Suppress noisy hickory_server logs
-    filter = filter.add_directive("hickory_server::server=off".parse().unwrap());
 
     let subscriber = Registry::default().with(filter).with(console_layer);
 

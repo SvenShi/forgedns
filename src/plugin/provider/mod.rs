@@ -7,6 +7,7 @@ use std::net::IpAddr;
  */
 use async_trait::async_trait;
 
+use crate::message::Name;
 use crate::plugin::Plugin;
 
 pub mod domain_set;
@@ -19,23 +20,9 @@ pub trait Provider: Plugin {
     /// Type-erased view for provider-specific downcasting.
     fn as_any(&self) -> &dyn Any;
 
-    /// Fast-path domain membership check for hot matcher paths.
-    fn contains_domain(&self, _domain: &str) -> bool {
-        false
-    }
-
-    /// Domain membership check with pre-normalized domain and pre-split labels.
-    ///
-    /// `domain` is expected to be lowercased and without trailing dot.
-    /// `labels_rev` is expected to be reverse labels of `domain`.
+    /// Domain membership check using an owned DNS name.
     #[inline]
-    fn contains_domain_prepared(&self, domain: &str, _labels_rev: &[&str]) -> bool {
-        self.contains_domain(domain)
-    }
-
-    /// Whether this provider has suffix-domain(trie) rules and can use `labels_rev`.
-    #[inline]
-    fn has_trie_domain_rules(&self) -> bool {
+    fn contains_name(&self, _name: &Name) -> bool {
         false
     }
 

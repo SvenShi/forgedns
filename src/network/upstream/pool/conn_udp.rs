@@ -5,13 +5,13 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::message::Message;
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::network::upstream::ConnectionInfo;
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::connect_socket;
 use async_trait::async_trait;
-use hickory_proto::op::Message;
 use std::fmt::Debug;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -22,6 +22,8 @@ use tokio::select;
 use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, trace, warn};
+
+const UDP_RECV_BUFFER_SIZE: usize = 65_535;
 
 /// Represents a single UDP connection used in DNS upstream queries.
 /// Each connection manages its own socket and maintains a mapping
@@ -81,14 +83,13 @@ impl Connection for UdpConnection {
     /// This two-stage approach improves resilience against UDP packet loss
     /// while maintaining low latency for successful queries.
     #[hotpath::measure]
-    async fn query(&self, mut request: Message) -> Result<Message> {
+    async fn query(&self, request: Message) -> Result<Message> {
         let raw_id = request.id();
         let mut current_timeout = RETRY_TIMEOUT;
 
         for attempt in 0..2 {
             let (tx, rx) = oneshot::channel();
             let query_id = self.request_map.store(tx);
-            request.set_id(query_id);
 
             trace!(
                 conn_id = self.id,
@@ -99,10 +100,14 @@ impl Connection for UdpConnection {
             );
 
             // Send UDP datagram via transport
-            match self.transport.write_message(&request).await {
+            match self
+                .transport
+                .write_message_with_id(&request, query_id)
+                .await
+            {
                 Ok(()) => {}
                 Err(e) => {
-                    self.request_map.take(query_id);
+                    self.request_map.remove(query_id);
                     error!(conn_id = self.id, err = %e, "Failed to send UDP query");
                     return Err(e);
                 }
@@ -117,6 +122,7 @@ impl Connection for UdpConnection {
                         return Ok(response);
                     }
                     Err(_canceled) => {
+                        self.request_map.remove(query_id);
                         trace!(
                             conn_id = self.id,
                             query_id, "Listener dropped channel, retrying"
@@ -126,6 +132,7 @@ impl Connection for UdpConnection {
                     }
                 },
                 Err(_elapsed) => {
+                    self.request_map.remove(query_id);
                     trace!(
                         conn_id = self.id,
                         query_id,
@@ -187,7 +194,7 @@ impl UdpConnection {
     /// Uses 4KB buffer which is sufficient for most DNS responses.
     /// Larger responses would typically use TCP (with TC bit set).
     async fn listen_dns_response(self: Arc<Self>) {
-        let mut buf = [0u8; 4096]; // Standard DNS UDP buffer size
+        let mut buf = vec![0u8; UDP_RECV_BUFFER_SIZE];
         let mut closing = false;
 
         debug!(
@@ -205,7 +212,7 @@ impl UdpConnection {
                 recv = self.transport.read_message(&mut buf) => {
                     match recv {
                         Ok(msg) => {
-                            let id = msg.header().id();
+                            let id = msg.id();
                             if let Some(sender) = self.request_map.take(id) {
                                 let _ = sender.send(msg);
                                 self.last_used.store(AppClock::elapsed_millis(), Ordering::Relaxed);
@@ -215,7 +222,11 @@ impl UdpConnection {
                                     "Delivered UDP response to waiting query"
                                 );
                             } else {
-                                trace!(conn_id = self.id, id, "No pending query for response");
+                                trace!(
+                                    conn_id = self.id,
+                                    id,
+                                    "No pending query or response fingerprint mismatch"
+                                );
                             }
                         }
                         Err(e) => {

@@ -5,13 +5,12 @@
 
 //! Shared helpers for matcher plugins.
 
-use crate::core::dns_utils::parse_named_response_code;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
+use crate::message::{DNSClass, Rcode, RecordType};
 use crate::plugin::PluginRegistry;
 use crate::plugin::provider::Provider;
 use ahash::AHashSet;
-use hickory_proto::rr::{DNSClass, RecordType};
 use serde_yml::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -49,20 +48,27 @@ pub(crate) fn parse_u16_rules(
     Ok(parsed)
 }
 
-pub(crate) fn parse_record_type(raw: &str) -> Option<u16> {
+pub(crate) fn parse_rr_type(raw: &str) -> Option<u16> {
     RecordType::from_str(&raw.to_ascii_uppercase())
         .ok()
         .map(u16::from)
 }
 
-pub(crate) fn parse_dns_class(raw: &str) -> Option<u16> {
+pub(crate) fn parse_class(raw: &str) -> Option<u16> {
     DNSClass::from_str(&raw.to_ascii_uppercase())
         .ok()
         .map(u16::from)
 }
 
+/// Parse rcode matcher input.
+///
+/// Current config only accepts decimal numeric rcodes. Mnemonic tokens such as
+/// `NOERROR` or `SERVFAIL` are intentionally not mapped here.
 pub(crate) fn parse_rcode(raw: &str) -> Option<u16> {
-    parse_named_response_code(raw).map(u16::from)
+    if let Ok(code) = raw.parse::<u16>() {
+        return Some(u16::from(Rcode::from(code)));
+    }
+    None
 }
 
 pub(crate) fn parse_ip_prefix_matcher(
@@ -79,6 +85,7 @@ pub(crate) fn parse_ip_prefix_matcher(
             .add_rule(v)
             .map_err(|e| DnsError::plugin(format!("invalid {} rule '{}': {}", field, v, e)))?;
     }
+    matcher.finalize();
     Ok(matcher)
 }
 

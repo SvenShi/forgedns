@@ -6,11 +6,10 @@
 //! `resp_ip` matcher plugin.
 //!
 //! This plugin follows standard plugin lifecycle (`init/destroy`) and
-//! matches A/AAAA records in response sections against configured IP rules.
+//! matches A/AAAA records in the answer section against configured IP rules.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::core::dns_utils::{response_records, rr_to_ip};
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::dependency::DependencySpec;
@@ -114,12 +113,8 @@ impl Plugin for RespIpMatcher {
 
 impl Matcher for RespIpMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
-        let Some(response) = context.response.as_ref() else {
-            return false;
-        };
-
-        response_records(response).any(|record| {
-            rr_to_ip(record).is_some_and(|ip| {
+        context.response().is_some_and(|response| {
+            response.has_answer_ip(|ip| {
                 self.ip_rules.contains_ip(ip) || self.ip_sets.iter().any(|set| set.contains_ip(ip))
             })
         })
@@ -129,30 +124,26 @@ impl Matcher for RespIpMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
+    use crate::message::rdata::A;
+    use crate::message::{Message, Question};
+    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
-    use hickory_proto::op::{Message, Query};
-    use hickory_proto::rr::rdata::A;
-    use hickory_proto::rr::{Name, RData, Record, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
-        request.add_query(Query::query(
+        request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
+            crate::message::DNSClass::IN,
         ));
 
-        DnsContext {
-            src_addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
+        DnsContext::new(
+            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
-            response: None,
-            exec_flow_state: ExecFlowState::Running,
-            marks: Default::default(),
-            attributes: Default::default(),
-            query_view: None,
-            registry: Arc::new(PluginRegistry::new()),
-        }
+            Arc::new(PluginRegistry::new()),
+        )
     }
 
     #[tokio::test]
@@ -172,7 +163,29 @@ mod tests {
             60,
             RData::A(A(Ipv4Addr::new(1, 1, 1, 8))),
         ));
-        ctx.response = Some(response);
+        ctx.set_response(response);
+
+        assert!(!matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_resp_ip_matcher_only_checks_answer_section() {
+        let matcher = RespIpMatcher {
+            tag: "resp_ip".into(),
+            ip_rules: parse_ip_prefix_matcher("resp_ip", &["8.8.8.0/24".into()]).unwrap(),
+            ip_set_tags: vec![],
+            ip_sets: vec![],
+            registry: Arc::new(PluginRegistry::new()),
+        };
+
+        let mut ctx = make_context();
+        let mut response = Message::new();
+        response.add_additional(Record::from_rdata(
+            Name::from_ascii("ns.example.com.").unwrap(),
+            60,
+            RData::A(A(Ipv4Addr::new(8, 8, 8, 8))),
+        ));
+        ctx.set_response(response);
 
         assert!(!matcher.is_match(&mut ctx));
     }
@@ -197,7 +210,7 @@ mod tests {
             60,
             RData::A(A(Ipv4Addr::new(8, 8, 8, 8))),
         ));
-        hit_ctx.response = Some(response);
+        hit_ctx.set_response(response);
         assert!(matcher.is_match(&mut hit_ctx));
     }
 }

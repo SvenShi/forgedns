@@ -75,14 +75,16 @@ impl Executor for QuerySummary {
             .unwrap_or_else(AppClock::elapsed_millis);
 
         let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
-        let (qname, qtype) = match context.request.query() {
-            Some(q) => (q.name().to_utf8(), format!("{:?}", q.query_type)),
+        let (qname, qtype) = match context.request.first_question() {
+            Some(question) => (
+                question.name().normalized().to_string(),
+                format!("{:?}", question.qtype()),
+            ),
             None => ("<none>".to_string(), "<none>".to_string()),
         };
         let rcode = context
-            .response
-            .as_ref()
-            .map(|r| format!("{:?}", r.response_code()))
+            .response()
+            .map(|response| format!("{:?}", response.rcode()))
             .unwrap_or_else(|| "<none>".to_string());
 
         info!(
@@ -90,7 +92,7 @@ impl Executor for QuerySummary {
             title = %self.msg,
             qname = %qname,
             qtype = %qtype,
-            src = %context.src_addr,
+            src = %context.peer_addr(),
             rcode = %rcode,
             elapsed_ms = elapsed,
             "query_summary"
@@ -161,9 +163,9 @@ fn parse_msg(args: Option<serde_yml::Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::Message;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_context;
-    use hickory_proto::op::Message;
 
     #[test]
     fn test_parse_msg_trims_and_filters_empty() {
@@ -199,7 +201,7 @@ mod tests {
             msg: "m".to_string(),
         };
         let mut ctx = test_context();
-        ctx.response = Some(Message::new());
+        ctx.set_response(Message::new());
 
         plugin
             .post_execute(&mut ctx, None)
