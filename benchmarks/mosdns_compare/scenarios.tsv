@@ -53,3 +53,7 @@
 # Standalone provider-focused scenarios.
 45-provider-domain-set-data|45-provider-domain-set-data.yaml|45-provider-domain-set-data.yaml|queries/domain-set.txt|udp|plugin-providers|-|extended,provider,stable|Domain-set provider with dataset-backed lookups|Pure positive-match provider walk for isolating dataset lookup cost.
 46-provider-ip-set-data|46-provider-ip-set-data.yaml|46-provider-ip-set-data.yaml|queries/ip-set-positive.txt|udp|plugin-providers|-|extended,provider,stable|IP-set provider with dataset-backed lookups|Pure positive-match provider walk to separate lookup cost from accept or reject branching.
+
+# Server-path scenarios focused on listener and transport overhead with minimal business logic.
+47-server-local-udp|47-server-local-udp-tcp.yaml|47-server-local-udp-tcp.yaml|queries/plugin-a.txt|udp|server|-|extended,server,micro,stable|Minimal UDP server path with local synthetic answer|Isolates UDP socket receive, decode, dispatch, encode, and send cost from upstream variance.
+48-server-local-tcp|47-server-local-udp-tcp.yaml|47-server-local-udp-tcp.yaml|queries/plugin-a.txt|tcp|server|-|extended,server,micro,stable|Minimal TCP server path with local synthetic answer|Highlights TCP accept, session read-write, and response framing overhead with almost no executor cost.

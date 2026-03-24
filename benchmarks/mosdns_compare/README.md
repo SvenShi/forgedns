@@ -39,6 +39,8 @@ Useful commands:
   - only run integrated multi-plugin pipelines
 - `./run_dnsperf_compare.sh plugin-matchers`
   - run one family from `scenarios.tsv`
+- `./run_dnsperf_compare.sh server`
+  - run isolated `udp_server` and `tcp_server` transport-path comparisons
 - `./run_dnsperf_compare.sh 01-baseline-udp-forward 08-domain-set`
   - run selected labels directly
 - `./run_dnsperf_compare.sh all`
@@ -67,6 +69,8 @@ Common tags:
   - end-to-end paths such as forward, cache, local answers, domain set, IP set
 - `micro`
   - isolated plugin overhead measurements
+- `server`
+  - listener and transport path comparisons for `udp_server` and `tcp_server`
 - `composite`
   - integrated multi-plugin chains
 - `extended`
@@ -108,6 +112,9 @@ Interpretation rules:
 - `BENCH_REPEATS=3` is the recommended floor for results you plan to quote
 - observer scenarios such as `debug_print` and `query_summary` are useful for
   overhead comparison, but not for broad "which server is faster" claims
+- `47-server-local-udp` and `48-server-local-tcp` are the closest thing to a
+  server-plugin microbenchmark in this pack: they intentionally keep executor
+  logic trivial so transport overhead dominates
 
 ## Workload Notes
 
@@ -125,11 +132,17 @@ Interpretation rules:
   record types
 - `ip-set.txt` and the related YAML now use multiple synthetic answers so the
   response-side IP set compare is not a single-name degenerate loop
+- `47-server-local-udp-tcp` uses a `black_hole` synthetic answer to minimize
+  business-logic variance and make UDP/TCP server plugin overhead easier to
+  compare directly
 
 ## Current Tooling Gaps
 
-- `http_server` and `quic_server` are not in the default catalog because this
-  compare pack is still driven by `dnsperf` in UDP/TCP mode
+- UDP and TCP server-path comparisons are now included through
+  `47-server-local-udp` and `48-server-local-tcp`
+- `http_server` and `quic_server` are still not in the catalog because this
+  compare pack is driven by `dnsperf` in UDP/TCP mode and does not exercise
+  HTTP or QUIC transports directly
 - `ipset`, `nftset`, and `mikrotik` are not in the default catalog because
   they require host-level side-effect setup that is harder to keep reproducible
   across compare runs
