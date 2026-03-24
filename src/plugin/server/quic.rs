@@ -16,16 +16,21 @@ use crate::network::transport::quic_transport::{
     QuicTransport, QuicTransportReader, QuicTransportWriter,
 };
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::server::{RequestHandle, RequestMeta, Server, normalize_listen_addr, udp};
+use crate::plugin::server::{
+    ConnectionGuard, RequestHandle, RequestMeta, Server, normalize_listen_addr, udp,
+};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
 use rustls::ServerConfig;
 use serde::Deserialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 /// QUIC server configuration
@@ -191,6 +196,10 @@ async fn run_server(
     // QUIC endpoint created successfully; enter the accept loop.
     debug!("QUIC server event loop started on {}", addr);
 
+    let tasks = TaskTracker::new();
+    let shutdown_token = CancellationToken::new();
+    let active_connections = Arc::new(AtomicU64::new(0));
+
     // Accept QUIC connections and spawn a task per connection.
     loop {
         tokio::select! {
@@ -202,18 +211,29 @@ async fn run_server(
             maybe_connecting = endpoint.accept() => {
                 match maybe_connecting {
                     Some(connecting) => {
-                        debug!("New QUIC connection started");
+                        let active = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
                         let handler_clone = handler.clone();
-                        tokio::spawn(async move {
-                            handle_quic_connection(connecting, handler_clone).await;
+                        let task_shutdown = shutdown_token.clone();
+                        let active_connections = active_connections.clone();
+                        tasks.spawn(async move {
+                            let _connection_guard =
+                                ConnectionGuard::new(active_connections.clone(), connecting.remote_address(), "QUIC");
+                            tokio::select! {
+                                _ = task_shutdown.cancelled() => {}
+                                _ = handle_quic_connection(connecting, handler_clone) => {}
+                            }
                         });
+                        debug!("New QUIC connection started (active: {})", active);
                     }
                     None => break,
                 }
             }
-
         }
     }
+
+    shutdown_token.cancel();
+    tasks.close();
+    tasks.wait().await;
     info!(listen = %addr, "QUIC server stopped");
 }
 

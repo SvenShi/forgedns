@@ -11,6 +11,7 @@ use std::io::Error;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{Level, debug, event_enabled, warn};
 
 pub mod http;
@@ -54,6 +55,42 @@ pub(crate) fn parse_listen_addr(listen: &str) -> Result<SocketAddr> {
 
 pub(crate) fn normalize_listen_addr(listen: &str) -> Result<String> {
     Ok(parse_listen_addr(listen)?.to_string())
+}
+
+pub(crate) struct ConnectionGuard {
+    active_connections: Arc<AtomicU64>,
+    src: SocketAddr,
+    protocol: &'static str,
+}
+
+impl ConnectionGuard {
+    pub(crate) fn new(
+        active_connections: Arc<AtomicU64>,
+        src: SocketAddr,
+        protocol: &'static str,
+    ) -> Self {
+        Self {
+            active_connections,
+            src,
+            protocol,
+        }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        let active = self
+            .active_connections
+            .fetch_sub(1, Ordering::Relaxed)
+            .saturating_sub(1);
+        debug!(
+            "{} connection from {} closed (active: {})",
+            self.protocol, self.src, active
+        );
+        if active > 0 && active % 10 == 0 {
+            debug!("Active connections: {}", active);
+        }
+    }
 }
 
 #[derive(Debug)]

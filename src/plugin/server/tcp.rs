@@ -22,7 +22,7 @@ use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{
-    RequestHandle, RequestMeta, Server, normalize_listen_addr, parse_listen_addr,
+    ConnectionGuard, RequestHandle, RequestMeta, Server, normalize_listen_addr, parse_listen_addr,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
@@ -31,11 +31,14 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch};
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 const DEFAULT_IDLE_TIMEOUT: u64 = 10;
@@ -177,8 +180,9 @@ impl Server for TcpServer {
 /// Main TCP server loop
 ///
 /// Creates a TCP stream, listens for incoming DNS queries, and spawns
-/// handler tasks for each request. Uses JoinSet to track and manage active
-/// connections, enabling graceful cleanup and resource management.
+/// handler tasks for each request. Uses a task tracker and cancellation token
+/// to manage active connections without polling completed tasks from the
+/// accept loop.
 async fn run_server(
     addr: String,
     handler: Arc<RequestHandle>,
@@ -210,6 +214,10 @@ async fn run_server(
         "TCP server bound successfully"
     );
 
+    let tasks = TaskTracker::new();
+    let shutdown_token = CancellationToken::new();
+    let active_connections = Arc::new(AtomicU64::new(0));
+
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -223,29 +231,40 @@ async fn run_server(
                     Ok((stream, src)) => {
                         let handler = handler.clone();
                         let tls_acceptor = tls_acceptor.clone();
-                        debug!("New connection from {}", src);
-                        tokio::spawn(async move {
-                            // Handle TLS handshake if TLS is enabled
-                            if let Some(acceptor) = tls_acceptor {
-                                match acceptor.accept(stream).await {
-                                    Ok(tls_stream) => {
-                                        let server_name = tls_stream
-                                            .get_ref()
-                                            .1
-                                            .server_name()
-                                            .map(Arc::from);
-                                        debug!("TLS handshake completed for client {}", src);
-                                        handle_dns_stream(tls_stream, src, handler, server_name)
-                                            .await;
+                        let task_shutdown = shutdown_token.clone();
+                        let active_connections = active_connections.clone();
+
+                        let active = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
+                        debug!("New connection from {} (active: {})", src, active);
+                        tasks.spawn(async move {
+                            let _connection_guard =
+                                ConnectionGuard::new(active_connections.clone(), src, "TCP");
+                            tokio::select! {
+                                _ = task_shutdown.cancelled() => {}
+                                _ = async move {
+                                    // Handle TLS handshake if TLS is enabled
+                                    if let Some(acceptor) = tls_acceptor {
+                                        match acceptor.accept(stream).await {
+                                            Ok(tls_stream) => {
+                                                let server_name = tls_stream
+                                                    .get_ref()
+                                                    .1
+                                                    .server_name()
+                                                    .map(Arc::from);
+                                                debug!("TLS handshake completed for client {}", src);
+                                                handle_dns_stream(tls_stream, src, handler, server_name)
+                                                    .await;
+                                            }
+                                            Err(e) => {
+                                                warn!("TLS handshake failed for {}: {}", src, e);
+                                            }
+                                        }
+                                    } else {
+                                        // Plain TCP connection
+                                        debug!("TCP server connected to client {}", src);
+                                        handle_dns_stream(stream, src, handler, None).await;
                                     }
-                                    Err(e) => {
-                                        warn!("TLS handshake failed for {}: {}", src, e);
-                                    }
-                                }
-                            } else {
-                                // Plain TCP connection
-                                debug!("TCP server connected to client {}", src);
-                                handle_dns_stream(stream, src, handler, None).await;
+                                } => {}
                             }
                         });
                     }
@@ -254,9 +273,12 @@ async fn run_server(
                     }
                 }
             }
-
         }
     }
+
+    shutdown_token.cancel();
+    tasks.close();
+    tasks.wait().await;
     info!(listen = %addr, "TCP server stopped");
 }
 

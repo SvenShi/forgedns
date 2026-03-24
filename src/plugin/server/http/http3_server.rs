@@ -2,6 +2,7 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
+use crate::plugin::server::ConnectionGuard;
 use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
 use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
 use crate::plugin::server::quic;
@@ -9,7 +10,10 @@ use bytes::{BufMut, Bytes, BytesMut};
 use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{oneshot, watch};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 const MAX_HTTP3_BODY_SIZE: usize = 64 * 1024;
@@ -17,7 +21,9 @@ const MAX_HTTP3_BODY_SIZE: usize = 64 * 1024;
 /// Main HTTP/3 server loop (over QUIC)
 ///
 /// Creates an HTTP/3 endpoint, accepts QUIC connections, and spawns
-/// handler tasks for each connection and per-stream request.
+/// handler tasks for each connection and per-stream request. Uses a task
+/// tracker and cancellation token to manage active connections without
+/// polling completed tasks from the accept loop.
 ///
 /// # Architecture
 /// - Binds a UDP socket for QUIC
@@ -67,7 +73,11 @@ pub async fn run_server(
     // Wrap header name in Arc to avoid cloning Strings per request
     let src_ip_header = src_ip_header.map(Arc::from);
 
+    let tasks = TaskTracker::new();
+    let shutdown_token = CancellationToken::new();
+    let active_connections = Arc::new(AtomicU64::new(0));
     loop {
+        // Accept new connections
         tokio::select! {
             changed = shutdown_rx.changed() => {
                 if changed.is_ok() && *shutdown_rx.borrow() {
@@ -77,22 +87,30 @@ pub async fn run_server(
             accept_result = endpoint.accept() => {
                 match accept_result {
                     Some(connecting) => {
+                        let active = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
                         let dispatcher = dispatcher.clone();
                         let src_ip_header = src_ip_header.clone();
-                        tokio::spawn(async move {
-                            handle_h3_connection(connecting, dispatcher, src_ip_header).await;
+                        let task_shutdown = shutdown_token.clone();
+                        let active_connections = active_connections.clone();
+                        tasks.spawn(async move {
+                            let _connection_guard =
+                                ConnectionGuard::new(active_connections.clone(), connecting.remote_address(), "HTTP/3");
+                            tokio::select! {
+                                _ = task_shutdown.cancelled() => {}
+                                _ = handle_h3_connection(connecting, dispatcher, src_ip_header) => {}
+                            }
                         });
-                        debug!("New QUIC connection started");
+                        debug!("New QUIC connection started (active: {})", active);
                     }
-                    None => {
-                        debug!("QUIC endpoint accept returned None");
-                        break;
-                    }
+                    _ => {}
                 }
             }
         }
     }
 
+    shutdown_token.cancel();
+    tasks.close();
+    tasks.wait().await;
     info!(listen = %addr, "HTTP/3 server stopped");
 }
 

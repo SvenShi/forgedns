@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+use crate::plugin::server::ConnectionGuard;
 use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
 use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
 use crate::plugin::server::tcp;
@@ -10,15 +11,20 @@ use bytes::{BufMut, Bytes, BytesMut};
 use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 /// Main HTTP/2 server loop (over TCP)
 ///
 /// Creates an HTTP/2 stream, listens for incoming DNS queries, and spawns
-/// handler tasks for each request.
+/// handler tasks for each request. Uses a task tracker and cancellation token
+/// to manage active connections without polling completed tasks from the
+/// accept loop.
 ///
 /// # Architecture
 /// - Accepts TCP connections (with optional TLS handshake)
@@ -72,7 +78,9 @@ pub async fn run_server(
     // Wrap header name in Arc to avoid cloning Strings per request
     let src_ip_header = src_ip_header.map(Arc::from);
 
-    // JoinSet to track all active connection tasks
+    let tasks = TaskTracker::new();
+    let shutdown_token = CancellationToken::new();
+    let active_connections = Arc::new(AtomicU64::new(0));
     let tls_acceptor = if let Some(mut server_config) = server_config {
         server_config.alpn_protocols = vec![b"h2".to_vec()];
         Some(Arc::new(TlsAcceptor::from(Arc::new(server_config))))
@@ -94,40 +102,48 @@ pub async fn run_server(
                         let dispatcher = dispatcher.clone();
                         let src_ip_header = src_ip_header.clone();
                         let tls_acceptor = tls_acceptor.clone();
+                        let task_shutdown = shutdown_token.clone();
+                        let active_connections = active_connections.clone();
 
-                        debug!("New connection from {}", src);
+                        let active = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
+                        debug!("New connection from {} (active: {})", src, active);
 
-                        tokio::spawn(async move {
-                            // Handle TLS handshake if TLS is enabled
-                            if let Some(acceptor) = tls_acceptor {
-                                match acceptor.accept(stream).await {
-                                    Ok(tls_stream) => {
-                                        let server_name = tls_stream
-                                            .get_ref()
-                                            .1
-                                            .server_name()
-                                            .map(Arc::<str>::from);
-
-                                        debug!("TLS handshake completed for client {}", src);
-
-                                        handle_http_stream(
-                                            tls_stream,
-                                            src,
-                                            dispatcher,
-                                            src_ip_header,
-                                            server_name,
-                                        )
-                                        .await;
+                        tasks.spawn(async move {
+                            let _connection_guard =
+                                ConnectionGuard::new(active_connections.clone(), src, "HTTP/2");
+                            tokio::select! {
+                                _ = task_shutdown.cancelled() => {}
+                                _ = async move {
+                                    // Handle TLS handshake if TLS is enabled
+                                    if let Some(acceptor) = tls_acceptor {
+                                        match acceptor.accept(stream).await {
+                                            Ok(tls_stream) => {
+                                                let server_name = tls_stream
+                                                    .get_ref()
+                                                    .1
+                                                    .server_name()
+                                                    .map(Arc::<str>::from);
+                                                debug!("TLS handshake completed for client {}", src);
+                                                handle_http_stream(
+                                                    tls_stream,
+                                                    src,
+                                                    dispatcher,
+                                                    src_ip_header,
+                                                    server_name,
+                                                )
+                                                .await;
+                                            }
+                                            Err(e) => {
+                                                warn!("TLS handshake failed for {}: {}", src, e);
+                                            }
+                                        }
+                                    } else {
+                                        // Plain HTTP connection
+                                        debug!("HTTP server connected to client {}", src);
+                                        handle_http_stream(stream, src, dispatcher, src_ip_header, None)
+                                            .await;
                                     }
-                                    Err(e) => {
-                                        warn!("TLS handshake failed for {}: {}", src, e);
-                                    }
-                                }
-                            } else {
-                                // Plain HTTP connection
-                                debug!("HTTP server connected to client {}", src);
-                                handle_http_stream(stream, src, dispatcher, src_ip_header, None)
-                                    .await;
+                                } => {}
                             }
                         });
                     }
@@ -139,6 +155,9 @@ pub async fn run_server(
         }
     }
 
+    shutdown_token.cancel();
+    tasks.close();
+    tasks.wait().await;
     info!(listen = %addr, "HTTP/2 server stopped");
 }
 

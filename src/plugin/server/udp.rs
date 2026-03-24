@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, watch};
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 const UDP_RECV_BUFFER_SIZE: usize = 65_535;
@@ -139,7 +140,8 @@ impl Server for UdpServer {
 /// Main UDP server loop
 ///
 /// Creates a UDP stream, listens for incoming DNS queries, and spawns
-/// handler tasks for each request. Performs periodic cleanup of finished tasks.
+/// handler tasks for each request. Uses a task tracker to manage request
+/// lifetimes without polling completed tasks from the hot path.
 async fn run_server(
     addr: String,
     handler: Arc<RequestHandle>,
@@ -166,6 +168,7 @@ async fn run_server(
 
     let transport = Arc::new(UdpTransport::new(socket));
     let mut buf = vec![0u8; UDP_RECV_BUFFER_SIZE];
+    let tasks = TaskTracker::new();
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -179,7 +182,7 @@ async fn run_server(
                         let max_payload = msg.max_payload();
                         let handler = handler.clone();
                         let transport = transport.clone();
-                        tokio::spawn(async move {
+                        tasks.spawn(async move {
                             let response = handler.handle_request(msg, src_addr, RequestMeta{server_name: None, url_path: None}).await;
                             // Use requester-advertised UDP payload limit (EDNS) when encoding
                             // response so oversize replies become TC=1 DNS messages, not raw truncation.
@@ -198,6 +201,8 @@ async fn run_server(
         }
     }
 
+    tasks.close();
+    tasks.wait().await;
     info!(listen = %addr, "UDP server stopped");
 }
 
