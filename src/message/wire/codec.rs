@@ -13,6 +13,8 @@ use crate::message::{
 };
 
 pub(crate) const DNS_HEADER_LEN: usize = 12;
+const MIN_QUESTION_WIRE_LEN: usize = 5;
+const MIN_RECORD_WIRE_LEN: usize = 11;
 
 const FLAG_QR: u16 = 0x8000;
 const FLAG_AA: u16 = 0x0400;
@@ -153,14 +155,33 @@ pub(crate) fn decode_message(packet: &[u8]) -> Result<Message> {
         additional_count,
     ) = parse_header(packet)?;
 
-    let mut questions = Vec::with_capacity(question_count as usize);
-    let mut answers = Vec::with_capacity(answer_count as usize);
-    let mut authorities = Vec::with_capacity(authority_count as usize);
-    let mut additionals = Vec::with_capacity(additional_count as usize);
+    let mut questions = Vec::with_capacity(bounded_section_capacity(
+        packet.len().saturating_sub(offset),
+        question_count,
+        MIN_QUESTION_WIRE_LEN,
+    ));
 
     parse_questions_into(packet, &mut offset, question_count, &mut questions)?;
+
+    let mut answers = Vec::with_capacity(bounded_section_capacity(
+        packet.len().saturating_sub(offset),
+        answer_count,
+        MIN_RECORD_WIRE_LEN,
+    ));
     parse_records_into(packet, &mut offset, answer_count, &mut answers)?;
+
+    let mut authorities = Vec::with_capacity(bounded_section_capacity(
+        packet.len().saturating_sub(offset),
+        authority_count,
+        MIN_RECORD_WIRE_LEN,
+    ));
     parse_records_into(packet, &mut offset, authority_count, &mut authorities)?;
+
+    let mut additionals = Vec::with_capacity(bounded_section_capacity(
+        packet.len().saturating_sub(offset),
+        additional_count,
+        MIN_RECORD_WIRE_LEN,
+    ));
 
     let mut signature = Vec::with_capacity(1);
     let mut edns = None;
@@ -228,6 +249,19 @@ pub(crate) fn decode_message(packet: &[u8]) -> Result<Message> {
         signature,
         edns,
     ))
+}
+
+#[inline]
+fn bounded_section_capacity(
+    remaining_len: usize,
+    declared_count: u16,
+    min_entry_len: usize,
+) -> usize {
+    if min_entry_len == 0 {
+        return declared_count as usize;
+    }
+
+    declared_count.min((remaining_len / min_entry_len).min(u16::MAX as usize) as u16) as usize
 }
 
 #[hotpath::measure]
@@ -432,6 +466,11 @@ pub(crate) fn encode_message_with_limit(
 
         // The main sections may consume only the remaining space after reserving the fixed
         // trailer block calculated by `compute_truncation_lens`.
+        if lens.trailer_len > limit {
+            return Err(DnsError::protocol(
+                "dns message cannot fit within UDP payload while preserving EDNS/signature trailer",
+            ));
+        }
         let with_trailer_limit = limit - lens.trailer_len;
 
         let mut ancount = 0u16;
@@ -894,6 +933,22 @@ mod tests {
         for (name, packet) in cases {
             assert!(Message::from_bytes(&packet).is_err(), "{name} should fail");
         }
+    }
+
+    #[test]
+    fn bounded_section_capacity_is_limited_by_remaining_packet_len() {
+        assert_eq!(
+            bounded_section_capacity(0, u16::MAX, MIN_QUESTION_WIRE_LEN),
+            0
+        );
+        assert_eq!(
+            bounded_section_capacity(12, u16::MAX, MIN_RECORD_WIRE_LEN),
+            1
+        );
+        assert_eq!(
+            bounded_section_capacity(4, u16::MAX, MIN_QUESTION_WIRE_LEN),
+            0
+        );
     }
 
     #[test]
@@ -1471,6 +1526,27 @@ mod tests {
         assert!(
             !encoded[signer_name_offset..signer_name_end].contains(&0xC0),
             "signature signer name should not use compression pointers"
+        );
+    }
+
+    #[test]
+    fn limited_encode_rejects_trailer_larger_than_limit() {
+        let mut message = Message::new();
+        message.set_message_type(MessageType::Response);
+        message.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+        message.set_edns(Edns::new());
+
+        let err = message
+            .to_bytes_with_limit(10)
+            .expect_err("trailer larger than limit should fail");
+        let text = err.to_string();
+        assert!(
+            text.contains("cannot fit within UDP payload while preserving EDNS/signature trailer"),
+            "unexpected error: {text}"
         );
     }
 
