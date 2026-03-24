@@ -88,7 +88,8 @@ impl QuicTransportWriter {
         self.write_buf.clear();
         self.write_buf.extend_from_slice(&[0, 0]);
 
-        msg.append_to(&mut self.write_buf)?;
+        // RFC 9250: query ID SHOULD be set to 0
+        msg.append_to_with_id(0, &mut self.write_buf)?;
 
         let body_len = self.write_buf.len() - 2;
 
