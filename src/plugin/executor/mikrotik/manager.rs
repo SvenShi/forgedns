@@ -1,72 +1,71 @@
-//! Route manager state machine for mikrotik executor.
+//! Address-list manager state machine for mikrotik executor.
 //!
 //! Responsibilities:
-//! - maintain domain -> IP bindings with per-IP expiry
-//! - maintain route-level reference states and router ids
-//! - reconcile local state with RouterOS route table/comment metadata
+//! - maintain desired persistent address-list entries
+//! - upsert dynamic address-list entries from observed DNS answers
+//! - keep ownership metadata in RouterOS comments
 //! - execute idempotent create/update/delete through [`MikrotikApi`]
+//!
+//! Design notes:
+//! - RouterOS remains the authority for dynamic expiration via native `timeout`.
+//! - local state is intentionally lightweight and only suppresses redundant
+//!   refresh writes; it does not attempt to mirror full remote state.
+//! - persistent items are reconciled as a desired set and never enter the
+//!   dynamic refresh cache.
 
 use super::api::MikrotikApi;
 use crate::core::app_clock::AppClock;
-use crate::core::error::{DnsError, Result};
+use crate::core::error::Result;
 use crate::core::task_center;
 use ahash::{AHashMap, AHashSet};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-const ROUTE_DEFAULT_V4: &str = "0.0.0.0/0";
-const ROUTE_DEFAULT_V6: &str = "::/0";
-const ROUTE_PREFIX_V4: u8 = 32;
-const ROUTE_PREFIX_V6: u8 = 128;
-const PERSISTENT_ANCHOR_DOMAIN: &str = "__forgedns_persistent__";
-const PERSISTENT_EXPIRES_AT_UNIX: u64 = u64::MAX;
+/// Host prefix used for normalized IPv4 single-address entries.
+const HOST_PREFIX_V4: u8 = 32;
+/// Host prefix used for normalized IPv6 single-address entries.
+const HOST_PREFIX_V6: u8 = 128;
+/// Capacity of the manager command channel.
 const MANAGER_QUEUE_SIZE: usize = 1024;
-const SWEEP_INTERVAL_SECS: u64 = 30;
+/// Periodic interval for persistent desired-set reconciliation.
 const RECONCILE_INTERVAL_SECS: u64 = 180;
+/// Periodic interval for reloading persistent item files.
 const PERSISTENT_RELOAD_INTERVAL_SECS: u64 = 60;
+/// Periodic interval for local dynamic-cache pruning.
+const DYNAMIC_CACHE_PRUNE_INTERVAL_SECS: u64 = 60;
+/// Maximum time allowed for graceful manager shutdown coordination.
 const SHUTDOWN_TIMEOUT_SECS: u64 = 8;
+/// Hard upper bound for locally cached dynamic refresh states.
+const MAX_DYNAMIC_CACHE_ENTRIES: usize = 65_536;
+/// Maximum time a dynamic key can go without a refresh attempt under steady traffic.
+const MAX_DYNAMIC_REFRESH_SUPPRESS_MS: u64 = 60_000;
+/// Minimum refresh lead time before estimated RouterOS timeout expiry.
+const MIN_DYNAMIC_REFRESH_LEAD_MS: u64 = 1_000;
+/// Maximum refresh lead time before estimated RouterOS timeout expiry.
+const MAX_DYNAMIC_REFRESH_LEAD_MS: u64 = 60_000;
 
+/// Comment field storing the owning plugin tag.
 const COMMENT_FIELD_PLUGIN: &str = "pg";
+/// Comment field storing entry kind metadata.
+const COMMENT_FIELD_KIND: &str = "kind";
+/// Comment field storing the observed domain for dynamic entries.
 const COMMENT_FIELD_DOMAIN: &str = "dm";
-const COMMENT_FIELD_EXP: &str = "exp";
-const COMMENT_FIELD_SEEN: &str = "seen";
-static START_UNIX_SECS: OnceLock<u64> = OnceLock::new();
-
-#[derive(Debug, Clone)]
-pub(super) struct RouteManagerConfig {
-    /// Plugin tag used in comment codec for ownership check.
-    pub(super) plugin_tag: String,
-    /// Dedicated RouterOS routing table name.
-    pub(super) routing_table: String,
-    /// Optional IPv4 gateway for managed routes.
-    pub(super) gateway4: Option<String>,
-    /// Optional IPv6 gateway for managed routes.
-    pub(super) gateway6: Option<String>,
-    /// Always-present routes in CIDR form (`ip/prefix`).
-    pub(super) persistent_ips: AHashSet<String>,
-    /// Comment prefix that marks managed routes.
-    pub(super) comment_prefix: String,
-    /// Route distance written to RouterOS.
-    pub(super) distance: u8,
-    /// Minimum TTL clamp in seconds.
-    pub(super) min_ttl: u32,
-    /// Maximum TTL clamp in seconds.
-    pub(super) max_ttl: u32,
-    /// Optional fixed TTL override in seconds.
-    pub(super) fixed_ttl: Option<u32>,
-}
+/// Compact comment marker for dynamic entries.
+const COMMENT_KIND_DYNAMIC: &str = "D";
+/// Compact comment marker for persistent entries.
+const COMMENT_KIND_PERSISTENT: &str = "P";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub(super) enum RouteFamily {
+pub(super) enum AddressListFamily {
     Ipv4,
     Ipv6,
 }
 
-impl RouteFamily {
+impl AddressListFamily {
     #[inline]
     pub(super) fn from_ip(ip: IpAddr) -> Self {
         match ip {
@@ -76,244 +75,146 @@ impl RouteFamily {
     }
 
     #[inline]
-    fn prefix(self) -> u8 {
+    pub(super) fn host_prefix(self) -> u8 {
         match self {
-            Self::Ipv4 => ROUTE_PREFIX_V4,
-            Self::Ipv6 => ROUTE_PREFIX_V6,
+            Self::Ipv4 => HOST_PREFIX_V4,
+            Self::Ipv6 => HOST_PREFIX_V6,
         }
     }
 
     #[inline]
-    fn is_valid_prefix(self, prefix: u8) -> bool {
+    pub(super) fn is_valid_prefix(self, prefix: u8) -> bool {
         match self {
-            Self::Ipv4 => prefix <= 32,
-            Self::Ipv6 => prefix <= 128,
+            Self::Ipv4 => prefix <= HOST_PREFIX_V4,
+            Self::Ipv6 => prefix <= HOST_PREFIX_V6,
         }
     }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(super) struct DomainBinding {
-    /// Normalized domain name.
-    pub(super) domain: String,
-    /// Active IP set observed for this domain.
-    pub(super) ips: AHashSet<IpAddr>,
-    /// Per-IP expiry timestamp for this domain.
-    pub(super) ip_expiries: AHashMap<IpAddr, u64>,
-    /// Max expiry among `ip_expiries`.
-    pub(super) expires_at_unix: u64,
-    /// Last refresh timestamp.
-    pub(super) last_refresh_unix: u64,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub(super) struct RouteKey {
-    /// Route network/base IP address.
-    pub(super) ip: IpAddr,
-    /// Route CIDR prefix.
+pub(super) struct AddressListKey {
+    pub(super) family: AddressListFamily,
+    pub(super) list: String,
+    pub(super) address: IpAddr,
     pub(super) prefix: u8,
-    /// RouterOS routing table name.
-    pub(super) table: String,
 }
 
-impl RouteKey {
-    pub(super) fn new(ip: IpAddr, table: String) -> Self {
-        let prefix = RouteFamily::from_ip(ip).prefix();
-        Self { ip, prefix, table }
+impl AddressListKey {
+    pub(super) fn new(ip: IpAddr, list: String) -> Self {
+        let family = AddressListFamily::from_ip(ip);
+        Self {
+            family,
+            list,
+            address: ip,
+            prefix: family.host_prefix(),
+        }
     }
 
-    pub(super) fn new_with_prefix(ip: IpAddr, prefix: u8, table: String) -> Option<Self> {
-        let family = RouteFamily::from_ip(ip);
+    pub(super) fn new_with_prefix(ip: IpAddr, prefix: u8, list: String) -> Option<Self> {
+        let family = AddressListFamily::from_ip(ip);
         if !family.is_valid_prefix(prefix) {
             return None;
         }
-        Some(Self { ip, prefix, table })
+        Some(Self {
+            family,
+            list,
+            address: normalize_network_ip(ip, prefix),
+            prefix,
+        })
     }
 
     #[inline]
-    pub(super) fn family(&self) -> RouteFamily {
-        RouteFamily::from_ip(self.ip)
+    pub(super) fn normalized_value(&self) -> String {
+        format!("{}/{}", self.address, self.prefix)
     }
 
     #[inline]
-    pub(super) fn dst_address(&self) -> String {
-        format!("{}/{}", self.ip, self.prefix)
+    pub(super) fn router_value(&self) -> String {
+        if self.prefix == self.family.host_prefix() {
+            self.address.to_string()
+        } else {
+            self.normalized_value()
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(super) enum SyncState {
-    /// Route does not exist on RouterOS yet (or local state intentionally
-    /// forgot the remote id) and must be created on next sync pass.
-    ///
-    /// Typical transitions:
-    /// - new observation creates a fresh route entry
-    /// - reconcile detects a missing remote route for an in-use key
-    /// - recovered entry lost its `router_id`
-    PendingCreate,
-    /// Local route state is consistent with RouterOS.
-    ///
-    /// In this state no API call is needed unless route payload changes
-    /// (gateway/comment/expiry metadata) or ref-count drops to zero.
-    Synced,
-    /// Route should be removed from RouterOS on next sync pass.
-    ///
-    /// This is set when the route has no active dynamic references, or when a
-    /// stale recovered route is identified during reconciliation/expiration.
-    PendingDelete,
-    /// Route exists remotely but local payload changed and requires an update.
-    ///
-    /// The sync loop handles this as an idempotent upsert (`set` or `add`
-    /// depending on remote presence), then returns to `Synced`.
-    Dirty,
+pub(super) enum OwnedCommentKind {
+    Dynamic,
+    Persistent,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct RouteEntry {
-    /// Unique key of the managed route.
-    pub(super) key: RouteKey,
-    /// Route family.
-    pub(super) family: RouteFamily,
-    /// Gateway string written to RouterOS.
-    pub(super) gateway: String,
-    /// Route distance written to RouterOS.
-    pub(super) distance: u8,
-    /// Domain set currently referencing this route.
-    pub(super) domains: AHashSet<String>,
-    /// Comment `dm` field, using the first observed active domain when available.
-    pub(super) comment_domain: String,
-    /// Per-domain expiry timestamps for ref-count and max-exp calculations.
-    pub(super) domain_expiries: AHashMap<String, u64>,
-    /// Current reference count from `domains`.
-    pub(super) ref_count: u32,
-    /// Route-level expiry (max of active refs).
-    pub(super) expires_at_unix: u64,
-    /// Last refresh timestamp.
-    pub(super) last_refresh_unix: u64,
-    /// RouterOS internal route id.
-    pub(super) router_id: Option<String>,
-    /// Whether route was restored from RouterOS comment metadata.
-    pub(super) recovered_from_comment: bool,
-    /// Pending/synced transition state for API sync loop.
-    pub(super) sync_state: SyncState,
+impl OwnedCommentKind {
+    #[inline]
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dynamic => COMMENT_KIND_DYNAMIC,
+            Self::Persistent => COMMENT_KIND_PERSISTENT,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(super) struct RouteCommentMeta {
-    pub(super) family: RouteFamily,
-    pub(super) ip: IpAddr,
-    pub(super) comment_domain: String,
-    pub(super) expires_at_unix: u64,
-    pub(super) last_refresh_unix: u64,
+pub(super) struct OwnedCommentMeta {
+    pub(super) kind: OwnedCommentKind,
 }
 
-#[derive(Debug)]
-pub(super) struct RouteCommentCodec;
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct DynamicRefreshState {
+    /// Timeout value written on the last successful RouterOS update.
+    written_timeout_ms: u64,
+    /// Local estimate of when the remote timeout will naturally expire.
+    expires_at_ms: u64,
+    /// Earliest local time when another refresh is worth sending.
+    next_refresh_at_ms: u64,
+}
 
-impl RouteCommentCodec {
-    /// Encode route metadata into RouterOS comment payload.
-    pub(super) fn encode(prefix: &str, plugin_tag: &str, route: &RouteEntry) -> String {
-        let mut out = String::new();
-        if !prefix.is_empty() {
-            out.push_str(prefix);
-            out.push(';');
+impl DynamicRefreshState {
+    /// Build a suppression window after a successful dynamic write.
+    ///
+    /// The cache deliberately refreshes before the estimated remote expiry so
+    /// periodic DNS traffic can extend entries without waiting for RouterOS to
+    /// drop them first. At the same time, the suppress window is capped so very
+    /// long TTLs do not completely stop background refreshes.
+    fn from_write(now_ms: u64, timeout_secs: u32) -> Self {
+        let timeout_ms = u64::from(timeout_secs).saturating_mul(1000);
+        let expires_at_ms = now_ms.saturating_add(timeout_ms);
+        let refresh_lead_ms = dynamic_refresh_lead_ms(timeout_ms);
+        let near_expiry_refresh_at_ms = expires_at_ms.saturating_sub(refresh_lead_ms);
+        let max_skip_refresh_at_ms = now_ms.saturating_add(MAX_DYNAMIC_REFRESH_SUPPRESS_MS);
+        Self {
+            written_timeout_ms: timeout_ms,
+            expires_at_ms,
+            next_refresh_at_ms: near_expiry_refresh_at_ms.min(max_skip_refresh_at_ms),
         }
-        out.push_str(COMMENT_FIELD_PLUGIN);
-        out.push('=');
-        out.push_str(plugin_tag);
-        out.push(';');
-        out.push_str(COMMENT_FIELD_DOMAIN);
-        out.push('=');
-        out.push_str(&route.comment_domain);
-        out.push(';');
-        out.push_str(COMMENT_FIELD_EXP);
-        out.push('=');
-        out.push_str(&route.expires_at_unix.to_string());
-        out.push(';');
-        out.push_str(COMMENT_FIELD_SEEN);
-        out.push('=');
-        out.push_str(&route.last_refresh_unix.to_string());
-        out
     }
+}
 
-    pub(super) fn decode(
-        prefix: &str,
-        plugin_tag: &str,
-        family: RouteFamily,
-        dst_address: &str,
-        comment: &str,
-    ) -> Result<Option<RouteCommentMeta>> {
-        // Prefix and plugin-tag checks provide cheap ownership filtering.
-        if !prefix.is_empty() {
-            if !comment.starts_with(prefix) {
-                return Ok(None);
-            }
-            if comment.as_bytes().get(prefix.len()) != Some(&b';') {
-                return Ok(None);
-            }
-        }
-
-        let mut kv = AHashMap::new();
-        for token in comment.split(';') {
-            let token = token.trim();
-            if token.is_empty() {
-                continue;
-            }
-            if let Some((k, v)) = token.split_once('=') {
-                kv.insert(k.trim().to_string(), v.trim().to_string());
-            }
-        }
-
-        if kv.get(COMMENT_FIELD_PLUGIN).map(String::as_str) != Some(plugin_tag) {
-            return Ok(None);
-        }
-
-        let (ip, _prefix) = parse_dst_address(dst_address).ok_or_else(|| {
-            DnsError::plugin(format!(
-                "mikrotik comment decode failed: invalid dst-address '{dst_address}'"
-            ))
-        })?;
-
-        if RouteFamily::from_ip(ip) != family {
-            return Err(DnsError::plugin(format!(
-                "mikrotik comment decode failed: af/ip mismatch af={:?} ip={}",
-                family, ip
-            )));
-        }
-
-        let comment_domain = kv
-            .get(COMMENT_FIELD_DOMAIN)
-            .ok_or_else(|| DnsError::plugin("mikrotik comment decode failed: missing dm field"))?
-            .to_string();
-        let expires_at_unix = kv
-            .get(COMMENT_FIELD_EXP)
-            .ok_or_else(|| DnsError::plugin("mikrotik comment decode failed: missing exp field"))?
-            .parse::<u64>()
-            .map_err(|e| {
-                DnsError::plugin(format!("mikrotik comment decode failed: invalid exp: {e}"))
-            })?;
-        let last_refresh_unix = kv
-            .get(COMMENT_FIELD_SEEN)
-            .ok_or_else(|| DnsError::plugin("mikrotik comment decode failed: missing seen field"))?
-            .parse::<u64>()
-            .map_err(|e| {
-                DnsError::plugin(format!("mikrotik comment decode failed: invalid seen: {e}"))
-            })?;
-
-        Ok(Some(RouteCommentMeta {
-            family,
-            ip,
-            comment_domain,
-            expires_at_unix,
-            last_refresh_unix,
-        }))
-    }
+#[derive(Debug, Clone)]
+pub(super) struct AddressListManagerConfig {
+    /// Plugin tag reused in RouterOS comments for ownership checks.
+    pub(super) plugin_tag: String,
+    /// IPv4 address-list name managed by this plugin.
+    pub(super) address_list4: Option<String>,
+    /// IPv6 address-list name managed by this plugin.
+    pub(super) address_list6: Option<String>,
+    /// Desired persistent set at startup.
+    pub(super) persistent_items: AHashSet<AddressListKey>,
+    /// Comment prefix used as an ownership fast-path.
+    pub(super) comment_prefix: String,
+    /// Minimum TTL clamp for dynamic observations.
+    pub(super) min_ttl: u32,
+    /// Maximum TTL clamp for dynamic observations.
+    pub(super) max_ttl: u32,
+    /// Optional fixed TTL override for dynamic observations.
+    pub(super) fixed_ttl: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(super) struct ObservedAddr {
+    /// Observed A/AAAA answer IP.
     pub(super) addr: IpAddr,
+    /// Raw TTL extracted from the DNS response before clamping.
     pub(super) ttl_secs: u32,
 }
 
@@ -324,11 +225,11 @@ pub(super) enum ManagerCommand {
         addrs: Vec<ObservedAddr>,
         wait: Option<oneshot::Sender<Result<()>>>,
     },
-    UpdatePersistentIps {
-        ips: AHashSet<String>,
+    UpdatePersistentItems {
+        items: AHashSet<AddressListKey>,
     },
-    Sweep,
     Reconcile,
+    PruneDynamicCache,
     Shutdown {
         cleanup: bool,
         done: oneshot::Sender<()>,
@@ -337,33 +238,40 @@ pub(super) enum ManagerCommand {
 
 #[derive(Debug, Clone)]
 pub(super) struct PersistentReloadConfig {
-    /// Inline persistent routes in normalized `ip/prefix` format.
-    pub(super) inline_ips: AHashSet<String>,
-    /// Source files that contain persistent route entries.
+    /// Inline-only persistent set that never changes after startup.
+    pub(super) inline_items: AHashSet<AddressListKey>,
+    /// File sources periodically reloaded in the background.
     pub(super) files: Vec<String>,
-    /// Initial desired set merged from inline + file content at startup.
-    pub(super) initial_ips: AHashSet<String>,
-    /// Whether IPv4 gateway is configured.
-    pub(super) gateway4_enabled: bool,
-    /// Whether IPv6 gateway is configured.
-    pub(super) gateway6_enabled: bool,
+    /// IPv4 target list needed to bind reloaded file items.
+    pub(super) address_list4: Option<String>,
+    /// IPv6 target list needed to bind reloaded file items.
+    pub(super) address_list6: Option<String>,
+    /// Initial merged desired set used to suppress redundant reload updates.
+    pub(super) initial_items: AHashSet<AddressListKey>,
 }
 
 #[derive(Debug)]
-pub(super) struct RouteManagerRuntime {
+pub(super) struct AddressListManagerRuntime {
+    /// Command channel used by `post_execute()` and background tasks.
     tx: mpsc::Sender<ManagerCommand>,
+    /// Single-owner worker task that serializes all local state transitions.
     worker_handle: Option<JoinHandle<()>>,
-    sweep_task_id: Option<u64>,
+    /// Local-memory cache prune loop.
+    prune_task_id: Option<u64>,
+    /// Periodic persistent reconcile loop.
     reconcile_task_id: Option<u64>,
+    /// Periodic persistent file reload loop.
     persistent_reload_task_id: Option<u64>,
 }
 
-impl RouteManagerRuntime {
+impl AddressListManagerRuntime {
     pub(super) fn start(
         tag: String,
-        manager: RouteManager,
+        manager: AddressListManager,
         persistent_reload: Option<PersistentReloadConfig>,
     ) -> Self {
+        // All mutable state lives behind one worker to avoid cross-map locking
+        // or request-path synchronization in the DNS hot path.
         let (tx, rx) = mpsc::channel::<ManagerCommand>(MANAGER_QUEUE_SIZE);
 
         let worker_tag = tag.clone();
@@ -371,79 +279,83 @@ impl RouteManagerRuntime {
             run_manager_worker(worker_tag, manager, rx).await;
         }));
 
-        let sweep_tx = tx.clone();
-        let sweep_task_id = Some(task_center::spawn_fixed(
-            format!("mikrotik:{}:sweep", tag),
-            Duration::from_secs(SWEEP_INTERVAL_SECS),
+        // Pruning is local-memory only. It never talks to RouterOS and exists
+        // solely to keep the write-suppression cache bounded.
+        let prune_tx = tx.clone();
+        let prune_task_id = Some(task_center::spawn_fixed(
+            format!("mikrotik:{tag}:dynamic_cache_prune"),
+            Duration::from_secs(DYNAMIC_CACHE_PRUNE_INTERVAL_SECS),
             move || {
-                let sweep_tx = sweep_tx.clone();
+                let prune_tx = prune_tx.clone();
                 async move {
-                    let _ = sweep_tx.send(ManagerCommand::Sweep).await;
+                    let _ = prune_tx.send(ManagerCommand::PruneDynamicCache).await;
                 }
             },
         ));
 
-        let reconcile_tx = tx.clone();
-        let reconcile_task_id = Some(task_center::spawn_fixed(
-            format!("mikrotik:{}:reconcile", tag),
-            Duration::from_secs(RECONCILE_INTERVAL_SECS),
-            move || {
-                let reconcile_tx = reconcile_tx.clone();
-                async move {
-                    let _ = reconcile_tx.send(ManagerCommand::Reconcile).await;
-                }
-            },
-        ));
+        // Reconcile is only useful when persistent behavior is configured.
+        let reconcile_enabled = persistent_reload
+            .as_ref()
+            .is_some_and(|cfg| !cfg.initial_items.is_empty() || !cfg.files.is_empty());
+        let reconcile_task_id = reconcile_enabled.then(|| {
+            let reconcile_tx = tx.clone();
+            task_center::spawn_fixed(
+                format!("mikrotik:{tag}:reconcile"),
+                Duration::from_secs(RECONCILE_INTERVAL_SECS),
+                move || {
+                    let reconcile_tx = reconcile_tx.clone();
+                    async move {
+                        let _ = reconcile_tx.send(ManagerCommand::Reconcile).await;
+                    }
+                },
+            )
+        });
 
         let persistent_reload_task_id = persistent_reload.and_then(|reload_cfg| {
-            if reload_cfg.initial_ips.is_empty() && reload_cfg.files.is_empty() {
+            if reload_cfg.files.is_empty() {
                 return None;
             }
 
+            // File reload re-parses source files in the background and only
+            // sends a manager update when the merged desired set actually changes.
             let maintain_tx = tx.clone();
             let maintain_tag = tag.clone();
-            let last_loaded_ips = Arc::new(tokio::sync::Mutex::new(reload_cfg.initial_ips.clone()));
+            let last_loaded_items =
+                Arc::new(tokio::sync::Mutex::new(reload_cfg.initial_items.clone()));
             Some(task_center::spawn_fixed(
-                format!("mikrotik:{}:persistent_reload", maintain_tag),
+                format!("mikrotik:{maintain_tag}:persistent_reload"),
                 Duration::from_secs(PERSISTENT_RELOAD_INTERVAL_SECS),
                 move || {
                     let maintain_tx = maintain_tx.clone();
                     let maintain_tag = maintain_tag.clone();
-                    let last_loaded_ips = last_loaded_ips.clone();
+                    let last_loaded_items = last_loaded_items.clone();
                     let reload_cfg = reload_cfg.clone();
                     async move {
-                        match super::load_persistent_ips_from_files_async(
+                        match super::load_persistent_items_from_files_async(
                             reload_cfg.files.as_slice(),
-                            reload_cfg.gateway4_enabled,
-                            reload_cfg.gateway6_enabled,
+                            reload_cfg.address_list4.as_deref(),
+                            reload_cfg.address_list6.as_deref(),
                         )
                         .await
                         {
-                            Ok((file_ips, ignored_by_gateway, ignored_default_route)) => {
-                                if ignored_by_gateway > 0 {
+                            Ok((file_items, ignored_by_family)) => {
+                                if ignored_by_family > 0 {
                                     debug!(
                                         plugin = %maintain_tag,
-                                        ignored = ignored_by_gateway,
-                                        "mikrotik persistent file reload ignored entries without corresponding gateway family"
-                                    );
-                                }
-                                if ignored_default_route > 0 {
-                                    debug!(
-                                        plugin = %maintain_tag,
-                                        ignored = ignored_default_route,
-                                        "mikrotik persistent file reload ignored default-route entries (/0)"
+                                        ignored = ignored_by_family,
+                                        "mikrotik persistent file reload ignored entries without corresponding address list family"
                                     );
                                 }
 
-                                let mut desired_ips = reload_cfg.inline_ips.clone();
-                                desired_ips.extend(file_ips);
+                                let mut desired_items = reload_cfg.inline_items.clone();
+                                desired_items.extend(file_items);
 
-                                let mut last_loaded_guard = last_loaded_ips.lock().await;
-                                if desired_ips != *last_loaded_guard {
-                                    *last_loaded_guard = desired_ips.clone();
+                                let mut last_loaded_guard = last_loaded_items.lock().await;
+                                if desired_items != *last_loaded_guard {
+                                    *last_loaded_guard = desired_items.clone();
                                     if maintain_tx
-                                        .send(ManagerCommand::UpdatePersistentIps {
-                                            ips: desired_ips,
+                                        .send(ManagerCommand::UpdatePersistentItems {
+                                            items: desired_items,
                                         })
                                         .await
                                         .is_err()
@@ -452,11 +364,7 @@ impl RouteManagerRuntime {
                                     }
                                 }
 
-                                // Dedicated tick keeps persistent routes self-healed
-                                // without requiring new DNS observations.
-                                if maintain_tx.send(ManagerCommand::Reconcile).await.is_err() {
-                                    return;
-                                }
+                                let _ = maintain_tx.send(ManagerCommand::Reconcile).await;
                             }
                             Err(e) => {
                                 warn!(
@@ -474,7 +382,7 @@ impl RouteManagerRuntime {
         Self {
             tx,
             worker_handle,
-            sweep_task_id,
+            prune_task_id,
             reconcile_task_id,
             persistent_reload_task_id,
         }
@@ -511,7 +419,7 @@ impl RouteManagerRuntime {
                     .is_ok();
         }
 
-        if let Some(task_id) = self.sweep_task_id.take() {
+        if let Some(task_id) = self.prune_task_id.take() {
             task_center::stop_task(task_id).await;
         }
         if let Some(task_id) = self.reconcile_task_id.take() {
@@ -533,23 +441,26 @@ impl RouteManagerRuntime {
 }
 
 #[derive(Debug)]
-pub(super) struct RouteManager {
+pub(super) struct AddressListManager {
+    /// RouterOS API abstraction used by the single-owner worker.
     api: Arc<dyn MikrotikApi>,
-    cfg: RouteManagerConfig,
-    persistent_ips: AHashSet<String>,
-    pub(super) domain_bindings: AHashMap<String, DomainBinding>,
-    pub(super) routes: AHashMap<RouteKey, RouteEntry>,
+    /// Immutable config shared across runtime decisions.
+    cfg: AddressListManagerConfig,
+    /// Current desired persistent set.
+    persistent_items: AHashSet<AddressListKey>,
+    /// Lightweight local cache that suppresses redundant dynamic refresh writes.
+    dynamic_refresh_cache: AHashMap<AddressListKey, DynamicRefreshState>,
+    /// One-time startup guard.
     initialized: bool,
 }
 
-impl RouteManager {
-    pub(super) fn new(api: Arc<dyn MikrotikApi>, cfg: RouteManagerConfig) -> Self {
+impl AddressListManager {
+    pub(super) fn new(api: Arc<dyn MikrotikApi>, cfg: AddressListManagerConfig) -> Self {
         Self {
             api,
-            persistent_ips: cfg.persistent_ips.clone(),
+            persistent_items: cfg.persistent_items.clone(),
+            dynamic_refresh_cache: AHashMap::new(),
             cfg,
-            domain_bindings: AHashMap::new(),
-            routes: AHashMap::new(),
             initialized: false,
         }
     }
@@ -559,15 +470,10 @@ impl RouteManager {
             return Ok(());
         }
 
-        // One-time bootstrap:
-        // 1) transport healthcheck
-        // 2) validate configured gateways against RouterOS
-        // 3) seed persistent routes
-        // 4) reconcile local state from RouterOS
+        // Startup intentionally validates connectivity and repairs persistent
+        // state before the first observed DNS answer is processed.
         self.api.healthcheck().await?;
-        self.validate_gateways().await?;
-        self.ensure_persistent_routes(unix_now());
-        self.reconcile_from_router().await?;
+        self.reconcile_persistent_inner().await?;
         self.initialized = true;
         Ok(())
     }
@@ -578,6 +484,8 @@ impl RouteManager {
 
     #[inline]
     fn clamp_ttl(&self, ttl_secs: u32) -> u32 {
+        // TTL policy is centralized here so dynamic observations and tests use
+        // identical clamping semantics.
         if let Some(ttl) = self.cfg.fixed_ttl {
             return ttl;
         }
@@ -585,652 +493,216 @@ impl RouteManager {
     }
 
     #[inline]
-    fn gateway_for(&self, family: RouteFamily) -> Option<&str> {
+    fn list_name_for(&self, family: AddressListFamily) -> Option<&str> {
         match family {
-            RouteFamily::Ipv4 => self.cfg.gateway4.as_deref(),
-            RouteFamily::Ipv6 => self.cfg.gateway6.as_deref(),
+            AddressListFamily::Ipv4 => self.cfg.address_list4.as_deref(),
+            AddressListFamily::Ipv6 => self.cfg.address_list6.as_deref(),
         }
     }
 
-    async fn validate_gateways(&self) -> Result<()> {
-        if let Some(gateway) = self.cfg.gateway4.as_deref() {
-            let nonce = validation_nonce();
-            let key =
-                validation_route_key(RouteFamily::Ipv4, self.cfg.routing_table.as_str(), nonce);
-            let comment = validation_comment(
-                self.cfg.comment_prefix.as_str(),
-                self.cfg.plugin_tag.as_str(),
-                RouteFamily::Ipv4,
-                nonce,
-            );
-            self.api
-                .validate_route_config(&key, gateway, self.cfg.distance, &comment)
-                .await
-                .map_err(|e| {
-                    DnsError::plugin(format!(
-                        "mikrotik gateway4 validation failed for '{gateway}': {e}"
-                    ))
-                })?;
+    #[inline]
+    fn comment_for_dynamic(&self, domain: &str) -> String {
+        encode_comment(
+            self.cfg.comment_prefix.as_str(),
+            self.cfg.plugin_tag.as_str(),
+            OwnedCommentKind::Dynamic,
+            Some(domain),
+        )
+    }
+
+    #[inline]
+    fn comment_for_persistent(&self) -> String {
+        encode_comment(
+            self.cfg.comment_prefix.as_str(),
+            self.cfg.plugin_tag.as_str(),
+            OwnedCommentKind::Persistent,
+            None,
+        )
+    }
+
+    fn should_refresh_dynamic_entry(
+        &self,
+        key: &AddressListKey,
+        timeout_secs: u32,
+        now_ms: u64,
+    ) -> bool {
+        // Missing or expired cache means we have no recent successful remote write
+        // to rely on, so the entry must be refreshed immediately.
+        let Some(state) = self.dynamic_refresh_cache.get(key) else {
+            return true;
+        };
+        if now_ms >= state.expires_at_ms {
+            return true;
         }
 
-        if let Some(gateway) = self.cfg.gateway6.as_deref() {
-            let nonce = validation_nonce();
-            let key =
-                validation_route_key(RouteFamily::Ipv6, self.cfg.routing_table.as_str(), nonce);
-            let comment = validation_comment(
+        // A longer TTL is always worth pushing immediately. Shorter TTLs are
+        // intentionally ignored until the normal refresh window to avoid
+        // excessive rewrite churn on frequently queried names.
+        let timeout_ms = u64::from(timeout_secs).saturating_mul(1000);
+        timeout_ms > state.written_timeout_ms || now_ms >= state.next_refresh_at_ms
+    }
+
+    fn prune_dynamic_cache(&mut self, now_ms: u64) {
+        // Step 1: drop obviously stale or now-persistent entries.
+        self.dynamic_refresh_cache.retain(|key, state| {
+            state.expires_at_ms > now_ms && !self.persistent_items.contains(key)
+        });
+
+        if self.dynamic_refresh_cache.len() <= MAX_DYNAMIC_CACHE_ENTRIES {
+            return;
+        }
+
+        // Step 2: if the cache still exceeds the hard cap, evict entries that
+        // will expire the soonest because they provide the least suppression value.
+        let overflow = self
+            .dynamic_refresh_cache
+            .len()
+            .saturating_sub(MAX_DYNAMIC_CACHE_ENTRIES);
+        let mut eviction_order = self
+            .dynamic_refresh_cache
+            .iter()
+            .map(|(key, state)| (key.clone(), state.expires_at_ms))
+            .collect::<Vec<_>>();
+        eviction_order.sort_by_key(|(_, expires_at_ms)| *expires_at_ms);
+        for (key, _) in eviction_order.into_iter().take(overflow) {
+            self.dynamic_refresh_cache.remove(&key);
+        }
+    }
+
+    async fn reconcile_persistent_inner(&mut self) -> Result<()> {
+        // Persistent reconcile treats RouterOS as a converged desired-set target:
+        // ensure every configured persistent item exists, then remove stale owned
+        // persistent entries that are no longer desired.
+        let existing = self
+            .api
+            .list_entries(
+                self.cfg.address_list4.as_deref(),
+                self.cfg.address_list6.as_deref(),
+            )
+            .await?;
+
+        let desired_comment = self.comment_for_persistent();
+        for key in &self.persistent_items {
+            match self
+                .api
+                .upsert_owned_entry(
+                    key,
+                    None,
+                    desired_comment.as_str(),
+                    self.cfg.comment_prefix.as_str(),
+                    self.cfg.plugin_tag.as_str(),
+                    false,
+                )
+                .await?
+            {
+                Some(_) => {}
+                None => {
+                    warn!(
+                        plugin = %self.cfg.plugin_tag,
+                        list = %key.list,
+                        address = %key.normalized_value(),
+                        "mikrotik persistent entry conflicts with foreign address-list entry, skipping"
+                    );
+                }
+            }
+        }
+
+        for entry in existing {
+            let Some(meta) = decode_owned_comment(
                 self.cfg.comment_prefix.as_str(),
                 self.cfg.plugin_tag.as_str(),
-                RouteFamily::Ipv6,
-                nonce,
-            );
+                entry.comment.as_deref(),
+            ) else {
+                continue;
+            };
+            if meta.kind != OwnedCommentKind::Persistent {
+                continue;
+            }
+            if self.persistent_items.contains(&entry.key) {
+                continue;
+            }
             self.api
-                .validate_route_config(&key, gateway, self.cfg.distance, &comment)
-                .await
-                .map_err(|e| {
-                    DnsError::plugin(format!(
-                        "mikrotik gateway6 validation failed for '{gateway}': {e}"
-                    ))
-                })?;
+                .delete_entry_by_id(&entry.id, entry.key.family)
+                .await?;
         }
 
         Ok(())
     }
 
-    fn ensure_persistent_routes(&mut self, now: u64) {
-        // Persistent IPs are represented as a synthetic anchor domain so they
-        // naturally fit existing ref-count and expiration aggregation logic.
-        let anchor = PERSISTENT_ANCHOR_DOMAIN.to_string();
-        let mut desired_keys = AHashSet::new();
-        let persistent_ips = self.persistent_ips.iter().cloned().collect::<Vec<_>>();
-        for cidr in persistent_ips {
-            let Some((ip, prefix)) = parse_dst_address(&cidr) else {
-                warn!(
-                    plugin = %self.cfg.plugin_tag,
-                    route = %cidr,
-                    "mikrotik persistent route parse failed, skipping"
-                );
-                continue;
-            };
-            let family = RouteFamily::from_ip(ip);
-            if !family.is_valid_prefix(prefix) {
-                warn!(
-                    plugin = %self.cfg.plugin_tag,
-                    route = %cidr,
-                    "mikrotik persistent route prefix is invalid for family, skipping"
-                );
-                continue;
-            }
-            let Some(gateway) = self.gateway_for(family).map(str::to_string) else {
-                continue;
-            };
-            let Some(key) = RouteKey::new_with_prefix(ip, prefix, self.cfg.routing_table.clone())
-            else {
-                continue;
-            };
-            desired_keys.insert(key.clone());
-
-            if let Some(entry) = self.routes.get_mut(&key) {
-                let mut changed = false;
-
-                if entry.domains.insert(anchor.clone()) {
-                    entry.ref_count = entry.ref_count.saturating_add(1);
-                    changed = true;
-                }
-                if entry.ref_count == 0 {
-                    entry.ref_count = 1;
-                    changed = true;
-                }
-                if entry
-                    .domain_expiries
-                    .insert(anchor.clone(), PERSISTENT_EXPIRES_AT_UNIX)
-                    != Some(PERSISTENT_EXPIRES_AT_UNIX)
-                {
-                    changed = true;
-                }
-                if entry.expires_at_unix != PERSISTENT_EXPIRES_AT_UNIX {
-                    entry.expires_at_unix = PERSISTENT_EXPIRES_AT_UNIX;
-                    changed = true;
-                }
-                if entry.gateway != gateway {
-                    entry.gateway = gateway.clone();
-                    changed = true;
-                }
-                if entry.distance != self.cfg.distance {
-                    entry.distance = self.cfg.distance;
-                    changed = true;
-                }
-
-                if entry.router_id.is_none() {
-                    if !matches!(entry.sync_state, SyncState::PendingCreate) {
-                        entry.sync_state = SyncState::PendingCreate;
-                        changed = true;
-                    }
-                } else if matches!(entry.sync_state, SyncState::PendingDelete)
-                    || (changed && matches!(entry.sync_state, SyncState::Synced))
-                {
-                    entry.sync_state = SyncState::Dirty;
-                    changed = true;
-                }
-
-                if changed {
-                    entry.last_refresh_unix = now;
-                }
-                continue;
-            }
-
-            let mut domains = AHashSet::new();
-            domains.insert(PERSISTENT_ANCHOR_DOMAIN.to_string());
-            let mut domain_expiries = AHashMap::new();
-            domain_expiries.insert(
-                PERSISTENT_ANCHOR_DOMAIN.to_string(),
-                PERSISTENT_EXPIRES_AT_UNIX,
-            );
-            self.routes.insert(
-                key.clone(),
-                RouteEntry {
-                    key,
-                    family,
-                    gateway,
-                    distance: self.cfg.distance,
-                    domains,
-                    comment_domain: "persistent".to_string(),
-                    domain_expiries,
-                    ref_count: 1,
-                    expires_at_unix: PERSISTENT_EXPIRES_AT_UNIX,
-                    last_refresh_unix: now,
-                    router_id: None,
-                    recovered_from_comment: false,
-                    sync_state: SyncState::PendingCreate,
-                },
-            );
-        }
-
-        // Remove persistent anchor from routes that are no longer configured by
-        // persistent IP sources (e.g. file content changed).
-        let anchored_keys = self
-            .routes
-            .iter()
-            .filter_map(|(key, entry)| {
-                if entry.domains.contains(PERSISTENT_ANCHOR_DOMAIN) {
-                    Some(key.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        for key in anchored_keys {
-            if desired_keys.contains(&key) {
-                continue;
-            }
-            let Some(entry) = self.routes.get_mut(&key) else {
-                continue;
-            };
-            if !entry.domains.remove(PERSISTENT_ANCHOR_DOMAIN) {
-                continue;
-            }
-            entry.domain_expiries.remove(PERSISTENT_ANCHOR_DOMAIN);
-            entry.ref_count = entry.ref_count.saturating_sub(1);
-            entry.last_refresh_unix = now;
-
-            if entry.ref_count == 0 {
-                entry.expires_at_unix = now;
-                entry.sync_state = SyncState::PendingDelete;
-            } else {
-                entry.expires_at_unix =
-                    entry.domain_expiries.values().copied().max().unwrap_or(now);
-                if matches!(entry.sync_state, SyncState::Synced) {
-                    entry.sync_state = SyncState::Dirty;
-                }
-            }
-        }
-    }
-
-    fn apply_observation(
+    async fn observe_domain_inner(
         &mut self,
         domain: String,
         addrs: Vec<ObservedAddr>,
-        now: u64,
-    ) -> Vec<RouteKey> {
-        let mut touched_keys = AHashSet::new();
-        // Deduplicate answer IPs and keep max ttl per IP for this observation.
-        let mut dedup_expiries = AHashMap::<IpAddr, u64>::new();
+        now_ms: u64,
+    ) -> Result<()> {
+        // Keep the local suppression cache healthy before evaluating refreshes.
+        let mut dedup = AHashMap::<AddressListKey, u32>::new();
         for observed in addrs {
-            let family = RouteFamily::from_ip(observed.addr);
-            if self.gateway_for(family).is_none() {
+            let family = AddressListFamily::from_ip(observed.addr);
+            let Some(list) = self.list_name_for(family) else {
+                continue;
+            };
+            let key = AddressListKey::new(observed.addr, list.to_string());
+            if self.persistent_items.contains(&key) {
                 continue;
             }
             let ttl = self.clamp_ttl(observed.ttl_secs.max(1));
-            let expires_at_unix = now.saturating_add(ttl as u64);
-            dedup_expiries
-                .entry(observed.addr)
-                .and_modify(|existing| *existing = (*existing).max(expires_at_unix))
-                .or_insert(expires_at_unix);
-        }
-        if dedup_expiries.is_empty() {
-            return Vec::new();
+            dedup
+                .entry(key)
+                .and_modify(|existing| *existing = (*existing).max(ttl))
+                .or_insert(ttl);
         }
 
-        let removed_ips = self
-            .domain_bindings
-            .get(&domain)
-            .map(|binding| {
-                binding
-                    .ips
-                    .iter()
-                    .filter(|ip| !dedup_expiries.contains_key(ip))
-                    .copied()
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        for ip in removed_ips {
-            if let Some(key) = self.detach_domain_from_route(&domain, ip, now) {
-                touched_keys.insert(key);
-            }
-        }
-
-        let mut new_ips = AHashSet::with_capacity(dedup_expiries.len());
-        for (ip, expiry) in &dedup_expiries {
-            new_ips.insert(*ip);
-            if let Some(key) = self.attach_or_refresh_route(&domain, *ip, *expiry, now) {
-                touched_keys.insert(key);
-            }
-        }
-
-        let expires_at_unix = dedup_expiries.values().copied().max().unwrap_or(now);
-        self.domain_bindings.insert(
-            domain.clone(),
-            DomainBinding {
-                domain,
-                ips: new_ips,
-                ip_expiries: dedup_expiries,
-                expires_at_unix,
-                last_refresh_unix: now,
-            },
-        );
-
-        touched_keys.into_iter().collect()
-    }
-
-    fn attach_or_refresh_route(
-        &mut self,
-        domain: &str,
-        ip: IpAddr,
-        expires_at: u64,
-        now: u64,
-    ) -> Option<RouteKey> {
-        let key = RouteKey::new(ip, self.cfg.routing_table.clone());
-        if let Some(entry) = self.routes.get_mut(&key) {
-            let inserted = entry.domains.insert(domain.to_string());
-            if inserted
-                && domain != PERSISTENT_ANCHOR_DOMAIN
-                && (entry.ref_count == 0 || entry.comment_domain.is_empty())
-            {
-                entry.comment_domain = domain.to_string();
-            }
-            if inserted {
-                entry.ref_count = entry.ref_count.saturating_add(1);
-            }
-            entry.domain_expiries.insert(domain.to_string(), expires_at);
-            entry.expires_at_unix = entry
-                .domain_expiries
-                .values()
-                .copied()
-                .max()
-                .unwrap_or(expires_at);
-            entry.last_refresh_unix = now;
-            entry.recovered_from_comment = false;
-
-            if entry.router_id.is_none() {
-                entry.sync_state = SyncState::PendingCreate;
-            } else if matches!(
-                entry.sync_state,
-                SyncState::Synced | SyncState::PendingDelete
-            ) {
-                entry.sync_state = SyncState::Dirty;
-            }
-            return Some(key);
-        }
-
-        let family = RouteFamily::from_ip(ip);
-        let Some(gateway) = self.gateway_for(family).map(str::to_string) else {
-            return None;
-        };
-        let mut domains = AHashSet::new();
-        domains.insert(domain.to_string());
-        let mut domain_expiries = AHashMap::new();
-        domain_expiries.insert(domain.to_string(), expires_at);
-
-        self.routes.insert(
-            key.clone(),
-            RouteEntry {
-                key: key.clone(),
-                family,
-                gateway,
-                distance: self.cfg.distance,
-                domains,
-                comment_domain: domain.to_string(),
-                domain_expiries,
-                ref_count: 1,
-                expires_at_unix: expires_at,
-                last_refresh_unix: now,
-                router_id: None,
-                recovered_from_comment: false,
-                sync_state: SyncState::PendingCreate,
-            },
-        );
-        Some(key)
-    }
-
-    fn detach_domain_from_route(&mut self, domain: &str, ip: IpAddr, now: u64) -> Option<RouteKey> {
-        let key = RouteKey::new(ip, self.cfg.routing_table.clone());
-        let Some(entry) = self.routes.get_mut(&key) else {
-            return None;
-        };
-
-        if !entry.domains.remove(domain) {
-            return None;
-        }
-
-        entry.domain_expiries.remove(domain);
-        entry.ref_count = entry.ref_count.saturating_sub(1);
-        entry.last_refresh_unix = now;
-        if entry.comment_domain == domain || entry.comment_domain.is_empty() {
-            entry.comment_domain = select_comment_domain(&entry.domains);
-        }
-
-        if entry.ref_count == 0 {
-            entry.expires_at_unix = now;
-            entry.sync_state = SyncState::PendingDelete;
-        } else {
-            entry.expires_at_unix = entry.domain_expiries.values().copied().max().unwrap_or(now);
-            if matches!(entry.sync_state, SyncState::Synced) {
-                entry.sync_state = SyncState::Dirty;
-            }
-        }
-        Some(key)
-    }
-
-    fn expire_domain_bindings(&mut self, now: u64) {
-        let domains = self.domain_bindings.keys().cloned().collect::<Vec<_>>();
-        for domain in domains {
-            let mut to_remove = Vec::new();
-            let mut remove_binding = false;
-
-            if let Some(binding) = self.domain_bindings.get_mut(&domain) {
-                if binding.expires_at_unix <= now {
-                    to_remove.extend(binding.ips.iter().copied());
-                } else {
-                    for (ip, exp) in &binding.ip_expiries {
-                        if *exp <= now {
-                            to_remove.push(*ip);
-                        }
-                    }
-                }
-
-                for ip in &to_remove {
-                    binding.ips.remove(ip);
-                    binding.ip_expiries.remove(ip);
-                }
-                binding.expires_at_unix = binding.ip_expiries.values().copied().max().unwrap_or(0);
-                remove_binding = binding.ips.is_empty();
-            }
-
-            for ip in &to_remove {
-                self.detach_domain_from_route(&domain, *ip, now);
-            }
-            if remove_binding {
-                self.domain_bindings.remove(&domain);
-            }
-        }
-    }
-
-    fn update_route_expiration(&mut self, now: u64) {
-        for route in self.routes.values_mut() {
-            if route.ref_count == 0 {
-                if route.expires_at_unix <= now {
-                    route.sync_state = SyncState::PendingDelete;
-                }
-                continue;
-            }
-
-            let max_exp = route.domain_expiries.values().copied().max().unwrap_or(now);
-            if max_exp != route.expires_at_unix {
-                route.expires_at_unix = max_exp;
-                if matches!(route.sync_state, SyncState::Synced) {
-                    route.sync_state = SyncState::Dirty;
-                }
-            }
-        }
-    }
-
-    async fn sync_routes(&mut self, now: u64) -> Result<()> {
-        let keys = self.routes.keys().cloned().collect::<Vec<_>>();
-        self.sync_route_keys(keys, now).await
-    }
-
-    async fn sync_route_keys(&mut self, keys: Vec<RouteKey>, now: u64) -> Result<()> {
-        if keys.is_empty() {
+        if dedup.is_empty() {
             return Ok(());
         }
-        // Snapshot-first loop avoids borrow conflicts and keeps each key operation atomic.
-        for key in keys {
-            let entry_snapshot =
-                self.routes.get(&key).cloned().ok_or_else(|| {
-                    DnsError::plugin("mikrotik route state disappeared during sync")
-                })?;
 
-            match entry_snapshot.sync_state {
-                SyncState::PendingCreate | SyncState::Dirty if entry_snapshot.ref_count > 0 => {
-                    // Upsert route with latest gateway/comment metadata.
-                    let comment = RouteCommentCodec::encode(
-                        &self.cfg.comment_prefix,
-                        &self.cfg.plugin_tag,
-                        &entry_snapshot,
-                    );
-                    let route_id = self
-                        .api
-                        .upsert_host_route(
-                            &entry_snapshot.key,
-                            &entry_snapshot.gateway,
-                            entry_snapshot.distance,
-                            &comment,
-                            &self.cfg.comment_prefix,
-                            &self.cfg.plugin_tag,
-                        )
-                        .await?;
-                    if let Some(route) = self.routes.get_mut(&key) {
-                        route.router_id = Some(route_id);
-                        route.recovered_from_comment = false;
-                        route.sync_state = SyncState::Synced;
-                        route.last_refresh_unix = now;
-                    }
+        // One response can contain duplicate IPs. We already reduced that to one
+        // key with the strongest TTL, so each key below represents at most one
+        // remote write decision for this DNS observation.
+        let comment = self.comment_for_dynamic(domain.as_str());
+        for (key, ttl) in dedup {
+            if !self.should_refresh_dynamic_entry(&key, ttl, now_ms) {
+                continue;
+            }
+            let timeout = format!("{ttl}s");
+            let upsert_result = self
+                .api
+                .upsert_owned_entry(
+                    &key,
+                    Some(timeout.as_str()),
+                    comment.as_str(),
+                    self.cfg.comment_prefix.as_str(),
+                    self.cfg.plugin_tag.as_str(),
+                    true,
+                )
+                .await;
+            match upsert_result {
+                Ok(Some(_)) => {
+                    // Only successful remote writes advance the suppression cache.
+                    self.dynamic_refresh_cache
+                        .insert(key.clone(), DynamicRefreshState::from_write(now_ms, ttl));
                 }
-                SyncState::PendingDelete => {
-                    // Delete by known id first; fallback to find-by-key for crash-recovery cases.
-                    if let Some(id) = entry_snapshot.router_id.as_deref() {
-                        self.api
-                            .delete_route_by_id(id, entry_snapshot.family)
-                            .await?;
-                    } else if let Some(found) = self
-                        .api
-                        .find_route(
-                            &entry_snapshot.key,
-                            &self.cfg.comment_prefix,
-                            &self.cfg.plugin_tag,
-                        )
-                        .await?
-                    {
-                        self.api.delete_route_by_id(&found.id, found.family).await?;
-                    }
-                    self.routes.remove(&key);
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    async fn reconcile_from_router(&mut self) -> Result<()> {
-        // Reconcile algorithm:
-        // 1) scan RouterOS rows in target table
-        // 2) recover managed rows by comment metadata
-        // 3) mark missing local entries as create/delete candidates
-        // 4) execute one sync pass
-        let now = unix_now();
-        let rows = self
-            .api
-            .list_managed_routes(&self.cfg.routing_table)
-            .await?;
-        let mut seen_keys = AHashSet::new();
-
-        for route in rows {
-            if is_default_route_dst(&route.dst_address) {
-                continue;
-            }
-
-            let Some((ip, prefix)) = parse_dst_address(&route.dst_address) else {
-                continue;
-            };
-            let family = RouteFamily::from_ip(ip);
-            if !family.is_valid_prefix(prefix) {
-                continue;
-            }
-
-            let Some(comment) = route.comment.as_deref() else {
-                continue;
-            };
-            let meta = match RouteCommentCodec::decode(
-                &self.cfg.comment_prefix,
-                &self.cfg.plugin_tag,
-                route.family,
-                &route.dst_address,
-                comment,
-            ) {
-                Ok(Some(meta)) => meta,
-                Ok(None) => continue,
-                Err(e) => {
+                Ok(None) => {
+                    // Foreign ownership conflict: drop any local cache so future
+                    // observations do not keep assuming we control the entry.
+                    self.dynamic_refresh_cache.remove(&key);
                     warn!(
                         plugin = %self.cfg.plugin_tag,
-                        route_id = %route.id,
-                        err = %e,
-                        "mikrotik route comment parse failed, treating as unknown residue"
+                        list = %key.list,
+                        address = %key.normalized_value(),
+                        "mikrotik dynamic entry conflicts with foreign address-list entry, skipping"
                     );
-                    continue;
                 }
-            };
-            if meta.family != family || meta.ip != ip {
-                warn!(
-                    plugin = %self.cfg.plugin_tag,
-                    route_id = %route.id,
-                    dst = %route.dst_address,
-                    "mikrotik route comment metadata mismatches route dst, skipping recovery"
-                );
-                continue;
-            }
-
-            let Some(key) = RouteKey::new_with_prefix(ip, prefix, self.cfg.routing_table.clone())
-            else {
-                continue;
-            };
-            seen_keys.insert(key.clone());
-
-            if let Some(existing) = self.routes.get_mut(&key) {
-                existing.router_id = Some(route.id.clone());
-                if existing.ref_count == 0 {
-                    existing.comment_domain = meta.comment_domain.clone();
-                    existing.expires_at_unix = meta.expires_at_unix;
-                    existing.last_refresh_unix = meta.last_refresh_unix;
-                    existing.sync_state = if meta.expires_at_unix <= now {
-                        SyncState::PendingDelete
-                    } else {
-                        SyncState::Synced
-                    };
-                    let gateway_drift = route.gateway.as_deref() != Some(existing.gateway.as_str());
-                    let distance_drift = route.distance != Some(existing.distance);
-                    let expected_comment = RouteCommentCodec::encode(
-                        &self.cfg.comment_prefix,
-                        &self.cfg.plugin_tag,
-                        existing,
-                    );
-                    let comment_drift = route.comment.as_deref() != Some(expected_comment.as_str());
-                    if gateway_drift || distance_drift || comment_drift {
-                        existing.sync_state = SyncState::Dirty;
-                    }
-                } else {
-                    let gateway_drift = route.gateway.as_deref() != Some(existing.gateway.as_str());
-                    let distance_drift = route.distance != Some(existing.distance);
-                    let expected_comment = RouteCommentCodec::encode(
-                        &self.cfg.comment_prefix,
-                        &self.cfg.plugin_tag,
-                        existing,
-                    );
-                    let comment_drift = route.comment.as_deref() != Some(expected_comment.as_str());
-                    if gateway_drift
-                        || distance_drift
-                        || comment_drift
-                        || matches!(existing.sync_state, SyncState::PendingCreate)
-                    {
-                        existing.sync_state = SyncState::Dirty;
-                    }
+                Err(err) => {
+                    // Error path also drops the local cache so the next
+                    // observation retries immediately instead of being suppressed.
+                    self.dynamic_refresh_cache.remove(&key);
+                    return Err(err);
                 }
-                continue;
-            }
-
-            let Some(gateway) = self.gateway_for(family).map(str::to_string) else {
-                continue;
-            };
-            let mut entry = RouteEntry {
-                key: key.clone(),
-                family,
-                gateway,
-                distance: self.cfg.distance,
-                domains: AHashSet::new(),
-                comment_domain: meta.comment_domain,
-                domain_expiries: AHashMap::new(),
-                ref_count: 0,
-                expires_at_unix: meta.expires_at_unix,
-                last_refresh_unix: meta.last_refresh_unix,
-                router_id: Some(route.id.clone()),
-                recovered_from_comment: true,
-                sync_state: if meta.expires_at_unix <= now {
-                    SyncState::PendingDelete
-                } else {
-                    SyncState::Synced
-                },
-            };
-            if !matches!(entry.sync_state, SyncState::PendingDelete) {
-                let gateway_drift = route.gateway.as_deref() != Some(entry.gateway.as_str());
-                let distance_drift = route.distance != Some(entry.distance);
-                let expected_comment = RouteCommentCodec::encode(
-                    &self.cfg.comment_prefix,
-                    &self.cfg.plugin_tag,
-                    &entry,
-                );
-                let comment_drift = route.comment.as_deref() != Some(expected_comment.as_str());
-                if gateway_drift || distance_drift || comment_drift {
-                    entry.sync_state = SyncState::Dirty;
-                }
-            }
-            self.routes.insert(key.clone(), entry);
-        }
-
-        let keys = self.routes.keys().cloned().collect::<Vec<_>>();
-        for key in keys {
-            if seen_keys.contains(&key) {
-                continue;
-            }
-            let Some(route) = self.routes.get_mut(&key) else {
-                continue;
-            };
-            if route.ref_count > 0 {
-                route.router_id = None;
-                route.sync_state = SyncState::PendingCreate;
-            } else {
-                route.sync_state = SyncState::PendingDelete;
             }
         }
 
-        self.sync_routes(now).await?;
         Ok(())
     }
 
@@ -1240,123 +712,171 @@ impl RouteManager {
         addrs: Vec<ObservedAddr>,
     ) -> Result<()> {
         self.ensure_initialized().await?;
-        let now = unix_now();
-        let touched = self.apply_observation(domain, addrs, now);
-        self.sync_route_keys(touched, now).await
+        self.observe_domain_inner(domain, addrs, now_millis()).await
     }
 
-    pub(super) async fn sweep(&mut self) -> Result<()> {
+    pub(super) async fn update_persistent_items(
+        &mut self,
+        items: AHashSet<AddressListKey>,
+    ) -> Result<()> {
         self.ensure_initialized().await?;
-        let now = unix_now();
-        self.ensure_persistent_routes(now);
-        self.expire_domain_bindings(now);
-        self.update_route_expiration(now);
-        self.sync_routes(now).await
-    }
-
-    pub(super) async fn update_persistent_ips(&mut self, ips: AHashSet<String>) -> Result<()> {
-        self.ensure_initialized().await?;
-        self.persistent_ips = ips;
-        let now = unix_now();
-        self.ensure_persistent_routes(now);
-        self.update_route_expiration(now);
-        self.sync_routes(now).await
+        // Persistent ownership takes precedence over any cached dynamic state.
+        self.persistent_items = items;
+        self.prune_dynamic_cache(now_millis());
+        self.reconcile_persistent_inner().await
     }
 
     pub(super) async fn reconcile(&mut self) -> Result<()> {
         self.ensure_initialized().await?;
-        self.ensure_persistent_routes(unix_now());
-        self.reconcile_from_router().await?;
+        self.prune_dynamic_cache(now_millis());
+        self.reconcile_persistent_inner().await
+    }
+
+    pub(super) async fn prune_dynamic_cache_now(&mut self) -> Result<()> {
+        self.ensure_initialized().await?;
+        self.prune_dynamic_cache(now_millis());
         Ok(())
     }
 
     pub(super) async fn shutdown(&mut self, cleanup: bool) -> Result<()> {
         if !cleanup {
+            self.dynamic_refresh_cache.clear();
             return Ok(());
         }
+
+        // Cleanup only touches entries that match this plugin's comment ownership.
         self.ensure_initialized().await?;
-        let routes = self
+        let entries = self
             .api
-            .list_managed_routes(&self.cfg.routing_table)
+            .list_entries(
+                self.cfg.address_list4.as_deref(),
+                self.cfg.address_list6.as_deref(),
+            )
             .await?;
-        for route in routes {
-            if comment_matches_prefix(route.comment.as_deref(), &self.cfg.comment_prefix) {
-                self.api.delete_route_by_id(&route.id, route.family).await?;
+        for entry in entries {
+            if decode_owned_comment(
+                self.cfg.comment_prefix.as_str(),
+                self.cfg.plugin_tag.as_str(),
+                entry.comment.as_deref(),
+            )
+            .is_some()
+            {
+                self.api
+                    .delete_entry_by_id(&entry.id, entry.key.family)
+                    .await?;
             }
         }
-        self.routes.clear();
-        self.domain_bindings.clear();
+        self.dynamic_refresh_cache.clear();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn dynamic_cache_len(&self) -> usize {
+        self.dynamic_refresh_cache.len()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn observe_domain_at_for_test(
+        &mut self,
+        domain: String,
+        addrs: Vec<ObservedAddr>,
+        now_ms: u64,
+    ) -> Result<()> {
+        self.ensure_initialized().await?;
+        self.observe_domain_inner(domain, addrs, now_ms).await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn prune_dynamic_cache_at_for_test(&mut self, now_ms: u64) -> Result<()> {
+        self.ensure_initialized().await?;
+        self.prune_dynamic_cache(now_ms);
         Ok(())
     }
 }
 
-fn comment_matches_prefix(comment: Option<&str>, prefix: &str) -> bool {
-    let Some(comment) = comment else {
-        return false;
-    };
-    if prefix.is_empty() {
-        return true;
-    }
-    comment.starts_with(prefix) && comment.as_bytes().get(prefix.len()) == Some(&b';')
-}
-
-fn validation_nonce() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
-}
-
-fn validation_route_key(family: RouteFamily, table: &str, nonce: u128) -> RouteKey {
-    let ip = match family {
-        RouteFamily::Ipv4 => {
-            let third = ((nonce >> 8) & 0xff) as u8;
-            let fourth = match (nonce & 0xff) as u8 {
-                0 => 1,
-                value => value,
-            };
-            IpAddr::V4(Ipv4Addr::new(198, 18, third, fourth))
-        }
-        RouteFamily::Ipv6 => {
-            let seg5 = ((nonce >> 32) & 0xffff) as u16;
-            let seg6 = ((nonce >> 16) & 0xffff) as u16;
-            let seg7 = (nonce & 0xffff) as u16;
-            IpAddr::V6(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, seg5, seg6, seg7, 1))
-        }
-    };
-    RouteKey::new(ip, table.to_string())
-}
-
-fn validation_comment(prefix: &str, plugin_tag: &str, _family: RouteFamily, nonce: u128) -> String {
+pub(super) fn encode_comment(
+    prefix: &str,
+    plugin_tag: &str,
+    kind: OwnedCommentKind,
+    domain: Option<&str>,
+) -> String {
+    // Comments intentionally stay compact because they live on RouterOS objects
+    // and are parsed frequently during reconciliation and cleanup.
     let mut out = String::new();
     if !prefix.is_empty() {
         out.push_str(prefix);
         out.push(';');
     }
-    out.push_str("plugin=");
+    out.push_str(COMMENT_FIELD_PLUGIN);
+    out.push('=');
     out.push_str(plugin_tag);
-    out.push_str(";kind=gateway-check");
-    out.push_str(";nonce=");
-    out.push_str(&nonce.to_string());
+    out.push(';');
+    out.push_str(COMMENT_FIELD_KIND);
+    out.push('=');
+    out.push_str(kind.as_str());
+    if let Some(domain) = domain {
+        out.push(';');
+        out.push_str(COMMENT_FIELD_DOMAIN);
+        out.push('=');
+        out.push_str(domain);
+    }
     out
 }
 
-fn select_comment_domain(domains: &AHashSet<String>) -> String {
-    domains
-        .iter()
-        .filter(|domain| domain.as_str() != PERSISTENT_ANCHOR_DOMAIN)
-        .min()
-        .cloned()
-        .unwrap_or_default()
+pub(super) fn decode_owned_comment(
+    prefix: &str,
+    plugin_tag: &str,
+    comment: Option<&str>,
+) -> Option<OwnedCommentMeta> {
+    // Prefix and plugin-tag checks provide a fast ownership filter before the
+    // caller considers deleting or modifying an entry.
+    let comment = comment?;
+    if !prefix.is_empty() {
+        if !comment.starts_with(prefix) {
+            return None;
+        }
+        if comment.as_bytes().get(prefix.len()) != Some(&b';') {
+            return None;
+        }
+    }
+
+    let mut plugin_matches = false;
+    let mut kind = None;
+    for token in comment.split(';') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            COMMENT_FIELD_PLUGIN if value.trim() == plugin_tag => plugin_matches = true,
+            COMMENT_FIELD_KIND => {
+                kind = match value.trim() {
+                    COMMENT_KIND_DYNAMIC => Some(OwnedCommentKind::Dynamic),
+                    COMMENT_KIND_PERSISTENT => Some(OwnedCommentKind::Persistent),
+                    _ => None,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    if plugin_matches {
+        kind.map(|kind| OwnedCommentMeta { kind })
+    } else {
+        None
+    }
 }
 
 async fn run_manager_worker(
     tag: String,
-    mut manager: RouteManager,
+    mut manager: AddressListManager,
     mut rx: mpsc::Receiver<ManagerCommand>,
 ) {
-    // Single-owner event loop for route state.
-    // All cross-map updates are serialized here to keep transitions deterministic.
+    // Every state transition is serialized here. Request-path code only pushes
+    // commands into the channel and never mutates manager state directly.
     while let Some(command) = rx.recv().await {
         match command {
             ManagerCommand::ObserveDomain {
@@ -1379,21 +899,12 @@ async fn run_manager_worker(
                     }
                 }
             }
-            ManagerCommand::Sweep => {
-                if let Err(e) = manager.sweep().await {
+            ManagerCommand::UpdatePersistentItems { items } => {
+                if let Err(e) = manager.update_persistent_items(items).await {
                     warn!(
                         plugin = %tag,
                         err = %e,
-                        "mikrotik periodic sweep failed"
-                    );
-                }
-            }
-            ManagerCommand::UpdatePersistentIps { ips } => {
-                if let Err(e) = manager.update_persistent_ips(ips).await {
-                    warn!(
-                        plugin = %tag,
-                        err = %e,
-                        "mikrotik persistent route maintenance failed"
+                        "mikrotik persistent address-list maintenance failed"
                     );
                 }
             }
@@ -1406,6 +917,15 @@ async fn run_manager_worker(
                     );
                 } else {
                     debug!(plugin = %tag, "mikrotik reconcile completed");
+                }
+            }
+            ManagerCommand::PruneDynamicCache => {
+                if let Err(e) = manager.prune_dynamic_cache_now().await {
+                    warn!(
+                        plugin = %tag,
+                        err = %e,
+                        "mikrotik dynamic cache prune failed"
+                    );
                 }
             }
             ManagerCommand::Shutdown { cleanup, done } => {
@@ -1421,24 +941,60 @@ async fn run_manager_worker(
     debug!(plugin = %tag, "mikrotik manager worker exited");
 }
 
-fn parse_dst_address(dst: &str) -> Option<(IpAddr, u8)> {
-    let (ip_raw, prefix_raw) = dst.split_once('/')?;
-    let ip = ip_raw.parse::<IpAddr>().ok()?;
-    let prefix = prefix_raw.parse::<u8>().ok()?;
-    Some((ip, prefix))
+fn dynamic_refresh_lead_ms(timeout_ms: u64) -> u64 {
+    // Refresh slightly ahead of the estimated remote expiry while keeping both
+    // extremely short and extremely long TTLs within practical bounds.
+    (timeout_ms / 4)
+        .max(MIN_DYNAMIC_REFRESH_LEAD_MS)
+        .min(MAX_DYNAMIC_REFRESH_LEAD_MS)
 }
 
-pub(super) fn is_default_route_dst(dst: &str) -> bool {
-    dst == ROUTE_DEFAULT_V4 || dst == ROUTE_DEFAULT_V6
+fn now_millis() -> u64 {
+    // The app clock avoids repeated syscalls on hot paths and is already used
+    // elsewhere in ForgeDNS for lightweight time reads.
+    AppClock::elapsed_millis()
 }
 
-#[inline]
-fn unix_now() -> u64 {
-    let start_unix = START_UNIX_SECS.get_or_init(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    });
-    start_unix.saturating_add(AppClock::elapsed_millis() / 1000)
+fn normalize_network_ip(ip: IpAddr, prefix: u8) -> IpAddr {
+    match ip {
+        IpAddr::V4(addr) => {
+            let raw = u32::from(addr);
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (HOST_PREFIX_V4 - prefix)
+            };
+            IpAddr::V4((raw & mask).into())
+        }
+        IpAddr::V6(addr) => {
+            let raw = u128::from(addr);
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (HOST_PREFIX_V6 - prefix)
+            };
+            IpAddr::V6((raw & mask).into())
+        }
+    }
+}
+
+pub(super) fn parse_router_address(family: AddressListFamily, raw: &str) -> Option<(IpAddr, u8)> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some((ip_raw, prefix_raw)) = value.split_once('/') {
+        let ip = ip_raw.parse::<IpAddr>().ok()?;
+        let prefix = prefix_raw.parse::<u8>().ok()?;
+        if AddressListFamily::from_ip(ip) != family || !family.is_valid_prefix(prefix) {
+            return None;
+        }
+        return Some((normalize_network_ip(ip, prefix), prefix));
+    }
+
+    let ip = value.parse::<IpAddr>().ok()?;
+    if AddressListFamily::from_ip(ip) != family {
+        return None;
+    }
+    Some((ip, family.host_prefix()))
 }

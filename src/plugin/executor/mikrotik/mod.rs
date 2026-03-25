@@ -8,27 +8,26 @@
 //! This executor is an observer-side effect stage designed to integrate with
 //! ForgeDNS sequence pipelines. It does not alter DNS decisions or response
 //! content. Instead, it watches final downstream DNS answers and synchronizes
-//! host routes into a dedicated RouterOS routing table.
+//! IPs into RouterOS address lists.
 //!
 //! Architecture overview:
 //! - `execute()` is hot-path light and always returns `NextWithPost`.
 //! - `post_execute()` extracts normalized query domain and unique A/AAAA IPs.
-//! - route synchronization is delegated to a single-owner background
-//!   `RouteManager` state machine.
+//! - address-list synchronization is delegated to a single-owner background
+//!   manager state machine.
 //! - RouterOS API details are isolated in `MikrotikApi` adapter implementations.
-//! - route metadata is persisted in RouterOS `comment` via `RouteCommentCodec`,
-//!   allowing restart recovery without local state files.
+//! - ownership metadata is persisted in RouterOS `comment` so cleanup can
+//!   safely distinguish ForgeDNS-managed entries from foreign entries.
 //!
 //! Behavior goals:
-//! - maintain `/32` (IPv4) and `/128` (IPv6) host routes in configured table.
-//! - support optional always-present CIDR routes via `persistent_route`.
-//! - periodically reload persistent route files and keep route table in sync.
+//! - maintain IPv4/IPv6 dynamic host entries in configured address lists.
+//! - support optional always-present IP/CIDR entries via `persistent`.
+//! - use RouterOS native `timeout` for dynamic expiration maintenance.
 //! - preserve DNS hot-path latency (`async=true` uses non-blocking queue).
 //! - provide blocking write-before-return mode (`async=false`) without
 //!   affecting DNS response result.
-//! - avoid long-term route pollution via TTL sweep + startup reconciliation +
-//!   optional shutdown cleanup.
-//! - assume routing table/rule/default routes are already provisioned by users.
+//! - keep persistent file-backed entries self-healed via background reload and
+//!   reconcile loops.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -41,22 +40,37 @@ use ahash::{AHashMap, AHashSet};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::fs as tokio_fs;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
+/// Default lower TTL clamp for dynamic address-list entries.
 const DEFAULT_MIN_TTL: u32 = 60;
+/// Default upper TTL clamp for dynamic address-list entries.
 const DEFAULT_MAX_TTL: u32 = 3600;
+/// Default execution mode keeps RouterOS writes off the DNS request path.
 const DEFAULT_ASYNC_MODE: bool = true;
+/// Default shutdown behavior removes plugin-owned RouterOS entries.
 const DEFAULT_CLEANUP_ON_SHUTDOWN: bool = true;
-const DEFAULT_ROUTE_DISTANCE: u8 = 100;
+/// Default comment prefix used to mark ForgeDNS-owned RouterOS rows.
 const DEFAULT_COMMENT_PREFIX: &str = "fdns";
+/// Maximum time sync mode waits for one observe command to finish.
 const SYNC_OBSERVE_TIMEOUT_SECS: u64 = 8;
 
+mod api;
+mod manager;
+
+use self::api::{MikrotikApi, MikrotikRsClient};
+use self::manager::{
+    AddressListFamily, AddressListKey, AddressListManager, AddressListManagerConfig,
+    AddressListManagerRuntime, ManagerCommand, ObservedAddr, PersistentReloadConfig,
+};
+
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct MikrotikConfigArgs {
     /// RouterOS API endpoint, usually `<host>:8728`.
     address: Option<String>,
@@ -67,91 +81,87 @@ struct MikrotikConfigArgs {
     /// Whether post stage waits RouterOS writes (`false`) or queues work (`true`).
     #[serde(rename = "async")]
     async_mode: Option<bool>,
-    /// Dedicated RouterOS routing table for managed routes.
-    routing_table: Option<String>,
-    /// IPv4 gateway value for managed IPv4 routes.
-    gateway4: Option<String>,
-    /// IPv6 gateway value for managed IPv6 routes.
-    gateway6: Option<String>,
-    /// Prefix used in RouterOS route comments to mark ForgeDNS-managed routes.
+    /// IPv4 address-list name for observed IPv4 answers.
+    address_list4: Option<String>,
+    /// IPv6 address-list name for observed IPv6 answers.
+    address_list6: Option<String>,
+    /// Prefix used in RouterOS comments to mark ForgeDNS-managed entries.
     /// Defaults to `fdns` when omitted.
     comment_prefix: Option<String>,
-    /// Route distance written to RouterOS for managed routes.
-    distance: Option<u8>,
-    /// Always-present routes that should not expire with DNS TTL.
-    persistent_route: Option<PersistentRouteArgs>,
+    /// Always-present address-list items that should never expire.
+    persistent: Option<PersistentArgs>,
     /// Minimum effective TTL clamp (seconds) for observed records.
     min_ttl: Option<u32>,
     /// Maximum effective TTL clamp (seconds) for observed records.
     max_ttl: Option<u32>,
     /// Optional fixed TTL override (seconds) for dynamic observed records.
     fixed_ttl: Option<u32>,
-    /// Whether to clean managed dynamic routes on shutdown.
+    /// Whether to clean managed address-list entries on shutdown.
     cleanup_on_shutdown: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-struct PersistentRouteArgs {
-    /// Inline always-present IPs/CIDRs. Plain IP is normalized to host route.
+#[serde(deny_unknown_fields)]
+struct PersistentArgs {
+    /// Inline always-present IPs/CIDRs. Plain IP is normalized to host entry.
     ips: Option<Vec<String>>,
-    /// File list that provides always-present IPs.
+    /// File list that provides always-present IPs/CIDRs.
     files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
 struct MikrotikConfig {
-    /// RouterOS API endpoint.
+    /// RouterOS API endpoint used by the shared client.
     address: String,
-    /// RouterOS login username.
+    /// Login username for RouterOS API.
     username: String,
-    /// RouterOS login password.
+    /// Login password for RouterOS API.
     password: String,
-    /// Async mode switch for post stage RouterOS writes.
+    /// Async mode switch for post stage writes.
     async_mode: bool,
-    /// Dedicated RouterOS routing table for this plugin.
-    routing_table: String,
-    /// Optional IPv4 gateway.
-    gateway4: Option<String>,
-    /// Optional IPv6 gateway.
-    gateway6: Option<String>,
-    /// Always-present routes in normalized CIDR format (`ip/prefix`).
-    persistent_ips: AHashSet<String>,
-    /// Inline persistent routes in normalized CIDR format.
-    persistent_inline_ips: AHashSet<String>,
-    /// Persistent route source files for periodic reload.
+    /// IPv4 address-list name managed by this plugin.
+    address_list4: Option<String>,
+    /// IPv6 address-list name managed by this plugin.
+    address_list6: Option<String>,
+    /// Full persistent desired set after merging inline and file sources.
+    persistent_items: AHashSet<AddressListKey>,
+    /// Inline-only persistent items kept separately so file reload can rebuild the merged set.
+    persistent_inline_items: AHashSet<AddressListKey>,
+    /// Source files periodically reloaded for persistent items.
     persistent_files: Vec<String>,
-    /// Managed route comment prefix.
+    /// Prefix used in RouterOS comments to mark plugin ownership.
     comment_prefix: String,
-    /// Route distance written to RouterOS.
-    distance: u8,
-    /// Minimum effective TTL clamp in seconds.
+    /// Minimum TTL clamp for dynamic entries.
     min_ttl: u32,
-    /// Maximum effective TTL clamp in seconds.
+    /// Maximum TTL clamp for dynamic entries.
     max_ttl: u32,
-    /// Optional fixed TTL override in seconds.
+    /// Optional fixed TTL override for dynamic entries.
     fixed_ttl: Option<u32>,
-    /// Shutdown cleanup behavior for dynamic routes.
+    /// Whether shutdown should remove owned entries from RouterOS.
     cleanup_on_shutdown: bool,
 }
 
 impl MikrotikConfigArgs {
+    /// Validate user-facing config and normalize it into a runtime-ready form.
+    ///
+    /// This is also where persistent input sources are parsed into normalized
+    /// `AddressListKey` values so the manager does not need to re-interpret
+    /// human-facing YAML at runtime.
     fn into_config(self, emit_warnings: bool) -> Result<MikrotikConfig> {
         let address = required_non_empty(self.address, "address")?;
         let username = required_non_empty(self.username, "username")?;
         let password = required_non_empty(self.password, "password")?;
-        let routing_table = required_non_empty(self.routing_table, "routing_table")?;
+        let address_list4 = optional_non_empty(self.address_list4);
+        let address_list6 = optional_non_empty(self.address_list6);
+        if address_list4.is_none() && address_list6.is_none() {
+            return Err(DnsError::plugin(
+                "mikrotik requires at least one of address_list4 or address_list6",
+            ));
+        }
+
         let comment_prefix = optional_non_empty(self.comment_prefix)
             .unwrap_or_else(|| DEFAULT_COMMENT_PREFIX.to_string());
         validate_comment_token("comment_prefix", &comment_prefix)?;
-        let distance = self.distance.unwrap_or(DEFAULT_ROUTE_DISTANCE);
-
-        let gateway4 = optional_non_empty(self.gateway4);
-        let gateway6 = optional_non_empty(self.gateway6);
-        if gateway4.is_none() && gateway6.is_none() {
-            return Err(DnsError::plugin(
-                "mikrotik requires at least one of gateway4 or gateway6",
-            ));
-        }
 
         let min_ttl = self.min_ttl.unwrap_or(DEFAULT_MIN_TTL);
         let max_ttl = self.max_ttl.unwrap_or(DEFAULT_MAX_TTL);
@@ -169,23 +179,16 @@ impl MikrotikConfigArgs {
             Some(ttl) => Some(ttl),
             None => None,
         };
-        let parsed_persistent = parse_persistent_ips(
-            self.persistent_route,
-            gateway4.is_some(),
-            gateway6.is_some(),
+
+        let parsed_persistent = parse_persistent_items(
+            self.persistent,
+            address_list4.as_deref(),
+            address_list6.as_deref(),
         )?;
-        let ignored_by_gateway = parsed_persistent.ignored_by_gateway;
-        if emit_warnings && ignored_by_gateway > 0 {
+        if emit_warnings && parsed_persistent.ignored_by_family > 0 {
             warn!(
-                ignored = ignored_by_gateway,
-                "mikrotik persistent_route ignored entries without corresponding gateway family"
-            );
-        }
-        let ignored_default_route = parsed_persistent.ignored_default_route;
-        if emit_warnings && ignored_default_route > 0 {
-            warn!(
-                ignored = ignored_default_route,
-                "mikrotik persistent_route ignored default-route entries (/0)"
+                ignored = parsed_persistent.ignored_by_family,
+                "mikrotik persistent ignored entries without corresponding address list family"
             );
         }
 
@@ -194,14 +197,12 @@ impl MikrotikConfigArgs {
             username,
             password,
             async_mode: self.async_mode.unwrap_or(DEFAULT_ASYNC_MODE),
-            routing_table,
-            gateway4,
-            gateway6,
-            persistent_ips: parsed_persistent.all_ips,
-            persistent_inline_ips: parsed_persistent.inline_ips,
+            address_list4,
+            address_list6,
+            persistent_items: parsed_persistent.all_items,
+            persistent_inline_items: parsed_persistent.inline_items,
             persistent_files: parsed_persistent.files,
             comment_prefix,
-            distance,
             min_ttl,
             max_ttl,
             fixed_ttl,
@@ -212,22 +213,18 @@ impl MikrotikConfigArgs {
     }
 }
 
-mod api;
-mod manager;
-
-use self::api::{MikrotikApi, MikrotikRsClient};
-use self::manager::{
-    ManagerCommand, ObservedAddr, PersistentReloadConfig, RouteManager, RouteManagerConfig,
-    RouteManagerRuntime,
-};
-
 #[derive(Debug)]
 struct MikrotikExecutor {
+    /// Plugin tag from the global registry.
     tag: String,
+    /// Fully validated immutable runtime config.
     config: MikrotikConfig,
-    manager: Option<RouteManager>,
+    /// Pre-built manager consumed during `init()`.
+    manager: Option<AddressListManager>,
+    /// Sender exposed to `post_execute()` after the background runtime starts.
     command_tx: Option<mpsc::Sender<ManagerCommand>>,
-    runtime: Mutex<Option<RouteManagerRuntime>>,
+    /// Runtime handle stored so `destroy()` can stop worker tasks.
+    runtime: Mutex<Option<AddressListManagerRuntime>>,
 }
 
 #[async_trait]
@@ -237,6 +234,8 @@ impl Plugin for MikrotikExecutor {
     }
 
     async fn init(&mut self) -> Result<()> {
+        // `init()` may be called more than once by the plugin framework.
+        // Keep it idempotent and only build the runtime once.
         if self.manager.is_none() || self.command_tx.is_some() {
             return Ok(());
         }
@@ -250,13 +249,16 @@ impl Plugin for MikrotikExecutor {
         };
 
         let persistent_reload = Some(PersistentReloadConfig {
-            inline_ips: self.config.persistent_inline_ips.clone(),
+            // Runtime keeps inline and file sources separate so a file reload
+            // can rebuild the merged desired set without reparsing YAML.
+            inline_items: self.config.persistent_inline_items.clone(),
             files: self.config.persistent_files.clone(),
-            initial_ips: self.config.persistent_ips.clone(),
-            gateway4_enabled: self.config.gateway4.is_some(),
-            gateway6_enabled: self.config.gateway6.is_some(),
+            address_list4: self.config.address_list4.clone(),
+            address_list6: self.config.address_list6.clone(),
+            initial_items: self.config.persistent_items.clone(),
         });
-        let runtime = RouteManagerRuntime::start(self.tag.clone(), manager, persistent_reload);
+        let runtime =
+            AddressListManagerRuntime::start(self.tag.clone(), manager, persistent_reload);
         self.command_tx = Some(runtime.sender());
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
@@ -283,15 +285,18 @@ impl Executor for MikrotikExecutor {
         context: &mut DnsContext,
         _state: Option<ExecState>,
     ) -> ExecResult {
+        // If the runtime never started, the plugin stays side-effect free.
         let Some(tx) = self.command_tx.as_ref() else {
             return Ok(());
         };
 
+        // This executor only reacts to successful final answers containing A/AAAA data.
         let Some((domain, addrs)) = extract_observation(context, &self.config) else {
             return Ok(());
         };
 
         if self.config.async_mode {
+            // Async mode keeps RouterOS I/O fully off the request path.
             match tx.try_send(ManagerCommand::ObserveDomain {
                 domain,
                 addrs,
@@ -314,6 +319,8 @@ impl Executor for MikrotikExecutor {
             return Ok(());
         }
 
+        // Sync mode still preserves DNS behavior on RouterOS failures. The only
+        // difference is that we wait for the manager to attempt the write.
         let (wait_tx, wait_rx) = oneshot::channel::<Result<()>>();
         let send_cmd = ManagerCommand::ObserveDomain {
             domain,
@@ -386,6 +393,7 @@ impl PluginFactory for MikrotikFactory {
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
+        // Plugin tag is reused inside RouterOS comment ownership metadata.
         validate_comment_token("plugin tag", plugin_config.tag.as_str())?;
         let config = parse_plugin_config(plugin_config.args.clone(), true)?;
         let api = Arc::new(MikrotikRsClient::new(
@@ -394,19 +402,17 @@ impl PluginFactory for MikrotikFactory {
             config.password.clone(),
         )) as Arc<dyn MikrotikApi>;
 
-        let manager_cfg = RouteManagerConfig {
+        let manager_cfg = AddressListManagerConfig {
             plugin_tag: plugin_config.tag.clone(),
-            routing_table: config.routing_table.clone(),
-            gateway4: config.gateway4.clone(),
-            gateway6: config.gateway6.clone(),
-            persistent_ips: config.persistent_ips.clone(),
+            address_list4: config.address_list4.clone(),
+            address_list6: config.address_list6.clone(),
+            persistent_items: config.persistent_items.clone(),
             comment_prefix: config.comment_prefix.clone(),
-            distance: config.distance,
             min_ttl: config.min_ttl,
             max_ttl: config.max_ttl,
             fixed_ttl: config.fixed_ttl,
         };
-        let manager = RouteManager::new(api, manager_cfg);
+        let manager = AddressListManager::new(api, manager_cfg);
 
         Ok(UninitializedPlugin::Executor(Box::new(MikrotikExecutor {
             tag: plugin_config.tag.clone(),
@@ -422,6 +428,9 @@ fn extract_observation(
     context: &mut DnsContext,
     config: &MikrotikConfig,
 ) -> Option<(String, Vec<ObservedAddr>)> {
+    // The first question is the authoritative domain label written to the
+    // RouterOS comment for dynamic entries. This is intentionally lightweight:
+    // we do not inspect CNAME chains or reconstruct canonical names here.
     let domain = context
         .request
         .first_question()
@@ -432,12 +441,14 @@ fn extract_observation(
         return None;
     }
 
-    // Collapse duplicated A/AAAA answers by IP and keep max TTL per IP.
+    // Collapse duplicate IPs inside one DNS response before sending work to
+    // the manager. For duplicates we keep the largest TTL because the manager
+    // should observe the strongest expiry hint from this response batch.
     let mut dedup = AHashMap::<IpAddr, u32>::new();
     for (ip, ttl_secs) in response.answer_ip_ttls() {
         match ip {
-            IpAddr::V4(_) if config.gateway4.is_none() => continue,
-            IpAddr::V6(_) if config.gateway6.is_none() => continue,
+            IpAddr::V4(_) if config.address_list4.is_none() => continue,
+            IpAddr::V6(_) if config.address_list6.is_none() => continue,
             _ => {}
         }
 
@@ -470,7 +481,6 @@ fn parse_plugin_config(
     raw.into_config(emit_warnings)
 }
 
-/// Require non-empty string config fields and keep trimmed value.
 fn required_non_empty(value: Option<String>, field: &str) -> Result<String> {
     let Some(value) = value else {
         return Err(DnsError::plugin(format!("mikrotik '{field}' is required")));
@@ -484,7 +494,6 @@ fn required_non_empty(value: Option<String>, field: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-/// Convert optional string to trimmed non-empty value.
 fn optional_non_empty(value: Option<String>) -> Option<String> {
     value
         .map(|v| v.trim().to_string())
@@ -506,71 +515,62 @@ fn validate_comment_token(field: &str, value: &str) -> Result<()> {
 }
 
 #[derive(Debug, Default)]
-struct ParsedPersistentRoutes {
-    all_ips: AHashSet<String>,
-    inline_ips: AHashSet<String>,
+struct ParsedPersistentItems {
+    /// Final desired set after merging inline and file sources.
+    all_items: AHashSet<AddressListKey>,
+    /// Inline-only subset used by periodic file reload.
+    inline_items: AHashSet<AddressListKey>,
+    /// File list preserved for runtime reload.
     files: Vec<String>,
-    ignored_by_gateway: usize,
-    ignored_default_route: usize,
+    /// Count of items skipped because that family is not configured.
+    ignored_by_family: usize,
 }
 
-/// Parse always-present route list from inline args and optional files.
+/// Parse `persistent` config into normalized address-list keys.
 ///
-/// Accepted item formats:
-/// - `1.1.1.1`
-/// - `2001:db8::1`
-/// - generic CIDR: `1.1.1.0/24`, `2001:db8::/64`
-///
-/// Entries whose IP family has no corresponding configured gateway are skipped.
-fn parse_persistent_ips(
-    persistent_route: Option<PersistentRouteArgs>,
-    gateway4_enabled: bool,
-    gateway6_enabled: bool,
-) -> Result<ParsedPersistentRoutes> {
-    let mut parsed = ParsedPersistentRoutes::default();
-    let Some(route) = persistent_route else {
+/// The parser performs all expensive normalization and validation at startup:
+/// plain IPs become host prefixes, CIDRs are masked to network form, and each
+/// item is bound to the correct IPv4/IPv6 address-list name.
+fn parse_persistent_items(
+    persistent: Option<PersistentArgs>,
+    address_list4: Option<&str>,
+    address_list6: Option<&str>,
+) -> Result<ParsedPersistentItems> {
+    let mut parsed = ParsedPersistentItems::default();
+    let Some(persistent) = persistent else {
         return Ok(parsed);
     };
 
-    if let Some(ips) = route.ips {
+    if let Some(ips) = persistent.ips {
         for (index, item) in ips.into_iter().enumerate() {
-            let source = format!("persistent_route.ips[{index}]");
-            let cidr = parse_persistent_ip_item(item.as_str(), source.as_str())?;
-            if is_default_route_cidr(cidr.as_str()) {
-                parsed.ignored_default_route = parsed.ignored_default_route.saturating_add(1);
-                continue;
-            }
-            if !is_persistent_ip_family_enabled(
-                cidr.as_str(),
-                gateway4_enabled,
-                gateway6_enabled,
+            let source = format!("persistent.ips[{index}]");
+            let key = parse_persistent_item(
+                item.as_str(),
                 source.as_str(),
-            )? {
-                parsed.ignored_by_gateway = parsed.ignored_by_gateway.saturating_add(1);
-                continue;
+                address_list4,
+                address_list6,
+            )?;
+            match key {
+                Some(key) => {
+                    parsed.inline_items.insert(key.clone());
+                    parsed.all_items.insert(key);
+                }
+                None => {
+                    parsed.ignored_by_family = parsed.ignored_by_family.saturating_add(1);
+                }
             }
-            parsed.inline_ips.insert(cidr.clone());
-            parsed.all_ips.insert(cidr);
         }
     }
 
-    parsed.files = parse_persistent_route_files(route.files)?;
-    let (file_ips, ignored_from_files, ignored_default_from_files) =
-        load_persistent_ips_from_files(
-            parsed.files.as_slice(),
-            gateway4_enabled,
-            gateway6_enabled,
-        )?;
-    parsed.ignored_by_gateway = parsed.ignored_by_gateway.saturating_add(ignored_from_files);
-    parsed.ignored_default_route = parsed
-        .ignored_default_route
-        .saturating_add(ignored_default_from_files);
-    parsed.all_ips.extend(file_ips);
-
+    parsed.files = parse_persistent_files(persistent.files)?;
+    let (file_items, ignored_by_family) =
+        load_persistent_items_from_files(parsed.files.as_slice(), address_list4, address_list6)?;
+    parsed.ignored_by_family = parsed.ignored_by_family.saturating_add(ignored_by_family);
+    parsed.all_items.extend(file_items);
     Ok(parsed)
 }
 
-fn parse_persistent_route_files(files: Option<Vec<String>>) -> Result<Vec<String>> {
+fn parse_persistent_files(files: Option<Vec<String>>) -> Result<Vec<String>> {
     let mut out = Vec::new();
     let Some(files) = files else {
         return Ok(out);
@@ -579,7 +579,7 @@ fn parse_persistent_route_files(files: Option<Vec<String>>) -> Result<Vec<String
         let file = file_raw.trim();
         if file.is_empty() {
             return Err(DnsError::plugin(format!(
-                "mikrotik persistent_route.files[{index}] cannot be empty"
+                "mikrotik persistent.files[{index}] cannot be empty"
             )));
         }
         out.push(file.to_string());
@@ -587,15 +587,19 @@ fn parse_persistent_route_files(files: Option<Vec<String>>) -> Result<Vec<String
     Ok(out)
 }
 
-fn load_persistent_ips_from_content(
+/// Parse one file body into normalized persistent items.
+///
+/// Files use the same item grammar as inline YAML. Empty lines and `#` comments
+/// are ignored. Family-mismatched entries are skipped rather than failing
+/// startup so shared source files can contain both IPv4 and IPv6 items.
+fn load_persistent_items_from_content(
     source_prefix: &str,
     content: &str,
-    gateway4_enabled: bool,
-    gateway6_enabled: bool,
-) -> Result<(AHashSet<String>, usize, usize)> {
+    address_list4: Option<&str>,
+    address_list6: Option<&str>,
+) -> Result<(AHashSet<AddressListKey>, usize)> {
     let mut out = AHashSet::new();
-    let mut ignored_by_gateway = 0usize;
-    let mut ignored_default_route = 0usize;
+    let mut ignored_by_family = 0usize;
 
     for (line_no, line) in content.lines().enumerate() {
         let token = line.split('#').next().unwrap_or_default().trim();
@@ -604,100 +608,91 @@ fn load_persistent_ips_from_content(
         }
 
         let source = format!("{source_prefix} line {}", line_no + 1);
-        let cidr = parse_persistent_ip_item(token, source.as_str())?;
-        if is_default_route_cidr(cidr.as_str()) {
-            ignored_default_route = ignored_default_route.saturating_add(1);
-            continue;
+        match parse_persistent_item(token, source.as_str(), address_list4, address_list6)? {
+            Some(key) => {
+                out.insert(key);
+            }
+            None => {
+                ignored_by_family = ignored_by_family.saturating_add(1);
+            }
         }
-        if !is_persistent_ip_family_enabled(
-            cidr.as_str(),
-            gateway4_enabled,
-            gateway6_enabled,
-            source.as_str(),
-        )? {
-            ignored_by_gateway = ignored_by_gateway.saturating_add(1);
-            continue;
-        }
-        out.insert(cidr);
     }
 
-    Ok((out, ignored_by_gateway, ignored_default_route))
+    Ok((out, ignored_by_family))
 }
 
-pub(super) fn load_persistent_ips_from_files(
+fn load_persistent_items_from_files(
     files: &[String],
-    gateway4_enabled: bool,
-    gateway6_enabled: bool,
-) -> Result<(AHashSet<String>, usize, usize)> {
+    address_list4: Option<&str>,
+    address_list6: Option<&str>,
+) -> Result<(AHashSet<AddressListKey>, usize)> {
     let mut out = AHashSet::new();
-    let mut ignored_by_gateway = 0usize;
-    let mut ignored_default_route = 0usize;
+    let mut ignored_by_family = 0usize;
 
     for (index, file) in files.iter().enumerate() {
         let content = fs::read_to_string(file).map_err(|e| {
             DnsError::plugin(format!(
-                "mikrotik failed to read persistent route file '{file}': {e}"
+                "mikrotik failed to read persistent file '{file}': {e}"
             ))
         })?;
-        let source_prefix = format!("persistent_route.files[{index}]");
-        let (loaded, ignored_by_gateway_delta, ignored_default_delta) =
-            load_persistent_ips_from_content(
-                source_prefix.as_str(),
-                &content,
-                gateway4_enabled,
-                gateway6_enabled,
-            )?;
+        let source_prefix = format!("persistent.files[{index}]");
+        let (loaded, ignored_delta) = load_persistent_items_from_content(
+            source_prefix.as_str(),
+            &content,
+            address_list4,
+            address_list6,
+        )?;
         out.extend(loaded);
-        ignored_by_gateway = ignored_by_gateway.saturating_add(ignored_by_gateway_delta);
-        ignored_default_route = ignored_default_route.saturating_add(ignored_default_delta);
+        ignored_by_family = ignored_by_family.saturating_add(ignored_delta);
     }
 
-    Ok((out, ignored_by_gateway, ignored_default_route))
+    Ok((out, ignored_by_family))
 }
 
-pub(super) async fn load_persistent_ips_from_files_async(
+async fn load_persistent_items_from_files_async(
     files: &[String],
-    gateway4_enabled: bool,
-    gateway6_enabled: bool,
-) -> Result<(AHashSet<String>, usize, usize)> {
+    address_list4: Option<&str>,
+    address_list6: Option<&str>,
+) -> Result<(AHashSet<AddressListKey>, usize)> {
     let mut out = AHashSet::new();
-    let mut ignored_by_gateway = 0usize;
-    let mut ignored_default_route = 0usize;
+    let mut ignored_by_family = 0usize;
 
     for (index, file) in files.iter().enumerate() {
         let content = tokio_fs::read_to_string(file).await.map_err(|e| {
             DnsError::plugin(format!(
-                "mikrotik failed to read persistent route file '{file}': {e}"
+                "mikrotik failed to read persistent file '{file}': {e}"
             ))
         })?;
-        let source_prefix = format!("persistent_route.files[{index}]");
-        let (loaded, ignored_by_gateway_delta, ignored_default_delta) =
-            load_persistent_ips_from_content(
-                source_prefix.as_str(),
-                &content,
-                gateway4_enabled,
-                gateway6_enabled,
-            )?;
+        let source_prefix = format!("persistent.files[{index}]");
+        let (loaded, ignored_delta) = load_persistent_items_from_content(
+            source_prefix.as_str(),
+            &content,
+            address_list4,
+            address_list6,
+        )?;
         out.extend(loaded);
-        ignored_by_gateway = ignored_by_gateway.saturating_add(ignored_by_gateway_delta);
-        ignored_default_route = ignored_default_route.saturating_add(ignored_default_delta);
+        ignored_by_family = ignored_by_family.saturating_add(ignored_delta);
     }
 
-    Ok((out, ignored_by_gateway, ignored_default_route))
+    Ok((out, ignored_by_family))
 }
 
-/// Parse one persistent item and normalize into `ip/prefix`.
+/// Parse one human-facing persistent item and bind it to the correct list.
 ///
-/// Rules:
-/// - plain IPv4/IPv6 becomes `/32` or `/128`
-/// - CIDR keeps its configured prefix and is normalized to network address
-fn parse_persistent_ip_item(raw: &str, source: &str) -> Result<String> {
+/// Return `Ok(None)` when the item is valid but its IP family has no configured
+/// target list, allowing callers to ignore mixed-family source files cleanly.
+fn parse_persistent_item(
+    raw: &str,
+    source: &str,
+    address_list4: Option<&str>,
+    address_list6: Option<&str>,
+) -> Result<Option<AddressListKey>> {
     let value = raw.trim();
     if value.is_empty() {
         return Err(DnsError::plugin(format!("mikrotik {source} is empty")));
     }
 
-    if let Some((ip_raw, prefix_raw)) = value.split_once('/') {
+    let (ip, prefix) = if let Some((ip_raw, prefix_raw)) = value.split_once('/') {
         let ip = ip_raw.trim().parse::<IpAddr>().map_err(|e| {
             DnsError::plugin(format!("mikrotik {source} has invalid ip '{ip_raw}': {e}"))
         })?;
@@ -706,101 +701,51 @@ fn parse_persistent_ip_item(raw: &str, source: &str) -> Result<String> {
                 "mikrotik {source} has invalid prefix '{prefix_raw}': {e}"
             ))
         })?;
-        let max_prefix = if ip.is_ipv4() { 32 } else { 128 };
-        if prefix > max_prefix {
-            return Err(DnsError::plugin(format!(
-                "mikrotik {source} has invalid prefix /{prefix} for {ip}, max /{max_prefix}"
-            )));
-        }
-        let network_ip = normalize_network_ip(ip, prefix);
-        return Ok(format!("{network_ip}/{prefix}"));
-    }
+        (ip, prefix)
+    } else {
+        let ip = value.parse::<IpAddr>().map_err(|e| {
+            DnsError::plugin(format!("mikrotik {source} has invalid ip '{value}': {e}"))
+        })?;
+        let family = AddressListFamily::from_ip(ip);
+        (ip, family.host_prefix())
+    };
 
-    let ip = value.parse::<IpAddr>().map_err(|e| {
-        DnsError::plugin(format!("mikrotik {source} has invalid ip '{value}': {e}"))
-    })?;
-    let prefix = if ip.is_ipv4() { 32 } else { 128 };
-    Ok(format!("{ip}/{prefix}"))
-}
+    let family = AddressListFamily::from_ip(ip);
+    let list = match family {
+        AddressListFamily::Ipv4 => address_list4,
+        AddressListFamily::Ipv6 => address_list6,
+    };
+    let Some(list) = list else {
+        return Ok(None);
+    };
 
-fn normalize_network_ip(ip: IpAddr, prefix: u8) -> IpAddr {
-    match ip {
-        IpAddr::V4(addr) => {
-            let raw = u32::from(addr);
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u32::MAX << (32 - prefix)
-            };
-            IpAddr::V4(Ipv4Addr::from(raw & mask))
-        }
-        IpAddr::V6(addr) => {
-            let raw = u128::from(addr);
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u128::MAX << (128 - prefix)
-            };
-            IpAddr::V6(Ipv6Addr::from(raw & mask))
-        }
-    }
-}
-
-#[inline]
-fn is_default_route_cidr(cidr: &str) -> bool {
-    cidr == "0.0.0.0/0" || cidr == "::/0"
-}
-
-/// Check whether this persistent route's family is enabled by gateway config.
-///
-/// Returns `Ok(false)` when family gateway is not configured so caller can skip
-/// the item without failing plugin startup.
-fn is_persistent_ip_family_enabled(
-    cidr: &str,
-    gateway4_enabled: bool,
-    gateway6_enabled: bool,
-    source: &str,
-) -> Result<bool> {
-    let (ip_raw, _) = cidr.split_once('/').ok_or_else(|| {
-        DnsError::plugin(format!(
-            "mikrotik {source} has invalid normalized route '{cidr}'"
-        ))
-    })?;
-    let ip = ip_raw.parse::<IpAddr>().map_err(|e| {
-        DnsError::plugin(format!(
-            "mikrotik {source} has invalid normalized route '{cidr}': {e}"
-        ))
-    })?;
-
-    match ip {
-        IpAddr::V4(_) if !gateway4_enabled => Ok(false),
-        IpAddr::V6(_) if !gateway6_enabled => Ok(false),
-        _ => Ok(true),
-    }
+    AddressListKey::new_with_prefix(ip, prefix, list.to_string())
+        .ok_or_else(|| {
+            DnsError::plugin(format!(
+                "mikrotik {source} has invalid prefix /{prefix} for {ip}"
+            ))
+        })
+        .map(Some)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::message::rdata::{A, AAAA};
-    use crate::message::{Message, Question};
-    use crate::message::{Name, RData, Record, RecordType};
+    use crate::message::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
     use crate::plugin::PluginRegistry;
-    use crate::plugin::executor::mikrotik::api::RouterRoute;
+    use crate::plugin::executor::mikrotik::api::RouterListEntry;
     use crate::plugin::executor::mikrotik::manager::{
-        RouteCommentCodec, RouteEntry, RouteFamily, RouteKey, SyncState,
+        OwnedCommentKind, decode_owned_comment, encode_comment,
     };
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-    use std::str::FromStr;
 
     #[derive(Debug, Default)]
     struct MockApiState {
-        routes: AHashMap<String, RouterRoute>,
+        entries: AHashMap<String, RouterListEntry>,
         next_id: u64,
         fail_next_upsert: bool,
         fail_healthcheck: bool,
-        fail_gateway_validation: bool,
-        gateway_validation_calls: u64,
         upsert_v4: u64,
         upsert_v6: u64,
         update_ops: u64,
@@ -820,89 +765,55 @@ mod tests {
     }
 
     impl MockMikrotikApi {
-        fn key(family: RouteFamily, table: &str, dst: &str) -> String {
-            format!("{:?}:{table}:{dst}", family)
+        fn storage_key(key: &AddressListKey) -> String {
+            format!("{:?}:{}:{}", key.family, key.list, key.normalized_value())
         }
 
-        fn matches_owner(comment: Option<&str>, comment_prefix: &str, plugin_tag: &str) -> bool {
-            let Some(comment) = comment else {
-                return false;
-            };
-            if !comment_prefix.is_empty() {
-                if !comment.starts_with(comment_prefix) {
-                    return false;
-                }
-                if comment.as_bytes().get(comment_prefix.len()) != Some(&b';') {
-                    return false;
-                }
-            }
-            comment
-                .split(';')
-                .filter_map(|token| token.split_once('='))
-                .any(|(k, v)| k.trim() == "pg" && v.trim() == plugin_tag)
-        }
-
-        fn seed_route(&self, route: RouterRoute) {
-            let key = Self::key(route.family, &route.routing_table, &route.dst_address);
+        fn seed_entry(&self, entry: RouterListEntry) {
             if let Ok(mut state) = self.state.lock() {
-                state.routes.insert(key, route);
+                state.entries.insert(Self::storage_key(&entry.key), entry);
             }
         }
 
-        fn route_count(&self) -> usize {
+        fn entry_count(&self) -> usize {
             self.state
                 .lock()
-                .map(|state| state.routes.len())
+                .map(|state| state.entries.len())
                 .unwrap_or_default()
         }
     }
 
     #[async_trait]
     impl MikrotikApi for MockMikrotikApi {
-        async fn list_managed_routes(&self, table: &str) -> Result<Vec<RouterRoute>> {
+        async fn list_entries(
+            &self,
+            list4: Option<&str>,
+            list6: Option<&str>,
+        ) -> Result<Vec<RouterListEntry>> {
             let state = self
                 .state
                 .lock()
                 .map_err(|_| DnsError::plugin("mock api lock poisoned"))?;
             Ok(state
-                .routes
+                .entries
                 .values()
-                .filter(|route| route.routing_table == table)
+                .filter(|entry| match entry.key.family {
+                    AddressListFamily::Ipv4 => list4 == Some(entry.key.list.as_str()),
+                    AddressListFamily::Ipv6 => list6 == Some(entry.key.list.as_str()),
+                })
                 .cloned()
                 .collect())
         }
 
-        async fn find_route(
+        async fn upsert_owned_entry(
             &self,
-            key: &RouteKey,
-            comment_prefix: &str,
-            plugin_tag: &str,
-        ) -> Result<Option<RouterRoute>> {
-            let state = self
-                .state
-                .lock()
-                .map_err(|_| DnsError::plugin("mock api lock poisoned"))?;
-            let route = state
-                .routes
-                .get(&Self::key(key.family(), &key.table, &key.dst_address()))
-                .cloned();
-            if let Some(route) = route {
-                if Self::matches_owner(route.comment.as_deref(), comment_prefix, plugin_tag) {
-                    return Ok(Some(route));
-                }
-            }
-            Ok(None)
-        }
-
-        async fn upsert_host_route(
-            &self,
-            key: &RouteKey,
-            gateway: &str,
-            distance: u8,
+            key: &AddressListKey,
+            timeout: Option<&str>,
             comment: &str,
             comment_prefix: &str,
             plugin_tag: &str,
-        ) -> Result<String> {
+            refresh_timeout: bool,
+        ) -> Result<Option<String>> {
             let mut state = self
                 .state
                 .lock()
@@ -911,71 +822,68 @@ mod tests {
                 state.fail_next_upsert = false;
                 return Err(DnsError::plugin("mock upsert failure"));
             }
-            let k = Self::key(key.family(), &key.table, &key.dst_address());
-            if let Some(existing) = state.routes.get_mut(&k) {
-                if !Self::matches_owner(existing.comment.as_deref(), comment_prefix, plugin_tag) {
-                    return Err(DnsError::plugin("mock upsert foreign route conflict"));
-                }
-                existing.gateway = Some(gateway.to_string());
-                existing.distance = Some(distance);
-                existing.comment = Some(comment.to_string());
-                let id = existing.id.clone();
-                state.update_ops = state.update_ops.saturating_add(1);
-                return Ok(id);
+
+            let existing = state
+                .entries
+                .values()
+                .filter(|entry| entry.key == *key)
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut owned = existing
+                .iter()
+                .filter(|entry| {
+                    decode_owned_comment(comment_prefix, plugin_tag, entry.comment.as_deref())
+                        .is_some()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let has_foreign = existing.len() > owned.len();
+            if owned.is_empty() && has_foreign {
+                return Ok(None);
             }
 
-            state.next_id += 1;
-            let id = format!("*{}", state.next_id);
-            if key.family() == RouteFamily::Ipv4 {
-                state.upsert_v4 += 1;
-            } else {
-                state.upsert_v6 += 1;
+            if let Some(mut entry) = owned.pop() {
+                let timeout_changed = entry.timeout.as_deref() != timeout;
+                let comment_changed = entry.comment.as_deref() != Some(comment);
+                if refresh_timeout || timeout_changed || comment_changed {
+                    entry.timeout = timeout.map(str::to_string);
+                    entry.comment = Some(comment.to_string());
+                    state.update_ops = state.update_ops.saturating_add(1);
+                    state.entries.insert(Self::storage_key(key), entry.clone());
+                }
+                return Ok(Some(entry.id));
             }
-            state.routes.insert(
-                k,
-                RouterRoute {
+
+            state.next_id = state.next_id.saturating_add(1);
+            let id = format!("*{}", state.next_id);
+            match key.family {
+                AddressListFamily::Ipv4 => state.upsert_v4 = state.upsert_v4.saturating_add(1),
+                AddressListFamily::Ipv6 => state.upsert_v6 = state.upsert_v6.saturating_add(1),
+            }
+            state.entries.insert(
+                Self::storage_key(key),
+                RouterListEntry {
                     id: id.clone(),
-                    family: key.family(),
-                    dst_address: key.dst_address(),
-                    routing_table: key.table.clone(),
-                    gateway: Some(gateway.to_string()),
-                    distance: Some(distance),
+                    key: key.clone(),
+                    timeout: timeout.map(str::to_string),
                     comment: Some(comment.to_string()),
                 },
             );
-            Ok(id)
+            Ok(Some(id))
         }
 
-        async fn validate_route_config(
-            &self,
-            _key: &RouteKey,
-            _gateway: &str,
-            _distance: u8,
-            _comment: &str,
-        ) -> Result<()> {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| DnsError::plugin("mock api lock poisoned"))?;
-            state.gateway_validation_calls = state.gateway_validation_calls.saturating_add(1);
-            if state.fail_gateway_validation {
-                return Err(DnsError::plugin("mock gateway validation failure"));
-            }
-            Ok(())
-        }
-
-        async fn delete_route_by_id(&self, id: &str, _family: RouteFamily) -> Result<()> {
+        async fn delete_entry_by_id(&self, id: &str, _family: AddressListFamily) -> Result<()> {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| DnsError::plugin("mock api lock poisoned"))?;
             let key = state
-                .routes
+                .entries
                 .iter()
-                .find(|(_, route)| route.id == id)
-                .map(|(k, _)| k.clone());
+                .find(|(_, entry)| entry.id == id)
+                .map(|(key, _)| key.clone());
             if let Some(key) = key {
-                state.routes.remove(&key);
+                state.entries.remove(&key);
             }
             Ok(())
         }
@@ -992,15 +900,13 @@ mod tests {
         }
     }
 
-    fn default_cfg(tag: &str) -> RouteManagerConfig {
-        RouteManagerConfig {
+    fn default_cfg(tag: &str) -> AddressListManagerConfig {
+        AddressListManagerConfig {
             plugin_tag: tag.to_string(),
-            routing_table: "forgedns_dynamic".to_string(),
-            gateway4: Some("172.16.1.2".to_string()),
-            gateway6: Some("fe80::2%ether1".to_string()),
-            persistent_ips: AHashSet::new(),
+            address_list4: Some("forgedns_ipv4".to_string()),
+            address_list6: Some("forgedns_ipv6".to_string()),
+            persistent_items: AHashSet::new(),
             comment_prefix: "forgedns".to_string(),
-            distance: DEFAULT_ROUTE_DISTANCE,
             min_ttl: DEFAULT_MIN_TTL,
             max_ttl: DEFAULT_MAX_TTL,
             fixed_ttl: None,
@@ -1012,7 +918,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            DNSClass::IN,
         ));
         DnsContext::new(
             "127.0.0.1:5353".parse::<SocketAddr>().unwrap(),
@@ -1050,8 +956,8 @@ mod tests {
         tag: &str,
         async_mode: bool,
         cleanup_on_shutdown: bool,
-        gateway4: Option<&str>,
-        gateway6: Option<&str>,
+        address_list4: Option<&str>,
+        address_list6: Option<&str>,
         api: Arc<dyn MikrotikApi>,
     ) -> MikrotikExecutor {
         let config = MikrotikConfig {
@@ -1059,27 +965,23 @@ mod tests {
             username: "u".to_string(),
             password: "p".to_string(),
             async_mode,
-            routing_table: "forgedns_dynamic".to_string(),
-            gateway4: gateway4.map(|v| v.to_string()),
-            gateway6: gateway6.map(|v| v.to_string()),
-            persistent_ips: AHashSet::new(),
-            persistent_inline_ips: AHashSet::new(),
+            address_list4: address_list4.map(|v| v.to_string()),
+            address_list6: address_list6.map(|v| v.to_string()),
+            persistent_items: AHashSet::new(),
+            persistent_inline_items: AHashSet::new(),
             persistent_files: Vec::new(),
             comment_prefix: "forgedns".to_string(),
-            distance: DEFAULT_ROUTE_DISTANCE,
             min_ttl: DEFAULT_MIN_TTL,
             max_ttl: DEFAULT_MAX_TTL,
             fixed_ttl: None,
             cleanup_on_shutdown,
         };
-        let manager_cfg = RouteManagerConfig {
+        let manager_cfg = AddressListManagerConfig {
             plugin_tag: tag.to_string(),
-            routing_table: config.routing_table.clone(),
-            gateway4: config.gateway4.clone(),
-            gateway6: config.gateway6.clone(),
-            persistent_ips: config.persistent_ips.clone(),
+            address_list4: config.address_list4.clone(),
+            address_list6: config.address_list6.clone(),
+            persistent_items: config.persistent_items.clone(),
             comment_prefix: config.comment_prefix.clone(),
-            distance: config.distance,
             min_ttl: config.min_ttl,
             max_ttl: config.max_ttl,
             fixed_ttl: config.fixed_ttl,
@@ -1087,7 +989,7 @@ mod tests {
         MikrotikExecutor {
             tag: tag.to_string(),
             config,
-            manager: Some(RouteManager::new(api, manager_cfg)),
+            manager: Some(AddressListManager::new(api, manager_cfg)),
             command_tx: None,
             runtime: Mutex::new(None),
         }
@@ -1104,14 +1006,28 @@ mod tests {
     }
 
     #[test]
-    fn config_validation_requires_fields() {
+    fn config_validation_requires_address_list() {
         let cfg = serde_yml::from_str::<serde_yml::Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
 password: "pass"
-gateway4: "172.16.1.2"
-comment_prefix: "forgedns"
+"#,
+        )
+        .unwrap();
+        let err = parse_plugin_config(Some(cfg), false).unwrap_err();
+        assert!(err.to_string().contains("address_list4 or address_list6"));
+    }
+
+    #[test]
+    fn config_validation_rejects_old_route_fields() {
+        let cfg = serde_yml::from_str::<serde_yml::Value>(
+            r#"
+address: "1.1.1.1:8728"
+username: "user"
+password: "pass"
+address_list4: "forgedns_ipv4"
+routing_table: "forgedns_dynamic"
 "#,
         )
         .unwrap();
@@ -1120,39 +1036,36 @@ comment_prefix: "forgedns"
     }
 
     #[test]
-    fn config_validation_rejects_invalid_ttl_range() {
+    fn config_validation_rejects_old_persistent_route_key() {
         let cfg = serde_yml::from_str::<serde_yml::Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
 password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
-comment_prefix: "forgedns"
-min_ttl: 120
-max_ttl: 60
+address_list4: "forgedns_ipv4"
+persistent_route:
+  ips:
+    - "1.1.1.1"
 "#,
         )
         .unwrap();
         let err = parse_plugin_config(Some(cfg), false).unwrap_err();
-        assert!(err.to_string().contains("min_ttl"));
+        assert!(err.to_string().contains("persistent_route"));
     }
 
     #[test]
-    fn config_validation_defaults_comment_prefix_and_distance() {
+    fn config_validation_defaults_comment_prefix() {
         let cfg = serde_yml::from_str::<serde_yml::Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
 password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
+address_list4: "forgedns_ipv4"
 "#,
         )
         .unwrap();
         let parsed = parse_plugin_config(Some(cfg), false).unwrap();
         assert_eq!(parsed.comment_prefix, DEFAULT_COMMENT_PREFIX);
-        assert_eq!(parsed.distance, DEFAULT_ROUTE_DISTANCE);
     }
 
     #[test]
@@ -1162,9 +1075,7 @@ gateway4: "172.16.1.2"
 address: "1.1.1.1:8728"
 username: "user"
 password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
-comment_prefix: "forgedns"
+address_list4: "forgedns_ipv4"
 fixed_ttl: 0
 "#,
         )
@@ -1174,254 +1085,86 @@ fixed_ttl: 0
     }
 
     #[test]
-    fn config_validation_requires_any_gateway() {
+    fn config_validation_ignores_persistent_item_without_family_list() {
         let cfg = serde_yml::from_str::<serde_yml::Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
 password: "pass"
-routing_table: "forgedns_dynamic"
-comment_prefix: "forgedns"
-"#,
-        )
-        .unwrap();
-        let err = parse_plugin_config(Some(cfg), false).unwrap_err();
-        assert!(err.to_string().contains("gateway4 or gateway6"));
-    }
-
-    #[test]
-    fn config_validation_rejects_comment_prefix_with_delimiter() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
-            r#"
-address: "1.1.1.1:8728"
-username: "user"
-password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
-comment_prefix: "forgedns;managed"
-"#,
-        )
-        .unwrap();
-        let err = parse_plugin_config(Some(cfg), false).unwrap_err();
-        assert!(err.to_string().contains("comment_prefix"));
-    }
-
-    #[test]
-    fn plugin_tag_validation_rejects_comment_delimiters() {
-        let mut cfg = PluginConfig {
-            tag: "mk;bad".to_string(),
-            plugin_type: "mikrotik".to_string(),
-            args: Some(
-                serde_yml::from_str::<serde_yml::Value>(
-                    r#"
-address: "1.1.1.1:8728"
-username: "user"
-password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
-comment_prefix: "forgedns"
-"#,
-                )
-                .unwrap(),
-            ),
-        };
-        let factory = MikrotikFactory;
-        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new())) {
-            Ok(_) => panic!("expected create to fail for invalid plugin tag"),
-            Err(err) => err,
-        };
-        assert!(err.to_string().contains("plugin tag"));
-
-        cfg.tag = "mk=bad".to_string();
-        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new())) {
-            Ok(_) => panic!("expected create to fail for invalid plugin tag"),
-            Err(err) => err,
-        };
-        assert!(err.to_string().contains("plugin tag"));
-    }
-
-    #[test]
-    fn config_validation_ignores_persistent_ip_without_family_gateway() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
-            r#"
-address: "1.1.1.1:8728"
-username: "user"
-password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
-comment_prefix: "forgedns"
-persistent_route:
+address_list4: "forgedns_ipv4"
+persistent:
   ips:
     - "2001:db8::1"
 "#,
         )
         .unwrap();
         let parsed = parse_plugin_config(Some(cfg), false).unwrap();
-        assert!(parsed.persistent_ips.is_empty());
+        assert!(parsed.persistent_items.is_empty());
     }
 
     #[test]
-    fn persistent_route_file_content_is_loaded_and_normalized() {
-        let files = parse_persistent_route_files(Some(vec!["persistent.txt".to_string()])).unwrap();
-        let (loaded, ignored_by_gateway, ignored_default_route) = load_persistent_ips_from_content(
-            "persistent_route.files[0]",
+    fn persistent_file_content_is_loaded_and_normalized() {
+        let files = parse_persistent_files(Some(vec!["persistent.txt".to_string()])).unwrap();
+        let (loaded, ignored_by_family) = load_persistent_items_from_content(
+            "persistent.files[0]",
             r#"
 # comments are ignored
 1.1.1.1
-2001:db8::1/128
+2001:db8::/64
+0.0.0.0/0
 "#,
-            true,
-            true,
+            Some("forgedns_ipv4"),
+            Some("forgedns_ipv6"),
         )
         .unwrap();
 
         assert_eq!(files, vec!["persistent.txt".to_string()]);
-        assert!(loaded.contains("1.1.1.1/32"));
-        assert!(loaded.contains("2001:db8::1/128"));
-        assert_eq!(ignored_by_gateway, 0);
-        assert_eq!(ignored_default_route, 0);
-    }
-
-    #[test]
-    fn config_validation_normalizes_persistent_cidr_network() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
-            r#"
-address: "1.1.1.1:8728"
-username: "user"
-password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
-comment_prefix: "forgedns"
-persistent_route:
-  ips:
-    - "100.64.1.123/24"
-"#,
-        )
-        .unwrap();
-
-        let parsed = parse_plugin_config(Some(cfg), false).unwrap();
-        assert!(parsed.persistent_ips.contains("100.64.1.0/24"));
-        assert!(!parsed.persistent_ips.contains("100.64.1.123/24"));
-    }
-
-    #[test]
-    fn config_validation_ignores_persistent_default_route() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
-            r#"
-address: "1.1.1.1:8728"
-username: "user"
-password: "pass"
-routing_table: "forgedns_dynamic"
-gateway4: "172.16.1.2"
-comment_prefix: "forgedns"
-persistent_route:
-  ips:
-    - "0.0.0.0/0"
-    - "100.64.1.0/24"
-"#,
-        )
-        .unwrap();
-        let parsed = parse_plugin_config(Some(cfg), false).unwrap();
-        assert!(!parsed.persistent_ips.contains("0.0.0.0/0"));
-        assert!(parsed.persistent_ips.contains("100.64.1.0/24"));
+        assert!(loaded.contains(&AddressListKey::new(
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+            "forgedns_ipv4".to_string()
+        )));
+        assert!(
+            loaded.contains(
+                &AddressListKey::new_with_prefix(
+                    IpAddr::V6("2001:db8::".parse().unwrap()),
+                    64,
+                    "forgedns_ipv6".to_string()
+                )
+                .unwrap()
+            )
+        );
+        assert!(
+            loaded.contains(
+                &AddressListKey::new_with_prefix(
+                    IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+                    0,
+                    "forgedns_ipv4".to_string()
+                )
+                .unwrap()
+            )
+        );
+        assert_eq!(ignored_by_family, 0);
     }
 
     #[test]
     fn comment_codec_roundtrip() {
-        let key = RouteKey::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), "tbl".to_string());
-        let mut domains = AHashSet::new();
-        domains.insert("example.com".to_string());
-        let route = RouteEntry {
-            key: key.clone(),
-            family: RouteFamily::Ipv4,
-            gateway: "172.16.1.2".to_string(),
-            distance: DEFAULT_ROUTE_DISTANCE,
-            domains,
-            comment_domain: "example.com".to_string(),
-            domain_expiries: AHashMap::new(),
-            ref_count: 1,
-            expires_at_unix: 1000,
-            last_refresh_unix: 900,
-            router_id: Some("*1".to_string()),
-            recovered_from_comment: false,
-            sync_state: SyncState::Synced,
-        };
-        let prefix = "forgedns";
-        let comment = RouteCommentCodec::encode(prefix, "mk_tag", &route);
-        assert_eq!(
-            comment,
-            "forgedns;pg=mk_tag;dm=example.com;exp=1000;seen=900"
+        let comment = encode_comment(
+            "forgedns",
+            "mk",
+            OwnedCommentKind::Dynamic,
+            Some("example.com"),
         );
-        let decoded =
-            RouteCommentCodec::decode(prefix, "mk_tag", route.family, "1.1.1.1/32", &comment)
-                .unwrap()
-                .unwrap();
-        assert_eq!(decoded.ip, key.ip);
-        assert_eq!(decoded.family, RouteFamily::Ipv4);
-        assert_eq!(decoded.comment_domain, "example.com");
-        assert_eq!(decoded.expires_at_unix, 1000);
-        assert_eq!(decoded.last_refresh_unix, 900);
+        let meta = decode_owned_comment("forgedns", "mk", Some(comment.as_str())).unwrap();
+        assert_eq!(meta.kind, OwnedCommentKind::Dynamic);
     }
 
     #[tokio::test]
-    async fn same_ip_observed_repeatedly_creates_one_route() {
+    async fn dynamic_observation_creates_address_list_entry() {
         let api = Arc::new(MockMikrotikApi::default());
-        let mut manager = RouteManager::new(api, default_cfg("mk"));
+        let mut manager = AddressListManager::new(api.clone(), default_cfg("mk"));
         manager
             .observe_domain(
                 "example.com".to_string(),
-                vec![
-                    ObservedAddr {
-                        addr: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
-                        ttl_secs: 120,
-                    },
-                    ObservedAddr {
-                        addr: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
-                        ttl_secs: 240,
-                    },
-                ],
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(manager.routes.len(), 1);
-        let route = manager.routes.values().next().unwrap();
-        assert_eq!(route.ref_count, 1);
-        assert_eq!(route.distance, DEFAULT_ROUTE_DISTANCE);
-    }
-
-    #[tokio::test]
-    async fn shared_ip_ref_count_is_correct() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut manager = RouteManager::new(api, default_cfg("mk"));
-        let observed = ObservedAddr {
-            addr: IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
-            ttl_secs: 120,
-        };
-        manager
-            .observe_domain("a.com".to_string(), vec![observed])
-            .await
-            .unwrap();
-        manager
-            .observe_domain("b.com".to_string(), vec![observed])
-            .await
-            .unwrap();
-
-        let route = manager.routes.values().next().unwrap();
-        assert_eq!(route.ref_count, 2);
-        assert!(route.domains.contains("a.com"));
-        assert!(route.domains.contains("b.com"));
-        assert_eq!(route.comment_domain, "a.com");
-    }
-
-    #[tokio::test]
-    async fn domain_ip_diff_updates_refs() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut manager = RouteManager::new(api, default_cfg("mk"));
-
-        manager
-            .observe_domain(
-                "a.com".to_string(),
                 vec![ObservedAddr {
                     addr: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
                     ttl_secs: 120,
@@ -1430,472 +1173,285 @@ persistent_route:
             .await
             .unwrap();
 
+        let state = api.state.lock().unwrap();
+        let entry = state.entries.values().next().unwrap();
+        assert_eq!(entry.key.list, "forgedns_ipv4");
+        assert_eq!(entry.timeout.as_deref(), Some("120s"));
+    }
+
+    #[tokio::test]
+    async fn repeated_dynamic_observation_refreshes_timeout() {
+        let api = Arc::new(MockMikrotikApi::default());
+        let mut manager = AddressListManager::new(api.clone(), default_cfg("mk"));
+        let observed = ObservedAddr {
+            addr: IpAddr::V4(Ipv4Addr::new(2, 2, 2, 2)),
+            ttl_secs: 120,
+        };
+        manager
+            .observe_domain("example.com".to_string(), vec![observed])
+            .await
+            .unwrap();
         manager
             .observe_domain(
-                "a.com".to_string(),
+                "example.com".to_string(),
                 vec![ObservedAddr {
-                    addr: IpAddr::V4(Ipv4Addr::new(2, 2, 2, 2)),
-                    ttl_secs: 120,
+                    addr: observed.addr,
+                    ttl_secs: 300,
                 }],
             )
             .await
             .unwrap();
 
-        assert_eq!(manager.routes.len(), 1);
-        let route = manager.routes.values().next().unwrap();
-        assert_eq!(route.key.ip, IpAddr::V4(Ipv4Addr::new(2, 2, 2, 2)));
+        let state = api.state.lock().unwrap();
+        let entry = state.entries.values().next().unwrap();
+        assert_eq!(entry.timeout.as_deref(), Some("300s"));
+        assert!(state.update_ops >= 1);
     }
 
     #[tokio::test]
-    async fn ttl_refresh_updates_expiry() {
+    async fn repeated_dynamic_observation_with_same_ttl_is_suppressed_before_refresh_window() {
         let api = Arc::new(MockMikrotikApi::default());
-        let mut manager = RouteManager::new(api, default_cfg("mk"));
+        let mut manager = AddressListManager::new(api.clone(), default_cfg("mk"));
+        let observed = ObservedAddr {
+            addr: IpAddr::V4(Ipv4Addr::new(3, 3, 3, 3)),
+            ttl_secs: 300,
+        };
+        manager
+            .observe_domain_at_for_test("example.com".to_string(), vec![observed], 0)
+            .await
+            .unwrap();
+        manager
+            .observe_domain_at_for_test("example.com".to_string(), vec![observed], 10_000)
+            .await
+            .unwrap();
+
+        let state = api.state.lock().unwrap();
+        assert_eq!(state.upsert_v4, 1);
+        assert_eq!(state.update_ops, 0);
+    }
+
+    #[tokio::test]
+    async fn shorter_ttl_does_not_force_early_refresh() {
+        let api = Arc::new(MockMikrotikApi::default());
+        let mut manager = AddressListManager::new(api.clone(), default_cfg("mk"));
+        let ip = IpAddr::V4(Ipv4Addr::new(4, 4, 4, 4));
+        manager
+            .observe_domain_at_for_test(
+                "example.com".to_string(),
+                vec![ObservedAddr {
+                    addr: ip,
+                    ttl_secs: 300,
+                }],
+                0,
+            )
+            .await
+            .unwrap();
+        manager
+            .observe_domain_at_for_test(
+                "example.com".to_string(),
+                vec![ObservedAddr {
+                    addr: ip,
+                    ttl_secs: 60,
+                }],
+                10_000,
+            )
+            .await
+            .unwrap();
+
+        let state = api.state.lock().unwrap();
+        let entry = state.entries.values().next().unwrap();
+        assert_eq!(entry.timeout.as_deref(), Some("300s"));
+        assert_eq!(state.update_ops, 0);
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_clears_cache_and_next_observation_retries_immediately() {
+        let api = Arc::new(MockMikrotikApi::default());
+        let mut manager = AddressListManager::new(api.clone(), default_cfg("mk"));
+        let observed = ObservedAddr {
+            addr: IpAddr::V4(Ipv4Addr::new(5, 5, 5, 5)),
+            ttl_secs: 120,
+        };
+        manager
+            .observe_domain_at_for_test("example.com".to_string(), vec![observed], 0)
+            .await
+            .unwrap();
+        {
+            let mut state = api.state.lock().unwrap();
+            state.fail_next_upsert = true;
+        }
+        let err = manager
+            .observe_domain_at_for_test("example.com".to_string(), vec![observed], 90_000)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("mock upsert failure"));
+        assert_eq!(manager.dynamic_cache_len(), 0);
+
+        manager
+            .observe_domain_at_for_test("example.com".to_string(), vec![observed], 90_000)
+            .await
+            .unwrap();
+        let state = api.state.lock().unwrap();
+        assert!(state.update_ops >= 1);
+    }
+
+    #[tokio::test]
+    async fn persistent_entry_is_created_without_timeout() {
+        let api = Arc::new(MockMikrotikApi::default());
+        let mut cfg = default_cfg("mk");
+        cfg.persistent_items.insert(
+            AddressListKey::new_with_prefix(
+                IpAddr::V4(Ipv4Addr::new(100, 64, 1, 0)),
+                24,
+                "forgedns_ipv4".to_string(),
+            )
+            .unwrap(),
+        );
+        let mut manager = AddressListManager::new(api.clone(), cfg);
+
+        manager.reconcile().await.unwrap();
+
+        let state = api.state.lock().unwrap();
+        let entry = state.entries.values().next().unwrap();
+        assert_eq!(entry.timeout, None);
+        let meta = decode_owned_comment("forgedns", "mk", entry.comment.as_deref()).unwrap();
+        assert_eq!(meta.kind, OwnedCommentKind::Persistent);
+    }
+
+    #[tokio::test]
+    async fn persistent_update_replaces_removed_entries() {
+        let api = Arc::new(MockMikrotikApi::default());
+        let mut cfg = default_cfg("mk");
+        cfg.persistent_items.insert(
+            AddressListKey::new_with_prefix(
+                IpAddr::V4(Ipv4Addr::new(100, 64, 2, 0)),
+                24,
+                "forgedns_ipv4".to_string(),
+            )
+            .unwrap(),
+        );
+        let mut manager = AddressListManager::new(api.clone(), cfg);
+        manager.reconcile().await.unwrap();
+
+        let mut updated = AHashSet::new();
+        updated.insert(
+            AddressListKey::new_with_prefix(
+                IpAddr::V4(Ipv4Addr::new(100, 64, 3, 0)),
+                24,
+                "forgedns_ipv4".to_string(),
+            )
+            .unwrap(),
+        );
+        manager.update_persistent_items(updated).await.unwrap();
+
+        let state = api.state.lock().unwrap();
+        assert!(
+            state
+                .entries
+                .values()
+                .all(|entry| entry.key.address == IpAddr::V4(Ipv4Addr::new(100, 64, 3, 0)))
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_entry_wins_over_dynamic_timeout() {
+        let api = Arc::new(MockMikrotikApi::default());
+        let key = AddressListKey::new(
+            IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)),
+            "forgedns_ipv4".to_string(),
+        );
+        let mut cfg = default_cfg("mk");
+        cfg.persistent_items.insert(key.clone());
+        let mut manager = AddressListManager::new(api.clone(), cfg);
+        manager.reconcile().await.unwrap();
 
         manager
             .observe_domain(
-                "ttl.com".to_string(),
+                "example.com".to_string(),
                 vec![ObservedAddr {
-                    addr: IpAddr::V4(Ipv4Addr::new(3, 3, 3, 3)),
+                    addr: IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)),
                     ttl_secs: 60,
                 }],
             )
             .await
             .unwrap();
-        let key = RouteKey::new(
-            IpAddr::V4(Ipv4Addr::new(3, 3, 3, 3)),
-            "forgedns_dynamic".to_string(),
-        );
-        let first_exp = manager.routes.get(&key).unwrap().expires_at_unix;
-
-        manager
-            .observe_domain(
-                "ttl.com".to_string(),
-                vec![ObservedAddr {
-                    addr: IpAddr::V4(Ipv4Addr::new(3, 3, 3, 3)),
-                    ttl_secs: 3600,
-                }],
-            )
-            .await
-            .unwrap();
-        let second_exp = manager.routes.get(&key).unwrap().expires_at_unix;
-
-        assert!(second_exp >= first_exp);
-    }
-
-    #[tokio::test]
-    async fn fixed_ttl_overrides_dns_record_ttl() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut cfg = default_cfg("mk");
-        cfg.fixed_ttl = Some(7);
-        let mut manager = RouteManager::new(api, cfg);
-
-        manager
-            .observe_domain(
-                "fixed-ttl.com".to_string(),
-                vec![ObservedAddr {
-                    addr: IpAddr::V4(Ipv4Addr::new(3, 3, 3, 3)),
-                    ttl_secs: 3600,
-                }],
-            )
-            .await
-            .unwrap();
-
-        let key = RouteKey::new(
-            IpAddr::V4(Ipv4Addr::new(3, 3, 3, 3)),
-            "forgedns_dynamic".to_string(),
-        );
-        let route = manager.routes.get(&key).unwrap();
-        assert_eq!(
-            route
-                .expires_at_unix
-                .saturating_sub(route.last_refresh_unix),
-            7
-        );
-    }
-
-    #[tokio::test]
-    async fn domain_expire_releases_reference() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut manager = RouteManager::new(api, default_cfg("mk"));
-
-        manager
-            .observe_domain(
-                "expire.com".to_string(),
-                vec![ObservedAddr {
-                    addr: IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)),
-                    ttl_secs: 120,
-                }],
-            )
-            .await
-            .unwrap();
-
-        let key = RouteKey::new(
-            IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)),
-            "forgedns_dynamic".to_string(),
-        );
-        if let Some(binding) = manager.domain_bindings.get_mut("expire.com") {
-            binding.expires_at_unix = 1;
-            binding
-                .ip_expiries
-                .insert(IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)), 1);
-        }
-        if let Some(route) = manager.routes.get_mut(&key) {
-            route.expires_at_unix = 1;
-        }
-
-        manager.sweep().await.unwrap();
-        assert!(!manager.routes.contains_key(&key));
-    }
-
-    #[tokio::test]
-    async fn persistent_ip_route_survives_sweep() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut cfg = default_cfg("mk");
-        cfg.persistent_ips.insert("100.64.1.0/24".to_string());
-        let mut manager = RouteManager::new(api.clone(), cfg);
-
-        manager.sweep().await.unwrap();
-        let key = RouteKey::new_with_prefix(
-            IpAddr::V4(Ipv4Addr::new(100, 64, 1, 0)),
-            24,
-            "forgedns_dynamic".to_string(),
-        )
-        .unwrap();
-        assert!(manager.routes.contains_key(&key));
-
-        if let Some(route) = manager.routes.get_mut(&key) {
-            route.expires_at_unix = 1;
-        }
-        manager.sweep().await.unwrap();
-        assert!(manager.routes.contains_key(&key));
-    }
-
-    #[tokio::test]
-    async fn persistent_route_does_not_rewrite_on_each_sweep() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut cfg = default_cfg("mk");
-        cfg.persistent_ips.insert("100.64.2.0/24".to_string());
-        let mut manager = RouteManager::new(api.clone(), cfg);
-
-        manager.sweep().await.unwrap();
-        let first_updates = api
-            .state
-            .lock()
-            .map(|state| state.update_ops)
-            .unwrap_or_default();
-
-        manager.sweep().await.unwrap();
-        let second_updates = api
-            .state
-            .lock()
-            .map(|state| state.update_ops)
-            .unwrap_or_default();
-
-        assert_eq!(
-            first_updates, second_updates,
-            "unchanged persistent routes should not be rewritten during sweep"
-        );
-    }
-
-    #[tokio::test]
-    async fn persistent_route_update_replaces_removed_file_entries() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut cfg = default_cfg("mk");
-        cfg.persistent_ips.insert("100.64.2.0/24".to_string());
-        let mut manager = RouteManager::new(api, cfg);
-
-        manager.sweep().await.unwrap();
-        let old_key = RouteKey::new_with_prefix(
-            IpAddr::V4(Ipv4Addr::new(100, 64, 2, 0)),
-            24,
-            "forgedns_dynamic".to_string(),
-        )
-        .unwrap();
-        assert!(manager.routes.contains_key(&old_key));
-
-        let mut updated = AHashSet::new();
-        updated.insert("100.64.3.0/24".to_string());
-        manager.update_persistent_ips(updated).await.unwrap();
-
-        let new_key = RouteKey::new_with_prefix(
-            IpAddr::V4(Ipv4Addr::new(100, 64, 3, 0)),
-            24,
-            "forgedns_dynamic".to_string(),
-        )
-        .unwrap();
-        assert!(!manager.routes.contains_key(&old_key));
-        assert!(manager.routes.contains_key(&new_key));
-    }
-
-    #[tokio::test]
-    async fn ipv6_ref_count_and_prefix_128() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut manager = RouteManager::new(api, default_cfg("mk"));
-        let ip = Ipv6Addr::from_str("2404:6800:4004:82c::200e").unwrap();
-
-        manager
-            .observe_domain(
-                "v6.com".to_string(),
-                vec![ObservedAddr {
-                    addr: IpAddr::V6(ip),
-                    ttl_secs: 300,
-                }],
-            )
-            .await
-            .unwrap();
-
-        let route = manager.routes.values().next().unwrap();
-        assert_eq!(route.key.prefix, 128);
-        assert_eq!(route.ref_count, 1);
-    }
-
-    #[tokio::test]
-    async fn dual_stack_routes_are_independent() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut manager = RouteManager::new(api.clone(), default_cfg("mk"));
-        manager
-            .observe_domain(
-                "dual.com".to_string(),
-                vec![
-                    ObservedAddr {
-                        addr: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-                        ttl_secs: 120,
-                    },
-                    ObservedAddr {
-                        addr: IpAddr::V6(Ipv6Addr::LOCALHOST),
-                        ttl_secs: 120,
-                    },
-                ],
-            )
-            .await
-            .unwrap();
 
         let state = api.state.lock().unwrap();
-        assert!(state.upsert_v4 >= 1);
-        assert!(state.upsert_v6 >= 1);
-    }
-
-    #[tokio::test]
-    async fn only_aaaa_does_not_create_ipv4_route() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut cfg = default_cfg("mk");
-        cfg.gateway4 = None;
-        let mut manager = RouteManager::new(api, cfg);
-        manager
-            .observe_domain(
-                "aaaa-only.com".to_string(),
-                vec![ObservedAddr {
-                    addr: IpAddr::V6(Ipv6Addr::LOCALHOST),
-                    ttl_secs: 120,
-                }],
-            )
-            .await
+        let entry = state
+            .entries
+            .get(&MockMikrotikApi::storage_key(&key))
             .unwrap();
-
-        assert_eq!(manager.routes.len(), 1);
-        assert!(matches!(
-            manager.routes.values().next().unwrap().family,
-            RouteFamily::Ipv6
-        ));
+        assert_eq!(entry.timeout, None);
     }
 
     #[tokio::test]
-    async fn reconcile_deletes_expired_recovered_route() {
+    async fn foreign_entry_conflict_is_left_untouched() {
         let api = Arc::new(MockMikrotikApi::default());
-        let cfg = default_cfg("mk_tag");
-
-        let key = RouteKey::new(
-            IpAddr::V4(Ipv4Addr::new(7, 7, 7, 7)),
-            cfg.routing_table.clone(),
+        let key = AddressListKey::new(
+            IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            "forgedns_ipv4".to_string(),
         );
-        let expired_route = RouteEntry {
-            key: key.clone(),
-            family: RouteFamily::Ipv4,
-            gateway: cfg.gateway4.clone().unwrap(),
-            distance: cfg.distance,
-            domains: AHashSet::new(),
-            comment_domain: "recover.example".to_string(),
-            domain_expiries: AHashMap::new(),
-            ref_count: 0,
-            expires_at_unix: 1,
-            last_refresh_unix: 1,
-            router_id: Some("*999".to_string()),
-            recovered_from_comment: true,
-            sync_state: SyncState::Synced,
-        };
-        let comment =
-            RouteCommentCodec::encode(&cfg.comment_prefix, &cfg.plugin_tag, &expired_route);
-
-        api.seed_route(RouterRoute {
-            id: "*999".to_string(),
-            family: RouteFamily::Ipv4,
-            dst_address: key.dst_address(),
-            routing_table: cfg.routing_table.clone(),
-            gateway: cfg.gateway4.clone(),
-            distance: Some(cfg.distance),
-            comment: Some(comment),
-        });
-
-        let mut manager = RouteManager::new(api.clone(), cfg);
-        manager.reconcile().await.unwrap();
-
-        let state = api.state.lock().unwrap();
-        assert!(
-            !state.routes.values().any(|route| route.id == "*999"),
-            "expired recovered route should be deleted"
-        );
-    }
-
-    #[tokio::test]
-    async fn reconcile_repairs_gateway_and_comment_drift() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut manager = RouteManager::new(api.clone(), default_cfg("mk"));
-        let observed_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4));
-
-        manager
-            .observe_domain(
-                "drift.com".to_string(),
-                vec![ObservedAddr {
-                    addr: observed_ip,
-                    ttl_secs: 300,
-                }],
-            )
-            .await
-            .unwrap();
-
-        let updates_before = api
-            .state
-            .lock()
-            .map(|state| state.update_ops)
-            .unwrap_or_default();
-
-        {
-            let mut state = api.state.lock().unwrap();
-            let route = state
-                .routes
-                .values_mut()
-                .find(|route| route.dst_address == "8.8.4.4/32")
-                .expect("expected observed route to exist");
-            route.gateway = Some("10.0.0.1".to_string());
-            route.distance = Some(1);
-            route.comment = Some("forgedns;pg=mk;dm=wrong.example;exp=1;seen=1".to_string());
-        }
-
-        manager.reconcile().await.unwrap();
-
-        let state = api.state.lock().unwrap();
-        let repaired = state
-            .routes
-            .values()
-            .find(|route| route.dst_address == "8.8.4.4/32")
-            .expect("expected observed route to remain");
-        assert_eq!(repaired.gateway.as_deref(), Some("172.16.1.2"));
-        assert_eq!(repaired.distance, Some(DEFAULT_ROUTE_DISTANCE));
-        let comment = repaired.comment.as_deref().unwrap_or_default();
-        assert!(
-            comment.contains("pg=mk") && comment.contains("dm=drift.com"),
-            "managed route comment should be rewritten to expected metadata"
-        );
-        assert!(
-            state.update_ops > updates_before,
-            "drift repair should perform an in-place route update"
-        );
-    }
-
-    #[tokio::test]
-    async fn pending_delete_fallback_does_not_delete_foreign_route() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let cfg = default_cfg("mk");
-        let distance = cfg.distance;
-        let key = RouteKey::new(
-            IpAddr::V4(Ipv4Addr::new(4, 4, 4, 4)),
-            cfg.routing_table.clone(),
-        );
-
-        api.seed_route(RouterRoute {
+        api.seed_entry(RouterListEntry {
             id: "*200".to_string(),
-            family: RouteFamily::Ipv4,
-            dst_address: key.dst_address(),
-            routing_table: cfg.routing_table.clone(),
-            gateway: cfg.gateway4.clone(),
-            distance: Some(cfg.distance),
-            comment: Some("forgedns;pg=other;dm=foreign.example;exp=999999;seen=1".to_string()),
+            key: key.clone(),
+            timeout: Some("300s".to_string()),
+            comment: Some("forgedns;pg=other;kind=dynamic;dm=foreign.example".to_string()),
         });
-
-        let mut manager = RouteManager::new(api.clone(), cfg);
-        manager.routes.insert(
-            key.clone(),
-            RouteEntry {
-                key,
-                family: RouteFamily::Ipv4,
-                gateway: "172.16.1.2".to_string(),
-                distance,
-                domains: AHashSet::new(),
-                comment_domain: String::new(),
-                domain_expiries: AHashMap::new(),
-                ref_count: 0,
-                expires_at_unix: 1,
-                last_refresh_unix: 1,
-                router_id: None,
-                recovered_from_comment: false,
-                sync_state: SyncState::PendingDelete,
-            },
-        );
-
-        manager.reconcile().await.unwrap();
+        let mut manager = AddressListManager::new(api.clone(), default_cfg("mk"));
+        manager
+            .observe_domain(
+                "example.com".to_string(),
+                vec![ObservedAddr {
+                    addr: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                    ttl_secs: 60,
+                }],
+            )
+            .await
+            .unwrap();
 
         let state = api.state.lock().unwrap();
-        assert!(
-            state.routes.values().any(|route| route.id == "*200"),
-            "foreign route should not be deleted by fallback lookup"
-        );
+        let entry = state
+            .entries
+            .get(&MockMikrotikApi::storage_key(&key))
+            .unwrap();
+        assert_eq!(entry.id, "*200");
+        assert_eq!(entry.timeout.as_deref(), Some("300s"));
+    }
+
+    #[tokio::test]
+    async fn dynamic_cache_prune_removes_expired_entries() {
+        let api = Arc::new(MockMikrotikApi::default());
+        let mut manager = AddressListManager::new(api, default_cfg("mk"));
+        manager
+            .observe_domain_at_for_test(
+                "example.com".to_string(),
+                vec![ObservedAddr {
+                    addr: IpAddr::V4(Ipv4Addr::new(7, 7, 7, 7)),
+                    ttl_secs: 60,
+                }],
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(manager.dynamic_cache_len(), 1);
+
+        manager
+            .prune_dynamic_cache_at_for_test(61_000)
+            .await
+            .unwrap();
+        assert_eq!(manager.dynamic_cache_len(), 0);
     }
 
     #[tokio::test]
     async fn execute_returns_next_with_post() {
         let api = Arc::new(MockMikrotikApi::default()) as Arc<dyn MikrotikApi>;
         let mut executor =
-            build_executor_for_test("mk", true, false, Some("172.16.1.2"), None, api);
+            build_executor_for_test("mk", true, false, Some("forgedns_ipv4"), None, api);
         let _ = executor.init().await;
         let mut ctx = make_context();
         let step = executor.execute(&mut ctx).await.unwrap();
         assert!(matches!(step, ExecStep::NextWithPost(_)));
         let _ = executor.destroy().await;
-    }
-
-    #[tokio::test]
-    async fn post_execute_skips_when_no_response() {
-        let api = Arc::new(MockMikrotikApi::default()) as Arc<dyn MikrotikApi>;
-        let mut executor =
-            build_executor_for_test("mk", true, false, Some("172.16.1.2"), None, api);
-        let _ = executor.init().await;
-        let mut ctx = make_context();
-        executor.post_execute(&mut ctx, None).await.unwrap();
-        let _ = executor.destroy().await;
-    }
-
-    #[tokio::test]
-    async fn init_fails_when_gateway_validation_fails() {
-        let api = Arc::new(MockMikrotikApi::default());
-        {
-            let mut state = api.state.lock().unwrap();
-            state.fail_gateway_validation = true;
-        }
-        let mut executor = build_executor_for_test(
-            "mk",
-            true,
-            false,
-            Some("172.16.1.2"),
-            None,
-            api.clone() as Arc<dyn MikrotikApi>,
-        );
-        let err = executor.init().await.unwrap_err();
-        assert!(err.to_string().contains("gateway4 validation failed"));
-        assert_eq!(
-            api.state.lock().unwrap().gateway_validation_calls,
-            1,
-            "startup should validate the configured gateway before running"
-        );
     }
 
     #[tokio::test]
@@ -1906,7 +1462,7 @@ persistent_route:
             true,
             false,
             None,
-            Some("fe80::2%ether1"),
+            Some("forgedns_ipv6"),
             api.clone() as Arc<dyn MikrotikApi>,
         );
         let _ = executor.init().await;
@@ -1916,7 +1472,7 @@ persistent_route:
             aaaa_record(Ipv6Addr::LOCALHOST, 300),
         ]));
         executor.post_execute(&mut ctx, None).await.unwrap();
-        yield_until("ipv6 route upsert", || {
+        yield_until("ipv6 entry upsert", || {
             api.state.lock().unwrap().upsert_v6 >= 1
         })
         .await;
@@ -1939,7 +1495,7 @@ persistent_route:
             "mk",
             false,
             false,
-            Some("172.16.1.2"),
+            Some("forgedns_ipv4"),
             None,
             api as Arc<dyn MikrotikApi>,
         );
@@ -1951,10 +1507,7 @@ persistent_route:
             300,
         )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
-        assert!(
-            ctx.response().is_some(),
-            "DNS response should be kept unchanged"
-        );
+        assert!(ctx.response().is_some());
         let _ = executor.destroy().await;
     }
 
@@ -1965,7 +1518,7 @@ persistent_route:
             "mk",
             true,
             false,
-            Some("172.16.1.2"),
+            Some("forgedns_ipv4"),
             None,
             api.clone() as Arc<dyn MikrotikApi>,
         );
@@ -1976,84 +1529,59 @@ persistent_route:
             300,
         )]));
         executor.post_execute(&mut ctx, None).await.unwrap();
-        yield_until("background manager route creation", || {
-            api.route_count() > 0
+        yield_until("background manager entry creation", || {
+            api.entry_count() > 0
         })
         .await;
-        assert!(api.route_count() > 0);
+        assert!(api.entry_count() > 0);
         let _ = executor.destroy().await;
     }
 
     #[tokio::test]
-    async fn shutdown_cleanup_removes_dynamic_routes() {
+    async fn shutdown_cleanup_removes_only_owned_entries() {
         let api = Arc::new(MockMikrotikApi::default());
+        let owned_key = AddressListKey::new(
+            IpAddr::V4(Ipv4Addr::new(11, 11, 11, 11)),
+            "forgedns_ipv4".to_string(),
+        );
+        api.seed_entry(RouterListEntry {
+            id: "*301".to_string(),
+            key: owned_key.clone(),
+            timeout: Some("300s".to_string()),
+            comment: Some(encode_comment(
+                "forgedns",
+                "mk",
+                OwnedCommentKind::Dynamic,
+                Some("example.com"),
+            )),
+        });
+        api.seed_entry(RouterListEntry {
+            id: "*302".to_string(),
+            key: AddressListKey::new(
+                IpAddr::V4(Ipv4Addr::new(12, 12, 12, 12)),
+                "forgedns_ipv4".to_string(),
+            ),
+            timeout: Some("300s".to_string()),
+            comment: Some("forgedns;pg=other;kind=dynamic;dm=foreign.example".to_string()),
+        });
+
         let mut executor = build_executor_for_test(
             "mk",
             true,
             true,
-            Some("172.16.1.2"),
+            Some("forgedns_ipv4"),
             None,
             api.clone() as Arc<dyn MikrotikApi>,
         );
         let _ = executor.init().await;
-        let mut ctx = make_context();
-        ctx.set_response(response_with_records(vec![a_record(
-            Ipv4Addr::new(11, 11, 11, 11),
-            300,
-        )]));
-        executor.post_execute(&mut ctx, None).await.unwrap();
-        yield_until("dynamic route creation before shutdown", || {
-            api.route_count() > 0
-        })
-        .await;
-        assert!(api.route_count() > 0);
-
         let _ = executor.destroy().await;
-        let state = api.state.lock().unwrap();
-        assert!(state.routes.is_empty(), "dynamic routes should be cleaned");
-    }
-
-    #[tokio::test]
-    async fn shutdown_cleanup_removes_all_prefix_routes() {
-        let api = Arc::new(MockMikrotikApi::default());
-        let mut cfg = default_cfg("mk");
-        cfg.persistent_ips.insert("203.0.113.7/32".to_string());
-        let mut manager = RouteManager::new(api.clone(), cfg);
-
-        manager.sweep().await.unwrap();
-
-        api.seed_route(RouterRoute {
-            id: "*301".to_string(),
-            family: RouteFamily::Ipv4,
-            dst_address: "203.0.113.8/32".to_string(),
-            routing_table: "forgedns_dynamic".to_string(),
-            gateway: Some("172.16.1.2".to_string()),
-            distance: Some(DEFAULT_ROUTE_DISTANCE),
-            comment: Some("forgedns;pg=other;dm=foreign.example;exp=999999;seen=1".to_string()),
-        });
-        api.seed_route(RouterRoute {
-            id: "*302".to_string(),
-            family: RouteFamily::Ipv4,
-            dst_address: "203.0.113.9/32".to_string(),
-            routing_table: "forgedns_dynamic".to_string(),
-            gateway: Some("172.16.1.2".to_string()),
-            distance: Some(DEFAULT_ROUTE_DISTANCE),
-            comment: Some("other;pg=other".to_string()),
-        });
-
-        manager.shutdown(true).await.unwrap();
 
         let state = api.state.lock().unwrap();
         assert!(
-            !state.routes.values().any(|route| route
-                .comment
-                .as_deref()
-                .is_some_and(|comment| comment.starts_with("forgedns;"))),
-            "cleanup should remove every route whose comment matches the configured prefix"
+            !state
+                .entries
+                .contains_key(&MockMikrotikApi::storage_key(&owned_key))
         );
-        assert!(
-            state.routes.values().any(|route| route.id == "*302"),
-            "routes with a different comment prefix should be kept"
-        );
+        assert_eq!(state.entries.len(), 1);
     }
 }

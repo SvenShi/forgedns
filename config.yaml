@@ -44,28 +44,26 @@ plugins:
   # - tag: mikrotik_dynamic_route
   #   type: mikrotik
   #   args:
-  #     # 注意：插件不会自动创建 routing table / routing rule / 默认路由，
-  #     # 这些前置项需要在 RouterOS 里手动配置好。
   #     address: "172.16.1.1:8728"
   #     username: "api-user"
   #     password: "secret"
   #     async: true
-  #     routing_table: "forgedns_dynamic"
-  #     gateway4: "172.16.1.2"
-  #     gateway6: "fe80::2%ether1"
-  #     # 常驻路由（不会因 TTL 过期而删除）：
+  #     address_list4: "forgedns_ipv4"
+  #     address_list6: "forgedns_ipv6"
+  #     # 常驻 address-list 项（不会过期）：
   #     # - 支持 IP 或 CIDR（IP 会自动归一化为 /32 或 /128）
-  #     # - 若未开启对应网关家族（gateway4/gateway6），该项会被忽略并汇总提示一次
-  #     persistent_route:
+  #     # - 若未开启对应 address list 家族（address_list4/address_list6），该项会被忽略并汇总提示一次
+  #     persistent:
   #       ips:
   #         - "1.1.1.1"
   #         - "100.64.1.0/24"
+  #         - "0.0.0.0/0"
   #         - "2606:4700:4700::1111"
   #         - "2001:db8::/64"
   #       files:
   #         - "/etc/forgedns/persistent_ips.txt"
   #     comment_prefix: "forgedns"
-  #     # 可选：固定动态路由 TTL（秒），配置后会忽略响应内 TTL
+  #     # 可选：固定动态 address-list timeout（秒），配置后会忽略响应内 TTL
   #     # fixed_ttl: 300
   #     min_ttl: 60
   #     max_ttl: 3600

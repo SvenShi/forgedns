@@ -1,10 +1,13 @@
 //! RouterOS API adapter for mikrotik executor.
 //!
-//! This module isolates all RouterOS command paths and response decoding so
-//! manager logic does not depend on `mikrotik-rs` protocol details.
-//! Business layer only sees strongly-typed route snapshots and idempotent APIs.
+//! This module isolates all RouterOS address-list command paths and response
+//! decoding so manager logic does not depend on `mikrotik-rs` protocol details.
+//! The business layer only sees normalized address-list keys, ownership-aware
+//! upsert behavior, and stable plugin errors.
 
-use super::manager::{RouteFamily, RouteKey};
+use super::manager::{
+    AddressListFamily, AddressListKey, decode_owned_comment, parse_router_address,
+};
 use crate::core::error::{DnsError, Result};
 use async_trait::async_trait;
 use mikrotik_rs::MikrotikDevice;
@@ -14,80 +17,81 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
 
-const ROUTER_ID_FIELD: &str = ".id";
-const ROUTE_DST_FIELD: &str = "dst-address";
-const ROUTE_TABLE_FIELD: &str = "routing-table";
-const ROUTE_GATEWAY_FIELD: &str = "gateway";
-const ROUTE_DISTANCE_FIELD: &str = "distance";
-const ROUTE_COMMENT_FIELD: &str = "comment";
-const COMMENT_FIELD_PLUGIN: &str = "pg";
+/// RouterOS field containing the internal row id.
+const ADDRESS_ID_FIELD: &str = ".id";
+/// RouterOS field containing the address-list name.
+const ADDRESS_LIST_FIELD: &str = "list";
+/// RouterOS field containing the IP or CIDR value.
+const ADDRESS_FIELD: &str = "address";
+/// RouterOS field containing the native timeout string.
+const TIMEOUT_FIELD: &str = "timeout";
+/// RouterOS field containing ownership metadata.
+const COMMENT_FIELD: &str = "comment";
 
+/// Cheap command used for API health checks during startup.
 const COMMAND_SYSTEM_IDENTITY_PRINT: &str = "/system/identity/print";
 
-const COMMAND_IP_ROUTE_PRINT: &str = "/ip/route/print";
-const COMMAND_IP_ROUTE_ADD: &str = "/ip/route/add";
-const COMMAND_IP_ROUTE_SET: &str = "/ip/route/set";
-const COMMAND_IP_ROUTE_REMOVE: &str = "/ip/route/remove";
+/// RouterOS command for listing IPv4 firewall address-list rows.
+const COMMAND_IP_ADDRESS_LIST_PRINT: &str = "/ip/firewall/address-list/print";
+/// RouterOS command for creating IPv4 firewall address-list rows.
+const COMMAND_IP_ADDRESS_LIST_ADD: &str = "/ip/firewall/address-list/add";
+/// RouterOS command for updating IPv4 firewall address-list rows.
+const COMMAND_IP_ADDRESS_LIST_SET: &str = "/ip/firewall/address-list/set";
+/// RouterOS command for deleting IPv4 firewall address-list rows.
+const COMMAND_IP_ADDRESS_LIST_REMOVE: &str = "/ip/firewall/address-list/remove";
 
-const COMMAND_IPV6_ROUTE_PRINT: &str = "/ipv6/route/print";
-const COMMAND_IPV6_ROUTE_ADD: &str = "/ipv6/route/add";
-const COMMAND_IPV6_ROUTE_SET: &str = "/ipv6/route/set";
-const COMMAND_IPV6_ROUTE_REMOVE: &str = "/ipv6/route/remove";
+/// RouterOS command for listing IPv6 firewall address-list rows.
+const COMMAND_IPV6_ADDRESS_LIST_PRINT: &str = "/ipv6/firewall/address-list/print";
+/// RouterOS command for creating IPv6 firewall address-list rows.
+const COMMAND_IPV6_ADDRESS_LIST_ADD: &str = "/ipv6/firewall/address-list/add";
+/// RouterOS command for updating IPv6 firewall address-list rows.
+const COMMAND_IPV6_ADDRESS_LIST_SET: &str = "/ipv6/firewall/address-list/set";
+/// RouterOS command for deleting IPv6 firewall address-list rows.
+const COMMAND_IPV6_ADDRESS_LIST_REMOVE: &str = "/ipv6/firewall/address-list/remove";
 
+/// Timeout for establishing a RouterOS API connection.
 const CONNECT_TIMEOUT_SECS: u64 = 5;
+/// Timeout for sending one RouterOS API command.
 const SEND_TIMEOUT_SECS: u64 = 5;
+/// Timeout for receiving one chunk of RouterOS API response data.
 const RECV_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]
-pub(super) struct RouterRoute {
-    /// RouterOS internal route identifier (e.g. `*123`).
+pub(super) struct RouterListEntry {
+    /// RouterOS internal row id (for example `*123`).
     pub(super) id: String,
-    /// Address family inferred by command namespace (`/ip/route` or `/ipv6/route`).
-    pub(super) family: RouteFamily,
-    /// Destination address in RouterOS format (`a.b.c.d/32` or `x::y/128`).
-    pub(super) dst_address: String,
-    /// Routing table name where the route lives.
-    pub(super) routing_table: String,
-    /// Optional gateway string from RouterOS.
-    pub(super) gateway: Option<String>,
-    /// Optional route distance from RouterOS.
-    pub(super) distance: Option<u8>,
-    /// Optional comment field from RouterOS.
+    /// Normalized key reconstructed from RouterOS list/address fields.
+    pub(super) key: AddressListKey,
+    /// Timeout string returned by RouterOS when present.
+    pub(super) timeout: Option<String>,
+    /// Comment field used for ownership checks and diagnostics.
     pub(super) comment: Option<String>,
 }
 
 #[async_trait]
 pub(super) trait MikrotikApi: Debug + Send + Sync {
-    /// List all routes in target table that can be considered by manager reconciliation.
-    async fn list_managed_routes(&self, table: &str) -> Result<Vec<RouterRoute>>;
-    /// Find one route by route key (family + table + destination).
-    async fn find_route(
+    /// List all entries from the configured IPv4/IPv6 address lists.
+    async fn list_entries(
         &self,
-        key: &RouteKey,
-        comment_prefix: &str,
-        plugin_tag: &str,
-    ) -> Result<Option<RouterRoute>>;
-    /// Create or update one host route and return its RouterOS internal id.
-    async fn upsert_host_route(
+        list4: Option<&str>,
+        list6: Option<&str>,
+    ) -> Result<Vec<RouterListEntry>>;
+    /// Upsert one plugin-owned address-list entry.
+    ///
+    /// Returning `Ok(None)` means a foreign entry already occupies the same
+    /// `(family, list, address)` key and the caller must not overwrite it.
+    async fn upsert_owned_entry(
         &self,
-        key: &RouteKey,
-        gateway: &str,
-        distance: u8,
+        key: &AddressListKey,
+        timeout: Option<&str>,
         comment: &str,
         comment_prefix: &str,
         plugin_tag: &str,
-    ) -> Result<String>;
-    /// Validate that configured table/gateway/distance can be accepted by RouterOS.
-    async fn validate_route_config(
-        &self,
-        key: &RouteKey,
-        gateway: &str,
-        distance: u8,
-        comment: &str,
-    ) -> Result<()>;
-    /// Delete route by internal id.
-    async fn delete_route_by_id(&self, id: &str, family: RouteFamily) -> Result<()>;
-    /// Lightweight command that verifies RouterOS API availability.
+        refresh_timeout: bool,
+    ) -> Result<Option<String>>;
+    /// Delete one row by RouterOS internal id.
+    async fn delete_entry_by_id(&self, id: &str, family: AddressListFamily) -> Result<()>;
+    /// Cheap connectivity check used during startup.
     async fn healthcheck(&self) -> Result<()>;
 }
 
@@ -110,9 +114,13 @@ impl RouterReply {
 }
 
 pub(super) struct MikrotikRsClient {
+    /// RouterOS API endpoint, usually `<host>:8728`.
     address: String,
+    /// Login username.
     username: String,
+    /// Login password.
     password: String,
+    /// Lazily initialized shared connection reused across commands.
     connection: tokio::sync::Mutex<Option<MikrotikDevice>>,
 }
 
@@ -136,11 +144,15 @@ impl MikrotikRsClient {
     }
 
     async fn invalidate_connection(&self) {
+        // Any protocol-level failure drops the cached connection so the next
+        // call performs a clean reconnect.
         let mut guard = self.connection.lock().await;
         *guard = None;
     }
 
     async fn get_or_connect(&self) -> Result<MikrotikDevice> {
+        // Keep connection reuse entirely inside the API layer. Callers should not
+        // need to care whether a command hits an existing session or reconnects.
         {
             let guard = self.connection.lock().await;
             if let Some(device) = guard.as_ref() {
@@ -185,8 +197,8 @@ impl MikrotikRsClient {
         action: &str,
         command: mikrotik_rs::protocol::command::Command,
     ) -> Result<Vec<RouterReply>> {
-        // All low-level transport/protocol errors are translated into plugin errors here.
-        // Manager sees stable semantic errors and does not handle stream-level details.
+        // All network/protocol details are normalized into `DnsError::plugin`
+        // here so the manager only sees semantic success/failure.
         let device = self.get_or_connect().await?;
         let send_result = tokio::time::timeout(
             Duration::from_secs(SEND_TIMEOUT_SECS),
@@ -260,281 +272,248 @@ impl MikrotikRsClient {
         Ok(rows)
     }
 
-    async fn find_route_by_exact_comment(
-        &self,
-        key: &RouteKey,
-        comment: &str,
-    ) -> Result<Option<RouterRoute>> {
+    async fn find_entries_by_key(&self, key: &AddressListKey) -> Result<Vec<RouterListEntry>> {
+        // RouterOS separates IPv4 and IPv6 address-lists into different command
+        // namespaces, but the manager uses one normalized key type.
         let print = CommandBuilder::new()
-            .command(route_command(key.family(), RouteOp::Print))
-            .query_equal(ROUTE_TABLE_FIELD, &key.table)
-            .query_equal(ROUTE_DST_FIELD, &key.dst_address())
-            .query_equal(ROUTE_COMMENT_FIELD, comment)
+            .command(address_list_command(key.family, ListOp::Print))
+            .query_equal(ADDRESS_LIST_FIELD, key.list.as_str())
+            .query_equal(ADDRESS_FIELD, key.router_value().as_str())
             .build();
-        let rows = self.send_rows("find route by comment", print).await?;
+        let rows = self.send_rows("find address-list entries", print).await?;
+        let mut entries = Vec::new();
         for row in rows {
-            let mut route =
-                parse_router_route_from_reply("find route by comment parse", key.family(), &row)?;
-            if route.routing_table.is_empty() {
-                route.routing_table = key.table.clone();
-            }
-            return Ok(Some(route));
+            entries.push(parse_router_list_entry(
+                "find address-list entries parse",
+                key.family,
+                &row,
+                Some(key.list.as_str()),
+            )?);
         }
-        Ok(None)
+        Ok(entries)
+    }
+
+    async fn add_entry(
+        &self,
+        key: &AddressListKey,
+        timeout: Option<&str>,
+        comment: &str,
+    ) -> Result<String> {
+        // Add is followed by a re-query because RouterOS does not always return
+        // the created row id directly in a stable shape.
+        let mut add = CommandBuilder::new()
+            .command(address_list_command(key.family, ListOp::Add))
+            .attribute(ADDRESS_LIST_FIELD, Some(key.list.as_str()))
+            .attribute(ADDRESS_FIELD, Some(key.router_value().as_str()))
+            .attribute(COMMENT_FIELD, Some(comment));
+        if let Some(timeout) = timeout {
+            add = add.attribute(TIMEOUT_FIELD, Some(timeout));
+        }
+        let _ = self
+            .send_rows("add address-list entry", add.build())
+            .await?;
+
+        let mut created = self.find_entries_by_key(key).await?;
+        created.retain(|entry| entry.comment.as_deref() == Some(comment));
+        created
+            .into_iter()
+            .map(|entry| entry.id)
+            .next()
+            .ok_or_else(|| {
+                DnsError::plugin("mikrotik add address-list entry succeeded but entry id not found")
+            })
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-enum RouteOp {
+enum ListOp {
     Print,
     Add,
     Set,
     Remove,
 }
 
-/// Map logical route operation to RouterOS command path by address family.
-fn route_command(family: RouteFamily, op: RouteOp) -> &'static str {
+/// Map a normalized family/op pair to the RouterOS command namespace.
+fn address_list_command(family: AddressListFamily, op: ListOp) -> &'static str {
     match (family, op) {
-        (RouteFamily::Ipv4, RouteOp::Print) => COMMAND_IP_ROUTE_PRINT,
-        (RouteFamily::Ipv4, RouteOp::Add) => COMMAND_IP_ROUTE_ADD,
-        (RouteFamily::Ipv4, RouteOp::Set) => COMMAND_IP_ROUTE_SET,
-        (RouteFamily::Ipv4, RouteOp::Remove) => COMMAND_IP_ROUTE_REMOVE,
-        (RouteFamily::Ipv6, RouteOp::Print) => COMMAND_IPV6_ROUTE_PRINT,
-        (RouteFamily::Ipv6, RouteOp::Add) => COMMAND_IPV6_ROUTE_ADD,
-        (RouteFamily::Ipv6, RouteOp::Set) => COMMAND_IPV6_ROUTE_SET,
-        (RouteFamily::Ipv6, RouteOp::Remove) => COMMAND_IPV6_ROUTE_REMOVE,
+        (AddressListFamily::Ipv4, ListOp::Print) => COMMAND_IP_ADDRESS_LIST_PRINT,
+        (AddressListFamily::Ipv4, ListOp::Add) => COMMAND_IP_ADDRESS_LIST_ADD,
+        (AddressListFamily::Ipv4, ListOp::Set) => COMMAND_IP_ADDRESS_LIST_SET,
+        (AddressListFamily::Ipv4, ListOp::Remove) => COMMAND_IP_ADDRESS_LIST_REMOVE,
+        (AddressListFamily::Ipv6, ListOp::Print) => COMMAND_IPV6_ADDRESS_LIST_PRINT,
+        (AddressListFamily::Ipv6, ListOp::Add) => COMMAND_IPV6_ADDRESS_LIST_ADD,
+        (AddressListFamily::Ipv6, ListOp::Set) => COMMAND_IPV6_ADDRESS_LIST_SET,
+        (AddressListFamily::Ipv6, ListOp::Remove) => COMMAND_IPV6_ADDRESS_LIST_REMOVE,
     }
 }
 
-/// Decode one RouterOS reply row into stable business route snapshot.
-fn parse_router_route_from_reply(
+fn parse_router_list_entry(
     action: &str,
-    family: RouteFamily,
+    family: AddressListFamily,
     reply: &RouterReply,
-) -> Result<RouterRoute> {
-    let id = reply.require(ROUTER_ID_FIELD, action)?;
-    let dst_address = reply.require(ROUTE_DST_FIELD, action)?;
-    let routing_table = reply
-        .get(ROUTE_TABLE_FIELD)
+    fallback_list: Option<&str>,
+) -> Result<RouterListEntry> {
+    // RouterOS may omit the list name in some filtered query paths, so callers
+    // can provide the already-known list as a fallback.
+    let id = reply.require(ADDRESS_ID_FIELD, action)?;
+    let list = reply
+        .get(ADDRESS_LIST_FIELD)
         .map(str::to_string)
-        .unwrap_or_default();
-    let gateway = reply.get(ROUTE_GATEWAY_FIELD).map(str::to_string);
-    let distance = reply
-        .get(ROUTE_DISTANCE_FIELD)
-        .map(|raw| {
-            raw.parse::<u8>().map_err(|e| {
-                DnsError::plugin(format!(
-                    "mikrotik {action} response has invalid '{ROUTE_DISTANCE_FIELD}' value '{raw}': {e}"
-                ))
-            })
-        })
-        .transpose()?;
-    let comment = reply.get(ROUTE_COMMENT_FIELD).map(str::to_string);
-
-    Ok(RouterRoute {
+        .or_else(|| fallback_list.map(str::to_string))
+        .ok_or_else(|| {
+            DnsError::plugin(format!(
+                "mikrotik {action} response missing '{ADDRESS_LIST_FIELD}'"
+            ))
+        })?;
+    let address_raw = reply.require(ADDRESS_FIELD, action)?;
+    let (address, prefix) =
+        parse_router_address(family, address_raw.as_str()).ok_or_else(|| {
+            DnsError::plugin(format!(
+                "mikrotik {action} response has invalid '{ADDRESS_FIELD}' value '{address_raw}'"
+            ))
+        })?;
+    let key = AddressListKey::new_with_prefix(address, prefix, list).ok_or_else(|| {
+        DnsError::plugin(format!(
+            "mikrotik {action} response has invalid normalized address '{address_raw}'"
+        ))
+    })?;
+    let timeout = reply.get(TIMEOUT_FIELD).map(str::to_string);
+    let comment = reply.get(COMMENT_FIELD).map(str::to_string);
+    Ok(RouterListEntry {
         id,
-        family,
-        dst_address,
-        routing_table,
-        gateway,
-        distance,
+        key,
+        timeout,
         comment,
     })
 }
 
-fn comment_matches_prefix(comment: &str, prefix: &str) -> bool {
-    if prefix.is_empty() {
-        return true;
-    }
-    comment.starts_with(prefix) && comment.as_bytes().get(prefix.len()) == Some(&b';')
-}
-
-fn comment_field<'a>(comment: &'a str, key: &str) -> Option<&'a str> {
-    for token in comment.split(';') {
-        let token = token.trim();
-        if token.is_empty() {
-            continue;
-        }
-        let Some((k, v)) = token.split_once('=') else {
-            continue;
-        };
-        if k.trim() == key {
-            return Some(v.trim());
-        }
-    }
-    None
-}
-
-fn route_owned_by_plugin(route: &RouterRoute, comment_prefix: &str, plugin_tag: &str) -> bool {
-    let Some(comment) = route.comment.as_deref() else {
-        return false;
-    };
-    if !comment_matches_prefix(comment, comment_prefix) {
-        return false;
-    }
-    comment_field(comment, COMMENT_FIELD_PLUGIN) == Some(plugin_tag)
-}
-
 #[async_trait]
 impl MikrotikApi for MikrotikRsClient {
-    async fn list_managed_routes(&self, table: &str) -> Result<Vec<RouterRoute>> {
-        // RouterOS IPv4/IPv6 routes live in different namespaces.
-        let mut routes = Vec::new();
+    async fn list_entries(
+        &self,
+        list4: Option<&str>,
+        list6: Option<&str>,
+    ) -> Result<Vec<RouterListEntry>> {
+        // The manager asks for a full list scan only on relatively cold paths:
+        // persistent reconcile, startup repair, and cleanup.
+        let mut entries = Vec::new();
 
-        let v4_print = CommandBuilder::new()
-            .command(route_command(RouteFamily::Ipv4, RouteOp::Print))
-            .query_equal(ROUTE_TABLE_FIELD, table)
-            .build();
-        let rows_v4 = self.send_rows("print ipv4 routes", v4_print).await?;
-        for row in &rows_v4 {
-            let mut route =
-                parse_router_route_from_reply("parse ipv4 route", RouteFamily::Ipv4, row)?;
-            if route.routing_table.is_empty() {
-                route.routing_table = table.to_string();
+        if let Some(list4) = list4 {
+            let print = CommandBuilder::new()
+                .command(address_list_command(AddressListFamily::Ipv4, ListOp::Print))
+                .query_equal(ADDRESS_LIST_FIELD, list4)
+                .build();
+            for row in self
+                .send_rows("print ipv4 address-list entries", print)
+                .await?
+            {
+                entries.push(parse_router_list_entry(
+                    "parse ipv4 address-list entry",
+                    AddressListFamily::Ipv4,
+                    &row,
+                    Some(list4),
+                )?);
             }
-            routes.push(route);
         }
 
-        let v6_print = CommandBuilder::new()
-            .command(route_command(RouteFamily::Ipv6, RouteOp::Print))
-            .query_equal(ROUTE_TABLE_FIELD, table)
-            .build();
-        let rows_v6 = self.send_rows("print ipv6 routes", v6_print).await?;
-        for row in &rows_v6 {
-            let mut route =
-                parse_router_route_from_reply("parse ipv6 route", RouteFamily::Ipv6, row)?;
-            if route.routing_table.is_empty() {
-                route.routing_table = table.to_string();
+        if let Some(list6) = list6 {
+            let print = CommandBuilder::new()
+                .command(address_list_command(AddressListFamily::Ipv6, ListOp::Print))
+                .query_equal(ADDRESS_LIST_FIELD, list6)
+                .build();
+            for row in self
+                .send_rows("print ipv6 address-list entries", print)
+                .await?
+            {
+                entries.push(parse_router_list_entry(
+                    "parse ipv6 address-list entry",
+                    AddressListFamily::Ipv6,
+                    &row,
+                    Some(list6),
+                )?);
             }
-            routes.push(route);
         }
 
-        Ok(routes)
+        Ok(entries)
     }
 
-    async fn find_route(
+    async fn upsert_owned_entry(
         &self,
-        key: &RouteKey,
-        comment_prefix: &str,
-        plugin_tag: &str,
-    ) -> Result<Option<RouterRoute>> {
-        let print = CommandBuilder::new()
-            .command(route_command(key.family(), RouteOp::Print))
-            .query_equal(ROUTE_TABLE_FIELD, &key.table)
-            .query_equal(ROUTE_DST_FIELD, &key.dst_address())
-            .build();
-        let rows = self.send_rows("find route", print).await?;
-        for row in rows {
-            let mut route = parse_router_route_from_reply("find route parse", key.family(), &row)?;
-            if route.routing_table.is_empty() {
-                route.routing_table = key.table.clone();
-            }
-            if route_owned_by_plugin(&route, comment_prefix, plugin_tag) {
-                return Ok(Some(route));
-            }
-        }
-        Ok(None)
-    }
-
-    async fn upsert_host_route(
-        &self,
-        key: &RouteKey,
-        gateway: &str,
-        distance: u8,
+        key: &AddressListKey,
+        timeout: Option<&str>,
         comment: &str,
         comment_prefix: &str,
         plugin_tag: &str,
-    ) -> Result<String> {
-        // Upsert strategy:
-        // 1) find existing by key
-        // 2) update only changed fields (gateway/distance/comment)
-        // 3) otherwise add and then resolve id by re-query
-        if let Some(existing) = self.find_route(key, comment_prefix, plugin_tag).await? {
-            let gateway_changed = existing.gateway.as_deref() != Some(gateway);
-            let distance_changed = existing.distance != Some(distance);
+        refresh_timeout: bool,
+    ) -> Result<Option<String>> {
+        // Upsert policy:
+        // 1) query all rows for the exact `(family, list, address)` key
+        // 2) refuse overwrite when only foreign rows exist
+        // 3) deduplicate multiple owned rows down to one canonical row
+        // 4) update the canonical row in place when safe
+        // 5) recreate when switching between timed and persistent forms
+        let entries = self.find_entries_by_key(key).await?;
+        let mut owned = Vec::new();
+        let mut has_foreign = false;
+        for entry in entries {
+            if decode_owned_comment(comment_prefix, plugin_tag, entry.comment.as_deref()).is_some()
+            {
+                owned.push(entry);
+            } else {
+                has_foreign = true;
+            }
+        }
+
+        if owned.is_empty() && has_foreign {
+            return Ok(None);
+        }
+
+        let mut iter = owned.into_iter();
+        let mut canonical = iter.next();
+        for extra in iter {
+            self.delete_entry_by_id(&extra.id, extra.key.family).await?;
+        }
+
+        if let Some(existing) = canonical.take() {
+            // RouterOS timed and timeless rows are different enough that the
+            // safest transition is delete-and-add when the timeout kind changes.
+            let timeout_kind_changed = existing.timeout.is_some() != timeout.is_some();
+            if timeout_kind_changed {
+                self.delete_entry_by_id(&existing.id, existing.key.family)
+                    .await?;
+                let id = self.add_entry(key, timeout, comment).await?;
+                return Ok(Some(id));
+            }
+
+            // `refresh_timeout` lets callers force a timeout rewrite even when
+            // the string looks unchanged, which keeps the remote timer alive.
+            let timeout_changed = existing.timeout.as_deref() != timeout;
             let comment_changed = existing.comment.as_deref() != Some(comment);
-            if gateway_changed || distance_changed || comment_changed {
-                let distance_str = distance.to_string();
-                let mut set_builder = CommandBuilder::new()
-                    .command(route_command(key.family(), RouteOp::Set))
-                    .attribute(ROUTER_ID_FIELD, Some(existing.id.as_str()));
-                if gateway_changed {
-                    set_builder = set_builder.attribute(ROUTE_GATEWAY_FIELD, Some(gateway));
-                }
-                if distance_changed {
-                    set_builder =
-                        set_builder.attribute(ROUTE_DISTANCE_FIELD, Some(distance_str.as_str()));
-                }
-                if comment_changed {
-                    set_builder = set_builder.attribute(ROUTE_COMMENT_FIELD, Some(comment));
+            if refresh_timeout || timeout_changed || comment_changed {
+                let mut set = CommandBuilder::new()
+                    .command(address_list_command(key.family, ListOp::Set))
+                    .attribute(ADDRESS_ID_FIELD, Some(existing.id.as_str()))
+                    .attribute(COMMENT_FIELD, Some(comment));
+                if let Some(timeout) = timeout {
+                    set = set.attribute(TIMEOUT_FIELD, Some(timeout));
                 }
                 let _ = self
-                    .send_rows("set host route", set_builder.build())
+                    .send_rows("set address-list entry", set.build())
                     .await?;
             }
-            return Ok(existing.id);
+            return Ok(Some(existing.id));
         }
 
-        let distance_str = distance.to_string();
-        let add = CommandBuilder::new()
-            .command(route_command(key.family(), RouteOp::Add))
-            .attribute(ROUTE_DST_FIELD, Some(&key.dst_address()))
-            .attribute(ROUTE_TABLE_FIELD, Some(&key.table))
-            .attribute(ROUTE_GATEWAY_FIELD, Some(gateway))
-            .attribute(ROUTE_DISTANCE_FIELD, Some(distance_str.as_str()))
-            .attribute(ROUTE_COMMENT_FIELD, Some(comment))
-            .build();
-        let _ = self.send_rows("add host route", add).await?;
-
-        let created = if let Some(route) = self.find_route_by_exact_comment(key, comment).await? {
-            route
-        } else {
-            self.find_route(key, comment_prefix, plugin_tag)
-                .await?
-                .ok_or_else(|| {
-                    DnsError::plugin("mikrotik upsert route succeeded but route id not found")
-                })?
-        };
-        Ok(created.id)
+        let id = self.add_entry(key, timeout, comment).await?;
+        Ok(Some(id))
     }
 
-    async fn validate_route_config(
-        &self,
-        key: &RouteKey,
-        gateway: &str,
-        distance: u8,
-        comment: &str,
-    ) -> Result<()> {
-        let distance_str = distance.to_string();
-        let add = CommandBuilder::new()
-            .command(route_command(key.family(), RouteOp::Add))
-            .attribute(ROUTE_DST_FIELD, Some(&key.dst_address()))
-            .attribute(ROUTE_TABLE_FIELD, Some(&key.table))
-            .attribute(ROUTE_GATEWAY_FIELD, Some(gateway))
-            .attribute(ROUTE_DISTANCE_FIELD, Some(distance_str.as_str()))
-            .attribute(ROUTE_COMMENT_FIELD, Some(comment))
-            .attribute("disabled", Some("yes"))
-            .build();
-        let _ = self.send_rows("validate route config", add).await?;
-
-        let route = self
-            .find_route_by_exact_comment(key, comment)
-            .await?
-            .ok_or_else(|| {
-                DnsError::plugin(
-                    "mikrotik validate route config succeeded but temporary route id not found",
-                )
-            })?;
-        self.delete_route_by_id(&route.id, route.family).await?;
-        Ok(())
-    }
-
-    async fn delete_route_by_id(&self, id: &str, family: RouteFamily) -> Result<()> {
+    async fn delete_entry_by_id(&self, id: &str, family: AddressListFamily) -> Result<()> {
         let remove = CommandBuilder::new()
-            .command(route_command(family, RouteOp::Remove))
-            .attribute(ROUTER_ID_FIELD, Some(id))
+            .command(address_list_command(family, ListOp::Remove))
+            .attribute(ADDRESS_ID_FIELD, Some(id))
             .build();
-        match self.send_rows("remove route", remove).await {
+        match self.send_rows("remove address-list entry", remove).await {
             Ok(_) => Ok(()),
             Err(e) if is_not_found_error(&e) => Ok(()),
             Err(e) => Err(e),
@@ -542,7 +521,8 @@ impl MikrotikApi for MikrotikRsClient {
     }
 
     async fn healthcheck(&self) -> Result<()> {
-        // Identity print is cheap and available on all RouterOS v7 targets.
+        // `/system/identity/print` is cheap and available on RouterOS targets
+        // that support the API used by this plugin.
         let command = CommandBuilder::new()
             .command(COMMAND_SYSTEM_IDENTITY_PRINT)
             .build();
@@ -552,6 +532,8 @@ impl MikrotikApi for MikrotikRsClient {
 }
 
 fn is_not_found_error(err: &DnsError) -> bool {
+    // RouterOS error text is not strongly typed. Treat common "already gone"
+    // variants as successful delete semantics.
     let lower = err.to_string().to_ascii_lowercase();
     lower.contains("no such item")
         || lower.contains("not found")
