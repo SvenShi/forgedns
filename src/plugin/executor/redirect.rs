@@ -11,7 +11,7 @@
 //! Two-stage behavior:
 //! - `execute`: match rule by original qname and replace request query name
 //!   with redirect target.
-//! - `post_execute`: restore original query name in request/response and add
+//! - continuation post-stage: restore original query name in request/response and add
 //!   synthetic CNAME from original -> target before upstream answers.
 //!
 //! This keeps downstream resolution consistent with redirected target while
@@ -22,9 +22,9 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::message::Question;
 use crate::message::{CNAME, DNSClass, Name, RData, Record};
-use crate::plugin::executor::{ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use ahash::AHashMap;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use async_trait::async_trait;
@@ -75,12 +75,6 @@ struct RuleIndex {
     regex_rule_indices: Vec<usize>,
 }
 
-#[derive(Debug)]
-struct RedirectPostState {
-    original: Name,
-    target: Name,
-}
-
 #[async_trait]
 impl Plugin for RedirectExecutor {
     fn tag(&self) -> &str {
@@ -98,67 +92,71 @@ impl Plugin for RedirectExecutor {
 
 #[async_trait]
 impl Executor for RedirectExecutor {
-    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let Some(qclass) = context.request.first_qclass() else {
-            return Ok(ExecStep::Next);
-        };
-        let Some(original) = context
-            .request
-            .first_question()
-            .map(|question| question.name().clone())
-        else {
-            return Ok(ExecStep::Next);
-        };
-
-        if qclass != DNSClass::IN {
-            return Ok(ExecStep::Next);
-        }
-
-        let Some(question) = context.request.first_question() else {
-            return Ok(ExecStep::Next);
-        };
-        let Some(rule) = self
-            .index
-            .match_rule(&self.rules, question.name().normalized())
-        else {
-            return Ok(ExecStep::Next);
-        };
-
-        let target = rule.target.clone();
-        set_query_name(context, target.clone())?;
-
-        Ok(ExecStep::NextWithPost(Some(
-            Box::new(RedirectPostState { original, target }) as ExecState,
-        )))
+    fn with_next(&self) -> bool {
+        true
     }
 
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let Some(state) = state
-            .and_then(|boxed| boxed.downcast::<RedirectPostState>().ok())
-            .map(|boxed| *boxed)
-        else {
-            return Ok(());
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
+
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
+        let Some((original, target)) = self.match_target(context)? else {
+            return continue_next!(next, context);
         };
 
-        set_query_name(context, state.original.clone())?;
+        set_query_name(context, &target)?;
+        let step_result = continue_next!(next, context);
+        self.finish_redirect(context, original, target, step_result)
+    }
+}
 
+impl RedirectExecutor {
+    fn finish_redirect(
+        &self,
+        context: &mut DnsContext,
+        original: Name,
+        target: Name,
+        step_result: Result<ExecStep>,
+    ) -> Result<ExecStep> {
+        set_query_name(context, &original)?;
+        let step = step_result?;
         let Some(response) = context.response_mut() else {
-            return Ok(());
+            return Ok(step);
         };
 
         for query in response.questions_mut() {
-            if query.name() == &state.target {
-                query.set_name(state.original.clone());
+            if query.name() == &target {
+                query.set_name(original.clone());
             }
         }
 
         let answers = response.answers_mut();
-        answers.push(Record::from_rdata(
-            state.original,
-            1,
-            RData::CNAME(CNAME(state.target)),
-        ));
-        Ok(())
+        answers.push(Record::from_rdata(original, 1, RData::CNAME(CNAME(target))));
+        Ok(step)
+    }
+
+    fn match_target(&self, context: &DnsContext) -> Result<Option<(Name, Name)>> {
+        let Some(question) = context.request.first_question() else {
+            return Ok(None);
+        };
+
+        if question.qclass() != DNSClass::IN {
+            return Ok(None);
+        }
+
+        let Some(rule) = self
+            .index
+            .match_rule(&self.rules, question.name().normalized())
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some((question.name().clone(), rule.target.clone())))
     }
 }
 
@@ -375,11 +373,11 @@ impl RuleIndex {
     }
 }
 
-fn set_query_name(context: &mut DnsContext, name: Name) -> Result<()> {
+fn set_query_name(context: &mut DnsContext, name: &Name) -> Result<()> {
     let Some(question) = context.request_mut().first_question_mut() else {
         return Err(DnsError::plugin("redirect requires one question"));
     };
-    question.set_name(name);
+    question.set_name(name.clone());
     Ok(())
 }
 
@@ -406,10 +404,10 @@ fn _question_name(question: &Question) -> &Name {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
+    use crate::core::error::DnsError;
     use crate::message::Message;
     use crate::message::rdata::A;
     use crate::message::{RData, RecordType};
-    use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
     use std::net::{Ipv4Addr, SocketAddr};
 
@@ -434,7 +432,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_redirect_execute_and_post_execute_full_flow() {
+    async fn test_redirect_with_next_full_flow() {
         let rules = vec![parse_redirect_rule("full:example.com target.example.com").unwrap()];
         let index = build_rule_index(&rules).expect("rule index should build");
         let plugin = RedirectExecutor {
@@ -444,23 +442,6 @@ mod tests {
         };
 
         let mut ctx = make_context("example.com.");
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-        assert_eq!(
-            ctx.request
-                .first_question()
-                .expect("question should exist")
-                .name()
-                .to_fqdn(),
-            "target.example.com."
-        );
-
         let mut response = Message::new();
         response.add_question(Question::new(
             Name::from_ascii("target.example.com.").unwrap(),
@@ -475,9 +456,9 @@ mod tests {
         ctx.set_response(response);
 
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post execute should succeed");
+            .expect("continuation execute should succeed");
 
         assert_eq!(
             ctx.request
@@ -496,6 +477,40 @@ mod tests {
                 .answers()
                 .iter()
                 .any(|record| record.rr_type() == RecordType::CNAME)
+        );
+    }
+
+    #[test]
+    fn test_finish_redirect_restores_query_name_when_next_errors() {
+        let rules = vec![parse_redirect_rule("full:example.com target.example.com").unwrap()];
+        let index = build_rule_index(&rules).expect("rule index should build");
+        let plugin = RedirectExecutor {
+            tag: "redirect".to_string(),
+            rules,
+            index,
+        };
+        let mut ctx = make_context("example.com.");
+        let original = Name::from_ascii("example.com.").unwrap();
+        let target = Name::from_ascii("target.example.com.").unwrap();
+
+        set_query_name(&mut ctx, &target).expect("redirect target should be valid");
+        let err = plugin
+            .finish_redirect(
+                &mut ctx,
+                original,
+                target,
+                Err(DnsError::plugin("downstream failed")),
+            )
+            .expect_err("downstream failure should propagate");
+
+        assert!(err.to_string().contains("downstream failed"));
+        assert_eq!(
+            ctx.request
+                .first_question()
+                .expect("question should exist")
+                .name()
+                .to_fqdn(),
+            "example.com."
         );
     }
 }

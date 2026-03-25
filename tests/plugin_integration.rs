@@ -283,6 +283,178 @@ plugins:
 }
 
 #[tokio::test]
+async fn test_sequence_accept_in_jump_stops_current_and_parent_sequences() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: mark 2
+      - exec: accept
+      - exec: mark 3
+  - tag: parent
+    type: sequence
+    args:
+      - exec: mark 1
+      - exec: jump child
+      - exec: mark 4
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config).await?;
+    let sequence = registry
+        .get_plugin("parent")
+        .expect("parent sequence should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(context.marks().contains("1"));
+    assert!(context.marks().contains("2"));
+    assert!(!context.marks().contains("3"));
+    assert!(!context.marks().contains("4"));
+    assert!(context.response().is_none());
+
+    registry.destroy_plugins().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sequence_reject_defaults_to_refused_and_stops_parent_sequences() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: mark 2
+      - exec: reject
+      - exec: mark 3
+  - tag: parent
+    type: sequence
+    args:
+      - exec: mark 1
+      - exec: jump child
+      - exec: mark 4
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config).await?;
+    let sequence = registry
+        .get_plugin("parent")
+        .expect("parent sequence should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(context.marks().contains("1"));
+    assert!(context.marks().contains("2"));
+    assert!(!context.marks().contains("3"));
+    assert!(!context.marks().contains("4"));
+    assert_eq!(
+        context
+            .response()
+            .expect("reject should set a response")
+            .rcode(),
+        Rcode::Refused
+    );
+
+    registry.destroy_plugins().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sequence_jump_return_resumes_parent_execution() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: mark 2
+      - exec: return
+      - exec: mark 3
+  - tag: parent
+    type: sequence
+    args:
+      - exec: mark 1
+      - exec: jump child
+      - exec: mark 4
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config).await?;
+    let sequence = registry
+        .get_plugin("parent")
+        .expect("parent sequence should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    assert_eq!(context.flow(), ExecFlowState::ReachedTail);
+    assert!(context.marks().contains("1"));
+    assert!(context.marks().contains("2"));
+    assert!(!context.marks().contains("3"));
+    assert!(context.marks().contains("4"));
+
+    registry.destroy_plugins().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sequence_goto_does_not_resume_source_sequence() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: mark 2
+      - exec: return
+      - exec: mark 3
+  - tag: parent
+    type: sequence
+    args:
+      - exec: mark 1
+      - exec: goto child
+      - exec: mark 4
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config).await?;
+    let sequence = registry
+        .get_plugin("parent")
+        .expect("parent sequence should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    assert_eq!(context.flow(), ExecFlowState::ReachedTail);
+    assert!(context.marks().contains("1"));
+    assert!(context.marks().contains("2"));
+    assert!(!context.marks().contains("3"));
+    assert!(!context.marks().contains("4"));
+
+    registry.destroy_plugins().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_udp_server_returns_hosts_answer_for_matching_query() -> Result<()> {
     let mut registry_and_addr = None;
     for _ in 0..16 {

@@ -5,7 +5,7 @@
 use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::error::{DnsError, Result};
 use crate::message::{Message, Rcode};
-use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
+use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginRegistry};
 use std::io::Error;
 use std::net::SocketAddr;
@@ -137,14 +137,16 @@ impl RequestHandle {
         }
 
         // Execute entry plugin to process the request
-        let exec_outcome = execute_with_post(self.entry_executor.as_ref(), &mut context).await;
+        let exec_outcome = self
+            .entry_executor
+            .execute_with_next(&mut context, None)
+            .await;
         let (response, exit) = match exec_outcome {
             Ok(step) => {
                 if context.flow() == ExecFlowState::Running {
                     context.set_flow(match step {
                         ExecStep::Next => ExecFlowState::ReachedTail,
                         ExecStep::Stop => ExecFlowState::Broken,
-                        ExecStep::NextWithPost(_) => ExecFlowState::Running,
                     });
                 }
                 let exit = if context.flow() == ExecFlowState::ReachedTail {
@@ -216,6 +218,7 @@ impl RequestHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::continue_next;
     use crate::core::error::{DnsError, Result};
     use crate::message::Question;
     use crate::message::{Name, RecordType};
@@ -399,17 +402,22 @@ mod tests {
 
     #[async_trait]
     impl Executor for PostResponseExecutor {
-        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
-            Ok(ExecStep::NextWithPost(None))
+        fn with_next(&self) -> bool {
+            true
         }
 
-        async fn post_execute(
+        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
+            Ok(ExecStep::Next)
+        }
+
+        async fn execute_with_next(
             &self,
             context: &mut DnsContext,
-            _state: Option<crate::plugin::executor::ExecState>,
-        ) -> crate::plugin::executor::ExecResult {
+            next: Option<crate::plugin::executor::ExecutorNext>,
+        ) -> Result<ExecStep> {
+            let step = continue_next!(next, context)?;
             context.set_response(context.request.response(Rcode::NXDomain));
-            Ok(())
+            Ok(step)
         }
     }
 
@@ -442,5 +450,22 @@ mod tests {
                 url_path: Some("/dns-query".to_string()),
             })
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_supports_with_next_entry_executor() {
+        let request_handle = make_request_handle(Arc::new(PostResponseExecutor));
+        let request = make_request(21, "example.com.");
+
+        let result = request_handle
+            .handle_request(
+                request,
+                SocketAddr::from(([127, 0, 0, 1], 5303)),
+                RequestMeta::default(),
+            )
+            .await;
+
+        assert_eq!(result.response.rcode(), Rcode::NXDomain);
+        assert_eq!(result.exit, RequestExit::Completed);
     }
 }

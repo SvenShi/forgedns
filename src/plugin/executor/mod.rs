@@ -3,18 +3,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use async_trait::async_trait;
-use std::any::Any;
 
 use crate::core::error::Result;
+pub use crate::plugin::executor::sequence::chain::ExecutorNext;
 use crate::{core::context::DnsContext, plugin::Plugin};
-
-pub type ExecResult = Result<()>;
-pub type ExecState = Box<dyn Any + Send + Sync>;
 
 #[derive(Debug)]
 pub enum ExecStep {
     Next,
-    NextWithPost(Option<ExecState>),
     Stop,
 }
 
@@ -40,37 +36,42 @@ pub mod sequence;
 pub mod sleep;
 pub mod ttl;
 
+// Helper macro to continue to next chain node if present
+#[macro_export]
+macro_rules! continue_next {
+    ($next:expr, $ctx:expr) => {{
+        if let Some(next) = $next {
+            next.next($ctx).await
+        } else {
+            if $ctx.flow() == crate::core::context::ExecFlowState::Running {
+                $ctx.set_flow(crate::core::context::ExecFlowState::ReachedTail);
+            }
+            Ok($crate::plugin::executor::ExecStep::Next)
+        }
+    }};
+}
+
 #[async_trait]
 pub trait Executor: Plugin {
+    fn with_next(&self) -> bool {
+        false
+    }
+
     /// Execute the plugin's logic on a DNS request context.
     ///
     /// Return [`ExecStep`] to instruct the sequence engine how to advance.
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep>;
 
-    /// Optional post-stage callback executed when `execute` returns `NextWithPost`.
-    async fn post_execute(
+    /// Execute around the downstream chain represented by `next`.
+    async fn execute_with_next(
         &self,
-        _context: &mut DnsContext,
-        _state: Option<ExecState>,
-    ) -> ExecResult {
-        Ok(())
-    }
-}
-
-/// Execute one executor stage and immediately run its post callback when needed.
-///
-/// This helper is intended for call sites that execute a single executor directly
-/// (without sequence's deferred post stack), such as server entry dispatch and
-/// composite executors that invoke child executors.
-pub async fn execute_with_post(
-    executor: &dyn Executor,
-    context: &mut DnsContext,
-) -> Result<ExecStep> {
-    match executor.execute(context).await? {
-        ExecStep::NextWithPost(state) => {
-            executor.post_execute(context, state).await?;
-            Ok(ExecStep::Next)
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
+        let result = self.execute(context).await?;
+        match result {
+            ExecStep::Next => continue_next!(next, context),
+            ExecStep::Stop => Ok(ExecStep::Stop),
         }
-        step => Ok(step),
     }
 }

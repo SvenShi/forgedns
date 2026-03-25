@@ -10,7 +10,7 @@
 //! Pipeline semantics:
 //! - `execute`: optionally intercepts PTR requests and answers directly from
 //!   cache (`handle_ptr = true`).
-//! - `post_execute`: after downstream response is available, extracts A/AAAA
+//! - continuation post-stage: after downstream response is available, extracts A/AAAA
 //!   answer IPs and updates cache with bounded TTL.
 //!
 //! Cache design:
@@ -26,9 +26,9 @@ use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::message::Rcode;
 use crate::message::{Name, PTR, RData, Record, RecordType};
-use crate::plugin::executor::{ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::net::IpAddr;
@@ -120,7 +120,19 @@ impl Plugin for ReverseLookup {
 
 #[async_trait]
 impl Executor for ReverseLookup {
+    fn with_next(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
+
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
         if self.handle_ptr
             && let Some(response) = self.try_handle_ptr(&context.request)
         {
@@ -128,18 +140,13 @@ impl Executor for ReverseLookup {
             return Ok(ExecStep::Stop);
         }
 
-        Ok(ExecStep::NextWithPost(None))
-    }
-
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let _ = state;
-
+        let step = continue_next!(next, context)?;
         let query_name = context
             .request
             .first_question()
             .map(|question| question.name().clone());
         let Some(response) = context.response_mut() else {
-            return Ok(());
+            return Ok(step);
         };
         let now = AppClock::elapsed_millis();
         for record in response.answers_mut() {
@@ -163,7 +170,7 @@ impl Executor for ReverseLookup {
             );
         }
 
-        Ok(())
+        Ok(step)
     }
 }
 
@@ -244,7 +251,7 @@ mod tests {
     use crate::message::rdata::A;
     use crate::message::{Message, Question};
     use crate::message::{Name, RData, Record};
-    use crate::plugin::executor::{ExecStep, Executor};
+    use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_registry;
     use std::net::{Ipv4Addr, SocketAddr};
 
@@ -275,7 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_reverse_lookup_post_execute_caches_and_serves_ptr() {
+    async fn test_reverse_lookup_with_next_caches_and_serves_ptr() {
         let plugin = ReverseLookup {
             tag: "reverse_lookup".to_string(),
             cache: TtlCache::with_capacity(64),
@@ -296,9 +303,9 @@ mod tests {
         a_ctx.set_response(response);
 
         plugin
-            .post_execute(&mut a_ctx, None)
+            .execute_with_next(&mut a_ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
         assert_eq!(
             a_ctx.response().expect("response should exist").answers()[0].ttl(),
             120
@@ -338,9 +345,9 @@ mod tests {
         ctx.set_response(response);
 
         plugin
-            .post_execute(&mut ctx, None)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
         assert_eq!(
             ctx.response().expect("response should exist").answers()[0].ttl(),
             120

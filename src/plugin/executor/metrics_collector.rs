@@ -12,7 +12,7 @@
 //! only observes and annotates request lifecycle without changing resolver
 //! routing decisions:
 //! - `execute`: increments total/inflight counters and stores start timestamp.
-//! - `post_execute`: decrements inflight, records success/error and latency.
+//! - continuation post-stage: decrements inflight, records success/error and latency.
 //! - snapshot logging: emits aggregated metrics every 1024 requests.
 //!
 //! Design goal is low overhead on hot paths: atomics with relaxed ordering and
@@ -22,9 +22,9 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
-use crate::plugin::executor::{ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -50,11 +50,6 @@ struct MetricsCollector {
     latency_sum_ms: AtomicU64,
 }
 
-#[derive(Debug)]
-struct PostState {
-    start_ms: u64,
-}
-
 #[async_trait]
 impl Plugin for MetricsCollector {
     fn tag(&self) -> &str {
@@ -72,26 +67,35 @@ impl Plugin for MetricsCollector {
 
 #[async_trait]
 impl Executor for MetricsCollector {
-    async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
-        self.query_total.fetch_add(1, Ordering::Relaxed);
-        self.inflight.fetch_add(1, Ordering::Relaxed);
-
-        Ok(ExecStep::NextWithPost(Some(Box::new(PostState {
-            start_ms: AppClock::elapsed_millis(),
-        }) as ExecState)))
+    fn with_next(&self) -> bool {
+        true
     }
 
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        self.inflight.fetch_sub(1, Ordering::Relaxed);
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
 
-        let start_ms = state
-            .and_then(|boxed| boxed.downcast::<PostState>().ok())
-            .map(|boxed| boxed.start_ms)
-            .unwrap_or_else(AppClock::elapsed_millis);
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
+        self.query_total.fetch_add(1, Ordering::Relaxed);
+        self.inflight.fetch_add(1, Ordering::Relaxed);
+        let start_ms = AppClock::elapsed_millis();
+        let result = continue_next!(next, context);
+        self.finalize_metrics(context, start_ms);
+        result
+    }
+}
+
+impl MetricsCollector {
+    fn finalize_metrics(&self, context: &DnsContext, start_ms: u64) {
+        self.inflight.fetch_sub(1, Ordering::Relaxed);
 
         if context.response().is_none() {
             self.err_total.fetch_add(1, Ordering::Relaxed);
-            return Ok(());
+            return;
         }
 
         let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
@@ -113,8 +117,6 @@ impl Executor for MetricsCollector {
                 "metrics_collector snapshot"
             );
         }
-
-        Ok(())
     }
 }
 
@@ -190,7 +192,6 @@ fn parse_name(args: Option<serde_yml::Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_context;
     use std::sync::atomic::Ordering;
 
@@ -224,19 +225,12 @@ mod tests {
         let plugin = make_collector();
         let mut ctx = test_context();
 
-        let step = plugin.execute(&mut ctx).await.expect("execute should work");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-        assert_eq!(plugin.query_total.load(Ordering::Relaxed), 1);
-        assert_eq!(plugin.inflight.load(Ordering::Relaxed), 1);
-
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post execute should work");
+            .expect("continuation execute should work");
 
+        assert_eq!(plugin.query_total.load(Ordering::Relaxed), 1);
         assert_eq!(plugin.inflight.load(Ordering::Relaxed), 0);
         assert_eq!(plugin.err_total.load(Ordering::Relaxed), 1);
         assert_eq!(plugin.latency_count.load(Ordering::Relaxed), 0);
@@ -248,16 +242,10 @@ mod tests {
         let mut ctx = test_context();
         ctx.set_response(crate::message::Message::new());
 
-        let step = plugin.execute(&mut ctx).await.expect("execute should work");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post execute should work");
+            .expect("continuation execute should work");
 
         assert_eq!(plugin.err_total.load(Ordering::Relaxed), 0);
         assert_eq!(plugin.latency_count.load(Ordering::Relaxed), 1);

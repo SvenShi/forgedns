@@ -11,8 +11,8 @@
 //! IPs into RouterOS address lists.
 //!
 //! Architecture overview:
-//! - `execute()` is hot-path light and always returns `NextWithPost`.
-//! - `post_execute()` extracts normalized query domain and unique A/AAAA IPs.
+//! - continuation pre-stage stays hot-path light.
+//! - continuation post-stage extracts normalized query domain and unique A/AAAA IPs.
 //! - address-list synchronization is delegated to a single-owner background
 //!   manager state machine.
 //! - RouterOS API details are isolated in `MikrotikApi` adapter implementations.
@@ -33,9 +33,9 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::message::Rcode;
-use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use ahash::{AHashMap, AHashSet};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -221,7 +221,7 @@ struct MikrotikExecutor {
     config: MikrotikConfig,
     /// Pre-built manager consumed during `init()`.
     manager: Option<AddressListManager>,
-    /// Sender exposed to `post_execute()` after the background runtime starts.
+    /// Sender exposed to continuation post-stage after the background runtime starts.
     command_tx: Option<mpsc::Sender<ManagerCommand>>,
     /// Runtime handle stored so `destroy()` can stop worker tasks.
     runtime: Mutex<Option<AddressListManagerRuntime>>,
@@ -276,23 +276,28 @@ impl Plugin for MikrotikExecutor {
 
 #[async_trait]
 impl Executor for MikrotikExecutor {
-    async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
-        Ok(ExecStep::NextWithPost(None))
+    fn with_next(&self) -> bool {
+        true
     }
 
-    async fn post_execute(
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
+
+    async fn execute_with_next(
         &self,
         context: &mut DnsContext,
-        _state: Option<ExecState>,
-    ) -> ExecResult {
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
+        let step = continue_next!(next, context)?;
         // If the runtime never started, the plugin stays side-effect free.
         let Some(tx) = self.command_tx.as_ref() else {
-            return Ok(());
+            return Ok(step);
         };
 
         // This executor only reacts to successful final answers containing A/AAAA data.
         let Some((domain, addrs)) = extract_observation(context, &self.config) else {
-            return Ok(());
+            return Ok(step);
         };
 
         if self.config.async_mode {
@@ -316,7 +321,7 @@ impl Executor for MikrotikExecutor {
                     );
                 }
             }
-            return Ok(());
+            return Ok(step);
         }
 
         // Sync mode still preserves DNS behavior on RouterOS failures. The only
@@ -339,7 +344,7 @@ impl Executor for MikrotikExecutor {
                     plugin = %self.tag,
                     "mikrotik manager channel closed in sync mode, DNS response is kept unchanged"
                 );
-                return Ok(());
+                return Ok(step);
             }
             Err(_) => {
                 warn!(
@@ -347,28 +352,28 @@ impl Executor for MikrotikExecutor {
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
                     "mikrotik observe enqueue timed out in sync mode, DNS response is kept unchanged"
                 );
-                return Ok(());
+                return Ok(step);
             }
         }
 
         let wait_outcome =
             tokio::time::timeout(Duration::from_secs(SYNC_OBSERVE_TIMEOUT_SECS), wait_rx).await;
         match wait_outcome {
-            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Ok(()))) => Ok(step),
             Ok(Ok(Err(e))) => {
                 warn!(
                     plugin = %self.tag,
                     err = %e,
                     "mikrotik observe failed in sync mode, DNS response is kept unchanged"
                 );
-                Ok(())
+                Ok(step)
             }
             Ok(Err(_)) => {
                 warn!(
                     plugin = %self.tag,
                     "mikrotik manager dropped sync observe response, DNS response is kept unchanged"
                 );
-                Ok(())
+                Ok(step)
             }
             Err(_) => {
                 warn!(
@@ -376,7 +381,7 @@ impl Executor for MikrotikExecutor {
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
                     "mikrotik observe timed out in sync mode, DNS response is kept unchanged"
                 );
-                Ok(())
+                Ok(step)
             }
         }
     }
@@ -1443,19 +1448,19 @@ persistent:
     }
 
     #[tokio::test]
-    async fn execute_returns_next_with_post() {
+    async fn execute_returns_next() {
         let api = Arc::new(MockMikrotikApi::default()) as Arc<dyn MikrotikApi>;
         let mut executor =
             build_executor_for_test("mk", true, false, Some("forgedns_ipv4"), None, api);
         let _ = executor.init().await;
         let mut ctx = make_context();
         let step = executor.execute(&mut ctx).await.unwrap();
-        assert!(matches!(step, ExecStep::NextWithPost(_)));
+        assert!(matches!(step, ExecStep::Next));
         let _ = executor.destroy().await;
     }
 
     #[tokio::test]
-    async fn post_execute_skips_unconfigured_family() {
+    async fn continuation_skips_unconfigured_family() {
         let api = Arc::new(MockMikrotikApi::default());
         let mut executor = build_executor_for_test(
             "mk",
@@ -1471,7 +1476,7 @@ persistent:
             a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
             aaaa_record(Ipv6Addr::LOCALHOST, 300),
         ]));
-        executor.post_execute(&mut ctx, None).await.unwrap();
+        executor.execute_with_next(&mut ctx, None).await.unwrap();
         yield_until("ipv6 entry upsert", || {
             api.state.lock().unwrap().upsert_v6 >= 1
         })
@@ -1506,7 +1511,7 @@ persistent:
             Ipv4Addr::new(10, 0, 0, 1),
             300,
         )]));
-        executor.post_execute(&mut ctx, None).await.unwrap();
+        executor.execute_with_next(&mut ctx, None).await.unwrap();
         assert!(ctx.response().is_some());
         let _ = executor.destroy().await;
     }
@@ -1528,7 +1533,7 @@ persistent:
             Ipv4Addr::new(6, 6, 6, 6),
             300,
         )]));
-        executor.post_execute(&mut ctx, None).await.unwrap();
+        executor.execute_with_next(&mut ctx, None).await.unwrap();
         yield_until("background manager entry creation", || {
             api.entry_count() > 0
         })

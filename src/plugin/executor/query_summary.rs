@@ -8,8 +8,8 @@
 //! Logs compact query summary after downstream execution.
 //!
 //! This plugin is an observer-only stage:
-//! - `execute` stores request start timestamp via post state.
-//! - `post_execute` logs source, qname/qtype, final rcode and elapsed time.
+//! - continuation pre-stage stores request start timestamp.
+//! - continuation post-stage logs source, qname/qtype, final rcode and elapsed time.
 //!
 //! It does not change request routing or response content, so it can be placed
 //! anywhere in a sequence for tracing and latency attribution.
@@ -18,9 +18,9 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
-use crate::plugin::executor::{ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -40,11 +40,6 @@ struct QuerySummary {
     msg: String,
 }
 
-#[derive(Debug)]
-struct PostState {
-    start_ms: u64,
-}
-
 #[async_trait]
 impl Plugin for QuerySummary {
     fn tag(&self) -> &str {
@@ -62,18 +57,32 @@ impl Plugin for QuerySummary {
 
 #[async_trait]
 impl Executor for QuerySummary {
-    async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
-        Ok(ExecStep::NextWithPost(Some(Box::new(PostState {
-            start_ms: AppClock::elapsed_millis(),
-        }) as ExecState)))
+    fn with_next(&self) -> bool {
+        true
     }
 
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let start_ms = state
-            .and_then(|boxed| boxed.downcast::<PostState>().ok())
-            .map(|boxed| boxed.start_ms)
-            .unwrap_or_else(AppClock::elapsed_millis);
+    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
 
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
+        let start_ms = AppClock::elapsed_millis();
+        let result = continue_next!(next, context);
+        self.finish_with_log(context, start_ms, result)
+    }
+}
+
+impl QuerySummary {
+    fn finish_with_log(
+        &self,
+        context: &DnsContext,
+        start_ms: u64,
+        result: Result<ExecStep>,
+    ) -> Result<ExecStep> {
         let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
         let (qname, qtype) = match context.request.first_question() {
             Some(question) => (
@@ -98,7 +107,7 @@ impl Executor for QuerySummary {
             "query_summary"
         );
 
-        Ok(())
+        result
     }
 }
 
@@ -163,9 +172,14 @@ fn parse_msg(args: Option<serde_yml::Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::error::DnsError;
     use crate::message::Message;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_context;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use tracing::dispatcher::Dispatch;
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[test]
     fn test_parse_msg_trims_and_filters_empty() {
@@ -181,7 +195,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_query_summary_execute_returns_next_with_post() {
+    async fn test_query_summary_execute_returns_next() {
         let plugin = QuerySummary {
             tag: "summary".to_string(),
             msg: "m".to_string(),
@@ -191,11 +205,11 @@ mod tests {
             .execute(&mut ctx)
             .await
             .expect("execute should succeed");
-        assert!(matches!(step, ExecStep::NextWithPost(_)));
+        assert!(matches!(step, ExecStep::Next));
     }
 
     #[tokio::test]
-    async fn test_query_summary_post_execute_accepts_missing_or_invalid_state() {
+    async fn test_query_summary_continuation_runs_with_terminal_next() {
         let plugin = QuerySummary {
             tag: "summary".to_string(),
             msg: "m".to_string(),
@@ -204,12 +218,69 @@ mod tests {
         ctx.set_response(Message::new());
 
         plugin
-            .post_execute(&mut ctx, None)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute without state should succeed");
-        plugin
-            .post_execute(&mut ctx, Some(Box::new("invalid".to_string())))
-            .await
-            .expect("post_execute with invalid state should succeed");
+            .expect("continuation execute should succeed");
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    struct SharedWriterGuard {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl<'a> MakeWriter<'a> for SharedWriter {
+        type Writer = SharedWriterGuard;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedWriterGuard {
+                buffer: self.buffer.clone(),
+            }
+        }
+    }
+
+    impl io::Write for SharedWriterGuard {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.buffer.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_query_summary_logs_when_result_is_error() {
+        let plugin = QuerySummary {
+            tag: "summary".to_string(),
+            msg: "m".to_string(),
+        };
+        let ctx = test_context();
+        let writer = SharedWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(writer.clone())
+            .finish();
+
+        let err = tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            plugin.finish_with_log(
+                &ctx,
+                AppClock::elapsed_millis(),
+                Err(DnsError::plugin("downstream failed")),
+            )
+        })
+        .expect_err("error result should be preserved");
+
+        assert!(err.to_string().contains("downstream failed"));
+
+        let output = String::from_utf8(writer.buffer.lock().unwrap().clone())
+            .expect("captured logs should be valid utf-8");
+        assert!(output.contains("query_summary"));
     }
 }

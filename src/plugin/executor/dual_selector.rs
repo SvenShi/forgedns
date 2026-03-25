@@ -11,7 +11,7 @@
 //! - For non-preferred qtype:
 //!   1) block immediately when cache says preferred type exists.
 //!   2) otherwise ask `forward` to run an extra preferred-type probe.
-//!      The final block/pass decision is applied in post_execute.
+//!      The final block/pass decision is applied in continuation post-stage.
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
@@ -20,9 +20,9 @@ use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::message::{Rcode, RecordType};
-use crate::plugin::executor::{ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -70,10 +70,11 @@ enum PostMode {
     NonPreferredProbe,
 }
 
-#[derive(Debug)]
-struct PostState {
-    domain: String,
-    mode: PostMode,
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum ExecPlan {
+    Bypass,
+    Stop,
+    Continue { domain: String, mode: PostMode },
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -125,16 +126,66 @@ impl Plugin for DualSelector {
 
 #[async_trait]
 impl Executor for DualSelector {
+    fn with_next(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
+
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
+        let plan = self.plan(context);
+
+        match plan {
+            ExecPlan::Bypass => continue_next!(next, context),
+            ExecPlan::Stop => Ok(ExecStep::Stop),
+            ExecPlan::Continue {
+                domain,
+                mode: PostMode::Preferred,
+            } => {
+                let step = continue_next!(next, context)?;
+                let has_preferred_answer = context
+                    .response()
+                    .is_some_and(|response| response.has_answer_type(self.preferred_type));
+                if has_preferred_answer {
+                    self.cache_preferred(&domain);
+                }
+                Ok(step)
+            }
+            ExecPlan::Continue {
+                domain,
+                mode: PostMode::NonPreferredProbe,
+            } => {
+                context.set_attr(
+                    DnsContext::ATTR_FORWARD_PROBE_REQUEST,
+                    ForwardProbeRequest {
+                        preferred_type: self.preferred_type,
+                    },
+                );
+                let step = continue_next!(next, context)?;
+                self.apply_probe_result(context, &domain)?;
+                Ok(step)
+            }
+        }
+    }
+}
+
+impl DualSelector {
+    fn plan(&self, context: &mut DnsContext) -> ExecPlan {
         if context.request.question_count() != 1 {
-            return Ok(ExecStep::Next);
+            return ExecPlan::Bypass;
         }
 
         let Some(qtype) = context.request.first_qtype() else {
-            return Ok(ExecStep::Next);
+            return ExecPlan::Bypass;
         };
         if qtype != RecordType::A && qtype != RecordType::AAAA {
-            return Ok(ExecStep::Next);
+            return ExecPlan::Bypass;
         }
 
         let Some(domain) = context
@@ -142,63 +193,32 @@ impl Executor for DualSelector {
             .first_question()
             .map(|question| question.name().normalized().to_string())
         else {
-            return Ok(ExecStep::Next);
+            return ExecPlan::Bypass;
         };
 
         if qtype == self.preferred_type {
-            return Ok(ExecStep::NextWithPost(Some(Box::new(PostState {
+            return ExecPlan::Continue {
                 domain,
                 mode: PostMode::Preferred,
-            }) as ExecState)));
+            };
         }
 
-        if self.cache_enabled {
-            if let Some(preferred_exists) = self.cache_get_preferred_state(&domain) {
-                if preferred_exists {
-                    context.set_response(context.request().response(Rcode::NoError));
-                    return Ok(ExecStep::Stop);
-                }
-                return Ok(ExecStep::Next);
+        if self.cache_enabled
+            && let Some(preferred_exists) = self.cache_get_preferred_state(&domain)
+        {
+            if preferred_exists {
+                context.set_response(context.request().response(Rcode::NoError));
+                return ExecPlan::Stop;
             }
+            return ExecPlan::Bypass;
         }
 
-        context.set_attr(
-            DnsContext::ATTR_FORWARD_PROBE_REQUEST,
-            ForwardProbeRequest {
-                preferred_type: self.preferred_type,
-            },
-        );
-
-        Ok(ExecStep::NextWithPost(Some(Box::new(PostState {
+        ExecPlan::Continue {
             domain,
             mode: PostMode::NonPreferredProbe,
-        }) as ExecState)))
-    }
-
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let Some(state) = state
-            .and_then(|boxed| boxed.downcast::<PostState>().ok())
-            .map(|boxed| *boxed)
-        else {
-            return Ok(());
-        };
-
-        match state.mode {
-            PostMode::Preferred => {
-                let has_preferred_answer = context
-                    .response()
-                    .is_some_and(|response| response.has_answer_type(self.preferred_type));
-                if has_preferred_answer {
-                    self.cache_preferred(&state.domain);
-                }
-                Ok(())
-            }
-            PostMode::NonPreferredProbe => self.apply_probe_result(context, &state.domain),
         }
     }
-}
 
-impl DualSelector {
     fn apply_probe_result(&self, context: &mut DnsContext, domain: &str) -> Result<()> {
         let Some(probe) =
             context.remove_attr::<ForwardProbeResult>(DnsContext::ATTR_FORWARD_PROBE_RESULT)
@@ -344,6 +364,7 @@ mod tests {
     use crate::message::rdata::{A, AAAA};
     use crate::message::{DNSClass, Message, Question};
     use crate::message::{Name, RData, Record};
+    use crate::plugin::executor::ExecStep;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn make_context(qtype: RecordType) -> DnsContext {
@@ -407,13 +428,17 @@ mod tests {
         })
     }
 
+    async fn run_selector(selector: &DualSelector, context: &mut DnsContext) -> Result<ExecStep> {
+        selector.execute_with_next(context, None).await
+    }
+
     #[tokio::test]
     async fn cache_hit_blocks_non_preferred_immediately() {
         let selector = make_selector(RecordType::A);
         selector.cache_preferred("example.com");
 
         let mut context = make_context(RecordType::AAAA);
-        let step = selector.execute(&mut context).await.unwrap();
+        let step = run_selector(&selector, &mut context).await.unwrap();
 
         assert!(matches!(step, ExecStep::Stop));
         assert!(!has_answer_of_type(&context, RecordType::AAAA));
@@ -423,21 +448,15 @@ mod tests {
     async fn preferred_post_warms_cache_for_next_non_preferred_request() {
         let selector = make_selector(RecordType::A);
         let mut preferred_context = make_context(RecordType::A);
-
-        let step = selector.execute(&mut preferred_context).await.unwrap();
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         set_answer(&mut preferred_context, RecordType::A);
-        selector
-            .post_execute(&mut preferred_context, state)
+        run_selector(&selector, &mut preferred_context)
             .await
             .unwrap();
 
         let mut non_preferred_context = make_context(RecordType::AAAA);
-        let step2 = selector.execute(&mut non_preferred_context).await.unwrap();
+        let step2 = run_selector(&selector, &mut non_preferred_context)
+            .await
+            .unwrap();
         assert!(matches!(step2, ExecStep::Stop));
         assert!(!has_answer_of_type(
             &non_preferred_context,
@@ -450,17 +469,10 @@ mod tests {
         let selector = make_selector(RecordType::A);
         let mut context = make_context(RecordType::AAAA);
 
-        let step = selector.execute(&mut context).await.unwrap();
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         let probe = context
             .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
-            .copied()
-            .expect("probe request should be set");
-        assert_eq!(probe.preferred_type, RecordType::A);
+            .copied();
+        assert!(probe.is_none());
 
         set_answer(&mut context, RecordType::AAAA);
         context.set_attr(
@@ -472,11 +484,11 @@ mod tests {
             },
         );
 
-        selector.post_execute(&mut context, state).await.unwrap();
+        run_selector(&selector, &mut context).await.unwrap();
         assert!(!has_answer_of_type(&context, RecordType::AAAA));
 
         let mut second = make_context(RecordType::AAAA);
-        let step2 = selector.execute(&mut second).await.unwrap();
+        let step2 = run_selector(&selector, &mut second).await.unwrap();
         assert!(matches!(step2, ExecStep::Stop));
         assert!(!has_answer_of_type(&second, RecordType::AAAA));
     }
@@ -485,13 +497,6 @@ mod tests {
     async fn non_preferred_without_preferred_answer_is_cached_to_skip_next_probe() {
         let selector = make_selector(RecordType::A);
         let mut first = make_context(RecordType::AAAA);
-
-        let step = selector.execute(&mut first).await.unwrap();
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         set_answer(&mut first, RecordType::AAAA);
         first.set_attr(
             DnsContext::ATTR_FORWARD_PROBE_RESULT,
@@ -501,11 +506,11 @@ mod tests {
                 original_error: None,
             },
         );
-        selector.post_execute(&mut first, state).await.unwrap();
+        run_selector(&selector, &mut first).await.unwrap();
         assert!(has_answer_of_type(&first, RecordType::AAAA));
 
         let mut second = make_context(RecordType::AAAA);
-        let step2 = selector.execute(&mut second).await.unwrap();
+        let step2 = run_selector(&selector, &mut second).await.unwrap();
         assert!(matches!(step2, ExecStep::Next));
         assert!(
             second
@@ -520,12 +525,6 @@ mod tests {
         selector.cache_enabled = false;
 
         let mut first = make_context(RecordType::AAAA);
-        let step1 = selector.execute(&mut first).await.unwrap();
-        let state1 = match step1 {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         set_answer(&mut first, RecordType::AAAA);
         first.set_attr(
             DnsContext::ATTR_FORWARD_PROBE_RESULT,
@@ -535,28 +534,17 @@ mod tests {
                 original_error: None,
             },
         );
-        selector.post_execute(&mut first, state1).await.unwrap();
+        run_selector(&selector, &mut first).await.unwrap();
 
         let mut second = make_context(RecordType::AAAA);
-        let step2 = selector.execute(&mut second).await.unwrap();
-        assert!(matches!(step2, ExecStep::NextWithPost(_)));
-        assert!(
-            second
-                .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
-                .is_some()
-        );
+        let step2 = run_selector(&selector, &mut second).await.unwrap();
+        assert!(matches!(step2, ExecStep::Next));
     }
 
     #[tokio::test]
     async fn non_preferred_returns_forward_error_when_probe_not_blocking() {
         let selector = make_selector(RecordType::A);
         let mut context = make_context(RecordType::AAAA);
-
-        let step = selector.execute(&mut context).await.unwrap();
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
 
         context.set_attr(
             DnsContext::ATTR_FORWARD_PROBE_RESULT,
@@ -568,10 +556,7 @@ mod tests {
         );
         context.clear_response();
 
-        let err = selector
-            .post_execute(&mut context, state)
-            .await
-            .unwrap_err();
+        let err = run_selector(&selector, &mut context).await.unwrap_err();
         assert!(err.to_string().contains("forward original query failed"));
     }
 
@@ -579,12 +564,6 @@ mod tests {
     async fn probe_error_does_not_block_or_warm_cache() {
         let selector = make_selector(RecordType::A);
         let mut context = make_context(RecordType::AAAA);
-
-        let step = selector.execute(&mut context).await.unwrap();
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
 
         set_answer(&mut context, RecordType::AAAA);
         context.set_attr(
@@ -596,11 +575,11 @@ mod tests {
             },
         );
 
-        selector.post_execute(&mut context, state).await.unwrap();
+        run_selector(&selector, &mut context).await.unwrap();
         assert!(has_answer_of_type(&context, RecordType::AAAA));
 
         let mut second = make_context(RecordType::AAAA);
-        let step2 = selector.execute(&mut second).await.unwrap();
-        assert!(matches!(step2, ExecStep::NextWithPost(_)));
+        let step2 = run_selector(&selector, &mut second).await.unwrap();
+        assert!(matches!(step2, ExecStep::Next));
     }
 }

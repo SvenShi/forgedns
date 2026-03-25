@@ -24,7 +24,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::executor::{ExecStep, Executor, execute_with_post};
+use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -285,7 +285,7 @@ async fn run_executor(
     mut context: DnsContext,
     source: &'static str,
 ) -> Outcome {
-    match execute_with_post(executor.as_ref(), &mut context).await {
+    match executor.execute_with_next(&mut context, None).await {
         Ok(step) => {
             let has_response = context.response().is_some();
             Outcome {
@@ -325,6 +325,7 @@ mod tests {
         tag: String,
         should_fail: bool,
         produce_response: bool,
+        refused_with_next: bool,
     }
 
     #[async_trait]
@@ -344,6 +345,10 @@ mod tests {
 
     #[async_trait]
     impl Executor for StubExecutor {
+        fn with_next(&self) -> bool {
+            self.refused_with_next
+        }
+
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
             if self.should_fail {
                 return Err(DnsError::plugin("stub failed"));
@@ -352,6 +357,19 @@ mod tests {
                 context.set_response(crate::message::Message::new());
             }
             Ok(ExecStep::Next)
+        }
+
+        async fn execute_with_next(
+            &self,
+            context: &mut DnsContext,
+            next: Option<crate::plugin::executor::ExecutorNext>,
+        ) -> Result<ExecStep> {
+            if self.refused_with_next {
+                let _ = next;
+                context.set_response(context.request.response(crate::message::Rcode::Refused));
+                return Ok(ExecStep::Next);
+            }
+            self.execute(context).await
         }
     }
 
@@ -362,6 +380,7 @@ mod tests {
                 tag: "ok".to_string(),
                 should_fail: false,
                 produce_response: true,
+                refused_with_next: false,
             }),
             test_context(),
             "primary",
@@ -375,6 +394,7 @@ mod tests {
                 tag: "noresp".to_string(),
                 should_fail: false,
                 produce_response: false,
+                refused_with_next: false,
             }),
             test_context(),
             "secondary",
@@ -393,6 +413,7 @@ mod tests {
                 tag: "err".to_string(),
                 should_fail: true,
                 produce_response: false,
+                refused_with_next: false,
             }),
             test_context(),
             "primary",
@@ -405,5 +426,32 @@ mod tests {
                 .as_deref()
                 .is_some_and(|e| e.contains("stub failed"))
         );
+    }
+
+    #[tokio::test]
+    async fn test_run_executor_supports_with_next_executor() {
+        let outcome = run_executor(
+            Arc::new(StubExecutor {
+                tag: "with_next".to_string(),
+                should_fail: false,
+                produce_response: false,
+                refused_with_next: true,
+            }),
+            test_context(),
+            "primary",
+        )
+        .await;
+
+        let context = outcome
+            .context
+            .expect("with-next executor should produce a response");
+        assert_eq!(
+            context
+                .response()
+                .expect("with-next executor should set response")
+                .rcode(),
+            crate::message::Rcode::Refused
+        );
+        assert!(outcome.error.is_none());
     }
 }

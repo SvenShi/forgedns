@@ -22,9 +22,9 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::message::Message;
 use crate::message::{ClientSubnet, DNSClass, Edns, EdnsCode, EdnsOption};
-use crate::plugin::executor::{ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::net::IpAddr;
@@ -56,11 +56,6 @@ struct EcsHandler {
     mask6: u8,
 }
 
-#[derive(Debug)]
-struct PostState {
-    forwarded_client_ecs: bool,
-}
-
 #[async_trait]
 impl Plugin for EcsHandler {
     fn tag(&self) -> &str {
@@ -78,13 +73,40 @@ impl Plugin for EcsHandler {
 
 #[async_trait]
 impl Executor for EcsHandler {
+    fn with_next(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
+
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
+        let forwarded_client_ecs = self.prepare_request(context)?;
+        let step = continue_next!(next, context)?;
+        if forwarded_client_ecs {
+            return Ok(step);
+        }
+
+        if let Some(response) = context.response_mut() {
+            strip_ecs_from_message(response);
+        }
+        Ok(step)
+    }
+}
+
+impl EcsHandler {
+    fn prepare_request(&self, context: &mut DnsContext) -> Result<bool> {
         let Some(query_class) = context.request.first_qclass() else {
-            return Ok(ExecStep::Next);
+            return Ok(false);
         };
 
         if query_class != DNSClass::IN {
-            return Ok(ExecStep::Next);
+            return Ok(false);
         }
 
         let mut forwarded_client_ecs = false;
@@ -114,25 +136,7 @@ impl Executor for EcsHandler {
             }
         }
 
-        Ok(ExecStep::NextWithPost(Some(Box::new(PostState {
-            forwarded_client_ecs,
-        }) as ExecState)))
-    }
-
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let forwarded_client_ecs = state
-            .and_then(|boxed| boxed.downcast::<PostState>().ok())
-            .map(|boxed| boxed.forwarded_client_ecs)
-            .unwrap_or(false);
-
-        if forwarded_client_ecs {
-            return Ok(());
-        }
-
-        if let Some(response) = context.response_mut() {
-            strip_ecs_from_message(response);
-        }
-        Ok(())
+        Ok(forwarded_client_ecs)
     }
 }
 
@@ -254,7 +258,6 @@ mod tests {
     use crate::core::context::DnsContext;
     use crate::message::{Message, Question};
     use crate::message::{Name, RecordType};
-    use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -298,24 +301,15 @@ mod tests {
         };
         let mut ctx = make_context(DNSClass::IN);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-        assert!(request_has_ecs(&ctx.request));
-
         let mut response = Message::new();
         add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
         ctx.set_response(response);
 
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
+        assert!(request_has_ecs(&ctx.request));
         assert!(
             !request_has_ecs(ctx.response().expect("response should exist")),
             "response ECS should be stripped when not forwarded from client"
@@ -335,24 +329,15 @@ mod tests {
         let mut ctx = make_context(DNSClass::IN);
         add_ecs_option(ctx.request_mut(), IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-        assert!(request_has_ecs(&ctx.request));
-
         let mut response = Message::new();
         add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
         ctx.set_response(response);
 
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
+        assert!(request_has_ecs(&ctx.request));
         assert!(request_has_ecs(
             ctx.response().expect("response should exist")
         ));
@@ -372,9 +357,9 @@ mod tests {
         add_ecs_option(ctx.request_mut(), IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
 
         plugin
-            .execute(&mut ctx)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("execute should succeed");
+            .expect("continuation execute should succeed");
         assert!(!request_has_ecs(&ctx.request));
     }
 
@@ -392,9 +377,9 @@ mod tests {
         add_ecs_option(ctx.request_mut(), IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 24);
 
         plugin
-            .execute(&mut ctx)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("execute should succeed");
+            .expect("continuation execute should succeed");
         assert!(!request_has_ecs(&ctx.request));
     }
 
@@ -412,9 +397,9 @@ mod tests {
         let _ = ensure_opt_record(ctx.request_mut());
 
         plugin
-            .execute(&mut ctx)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("execute should succeed");
+            .expect("continuation execute should succeed");
         assert!(request_has_ecs(&ctx.request));
     }
 
@@ -431,9 +416,9 @@ mod tests {
         let mut ctx = make_context(DNSClass::IN);
 
         plugin
-            .execute(&mut ctx)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("execute should succeed");
+            .expect("continuation execute should succeed");
         assert!(request_has_ecs(&ctx.request));
         assert!(ctx.request.edns().is_some());
     }
@@ -450,23 +435,14 @@ mod tests {
         };
         let mut ctx = make_context(DNSClass::IN);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         let mut response = Message::new();
         add_ecs_option(&mut response, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 24);
         ctx.set_response(response);
 
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
         assert!(
             !request_has_ecs(ctx.response().expect("response should exist")),
             "response ECS should be stripped when not forwarded from client"

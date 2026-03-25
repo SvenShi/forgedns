@@ -2,7 +2,6 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use forgedns::config::types::{Config, LogConfig, PluginConfig, RuntimeConfig};
 use forgedns::core::context::DnsContext;
 use forgedns::message::{DNSClass, Message, Name, Question, RecordType};
-use forgedns::plugin::executor::execute_with_post;
 use forgedns::plugin::{PluginRegistry, init as init_plugins};
 use serde_yml::Value;
 use std::hint::black_box;
@@ -111,7 +110,7 @@ fn bench_black_hole(c: &mut Criterion) {
             b.iter(|| {
                 let mut ctx = make_context(registry.clone(), "bench.test.", qtype);
                 let step = rt
-                    .block_on(execute_with_post(executor.as_ref(), &mut ctx))
+                    .block_on(executor.execute_with_next(&mut ctx, None))
                     .expect("black_hole execute should succeed");
                 black_box(step);
                 black_box(ctx.response().expect("response should be present"));
@@ -156,7 +155,7 @@ fn bench_hosts(c: &mut Criterion) {
             b.iter(|| {
                 let mut ctx = make_context(registry.clone(), qname, RecordType::A);
                 let step = rt
-                    .block_on(execute_with_post(executor.as_ref(), &mut ctx))
+                    .block_on(executor.execute_with_next(&mut ctx, None))
                     .expect("hosts execute should succeed");
                 black_box(step);
                 black_box(ctx.response().expect("response should be present"));
@@ -238,7 +237,7 @@ fn bench_arbitrary(c: &mut Criterion) {
             b.iter(|| {
                 let mut ctx = make_context(registry.clone(), qname, qtype);
                 let step = rt
-                    .block_on(execute_with_post(executor.as_ref(), &mut ctx))
+                    .block_on(executor.execute_with_next(&mut ctx, None))
                     .expect("arbitrary execute should succeed");
                 black_box(step);
                 black_box(ctx.response().expect("response should be present"));

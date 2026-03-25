@@ -10,7 +10,7 @@ use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{
     SequenceRef, parse_control_flow_sequence_tag, parse_sequence_ref,
 };
-use crate::plugin::executor::{ExecState, ExecStep, Executor, execute_with_post};
+use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
 use ahash::AHashSet;
@@ -49,6 +49,7 @@ enum BuiltinOp {
 enum InstructionOp {
     /// Normal executor plugin dispatch.
     Executor(Arc<dyn Executor>),
+    ExecutorWithNext(Arc<dyn Executor>),
     /// Builtin control-flow operation.
     Builtin(BuiltinOp),
 }
@@ -74,20 +75,16 @@ impl ChainProgram {
     /// - Evaluate matchers for current instruction.
     /// - Execute either executor opcode or builtin opcode.
     /// - Advance `pc` according to returned [`ExecStep`] / builtin semantics.
-    /// - Execute deferred `post_execute` callbacks in LIFO order.
     pub async fn run(self: &Arc<Self>, context: &mut DnsContext) -> Result<()> {
-        self.run_from_inner(context, 0).await
+        let _ = self.run_from_inner(context, 0).await?;
+        Ok(())
     }
 
     async fn run_from_inner(
         self: &Arc<Self>,
         context: &mut DnsContext,
         mut pc: usize,
-    ) -> Result<()> {
-        // Deferred post callbacks for `ExecStep::NextWithPost`.
-        let mut post_stack: Vec<(Arc<dyn Executor>, Option<ExecState>)> = Vec::new();
-        let mut run_error: Option<DnsError> = None;
-
+    ) -> Result<ExecStep> {
         while pc < self.instructions.len() {
             let instruction = &self.instructions[pc];
             if !instruction.matches(context) {
@@ -96,63 +93,43 @@ impl ChainProgram {
             }
 
             match &instruction.op {
-                InstructionOp::Executor(executor) => match executor.execute(context).await {
-                    Ok(step) => match step {
-                        ExecStep::Next => pc += 1,
-                        ExecStep::NextWithPost(state) => {
-                            post_stack.push((executor.clone(), state));
-                            pc += 1;
-                        }
-                        ExecStep::Stop => break,
-                    },
-                    Err(e) => {
-                        run_error = Some(e);
-                        break;
-                    }
+                InstructionOp::Executor(executor) => match executor.execute(context).await? {
+                    ExecStep::Next => pc += 1,
+                    ExecStep::Stop => return Ok(ExecStep::Stop),
                 },
+                InstructionOp::ExecutorWithNext(executor) => {
+                    let next = ExecutorNext::new(self.clone(), pc + 1);
+                    return executor.execute_with_next(context, Some(next)).await;
+                }
                 InstructionOp::Builtin(op) => match op {
                     BuiltinOp::Accept => {
                         context.set_flow(ExecFlowState::Broken);
-                        break;
+                        return Ok(ExecStep::Stop);
                     }
-                    BuiltinOp::Return => break,
+                    BuiltinOp::Return => return Ok(ExecStep::Stop),
                     BuiltinOp::Reject(rcode) => {
                         context.set_response(context.request().response(*rcode));
                         context.set_flow(ExecFlowState::Broken);
-                        break;
+                        return Ok(ExecStep::Stop);
                     }
                     BuiltinOp::Jump(executor) => {
-                        let step = match execute_with_post(executor.as_ref(), context).await {
-                            Ok(step) => step,
-                            Err(e) => {
-                                run_error = Some(e);
-                                break;
-                            }
-                        };
+                        let step = executor.execute_with_next(context, None).await?;
                         match step {
-                            ExecStep::Stop => break,
+                            ExecStep::Stop => return Ok(ExecStep::Stop),
                             ExecStep::Next => {
                                 if context.flow() == ExecFlowState::Broken {
-                                    break;
+                                    return Ok(ExecStep::Stop);
                                 }
                                 if context.flow() == ExecFlowState::ReachedTail {
                                     context.set_flow(ExecFlowState::Running);
                                 }
                                 pc += 1;
                             }
-                            ExecStep::NextWithPost(_) => {
-                                run_error = Some(DnsError::plugin(
-                                    "unexpected NextWithPost after execute_with_post in jump",
-                                ));
-                                break;
-                            }
                         }
                     }
                     BuiltinOp::Goto(executor) => {
-                        if let Err(e) = execute_with_post(executor.as_ref(), context).await {
-                            run_error = Some(e);
-                        }
-                        break;
+                        let _ = executor.execute_with_next(context, None).await?;
+                        return Ok(ExecStep::Stop);
                     }
                     BuiltinOp::Mark(marks) => {
                         context.marks_mut().extend(marks.iter().cloned());
@@ -162,19 +139,23 @@ impl ChainProgram {
             }
         }
 
-        while let Some((executor, state)) = post_stack.pop() {
-            if let Err(e) = executor.post_execute(context, state).await {
-                if run_error.is_none() {
-                    run_error = Some(e);
-                }
-            }
-        }
+        Ok(ExecStep::Next)
+    }
+}
 
-        if let Some(e) = run_error {
-            Err(e)
-        } else {
-            Ok(())
-        }
+#[derive(Debug)]
+pub struct ExecutorNext {
+    program: Arc<ChainProgram>,
+    pc: usize,
+}
+
+impl ExecutorNext {
+    pub(crate) fn new(program: Arc<ChainProgram>, pc: usize) -> Self {
+        Self { program, pc }
+    }
+
+    pub async fn next(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.program.run_from_inner(context, self.pc).await
     }
 }
 
@@ -275,7 +256,12 @@ impl ChainBuilder {
         let op = if let Some(op) = self.parse_builtin(exec, node_index).await? {
             InstructionOp::Builtin(op)
         } else {
-            InstructionOp::Executor(self.resolve_executor_ref(exec, node_index).await?)
+            let exec = self.resolve_executor_ref(exec, node_index).await?;
+            if exec.with_next() {
+                InstructionOp::ExecutorWithNext(exec)
+            } else {
+                InstructionOp::Executor(exec)
+            }
         };
 
         Ok(Instruction { matchers, op })
@@ -299,9 +285,7 @@ impl ChainBuilder {
                         ))
                     }
                 } else {
-                    Err(DnsError::plugin(
-                        "invalid code argument: reject expects a decimal numeric rcode",
-                    ))
+                    Ok(Some(BuiltinOp::Reject(Rcode::Refused)))
                 }
             }
             "mark" => Ok(Some(BuiltinOp::Mark(parse_mark_values(arg)?))),
@@ -463,11 +447,11 @@ fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::continue_next;
     use crate::core::context::ExecFlowState;
     use crate::message::{Message, Question};
     use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
-    use crate::plugin::executor::ExecResult;
     use async_trait::async_trait;
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Mutex;
@@ -475,7 +459,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     enum StubBehavior {
         Next,
-        NextWithPost,
+        AroundNext,
         Error(&'static str),
     }
 
@@ -526,6 +510,10 @@ mod tests {
 
     #[async_trait]
     impl Executor for StubExecutor {
+        fn with_next(&self) -> bool {
+            matches!(self.behavior, StubBehavior::AroundNext)
+        }
+
         async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
             if let Some(label) = self.execute_log {
                 self.log.lock().unwrap().push(label);
@@ -536,20 +524,28 @@ mod tests {
 
             match self.behavior {
                 StubBehavior::Next => Ok(ExecStep::Next),
-                StubBehavior::NextWithPost => Ok(ExecStep::NextWithPost(None)),
                 StubBehavior::Error(message) => Err(DnsError::plugin(message)),
+                StubBehavior::AroundNext => Ok(ExecStep::Next),
             }
         }
 
-        async fn post_execute(
+        async fn execute_with_next(
             &self,
-            _context: &mut DnsContext,
-            _state: Option<ExecState>,
-        ) -> ExecResult {
+            context: &mut DnsContext,
+            next: Option<ExecutorNext>,
+        ) -> Result<ExecStep> {
+            if let Some(label) = self.execute_log {
+                self.log.lock().unwrap().push(label);
+            }
+            if let Some(state) = self.next_flow_state {
+                context.set_flow(state);
+            }
+
+            let result = continue_next!(next, context);
             if let Some(label) = self.post_log {
                 self.log.lock().unwrap().push(label);
             }
-            Ok(())
+            result
         }
     }
 
@@ -570,9 +566,14 @@ mod tests {
     }
 
     fn executor_instruction(executor: Arc<dyn Executor>) -> Instruction {
+        let op = if executor.with_next() {
+            InstructionOp::ExecutorWithNext(executor)
+        } else {
+            InstructionOp::Executor(executor)
+        };
         Instruction {
             matchers: Vec::new(),
-            op: InstructionOp::Executor(executor),
+            op,
         }
     }
 
@@ -584,12 +585,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_executes_post_callbacks_in_lifo_order() {
+    async fn test_run_executes_continuation_callbacks_in_lifo_order() {
         // Arrange
         let log = Arc::new(Mutex::new(Vec::new()));
         let first: Arc<dyn Executor> = Arc::new(StubExecutor::new(
             "first",
-            StubBehavior::NextWithPost,
+            StubBehavior::AroundNext,
             None,
             Some("post:first"),
             None,
@@ -597,7 +598,7 @@ mod tests {
         ));
         let second: Arc<dyn Executor> = Arc::new(StubExecutor::new(
             "second",
-            StubBehavior::NextWithPost,
+            StubBehavior::AroundNext,
             None,
             Some("post:second"),
             None,
@@ -619,12 +620,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_bubbles_execute_error_after_running_deferred_posts() {
+    async fn test_run_bubbles_execute_error_after_running_with_next_cleanup() {
         // Arrange
         let log = Arc::new(Mutex::new(Vec::new()));
         let deferred: Arc<dyn Executor> = Arc::new(StubExecutor::new(
             "deferred",
-            StubBehavior::NextWithPost,
+            StubBehavior::AroundNext,
             None,
             Some("post:deferred"),
             None,
@@ -686,6 +687,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_standalone_execute_with_next_supports_with_next_executor() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let executor = StubExecutor::new(
+            "terminal",
+            StubBehavior::AroundNext,
+            Some("execute:terminal"),
+            Some("post:terminal"),
+            None,
+            log.clone(),
+        );
+        let mut context = make_context();
+
+        let step = executor
+            .execute_with_next(&mut context, None)
+            .await
+            .unwrap();
+
+        assert!(matches!(step, ExecStep::Next));
+        assert_eq!(
+            log.lock().unwrap().clone(),
+            vec!["execute:terminal", "post:terminal"]
+        );
+    }
+
+    #[tokio::test]
     async fn test_run_reject_builds_response_from_request_message() {
         let program = Arc::new(ChainProgram {
             instructions: vec![builtin_instruction(BuiltinOp::Reject(Rcode::ServFail))],
@@ -698,6 +724,19 @@ mod tests {
         assert_eq!(response.id(), 42);
         assert_eq!(response.rcode(), Rcode::ServFail);
         assert_eq!(context.flow(), ExecFlowState::Broken);
+    }
+
+    #[tokio::test]
+    async fn test_parse_builtin_reject_defaults_to_refused() {
+        let registry = crate::plugin::test_utils::test_registry();
+        let mut builder = ChainBuilder::new(registry, "seq".to_string());
+
+        let op = builder
+            .parse_builtin("reject", 0)
+            .await
+            .expect("reject without argument should parse");
+
+        assert!(matches!(op, Some(BuiltinOp::Reject(Rcode::Refused))));
     }
 
     #[tokio::test]

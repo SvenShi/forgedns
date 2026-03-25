@@ -16,9 +16,9 @@ use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::message::{Message, Rcode};
-use crate::plugin::executor::{ExecResult, ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::fmt::Debug;
@@ -491,10 +491,23 @@ impl Plugin for Cache {
 
 #[async_trait]
 impl Executor for Cache {
+    fn with_next(&self) -> bool {
+        true
+    }
+
     #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
+
+    #[hotpath::measure]
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
         let Some(cache_map) = self.cache_map.get() else {
-            return Ok(ExecStep::Next);
+            return continue_next!(next, context);
         };
 
         let (miss_key, cache_hit) = self.try_cache_hit(context, cache_map);
@@ -506,41 +519,25 @@ impl Executor for Cache {
         // Cache hit without short-circuit keeps chain running but does not
         // rewrite cache in post stage. This avoids TTL drift on repeated hits.
         if cache_hit {
-            return Ok(ExecStep::Next);
+            return continue_next!(next, context);
         }
+
+        let next_step = continue_next!(next, context)?;
 
         if let Some(key) = miss_key {
-            return Ok(ExecStep::NextWithPost(Some(Box::new(key) as ExecState)));
-        }
-
-        Ok(ExecStep::Next)
-    }
-
-    #[hotpath::measure]
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> ExecResult {
-        let Some(cache_map) = self.cache_map.get() else {
-            return Ok(());
-        };
-
-        let cache_key = state
-            .and_then(|boxed| boxed.downcast::<CacheKey>().ok())
-            .map(|boxed| *boxed);
-
-        if let Some(key) = cache_key {
             let Some(response) = context.response() else {
-                return Ok(());
+                return Ok(next_step);
             };
 
             if response.truncated() {
-                return Ok(());
+                return Ok(next_step);
             }
 
             if let Some(ttl) = self.compute_cache_ttl(response) {
                 self.update_cache_entry(cache_map, key, response.clone(), ttl);
             }
         }
-
-        Ok(())
+        Ok(next_step)
     }
 }
 
@@ -869,17 +866,13 @@ mod tests {
         let _ = cache.init().await;
 
         let mut context = make_context(make_request_with_query("example.com.", false, false));
-        let state = match cache.execute(&mut context).await.unwrap() {
-            ExecStep::NextWithPost(state) => state,
-            other => panic!("unexpected execute step: {:?}", other),
-        };
 
         let mut response = Message::new();
         response.set_rcode(Rcode::NoError);
         response.set_truncated(true);
         context.set_response(response);
 
-        cache.post_execute(&mut context, state).await.unwrap();
+        cache.execute_with_next(&mut context, None).await.unwrap();
 
         let cache_map = cache.cache_map.get().unwrap();
         assert_eq!(cache_map.len(), 0);

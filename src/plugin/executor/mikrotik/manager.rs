@@ -252,7 +252,7 @@ pub(super) struct PersistentReloadConfig {
 
 #[derive(Debug)]
 pub(super) struct AddressListManagerRuntime {
-    /// Command channel used by `post_execute()` and background tasks.
+    /// Command channel used by with-next execution and background tasks.
     tx: mpsc::Sender<ManagerCommand>,
     /// Single-owner worker task that serializes all local state transitions.
     worker_handle: Option<JoinHandle<()>>,

@@ -10,8 +10,8 @@
 //!
 //! Runtime behavior:
 //! - `execute`: extracts configured option codes from request OPT records and
-//!   stores them in post state.
-//! - `post_execute`: re-inserts those options into response OPT records after
+//!   prepares them for continuation-local post processing.
+//! - continuation post-stage: re-inserts those options into response OPT records after
 //!   downstream executors complete.
 //!
 //! Safety/perf notes:
@@ -23,9 +23,9 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::message::{EdnsCode, EdnsOption};
-use crate::plugin::executor::{ExecState, ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -61,29 +61,27 @@ impl Plugin for ForwardEdns0Opt {
 
 #[async_trait]
 impl Executor for ForwardEdns0Opt {
+    fn with_next(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
+
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
         if self.code_set.is_empty() {
-            return Ok(ExecStep::Next);
+            return continue_next!(next, context);
         }
 
         let selected = collect_selected_options(&context.request, &self.code_set);
+        let step = continue_next!(next, context)?;
         if selected.is_empty() {
-            return Ok(ExecStep::Next);
-        }
-
-        Ok(ExecStep::NextWithPost(
-            Some(Box::new(selected) as ExecState),
-        ))
-    }
-
-    async fn post_execute(&self, context: &mut DnsContext, state: Option<ExecState>) -> Result<()> {
-        let selected = state
-            .and_then(|boxed| boxed.downcast::<Vec<EdnsOption>>().ok())
-            .map(|boxed| *boxed)
-            .unwrap_or_default();
-
-        if selected.is_empty() {
-            return Ok(());
+            return Ok(step);
         }
 
         if let Some(response) = context.response_mut() {
@@ -97,7 +95,7 @@ impl Executor for ForwardEdns0Opt {
             }
         }
 
-        Ok(())
+        Ok(step)
     }
 }
 
@@ -216,7 +214,6 @@ mod tests {
     use crate::core::context::DnsContext;
     use crate::message::{ClientSubnet, DNSClass, Message, Question};
     use crate::message::{Name, RecordType};
-    use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -273,20 +270,11 @@ mod tests {
         let mut ctx = make_context();
         add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         ctx.set_response(Message::new());
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
         assert_eq!(
             count_code(ctx.response().expect("response should exist"), 8),
             1
@@ -294,7 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_forward_edns0opt_post_execute_deduplicates_existing_code() {
+    async fn test_forward_edns0opt_with_next_deduplicates_existing_code() {
         let plugin = ForwardEdns0Opt {
             tag: "forward_opt".to_string(),
             code_set: [8u16].into_iter().collect(),
@@ -302,23 +290,14 @@ mod tests {
         let mut ctx = make_context();
         add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         let mut response = Message::new();
         add_ecs(&mut response, Ipv4Addr::new(2, 2, 2, 2), 24);
         ctx.set_response(response);
 
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
         assert_eq!(
             count_code(ctx.response().expect("response should exist"), 8),
             1
@@ -334,20 +313,11 @@ mod tests {
         let mut ctx = make_context();
         add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         ctx.set_response(Message::new());
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
         assert_eq!(
             count_code(ctx.response().expect("response should exist"), 8),
             1
@@ -363,23 +333,14 @@ mod tests {
         let mut ctx = make_context();
         add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         let mut response = Message::new();
         add_ecs(&mut response, Ipv4Addr::new(2, 2, 2, 2), 24);
         ctx.set_response(response);
 
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
         assert_eq!(
             count_code(ctx.response().expect("response should exist"), 8),
             1
@@ -395,23 +356,14 @@ mod tests {
         let mut ctx = make_context();
         add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         let mut response = Message::new();
         let _ = ensure_opt_record(&mut response);
         ctx.set_response(response);
 
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
         assert_eq!(
             count_code(ctx.response().expect("response should exist"), 8),
             1
@@ -427,21 +379,12 @@ mod tests {
         let mut ctx = make_context();
         add_ecs(ctx.request_mut(), Ipv4Addr::new(1, 1, 1, 1), 24);
 
-        let step = plugin
-            .execute(&mut ctx)
-            .await
-            .expect("execute should succeed");
-        let state = match step {
-            ExecStep::NextWithPost(state) => state,
-            _ => panic!("expected NextWithPost"),
-        };
-
         ctx.set_response(Message::new());
 
         plugin
-            .post_execute(&mut ctx, state)
+            .execute_with_next(&mut ctx, None)
             .await
-            .expect("post_execute should succeed");
+            .expect("continuation execute should succeed");
 
         let updated = ctx.response().expect("response should exist");
         assert!(updated.edns().is_some());
