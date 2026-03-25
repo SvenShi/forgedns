@@ -87,7 +87,7 @@ impl Matcher for RcodeMatcher {
         let Some(rcode) = context.response().map(|response| response.rcode()) else {
             return false;
         };
-        self.rcodes.contains(&u16::from(rcode))
+        self.rcodes.contains(&rcode.value())
     }
 }
 

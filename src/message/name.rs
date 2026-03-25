@@ -11,7 +11,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 const MAX_NAME_WIRE_OCTETS: usize = 255;
 const MAX_COMPRESSION_POINTERS: usize = (MAX_NAME_WIRE_OCTETS + 1) / 2 - 2;
@@ -72,8 +72,13 @@ const ASCII_LOWERCASE_TABLE: [u8; 256] = build_ascii_lowercase_table();
 /// - `wire`: expanded wire name preserving original input/packet case
 /// - `wire_label_offsets`: start offset of each label length octet in `wire`
 /// - `presentation`: lazily built canonical lowercased escaped fqdn with offsets
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Name {
+    inner: Arc<NameInner>,
+}
+
+#[derive(Debug)]
+struct NameInner {
     wire: WireBuf,
     wire_label_offsets: WireLabelOffsets,
     presentation: OnceLock<PresentationData>,
@@ -85,7 +90,7 @@ struct PresentationData {
     fqdn_label_offsets: FqdnLabelOffsets,
 }
 
-impl Clone for Name {
+impl Clone for NameInner {
     fn clone(&self) -> Self {
         let cloned = Self {
             wire: self.wire.clone(),
@@ -231,9 +236,11 @@ impl Name {
         }
 
         Ok(Self {
-            wire,
-            wire_label_offsets,
-            presentation: OnceLock::new(),
+            inner: Arc::new(NameInner {
+                wire,
+                wire_label_offsets,
+                presentation: OnceLock::new(),
+            }),
         })
     }
 
@@ -243,9 +250,11 @@ impl Name {
         wire.push(0);
 
         Self {
-            wire,
-            wire_label_offsets: WireLabelOffsets::new(),
-            presentation: OnceLock::new(),
+            inner: Arc::new(NameInner {
+                wire,
+                wire_label_offsets: WireLabelOffsets::new(),
+                presentation: OnceLock::new(),
+            }),
         }
     }
 
@@ -271,7 +280,7 @@ impl Name {
     /// Report whether the name is the DNS root.
     #[inline]
     pub fn is_root(&self) -> bool {
-        self.wire_label_offsets.is_empty()
+        self.inner.wire_label_offsets.is_empty()
     }
 
     /// Return the matcher-friendly normalized form without a trailing dot.
@@ -308,24 +317,28 @@ impl Name {
 
     #[inline]
     pub(crate) fn wire_label_meta_at(&self, index: usize) -> (u8, &[u8], &[u8]) {
-        let len_pos = self.wire_label_offsets[index] as usize;
-        let len = self.wire[len_pos];
+        let len_pos = self.inner.wire_label_offsets[index] as usize;
+        let len = self.inner.wire[len_pos];
         let start = len_pos + 1;
         let end = start + len as usize;
-        (len, &self.wire[start..end], &self.wire[len_pos..])
+        (
+            len,
+            &self.inner.wire[start..end],
+            &self.inner.wire[len_pos..],
+        )
     }
 
     #[inline]
     pub(crate) fn wire_label_len_and_suffix_at(&self, index: usize) -> (u8, &[u8]) {
-        let len_pos = self.wire_label_offsets[index] as usize;
-        let len = self.wire[len_pos];
-        (len, &self.wire[len_pos..])
+        let len_pos = self.inner.wire_label_offsets[index] as usize;
+        let len = self.inner.wire[len_pos];
+        (len, &self.inner.wire[len_pos..])
     }
 
     /// Number of labels in this name.
     #[inline]
     pub(crate) fn label_count(&self) -> usize {
-        self.wire_label_offsets.len()
+        self.inner.wire_label_offsets.len()
     }
 
     /// Borrow one label from the canonical fqdn representation.
@@ -345,11 +358,11 @@ impl Name {
     /// Borrow one label from the expanded wire representation.
     #[inline]
     pub(crate) fn wire_label_at(&self, index: usize) -> &[u8] {
-        let len_pos = self.wire_label_offsets[index] as usize;
-        let len = self.wire[len_pos] as usize;
+        let len_pos = self.inner.wire_label_offsets[index] as usize;
+        let len = self.inner.wire[len_pos] as usize;
         let start = len_pos + 1;
         let end = start + len;
-        &self.wire[start..end]
+        &self.inner.wire[start..end]
     }
 
     /// Borrow the canonical suffix from label index `index` to the end, without a trailing dot.
@@ -363,23 +376,23 @@ impl Name {
     #[inline]
     pub(crate) fn wire_suffix_from(&self, index: usize) -> &[u8] {
         if index == self.label_count() {
-            &self.wire[self.wire.len() - 1..]
+            &self.inner.wire[self.inner.wire.len() - 1..]
         } else {
-            let start = self.wire_label_offsets[index] as usize;
-            &self.wire[start..]
+            let start = self.inner.wire_label_offsets[index] as usize;
+            &self.inner.wire[start..]
         }
     }
 
     /// Borrow the expanded wire name.
     #[inline]
     pub(crate) fn wire(&self) -> &[u8] {
-        &self.wire
+        &self.inner.wire
     }
 
     /// Return the DNS wire length without compression.
     #[inline]
     pub fn bytes_len(&self) -> usize {
-        self.wire.len()
+        self.inner.wire.len()
     }
 
     /// Return encoded byte length at offset `off` with optional compression.
@@ -483,9 +496,11 @@ impl Name {
 
                         return Ok((
                             Self {
-                                wire,
-                                wire_label_offsets,
-                                presentation: OnceLock::new(),
+                                inner: Arc::new(NameInner {
+                                    wire,
+                                    wire_label_offsets,
+                                    presentation: OnceLock::new(),
+                                }),
                             },
                             end,
                         ));
@@ -558,8 +573,9 @@ impl Name {
 impl Name {
     #[inline]
     fn presentation(&self) -> &PresentationData {
-        self.presentation
-            .get_or_init(|| build_presentation_from_wire(&self.wire, &self.wire_label_offsets))
+        self.inner.presentation.get_or_init(|| {
+            build_presentation_from_wire(&self.inner.wire, &self.inner.wire_label_offsets)
+        })
     }
 }
 

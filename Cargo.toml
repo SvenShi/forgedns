@@ -59,3 +59,7 @@ criterion = "0.8.2"
 [[bench]]
 name = "message_codec"
 harness = false
+
+[[bench]]
+name = "plugin_local_answers"
+harness = false

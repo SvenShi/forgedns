@@ -187,7 +187,7 @@ impl StringSource {
                 context
                     .response()
                     .map(|response| response.rcode())
-                    .map(|rcode| u16::from(rcode).to_string())
+                    .map(|rcode| rcode.value().to_string())
                     .unwrap_or_default(),
             ),
             StringSource::RespIp => {

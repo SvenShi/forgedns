@@ -19,13 +19,12 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::RecordType;
+use crate::message::{A, AAAA, RData, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
-use smallvec::SmallVec;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -41,8 +40,8 @@ struct BlackHoleConfig {
 #[derive(Debug)]
 struct BlackHole {
     tag: String,
-    ipv4: Vec<std::net::Ipv4Addr>,
-    ipv6: Vec<std::net::Ipv6Addr>,
+    ipv4: Vec<Arc<RData>>,
+    ipv6: Vec<Arc<RData>>,
 }
 
 #[async_trait]
@@ -66,24 +65,16 @@ impl Executor for BlackHole {
         let Some(question) = context.request.first_question() else {
             return Ok(ExecStep::Next);
         };
-        let qtype = question.qtype();
-
-        let mut addresses = SmallVec::<[IpAddr; 8]>::new();
-        match qtype {
-            RecordType::A if !self.ipv4.is_empty() => {
-                addresses.extend(self.ipv4.iter().copied().map(IpAddr::V4));
-            }
-            RecordType::AAAA if !self.ipv6.is_empty() => {
-                addresses.extend(self.ipv6.iter().copied().map(IpAddr::V6));
-            }
+        let response = match question.qtype() {
+            RecordType::A if !self.ipv4.is_empty() => context
+                .request
+                .address_response_rdata(question, 300, &self.ipv4)?,
+            RecordType::AAAA if !self.ipv6.is_empty() => context
+                .request
+                .address_response_rdata(question, 300, &self.ipv6)?,
             _ => return Ok(ExecStep::Next),
-        }
-
-        context.set_response(context.request.address_response(
-            question,
-            300,
-            addresses.as_slice(),
-        )?);
+        };
+        context.set_response(response);
 
         Ok(ExecStep::Next)
     }
@@ -180,14 +171,14 @@ fn split_tokens(raw: &str) -> Vec<&str> {
         .collect()
 }
 
-fn split_ips(ips: Vec<IpAddr>) -> (Vec<std::net::Ipv4Addr>, Vec<std::net::Ipv6Addr>) {
+fn split_ips(ips: Vec<IpAddr>) -> (Vec<Arc<RData>>, Vec<Arc<RData>>) {
     let mut ipv4 = Vec::new();
     let mut ipv6 = Vec::new();
 
     for ip in ips {
         match ip {
-            IpAddr::V4(v4) => ipv4.push(v4),
-            IpAddr::V6(v6) => ipv6.push(v6),
+            IpAddr::V4(v4) => ipv4.push(Arc::new(RData::A(A(v4)))),
+            IpAddr::V6(v6) => ipv6.push(Arc::new(RData::AAAA(AAAA(v6)))),
         }
     }
 
@@ -229,7 +220,7 @@ mod tests {
     async fn test_black_hole_execute_generates_a_answers() {
         let plugin = BlackHole {
             tag: "bh".to_string(),
-            ipv4: vec![Ipv4Addr::new(1, 1, 1, 1)],
+            ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
         };
         let mut ctx = make_context(RecordType::A);
@@ -248,7 +239,7 @@ mod tests {
         let plugin = BlackHole {
             tag: "bh".to_string(),
             ipv4: vec![],
-            ipv6: vec![Ipv6Addr::LOCALHOST],
+            ipv6: vec![Arc::new(RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)))],
         };
         let mut ctx = make_context(RecordType::AAAA);
         let step = plugin
@@ -265,7 +256,7 @@ mod tests {
     async fn test_black_hole_execute_builds_response_from_request_message() {
         let plugin = BlackHole {
             tag: "bh".to_string(),
-            ipv4: vec![Ipv4Addr::new(1, 1, 1, 1)],
+            ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
         };
         let mut ctx = make_context(RecordType::A);
@@ -284,7 +275,7 @@ mod tests {
     async fn test_black_hole_execute_skips_multi_question_request() {
         let plugin = BlackHole {
             tag: "bh".to_string(),
-            ipv4: vec![Ipv4Addr::new(1, 1, 1, 1)],
+            ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
         };
         let mut ctx = make_context(RecordType::A);

@@ -21,7 +21,6 @@ use crate::register_plugin_factory;
 use ahash::AHashMap;
 use async_trait::async_trait;
 use serde::Deserialize;
-use smallvec::SmallVec;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -48,32 +47,66 @@ struct Arbitrary {
 
 #[derive(Debug, Default)]
 struct NameRecords {
-    by_type: AHashMap<RecordType, StoredAnswers>,
-    any: StoredAnswers,
+    by_type: AHashMap<RecordType, PreparedAnswer>,
+    any: SharedRecords,
 }
 
 #[derive(Debug, Clone, Default)]
-struct StoredAnswers {
-    records: Vec<Record>,
-    answer_ips: SmallVec<[IpAddr; 8]>,
-    fast_address: Option<FastAddressAnswer>,
+struct SharedRecords {
+    records: Arc<[Record]>,
 }
 
 #[derive(Debug, Clone)]
-struct FastAddressAnswer {
-    ttl: u32,
-    addresses: SmallVec<[IpAddr; 8]>,
+enum PreparedAnswer {
+    Shared(SharedRecords),
+    FastV4(FastAddressV4),
+    FastV6(FastAddressV6),
 }
 
-impl StoredAnswers {
+#[derive(Debug, Clone)]
+struct FastAddressV4 {
+    ttl: u32,
+    addresses: Vec<Arc<RData>>,
+}
+
+#[derive(Debug, Clone)]
+struct FastAddressV6 {
+    ttl: u32,
+    addresses: Vec<Arc<RData>>,
+}
+
+impl Default for PreparedAnswer {
+    fn default() -> Self {
+        Self::Shared(SharedRecords::default())
+    }
+}
+
+impl SharedRecords {
     #[inline]
     fn len(&self) -> usize {
         self.records.len()
     }
 
-    fn finalize(&mut self) {
-        self.answer_ips = self.records.iter().filter_map(Record::ip_addr).collect();
-        self.fast_address = build_fast_address_answer(&self.records);
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    #[inline]
+    fn extend_answers_into(&self, answers: &mut Vec<Record>) {
+        answers.reserve(self.records.len());
+        answers.extend(self.records.iter().cloned());
+    }
+}
+
+impl PreparedAnswer {
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            Self::Shared(records) => records.len(),
+            Self::FastV4(answer) => answer.addresses.len(),
+            Self::FastV6(answer) => answer.addresses.len(),
+        }
     }
 }
 
@@ -107,37 +140,62 @@ impl Executor for Arbitrary {
         };
 
         let answers = if qtype == RecordType::ANY {
-            &name_records.any
+            None
         } else {
             let Some(records) = name_records.by_type.get(&qtype) else {
                 return Ok(ExecStep::Next);
             };
-            records
+            Some(records)
         };
-        let answer_count = answers.len();
 
-        if answer_count > 0 {
-            if qtype != RecordType::ANY
-                && qclass == DNSClass::IN
-                && let Some(fast_address) = answers.fast_address.as_ref()
-            {
-                let response = context.request.address_response(
-                    question,
-                    fast_address.ttl,
-                    fast_address.addresses.as_slice(),
-                )?;
-                context.set_response(response);
+        if qtype == RecordType::ANY {
+            if name_records.any.is_empty() {
                 return Ok(ExecStep::Next);
             }
 
             let mut response = context.request().response(Rcode::NoError);
-            response.answers_mut().reserve(answer_count);
-            response
-                .answers_mut()
-                .extend(answers.records.iter().cloned());
-
+            name_records.any.extend_answers_into(response.answers_mut());
             context.set_response(response);
+            return Ok(ExecStep::Next);
         }
+
+        let Some(answers) = answers else {
+            return Ok(ExecStep::Next);
+        };
+        if answers.len() == 0 {
+            return Ok(ExecStep::Next);
+        }
+
+        if qclass == DNSClass::IN {
+            match answers {
+                PreparedAnswer::FastV4(answer) => {
+                    let response = context.request.address_response_rdata(
+                        question,
+                        answer.ttl,
+                        &answer.addresses,
+                    )?;
+                    context.set_response(response);
+                    return Ok(ExecStep::Next);
+                }
+                PreparedAnswer::FastV6(answer) => {
+                    let response = context.request.address_response_rdata(
+                        question,
+                        answer.ttl,
+                        &answer.addresses,
+                    )?;
+                    context.set_response(response);
+                    return Ok(ExecStep::Next);
+                }
+                PreparedAnswer::Shared(_) => {}
+            }
+        }
+
+        let PreparedAnswer::Shared(records) = answers else {
+            return Ok(ExecStep::Next);
+        };
+        let mut response = context.request().response(Rcode::NoError);
+        records.extend_answers_into(response.answers_mut());
+        context.set_response(response);
 
         Ok(ExecStep::Next)
     }
@@ -174,7 +232,7 @@ fn parse_config(args: Option<serde_yml::Value>) -> Result<ArbitraryConfig> {
 }
 
 fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>> {
-    let mut map: AHashMap<String, NameRecords> = AHashMap::new();
+    let mut map: AHashMap<String, BuildNameRecords> = AHashMap::new();
 
     for (idx, line) in cfg.rules.iter().enumerate() {
         let record = parse_zone_line(line).map_err(|e| {
@@ -187,9 +245,8 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
             .by_type
             .entry(record.rr_type())
             .or_default()
-            .records
             .push(record.clone());
-        entry.any.records.push(record);
+        entry.any.push(record);
     }
 
     for path in &cfg.files {
@@ -235,43 +292,96 @@ fn build_records(cfg: &ArbitraryConfig) -> Result<AHashMap<String, NameRecords>>
                 .by_type
                 .entry(record.rr_type())
                 .or_default()
-                .records
                 .push(record.clone());
-            entry.any.records.push(record);
+            entry.any.push(record);
         }
     }
 
-    for name_records in map.values_mut() {
-        name_records.any.finalize();
-        for answers in name_records.by_type.values_mut() {
-            answers.finalize();
-        }
-    }
-
-    Ok(map)
+    Ok(map
+        .into_iter()
+        .map(|(name, records)| (name, records.finalize()))
+        .collect())
 }
 
-fn build_fast_address_answer(records: &[Record]) -> Option<FastAddressAnswer> {
+#[derive(Debug, Default)]
+struct BuildNameRecords {
+    by_type: AHashMap<RecordType, Vec<Record>>,
+    any: Vec<Record>,
+}
+
+impl BuildNameRecords {
+    fn finalize(self) -> NameRecords {
+        let any = SharedRecords {
+            records: Arc::<[Record]>::from(self.any),
+        };
+        let by_type = self
+            .by_type
+            .into_iter()
+            .map(|(record_type, records)| (record_type, finalize_prepared_answer(records)))
+            .collect();
+        NameRecords { by_type, any }
+    }
+}
+
+fn finalize_prepared_answer(records: Vec<Record>) -> PreparedAnswer {
+    if let Some(answer) = build_fast_address_answer_v4(&records) {
+        return PreparedAnswer::FastV4(answer);
+    }
+    if let Some(answer) = build_fast_address_answer_v6(&records) {
+        return PreparedAnswer::FastV6(answer);
+    }
+    PreparedAnswer::Shared(SharedRecords {
+        records: Arc::<[Record]>::from(records),
+    })
+}
+
+fn build_fast_address_answer_v4(records: &[Record]) -> Option<FastAddressV4> {
     let first = records.first()?;
-    let record_type = first.rr_type();
-    if !matches!(record_type, RecordType::A | RecordType::AAAA) {
+    if first.rr_type() != RecordType::A || first.class() != DNSClass::IN {
         return None;
     }
-    if first.class() != DNSClass::IN {
+    let ttl = first.ttl();
+    let mut addresses = Vec::with_capacity(records.len());
+    for record in records {
+        if record.rr_type() != RecordType::A
+            || record.class() != DNSClass::IN
+            || record.ttl() != ttl
+        {
+            return None;
+        }
+        if matches!(record.data(), RData::A(_)) {
+            addresses.push(record.data_arc());
+        } else {
+            return None;
+        }
+    }
+
+    Some(FastAddressV4 { ttl, addresses })
+}
+
+fn build_fast_address_answer_v6(records: &[Record]) -> Option<FastAddressV6> {
+    let first = records.first()?;
+    if first.rr_type() != RecordType::AAAA || first.class() != DNSClass::IN {
         return None;
     }
 
     let ttl = first.ttl();
-    let mut addresses = SmallVec::<[IpAddr; 8]>::with_capacity(records.len());
+    let mut addresses = Vec::with_capacity(records.len());
     for record in records {
-        if record.rr_type() != record_type || record.class() != DNSClass::IN || record.ttl() != ttl
+        if record.rr_type() != RecordType::AAAA
+            || record.class() != DNSClass::IN
+            || record.ttl() != ttl
         {
             return None;
         }
-        addresses.push(record.ip_addr()?);
+        if matches!(record.data(), RData::AAAA(_)) {
+            addresses.push(record.data_arc());
+        } else {
+            return None;
+        }
     }
 
-    Some(FastAddressAnswer { ttl, addresses })
+    Some(FastAddressV6 { ttl, addresses })
 }
 
 fn parse_zone_line(raw: &str) -> std::result::Result<Record, String> {

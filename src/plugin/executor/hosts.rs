@@ -23,7 +23,7 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::{DNSClass, RecordType};
+use crate::message::{A, AAAA, DNSClass, RData, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -32,7 +32,6 @@ use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use async_trait::async_trait;
 use regex::{Regex, RegexSet, RegexSetBuilder};
 use serde::Deserialize;
-use smallvec::SmallVec;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -59,8 +58,8 @@ enum RuleMatcher {
 #[derive(Debug, Clone)]
 struct HostsRule {
     matcher: RuleMatcher,
-    ipv4: Vec<std::net::Ipv4Addr>,
-    ipv6: Vec<std::net::Ipv6Addr>,
+    ipv4: Vec<Arc<RData>>,
+    ipv6: Vec<Arc<RData>>,
 }
 
 #[derive(Debug)]
@@ -116,21 +115,17 @@ impl Executor for HostsExecutor {
             return Ok(ExecStep::Next);
         };
 
-        let mut addresses = SmallVec::<[IpAddr; 8]>::new();
-        match qtype {
-            RecordType::A => addresses.extend(rule.ipv4.iter().copied().map(IpAddr::V4)),
-            RecordType::AAAA => addresses.extend(rule.ipv6.iter().copied().map(IpAddr::V6)),
-            _ => {}
-        }
-        if addresses.is_empty() {
-            return Ok(ExecStep::Next);
-        }
+        let response = match qtype {
+            RecordType::A if !rule.ipv4.is_empty() => context
+                .request
+                .address_response_rdata(question, 300, &rule.ipv4)?,
+            RecordType::AAAA if !rule.ipv6.is_empty() => context
+                .request
+                .address_response_rdata(question, 300, &rule.ipv6)?,
+            _ => return Ok(ExecStep::Next),
+        };
 
-        context.set_response(context.request.address_response(
-            question,
-            300,
-            addresses.as_slice(),
-        )?);
+        context.set_response(response);
 
         Ok(ExecStep::Next)
     }
@@ -243,8 +238,8 @@ fn parse_hosts_line(raw: &str) -> std::result::Result<HostsRule, String> {
     let mut ipv6 = Vec::new();
     for token in &fields[1..] {
         match token.parse::<IpAddr>() {
-            Ok(IpAddr::V4(v4)) => ipv4.push(v4),
-            Ok(IpAddr::V6(v6)) => ipv6.push(v6),
+            Ok(IpAddr::V4(v4)) => ipv4.push(Arc::new(RData::A(A(v4)))),
+            Ok(IpAddr::V6(v6)) => ipv6.push(Arc::new(RData::AAAA(AAAA(v6)))),
             Err(e) => return Err(format!("invalid hosts IP '{}': {}", token, e)),
         }
     }

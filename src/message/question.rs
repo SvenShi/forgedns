@@ -63,3 +63,28 @@ impl Question {
         self.name.bytes_len_at(true, compression) + 4
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_then_mutate_does_not_change_original() {
+        let original = Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        );
+        let mut cloned = original.clone();
+        cloned.set_name(Name::from_ascii("other.example.").unwrap());
+        cloned.set_qtype(RecordType::AAAA);
+        cloned.set_qclass(DNSClass::CH);
+
+        assert_eq!(original.name().to_fqdn(), "example.com.");
+        assert_eq!(original.qtype(), RecordType::A);
+        assert_eq!(original.qclass(), DNSClass::IN);
+        assert_eq!(cloned.name().to_fqdn(), "other.example.");
+        assert_eq!(cloned.qtype(), RecordType::AAAA);
+        assert_eq!(cloned.qclass(), DNSClass::CH);
+    }
+}

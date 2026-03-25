@@ -1,10 +1,12 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use forgedns::message::{
-    DNSClass, Message, MessageType, Opcode, Question, RData, Rcode, Record, RecordType,
+    DNSClass, EdnsCode, EdnsOption, Message, MessageType, Opcode, Question, RData, Rcode, Record,
+    RecordType,
     rdata::{self},
 };
 use std::hint::black_box;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 
 fn forgedns_name(raw: &str) -> forgedns::message::Name {
     forgedns::message::Name::from_ascii(raw).expect("fixture name should be valid")
@@ -232,6 +234,176 @@ fn bench_case(c: &mut Criterion, name: &str, message: Message) {
     group.finish();
 }
 
+fn build_query_with_edns() -> Message {
+    let mut query = Message::new();
+    query.set_id(0x5151);
+    query.set_opcode(Opcode::Query);
+    query.set_recursion_desired(true);
+    query.add_question(Question::new(
+        forgedns_name("bench.example.com."),
+        RecordType::A,
+        DNSClass::IN,
+    ));
+
+    let mut edns = rdata::Edns::new();
+    edns.set_udp_payload_size(1400);
+    edns.set_dnssec_ok(true);
+    edns.insert(EdnsOption::Subnet(rdata::ClientSubnet::new(
+        IpAddr::V4(Ipv4Addr::new(198, 51, 100, 0)),
+        24,
+        0,
+    )));
+    edns.insert(EdnsOption::Local(rdata::EdnsLocal::new(
+        65001,
+        vec![1, 2, 3, 4, 5, 6],
+    )));
+    query.set_edns(edns);
+    query
+}
+
+fn build_query_without_edns() -> Message {
+    let mut query = Message::new();
+    query.set_id(0x5152);
+    query.set_opcode(Opcode::Query);
+    query.set_recursion_desired(true);
+    query.add_question(Question::new(
+        forgedns_name("bench.example.com."),
+        RecordType::A,
+        DNSClass::IN,
+    ));
+    query
+}
+
+fn build_question(qname: &str, qtype: RecordType) -> Question {
+    Question::new(forgedns_name(qname), qtype, DNSClass::IN)
+}
+
+fn bench_response_builders(c: &mut Criterion) {
+    let query = build_query_with_edns();
+    let query_without_edns = build_query_without_edns();
+    let question_v4 = build_question("bench.example.com.", RecordType::A);
+    let question_v6 = build_question("bench.example.com.", RecordType::AAAA);
+    let v4_one = [Ipv4Addr::new(192, 0, 2, 10)];
+    let v4_eight = [
+        Ipv4Addr::new(192, 0, 2, 10),
+        Ipv4Addr::new(192, 0, 2, 11),
+        Ipv4Addr::new(192, 0, 2, 12),
+        Ipv4Addr::new(192, 0, 2, 13),
+        Ipv4Addr::new(192, 0, 2, 14),
+        Ipv4Addr::new(192, 0, 2, 15),
+        Ipv4Addr::new(192, 0, 2, 16),
+        Ipv4Addr::new(192, 0, 2, 17),
+    ];
+    let v6_one = [Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10)];
+    let v6_eight = [
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10),
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x11),
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x12),
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x13),
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x14),
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x15),
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x16),
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x17),
+    ];
+    let v4_one_rdata = v4_one.map(|addr| Arc::new(RData::A(rdata::A(addr))));
+    let v4_eight_rdata = v4_eight.map(|addr| Arc::new(RData::A(rdata::A(addr))));
+    let v6_one_rdata = v6_one.map(|addr| Arc::new(RData::AAAA(rdata::AAAA(addr))));
+    let v6_eight_rdata = v6_eight.map(|addr| Arc::new(RData::AAAA(rdata::AAAA(addr))));
+
+    let mut group = c.benchmark_group("message_response_builders");
+    group.bench_function("response_no_edns_single_question", |b| {
+        b.iter(|| {
+            let response = query_without_edns.response(Rcode::NoError);
+            black_box(response);
+        })
+    });
+
+    group.bench_function("response_with_edns_copy_only", |b| {
+        b.iter(|| {
+            let response = query.response(Rcode::NoError);
+            black_box(response);
+        })
+    });
+
+    group.bench_function("response_with_edns_copy_and_mutate", |b| {
+        b.iter(|| {
+            let mut response = query.response(Rcode::NoError);
+            let edns = response.ensure_edns_mut();
+            edns.set_udp_payload_size(4096);
+            edns.flags_mut().z = 3;
+            edns.remove(EdnsCode::Unknown(65001));
+            edns.insert(EdnsOption::Local(rdata::EdnsLocal::new(
+                65001,
+                vec![9, 9, 9],
+            )));
+            black_box(response);
+        })
+    });
+
+    group.bench_function("address_response_v4_1", |b| {
+        b.iter(|| {
+            let response = query
+                .address_response_rdata(&question_v4, 60, &v4_one_rdata)
+                .expect("address response should build");
+            black_box(response);
+        })
+    });
+
+    group.bench_function("address_response_v4_8", |b| {
+        b.iter(|| {
+            let response = query
+                .address_response_rdata(&question_v4, 60, &v4_eight_rdata)
+                .expect("address response should build");
+            black_box(response);
+        })
+    });
+
+    group.bench_function("address_response_v6_1", |b| {
+        b.iter(|| {
+            let response = query
+                .address_response_rdata(&question_v6, 60, &v6_one_rdata)
+                .expect("address response should build");
+            black_box(response);
+        })
+    });
+
+    group.bench_function("address_response_v6_8", |b| {
+        b.iter(|| {
+            let response = query
+                .address_response_rdata(&question_v6, 60, &v6_eight_rdata)
+                .expect("address response should build");
+            black_box(response);
+        })
+    });
+
+    group.bench_function("response_then_encode_a", |b| {
+        b.iter(|| {
+            let response = query
+                .address_response_rdata(&question_v4, 60, &v4_one_rdata)
+                .expect("address response should build");
+            let encoded = response.to_bytes().expect("address response should encode");
+            black_box(encoded);
+        })
+    });
+
+    group.bench_function("response_then_encode_txt", |b| {
+        b.iter(|| {
+            let mut response = query.response(Rcode::NoError);
+            response.add_answer(Record::from_rdata(
+                forgedns_name("bench.example.com."),
+                60,
+                RData::TXT(rdata::TXT::new(txt_wire(&[
+                    b"forge-benchmark-payload-segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    b"forge-benchmark-payload-segment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                ]))),
+            ));
+            let encoded = response.to_bytes().expect("txt response should encode");
+            black_box(encoded);
+        })
+    });
+    group.finish();
+}
+
 fn bench_message_encode_decode(c: &mut Criterion) {
     bench_case(c, "message_small_response", build_small_response_message());
     bench_case(
@@ -241,6 +413,7 @@ fn bench_message_encode_decode(c: &mut Criterion) {
     );
     bench_case(c, "message_large_payload", build_large_payload_message());
     bench_case(c, "message_compat_fixture", build_compat_fixture_message());
+    bench_response_builders(c);
 }
 
 criterion_group!(message_codec, bench_message_encode_decode);

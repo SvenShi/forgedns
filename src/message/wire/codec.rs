@@ -98,11 +98,11 @@ fn set_header(
     nscount: u16,
     arcount: u16,
 ) -> Result<()> {
-    let rcode = u16::from(message.rcode());
-    if (rcode >> 4) != 0 && message.edns().is_none() {
+    let rcode = message.rcode();
+    if rcode.has_extended_bits() && message.edns().is_none() {
         return Err(DnsError::protocol("extended dns rcode requires edns"));
     }
-    let mut flags = rcode & 0x000f;
+    let mut flags = u16::from(rcode.low());
 
     if matches!(message.message_type(), MessageType::Response) {
         flags |= FLAG_QR;
@@ -231,24 +231,25 @@ pub(crate) fn decode_message(packet: &[u8]) -> Result<Message> {
         offset = next_offset;
     }
 
-    header.set_rcode(Rcode::from(
-        low_rcode | (u16::from(edns.as_ref().map(|e| e.ext_rcode()).unwrap_or(0)) << 4),
+    header.set_rcode(Rcode::from_parts(
+        edns.as_ref().map(|e| e.ext_rcode()).unwrap_or(0),
+        low_rcode as u8,
     ));
 
     if offset != packet.len() {
         return Err(DnsError::protocol("dns packet has trailing bytes"));
     }
 
-    Ok(Message::new_with_params(
+    Ok(Message {
         header,
-        false,
+        compress: false,
         questions,
         answers,
         authorities,
         additionals,
         signature,
         edns,
-    ))
+    })
 }
 
 #[inline]
@@ -409,7 +410,7 @@ pub(crate) fn encode_message_into_mode(
         arcount += 1;
     }
     if let Some(edns) = message.edns() {
-        encode_edns_record(out, edns, (u16::from(message.rcode()) >> 4) as u8)?;
+        encode_edns_record(out, edns, message.rcode().high())?;
         arcount += 1;
     }
 
@@ -513,7 +514,7 @@ pub(crate) fn encode_message_with_limit(
 
         if let Some(edns) = message.edns() {
             arcount += 1;
-            encode_edns_record(out, edns, (u16::from(message.rcode()) >> 4) as u8)?;
+            encode_edns_record(out, edns, message.rcode().high())?;
         }
 
         for record in message.signature() {

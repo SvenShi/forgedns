@@ -10,16 +10,16 @@ use crate::message::{MessageType, Opcode, Rcode};
 /// Public message header carried by the owned DNS message model.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Eq, Hash)]
 pub struct Header {
-    id: u16,
-    message_type: MessageType,
-    opcode: Opcode,
-    authoritative: bool,
-    truncated: bool,
-    recursion_desired: bool,
-    recursion_available: bool,
-    authentic_data: bool,
-    checking_disabled: bool,
-    rcode: Rcode,
+    pub(super) id: u16,
+    pub(super) message_type: MessageType,
+    pub(super) opcode: Opcode,
+    pub(super) authoritative: bool,
+    pub(super) truncated: bool,
+    pub(super) recursion_desired: bool,
+    pub(super) recursion_available: bool,
+    pub(super) authentic_data: bool,
+    pub(super) checking_disabled: bool,
+    pub(super) rcode: Rcode,
 }
 
 impl Default for Header {

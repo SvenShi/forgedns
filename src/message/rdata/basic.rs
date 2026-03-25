@@ -9,6 +9,8 @@
 //! The name-like RDATA types in this module are only thin wrappers around that
 //! canonical owned DNS name model.
 
+use std::sync::Arc;
+
 use crate::core::error::DnsError;
 use crate::message::Name;
 use std::net::IpAddr;
@@ -683,6 +685,11 @@ impl From<EdnsFlags> for u16 {
 /// Owned EDNS state attached to an OPT pseudo-record in the message model.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Edns {
+    inner: Arc<EdnsInner>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct EdnsInner {
     udp_payload_size: u16,
     ext_rcode: u8,
     version: u8,
@@ -703,66 +710,87 @@ impl Edns {
     /// common safe DNS-over-UDP payload on the modern Internet.
     pub fn new() -> Self {
         Self {
-            udp_payload_size: 1232,
-            ext_rcode: 0,
-            version: 0,
-            flags: EdnsFlags::default(),
-            options: Vec::new(),
+            inner: Arc::new(EdnsInner {
+                udp_payload_size: 1232,
+                ext_rcode: 0,
+                version: 0,
+                flags: EdnsFlags::default(),
+                options: Vec::new(),
+            }),
+        }
+    }
+
+    pub fn new_with_param(
+        udp_payload_size: u16,
+        ext_rcode: u8,
+        version: u8,
+        flags: EdnsFlags,
+        options: Vec<EdnsOption>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(EdnsInner {
+                udp_payload_size,
+                ext_rcode,
+                version,
+                flags,
+                options,
+            }),
         }
     }
 
     pub fn udp_payload_size(&self) -> u16 {
-        self.udp_payload_size
+        self.inner.udp_payload_size
     }
 
     /// Set the CLASS field value used by the OPT pseudo-RR on the wire.
     pub fn set_udp_payload_size(&mut self, value: u16) {
-        self.udp_payload_size = value;
+        Arc::make_mut(&mut self.inner).udp_payload_size = value;
     }
 
     pub fn ext_rcode(&self) -> u8 {
-        self.ext_rcode
+        self.inner.ext_rcode
     }
 
     /// Set the high 8 bits of the extended response code carried in the OPT TTL field.
     pub fn set_ext_rcode(&mut self, value: u8) {
-        self.ext_rcode = value;
+        Arc::make_mut(&mut self.inner).ext_rcode = value;
     }
 
     pub fn version(&self) -> u8 {
-        self.version
+        self.inner.version
     }
 
     /// Set the EDNS version carried in the OPT TTL field.
     pub fn set_version(&mut self, value: u8) {
-        self.version = value;
+        Arc::make_mut(&mut self.inner).version = value;
     }
 
     /// Borrow the decoded EDNS flag bitfield.
     pub fn flags(&self) -> &EdnsFlags {
-        &self.flags
+        &self.inner.flags
     }
 
     /// Mutably borrow the decoded EDNS flag bitfield.
     pub fn flags_mut(&mut self) -> &mut EdnsFlags {
-        &mut self.flags
+        &mut Arc::make_mut(&mut self.inner).flags
     }
 
     /// Toggle the DNSSEC OK (DO) bit in the OPT TTL field.
     pub fn set_dnssec_ok(&mut self, enabled: bool) {
-        self.flags.dnssec_ok = enabled;
+        Arc::make_mut(&mut self.inner).flags.dnssec_ok = enabled;
     }
 
     /// Look up an EDNS option by code.
     pub fn option(&self, code: EdnsCode) -> Option<&EdnsOption> {
-        self.options
+        self.inner
+            .options
             .iter()
             .find(|option| EdnsCode::from(*option) == code)
     }
 
     /// Borrow all EDNS options in insertion order.
     pub fn options(&self) -> &[EdnsOption] {
-        &self.options
+        &self.inner.options
     }
 
     /// Insert or replace an EDNS option with the same code.
@@ -772,21 +800,23 @@ impl Edns {
     pub fn insert(&mut self, option: EdnsOption) {
         let code = EdnsCode::from(&option);
         self.remove(code);
-        self.options.push(option);
+        Arc::make_mut(&mut self.inner).options.push(option);
     }
 
     /// Remove all EDNS options matching `code`.
     pub fn remove(&mut self, code: EdnsCode) {
-        self.options.retain(|option| EdnsCode::from(option) != code);
+        Arc::make_mut(&mut self.inner)
+            .options
+            .retain(|option| EdnsCode::from(option) != code);
     }
 
     /// Rebuild the 32-bit OPT TTL value from the structured EDNS fields.
     ///
     /// Layout: `[extended rcode:8][version:8][flags+z:16]`.
     pub fn raw_ttl(&self) -> u32 {
-        (u32::from(self.ext_rcode) << 24)
-            | (u32::from(self.version) << 16)
-            | u32::from(u16::from(self.flags))
+        (u32::from(self.ext_rcode()) << 24)
+            | (u32::from(self.version()) << 16)
+            | u32::from(u16::from(*self.flags()))
     }
 }
 
@@ -815,7 +845,7 @@ impl OPT {
 
     pub fn as_ref(&self) -> OptIter<'_> {
         OptIter {
-            inner: self.0.options.iter(),
+            inner: self.0.options().iter(),
         }
     }
 }
@@ -1107,6 +1137,7 @@ impl SOA {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::EdnsLocal;
 
     #[test]
     fn edns_code_roundtrip_covers_named_registry_values() {
@@ -1140,5 +1171,35 @@ mod tests {
 
         assert_eq!(EdnsCode::from(65001), EdnsCode::Unknown(65001));
         assert_eq!(u16::from(EdnsCode::Unknown(65001)), 65001);
+    }
+
+    #[test]
+    fn edns_clone_then_mutate_does_not_change_original() {
+        let mut original = Edns::new();
+        original.set_udp_payload_size(1232);
+        original.set_dnssec_ok(true);
+        original.insert(EdnsOption::Local(EdnsLocal::new(65001, vec![1, 2, 3])));
+
+        let mut cloned = original.clone();
+        cloned.set_udp_payload_size(4096);
+        cloned.set_ext_rcode(2);
+        cloned.flags_mut().z = 7;
+        cloned.insert(EdnsOption::Local(EdnsLocal::new(65001, vec![9, 9, 9])));
+
+        assert_eq!(original.udp_payload_size(), 1232);
+        assert_eq!(original.ext_rcode(), 0);
+        assert_eq!(original.flags().z, 0);
+        let Some(EdnsOption::Local(local)) = original.option(EdnsCode::Unknown(65001)) else {
+            panic!("expected original local edns option");
+        };
+        assert_eq!(local.data(), &[1, 2, 3]);
+
+        assert_eq!(cloned.udp_payload_size(), 4096);
+        assert_eq!(cloned.ext_rcode(), 2);
+        assert_eq!(cloned.flags().z, 7);
+        let Some(EdnsOption::Local(local)) = cloned.option(EdnsCode::Unknown(65001)) else {
+            panic!("expected cloned local edns option");
+        };
+        assert_eq!(local.data(), &[9, 9, 9]);
     }
 }

@@ -158,6 +158,73 @@ pub enum Rcode {
 }
 
 impl Rcode {
+    #[inline]
+    pub fn value(self) -> u16 {
+        u16::from(self)
+    }
+
+    #[inline]
+    pub fn low(self) -> u8 {
+        match self {
+            Self::NoError => 0,
+            Self::FormErr => 1,
+            Self::ServFail => 2,
+            Self::NXDomain => 3,
+            Self::NotImp => 4,
+            Self::Refused => 5,
+            Self::YXDomain => 6,
+            Self::YXRRSet => 7,
+            Self::NXRRSet => 8,
+            Self::NotAuth => 9,
+            Self::NotZone => 10,
+            Self::BADVERS | Self::BADSIG => 0,
+            Self::BADKEY => 1,
+            Self::BADTIME => 2,
+            Self::BADMODE => 3,
+            Self::BADNAME => 4,
+            Self::BADALG => 5,
+            Self::BADTRUNC => 6,
+            Self::BADCOOKIE => 7,
+            Self::Unknown(code) => (code & 0x000f) as u8,
+        }
+    }
+
+    #[inline]
+    pub fn high(self) -> u8 {
+        match self {
+            Self::NoError
+            | Self::FormErr
+            | Self::ServFail
+            | Self::NXDomain
+            | Self::NotImp
+            | Self::Refused
+            | Self::YXDomain
+            | Self::YXRRSet
+            | Self::NXRRSet
+            | Self::NotAuth
+            | Self::NotZone => 0,
+            Self::BADVERS | Self::BADSIG => 1,
+            Self::BADKEY => 1,
+            Self::BADTIME => 1,
+            Self::BADMODE => 1,
+            Self::BADNAME => 1,
+            Self::BADALG => 1,
+            Self::BADTRUNC => 1,
+            Self::BADCOOKIE => 1,
+            Self::Unknown(code) => ((code >> 4) & 0x00ff) as u8,
+        }
+    }
+
+    #[inline]
+    pub fn has_extended_bits(self) -> bool {
+        self.high() != 0
+    }
+
+    #[inline]
+    pub fn from_parts(high: u8, low: u8) -> Self {
+        Self::from((u16::from(high) << 4) | u16::from(low & 0x0f))
+    }
+
     /// Transforms the response code into the human message
     pub fn to_str(self) -> &'static str {
         match self {
@@ -254,6 +321,27 @@ impl From<Rcode> for u16 {
             Rcode::BADCOOKIE => 23, // 23  BADCOOKIE Bad/missing Server Cookie              [RFC7873]
             Rcode::Unknown(code) => code,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Rcode;
+
+    #[test]
+    fn rcode_parts_roundtrip_matches_known_layout() {
+        assert_eq!(Rcode::NoError.low(), 0);
+        assert_eq!(Rcode::NoError.high(), 0);
+        assert!(!Rcode::NoError.has_extended_bits());
+
+        assert_eq!(Rcode::BADVERS.low(), 0);
+        assert_eq!(Rcode::BADVERS.high(), 1);
+        assert!(Rcode::BADVERS.has_extended_bits());
+
+        assert_eq!(Rcode::Unknown(0x03af).low(), 0x0f);
+        assert_eq!(Rcode::Unknown(0x03af).high(), 0x3a);
+        assert_eq!(Rcode::from_parts(0x3a, 0x0f), Rcode::Unknown(0x03af));
+        assert_eq!(Rcode::from_parts(1, 0), Rcode::BADVERS);
     }
 }
 

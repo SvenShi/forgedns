@@ -7,14 +7,20 @@
 
 use crate::message::{DNSClass, Name, RData, RecordType};
 use std::net::IpAddr;
+use std::sync::Arc;
 
 /// Owned resource record.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Record {
+    inner: Arc<RecordInner>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct RecordInner {
     name: Name,
     class: DNSClass,
     ttl: u32,
-    data: RData,
+    data: Arc<RData>,
 }
 
 impl Record {
@@ -22,65 +28,94 @@ impl Record {
     pub fn from_rdata(name: Name, ttl: u32, data: RData) -> Self {
         Self::from_rdata_with_class(name, ttl, DNSClass::IN, data)
     }
+    /// Construct a record directly from arc RDATA.
+    pub fn from_arc_rdata(name: Name, ttl: u32, data: Arc<RData>) -> Self {
+        Self::from_arc_rdata_with_class(name, ttl, DNSClass::IN, data)
+    }
+
+    /// Construct a record directly from arc RDATA and an explicit DNS class.
+    pub fn from_arc_rdata_with_class(
+        name: Name,
+        ttl: u32,
+        class: DNSClass,
+        data: Arc<RData>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(RecordInner {
+                name,
+                class,
+                ttl,
+                data,
+            }),
+        }
+    }
 
     /// Construct a record directly from owned RDATA and an explicit DNS class.
     pub fn from_rdata_with_class(name: Name, ttl: u32, class: DNSClass, data: RData) -> Self {
         Self {
-            name,
-            class,
-            ttl,
-            data,
+            inner: Arc::new(RecordInner {
+                name,
+                class,
+                ttl,
+                data: Arc::new(data),
+            }),
         }
     }
 
     /// Return the owner name.
     pub fn name(&self) -> &Name {
-        &self.name
+        &self.inner.name
     }
 
     /// Return the record class.
     pub fn class(&self) -> DNSClass {
-        self.class
+        self.inner.class
     }
 
     /// Update the record class.
     pub fn set_class(&mut self, class: DNSClass) {
-        self.class = class;
+        Arc::make_mut(&mut self.inner).class = class;
     }
 
     /// Return the TTL in seconds.
     pub fn ttl(&self) -> u32 {
-        self.ttl
+        self.inner.ttl
     }
 
     /// Update the record TTL in seconds.
     pub fn set_ttl(&mut self, ttl: u32) {
-        self.ttl = ttl;
+        Arc::make_mut(&mut self.inner).ttl = ttl;
     }
 
     /// Return the record type derived from the payload.
     pub fn rr_type(&self) -> RecordType {
-        self.data.rr_type()
+        self.inner.data.as_ref().rr_type()
     }
 
     /// Borrow the type-specific record payload.
     pub fn data(&self) -> &RData {
-        &self.data
+        self.inner.data.as_ref()
+    }
+
+    /// Borrow the type-specific record payload.
+    pub fn data_arc(&self) -> Arc<RData> {
+        self.inner.data.clone()
     }
 
     /// Mutably borrow the type-specific record payload.
     pub fn data_mut(&mut self) -> &mut RData {
-        &mut self.data
+        let inner = Arc::make_mut(&mut self.inner);
+        Arc::make_mut(&mut inner.data)
     }
 
     /// Extract an IP address from `A` and `AAAA` records.
     pub fn ip_addr(&self) -> Option<IpAddr> {
-        self.data.ip_addr()
+        self.data().ip_addr()
     }
 
     /// Return the CNAME target when this record carries one.
     pub fn cname_target(&self) -> Option<&Name> {
-        match &self.data {
+        match self.data() {
             RData::CNAME(value) => Some(&value.0),
             _ => None,
         }
@@ -91,7 +126,52 @@ impl Record {
         &'a self,
         compression: &mut crate::message::codec::LenCompressionMap<'a>,
     ) -> usize {
-        let owner_len = self.name.bytes_len_at(true, compression);
-        owner_len + 10 + self.data.bytes_len(compression)
+        let owner_len = self.name().bytes_len_at(true, compression);
+        owner_len + 10 + self.data().bytes_len(compression)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::rdata::{A, TXT};
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn clone_then_mutate_does_not_change_original() {
+        let original = Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            60,
+            RData::A(A(Ipv4Addr::new(1, 1, 1, 1))),
+        );
+        let mut cloned = original.clone();
+        cloned.set_ttl(120);
+        cloned.set_class(DNSClass::CH);
+        *cloned.data_mut() = RData::TXT(TXT::new(Box::from([2u8, b'o', b'k'])));
+
+        assert_eq!(original.ttl(), 60);
+        assert_eq!(original.class(), DNSClass::IN);
+        assert!(matches!(original.data(), RData::A(..)));
+        assert_eq!(cloned.ttl(), 120);
+        assert_eq!(cloned.class(), DNSClass::CH);
+        assert!(matches!(cloned.data(), RData::TXT(..)));
+    }
+
+    #[test]
+    fn ttl_mutation_keeps_rdata_shared_until_data_changes() {
+        let original = Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            60,
+            RData::A(A(Ipv4Addr::new(1, 1, 1, 1))),
+        );
+        let mut cloned = original.clone();
+
+        cloned.set_ttl(120);
+        assert!(Arc::ptr_eq(&original.inner.data, &cloned.inner.data));
+
+        *cloned.data_mut() = RData::TXT(TXT::new(Box::from([2u8, b'o', b'k'])));
+        assert!(!Arc::ptr_eq(&original.inner.data, &cloned.inner.data));
+        assert!(matches!(original.data(), RData::A(..)));
+        assert!(matches!(cloned.data(), RData::TXT(..)));
     }
 }

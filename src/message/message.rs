@@ -11,25 +11,74 @@ use crate::message::wire::{
     decode_message, edns_record_len, encode_message_into, encode_message_with_limit,
 };
 use crate::message::{
-    DNSClass, Header, MessageType, Name, Opcode, Question, RData, Rcode, Record, RecordType,
+    DNSClass, EdnsFlags, Header, MessageType, Name, Opcode, Question, RData, Rcode, Record,
+    RecordType,
 };
 use std::net::IpAddr;
+use std::sync::Arc;
 
 /// Owned DNS message that flows directly through the pipeline.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Message {
-    header: Header,
-    compress: bool,
-    questions: Vec<Question>,
-    answers: Vec<Record>,
-    authorities: Vec<Record>,
-    additionals: Vec<Record>,
-    signature: Vec<Record>,
-    edns: Option<Edns>,
+    pub(super) header: Header,
+    pub(super) compress: bool,
+    pub(super) questions: Vec<Question>,
+    pub(super) answers: Vec<Record>,
+    pub(super) authorities: Vec<Record>,
+    pub(super) additionals: Vec<Record>,
+    pub(super) signature: Vec<Record>,
+    pub(super) edns: Option<Edns>,
 }
 
 #[allow(dead_code)]
 impl Message {
+    #[inline]
+    fn build_response_edns(&self, rcode: Rcode) -> Option<Edns> {
+        let ext_rcode = rcode.high();
+        if let Some(request_edns) = self.edns.as_ref() {
+            let edns = Edns::new_with_param(
+                request_edns.udp_payload_size(),
+                ext_rcode,
+                request_edns.version(),
+                *request_edns.flags(),
+                Vec::new(),
+            );
+            Some(edns)
+        } else if ext_rcode != 0 {
+            let edns = Edns::new_with_param(1232, ext_rcode, 0, EdnsFlags::default(), Vec::new());
+            Some(edns)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn init_response(&self, rcode: Rcode, answer_capacity: usize) -> Message {
+        let header = Header {
+            id: self.header.id(),
+            message_type: MessageType::Response,
+            opcode: self.header.opcode(),
+            authoritative: false,
+            truncated: false,
+            recursion_desired: self.header.recursion_desired(),
+            recursion_available: false,
+            authentic_data: false,
+            checking_disabled: self.header.checking_disabled(),
+            rcode,
+        };
+
+        Message {
+            header,
+            compress: false,
+            questions: self.questions.clone(),
+            answers: Vec::with_capacity(answer_capacity),
+            authorities: Vec::new(),
+            additionals: Vec::new(),
+            signature: Vec::new(),
+            edns: self.build_response_edns(rcode),
+        }
+    }
+
     /// Construct a new empty query message.
     pub fn new() -> Self {
         Message {
@@ -41,28 +90,6 @@ impl Message {
             additionals: Vec::default(),
             signature: Vec::default(),
             edns: None,
-        }
-    }
-
-    pub(crate) fn new_with_params(
-        header: Header,
-        compress: bool,
-        questions: Vec<Question>,
-        answers: Vec<Record>,
-        authorities: Vec<Record>,
-        additionals: Vec<Record>,
-        signature: Vec<Record>,
-        edns: Option<Edns>,
-    ) -> Message {
-        Message {
-            header,
-            compress,
-            questions,
-            answers,
-            authorities,
-            additionals,
-            signature,
-            edns,
         }
     }
 
@@ -355,7 +382,7 @@ impl Message {
     }
 
     fn sync_edns_ext_rcode(&mut self) {
-        let ext_rcode = (u16::from(self.rcode()) >> 4) as u8;
+        let ext_rcode = self.rcode().high();
         if let Some(edns) = self.edns_mut() {
             edns.set_ext_rcode(ext_rcode);
         }
@@ -465,7 +492,7 @@ impl Message {
 
     pub fn set_edns(&mut self, edns: Edns) {
         let mut edns = edns;
-        edns.set_ext_rcode((u16::from(self.rcode()) >> 4) as u8);
+        edns.set_ext_rcode(self.rcode().high());
         self.edns_mut().replace(edns);
     }
 
@@ -489,27 +516,7 @@ impl Message {
     }
 
     pub fn response(&self, rcode: Rcode) -> Message {
-        let mut response = Message::new();
-        response.set_id(self.id());
-        response.set_opcode(self.opcode());
-        response.set_message_type(MessageType::Response);
-        response.set_recursion_desired(self.recursion_desired());
-        response.set_checking_disabled(self.checking_disabled());
-        response.set_rcode(rcode);
-        response.questions = self.questions.clone();
-        if let Some(request_edns) = self.edns() {
-            let mut edns = Edns::new();
-            edns.set_udp_payload_size(request_edns.udp_payload_size());
-            edns.set_version(request_edns.version());
-            *edns.flags_mut() = *request_edns.flags();
-            edns.set_ext_rcode((u16::from(rcode) >> 4) as u8);
-            response.set_edns(edns);
-        } else if u16::from(rcode) > 0x0f {
-            let mut edns = Edns::new();
-            edns.set_ext_rcode((u16::from(rcode) >> 4) as u8);
-            response.set_edns(edns);
-        }
-        response
+        self.init_response(rcode, 0)
     }
 
     pub fn address_response(
@@ -540,6 +547,29 @@ impl Message {
                     ));
                 }
             }
+        }
+        Ok(response)
+    }
+
+    pub fn address_response_rdata(
+        &self,
+        question: &Question,
+        ttl: u32,
+        rdatas: &[Arc<RData>],
+    ) -> Result<Message> {
+        let mut response = self.init_response(Rcode::NoError, rdatas.len());
+        let qname = question.name();
+        if let [rdata] = rdatas {
+            response
+                .answers
+                .push(Record::from_arc_rdata(qname.clone(), ttl, rdata.clone()));
+            return Ok(response);
+        }
+
+        for rdata in rdatas {
+            response
+                .answers
+                .push(Record::from_arc_rdata(qname.clone(), ttl, rdata.clone()));
         }
         Ok(response)
     }
@@ -973,6 +1003,53 @@ mod tests {
         assert!(message.truncated());
         assert!(encoded.len() <= 512);
         assert_eq!(decoded.signature().len(), 1);
+    }
+
+    #[test]
+    fn response_edns_mutation_does_not_change_original_request() {
+        let mut request = Message::new();
+        request.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+        let mut edns = Edns::new();
+        edns.set_udp_payload_size(1232);
+        edns.insert(crate::message::EdnsOption::Local(
+            crate::message::EdnsLocal::new(65001, vec![1, 2, 3]),
+        ));
+        request.set_edns(edns);
+
+        let mut response = request.response(Rcode::NoError);
+        let response_edns = response.ensure_edns_mut();
+        response_edns.set_udp_payload_size(4096);
+        response_edns.flags_mut().z = 9;
+        response_edns.insert(crate::message::EdnsOption::Local(
+            crate::message::EdnsLocal::new(65001, vec![9, 9, 9]),
+        ));
+
+        let request_edns = request.edns().as_ref().expect("request edns should exist");
+        assert_eq!(request_edns.udp_payload_size(), 1232);
+        assert_eq!(request_edns.flags().z, 0);
+        let Some(crate::message::EdnsOption::Local(local)) =
+            request_edns.option(crate::message::EdnsCode::Unknown(65001))
+        else {
+            panic!("expected request local edns option");
+        };
+        assert_eq!(local.data(), &[1, 2, 3]);
+
+        let response_edns = response
+            .edns()
+            .as_ref()
+            .expect("response edns should exist");
+        assert_eq!(response_edns.udp_payload_size(), 4096);
+        assert_eq!(response_edns.flags().z, 9);
+        let Some(crate::message::EdnsOption::Local(local)) =
+            response_edns.option(crate::message::EdnsCode::Unknown(65001))
+        else {
+            panic!("expected response local edns option");
+        };
+        assert_eq!(local.data(), &[9, 9, 9]);
     }
 }
 
