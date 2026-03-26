@@ -95,7 +95,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
 
     assert_eq!(
         registry.plugin_count(),
@@ -126,7 +126,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
 
     assert_eq!(registry.plugin_count(), 2);
 
@@ -163,7 +163,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
 
     let sequence = registry
         .get_plugin("seq")
@@ -203,7 +203,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config)
+    let err = plugin::init(config, None)
         .await
         .expect_err("missing dependency should fail plugin init");
     let msg = err.to_string();
@@ -229,7 +229,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config)
+    let err = plugin::init(config, None)
         .await
         .expect_err("missing dependency should fail plugin init");
     let msg = err.to_string();
@@ -256,7 +256,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
 
     let sequence = registry
         .get_plugin("seq")
@@ -303,7 +303,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -345,7 +345,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -393,7 +393,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -434,7 +434,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -478,7 +478,7 @@ plugins:
         );
 
         let config = parse_config(&yaml)?;
-        match plugin::init(config).await {
+        match plugin::init(config, None).await {
             Ok(registry) => {
                 registry_and_addr = Some((registry, listen));
                 break;
@@ -526,7 +526,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
 
     let provider = registry
         .get_plugin("combined_domain")
@@ -562,7 +562,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config).await?;
+    let registry = plugin::init(config, None).await?;
 
     let provider = registry
         .get_plugin("combined_ip")
@@ -594,7 +594,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config)
+    let err = plugin::init(config, None)
         .await
         .expect_err("kind mismatch should fail plugin init");
     let msg = err.to_string();
@@ -623,7 +623,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config)
+    let err = plugin::init(config, None)
         .await
         .expect_err("circular dependencies should fail plugin init");
     let msg = err.to_string();
@@ -649,7 +649,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config)
+    let err = plugin::init(config, None)
         .await
         .expect_err("dollar-prefixed jump target should fail plugin init");
     let msg = err.to_string();
@@ -673,7 +673,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config)
+    let err = plugin::init(config, None)
         .await
         .expect_err("jump target should require sequence plugin");
     let msg = err.to_string();

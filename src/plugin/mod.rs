@@ -23,7 +23,8 @@ pub mod server;
 #[cfg(test)]
 pub(crate) mod test_utils;
 
-use crate::api::ApiHub;
+use crate::api::control::AppController;
+use crate::api::{ApiHub, control};
 use crate::config::types::{Config, PluginConfig};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
@@ -88,8 +89,17 @@ impl UninitializedPlugin {
 /// # Returns
 /// * `Ok(Arc<PluginRegistry>)` - Initialized plugin registry
 /// * `Err(DnsError)` - Error message if initialization fails
-pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
+pub async fn init(
+    config: Config,
+    app_controller: Option<Arc<AppController>>,
+) -> Result<Arc<PluginRegistry>> {
     let api_hub = ApiHub::from_config(&config.api)?;
+    if let (Some(api_hub), Some(controller)) = (&api_hub, app_controller) {
+        control::register_builtin_routes(
+            &crate::api::ApiRegister::new(api_hub.clone()),
+            controller,
+        )?;
+    }
 
     // Create and configure the registry
     let mut registry = PluginRegistry::with_api(api_hub);
@@ -113,6 +123,57 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
     }
 
     Ok(registry)
+}
+
+pub fn validate_configuration(config: &Config) -> Result<()> {
+    use crate::plugin::dependency;
+    use std::collections::{HashMap, HashSet};
+
+    let mut factories = HashMap::new();
+    let mut factory_kinds = HashMap::new();
+    let mut seen_plugin_types = HashSet::new();
+
+    for registration in inventory::iter::<FactoryRegistration> {
+        if !seen_plugin_types.insert(registration.plugin_type) {
+            return Err(DnsError::plugin(format!(
+                "Duplicate plugin type '{}' registered in inventory",
+                registration.plugin_type
+            )));
+        }
+        factories.insert(
+            registration.plugin_type.to_string(),
+            (registration.constructor)(),
+        );
+        factory_kinds.insert(
+            registration.plugin_type.to_string(),
+            dependency_kind_from_module_path(registration.module_path),
+        );
+    }
+
+    for plugin in &config.plugins {
+        if !factories.contains_key(&plugin.plugin_type) {
+            return Err(DnsError::plugin(format!(
+                "Unknown plugin type: {}",
+                plugin.plugin_type
+            )));
+        }
+    }
+
+    let get_deps = |config: &PluginConfig| {
+        factories
+            .get(&config.plugin_type)
+            .map(|factory| factory.get_dependency_specs(config))
+            .unwrap_or_default()
+    };
+    let get_kind = |config: &PluginConfig| {
+        factory_kinds
+            .get(&config.plugin_type)
+            .copied()
+            .unwrap_or(dependency::DependencyKind::Unknown)
+    };
+
+    dependency::resolve_dependencies(config.plugins.clone(), &get_deps, &get_kind)?;
+    Ok(())
 }
 
 pub struct FactoryRegistration {

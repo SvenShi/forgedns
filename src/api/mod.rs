@@ -5,6 +5,7 @@
 
 //! Management HTTP API hub and plugin route registration.
 
+pub mod control;
 pub mod health;
 
 use crate::api::health::HealthState;

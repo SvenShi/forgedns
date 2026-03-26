@@ -32,6 +32,13 @@ log:
 # - GET  /healthz  # 只检查进程与 API
 # - GET  /readyz   # 检查初始化和 server 启动是否完成
 # - GET  /health   # 返回 JSON 详情
+# 应用级控制接口：
+# - GET  /control
+# - POST /shutdown
+# - POST /reload
+# - GET  /reload/status
+# - GET  /config/check
+# - POST /config/validate
 
 plugins:
   - tag: forward

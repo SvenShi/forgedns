@@ -22,7 +22,7 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{Method, Request, Response, StatusCode};
+use http::{Request, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::sync::Arc;
