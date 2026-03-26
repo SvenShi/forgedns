@@ -18,7 +18,7 @@ pub struct Runtime {
 
 /// Top-level CLI definition.
 #[derive(Parser, Clone, Debug)]
-#[command(version = "1.0", author = "Sven Shi <isvenshi@gmail.com>")]
+#[command(version, author = "Sven Shi <isvenshi@gmail.com>")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

@@ -197,9 +197,7 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
 
     let mut current_config = config;
     let mut registry =
-        match plugin::init(current_config.clone(), Some(app_controller.clone()))
-            .await
-        {
+        match plugin::init(current_config.clone(), Some(app_controller.clone())).await {
             Ok(registry) => {
                 info!("ForgeDNS server started successfully");
                 registry
@@ -299,9 +297,7 @@ async fn handle_reload_command(
         }
         Err(reload_err) => {
             error!("Configuration reload failed: {}", reload_err);
-            match plugin::init(previous_config.clone(), Some(controller.clone()))
-                .await
-            {
+            match plugin::init(previous_config.clone(), Some(controller.clone())).await {
                 Ok(restored_registry) => {
                     *registry = restored_registry;
                     controller.mark_reload_failed(format!(

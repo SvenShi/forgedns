@@ -31,6 +31,9 @@ pub mod ttl_cache;
 mod log;
 mod runtime;
 
+/// ForgeDNS version shared by CLI and management APIs.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub use crate::core::runtime::{
     Cli, Command, ServiceCommand, ServiceInstallOptions, ServiceOptions, StartOptions,
 };

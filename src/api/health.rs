@@ -6,6 +6,7 @@
 //! Built-in application health endpoints for the management API.
 
 use crate::api::{ApiHandler, ApiRegister, json_ok, simple_response};
+use crate::core::VERSION;
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 use async_trait::async_trait;
@@ -59,6 +60,7 @@ impl HealthState {
             } else {
                 "not_ready"
             },
+            version: VERSION,
             uptime_ms: AppClock::elapsed_millis().saturating_sub(self.started_at_ms),
             checks: HealthChecks {
                 api: bool_status(api_listening),
@@ -76,6 +78,7 @@ impl HealthState {
 #[derive(Debug, Serialize)]
 struct HealthSnapshot {
     status: &'static str,
+    version: &'static str,
     uptime_ms: u64,
     checks: HealthChecks,
     plugins: HealthPluginCounts,
@@ -222,6 +225,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = std::str::from_utf8(response.body()).expect("utf8 json");
         assert!(body.contains("\"status\":\"ok\""));
+        assert!(body.contains(&format!("\"version\":\"{}\"", VERSION)));
         assert!(body.contains("\"api\":\"ok\""));
         assert!(body.contains("\"plugin_init\":\"ok\""));
         assert!(body.contains("\"server_startup\":\"ok\""));

@@ -1,4 +1,3 @@
-
 [package]
 name = "forgedns"
 version = "0.1.0"
@@ -33,8 +32,8 @@ h2 = "0.4"
 h3 = "0.0.8"
 quinn = "0.11.9"
 h3-quinn = "0.0.10"
-hyper = { version = "1.7.0", features = ["server", "client", "http1", "http2"] }
-hyper-util = { version = "0.1.17", features = ["server", "client", "client-legacy", "http1", "http2", "tokio"] }
+hyper = { version = "1.8.1", features = ["server", "client", "http1", "http2"] }
+hyper-util = { version = "0.1.20", features = ["server", "http1", "http2", "tokio"] }
 http-body-util = "0.1.3"
 http = "1.4"
 base64 = "0.22"
@@ -45,10 +44,10 @@ regex = "1.12.2"
 aho-corasick = "1.1.4"
 ahash = "0.8.12"
 smallvec = "1.15.1"
-mikrotik-rs = "0.6.0"
+mikrotik-rs = "0.6.1"
+service-manager = "0.11.0"
 
-hotpath =  "0.14.0"
-service-manager = "0.6.2"
+hotpath = "0.14.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 neli = "0.7.4"
@@ -61,6 +60,7 @@ hotpath-alloc = ["hotpath/hotpath-alloc"]
 hickory-proto = "0.25.2"
 criterion = "0.8.2"
 tempfile = "3.23.0"
+hyper-util = { version = "0.1.20", features = ["server", "client", "client-legacy", "http1", "http2", "tokio"] }
 
 [[bench]]
 name = "message_codec"

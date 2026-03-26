@@ -8,8 +8,8 @@
 use crate::core::error::{DnsError, Result};
 use crate::core::{ServiceCommand, ServiceInstallOptions, ServiceOptions};
 use service_manager::{
-    ServiceInstallCtx, ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx, ServiceStopCtx,
-    ServiceUninstallCtx, native_service_manager,
+    RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx,
+    ServiceStopCtx, ServiceUninstallCtx, native_service_manager,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -52,6 +52,8 @@ fn install_service(options: ServiceInstallOptions) -> Result<()> {
         username: None,
         working_directory: Some(working_dir),
         environment: None,
+        autostart: true,
+        restart_policy: RestartPolicy::Always { delay_secs: None },
     };
     manager
         .install(ctx)
