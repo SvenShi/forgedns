@@ -155,7 +155,7 @@ start_server() {
   local startup_log="$3"
 
   if [[ "$engine" == "forgedns" ]]; then
-    "$FORGEDNS_BIN" -c "$config_file" >"$startup_log" 2>&1 &
+    "$FORGEDNS_BIN" start -c "$config_file" >"$startup_log" 2>&1 &
   else
     if [[ "$MOSDNS_LAUNCHER" == "start" ]]; then
       "$MOSDNS_BIN" start -c "$config_file" >"$startup_log" 2>&1 &
