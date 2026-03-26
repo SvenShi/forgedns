@@ -33,9 +33,9 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::message::Rcode;
-use crate::plugin::executor::{ExecStep, Executor};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::{continue_next, register_plugin_factory};
 use ahash::{AHashMap, AHashSet};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -276,15 +276,28 @@ impl Plugin for MikrotikExecutor {
 
 #[async_trait]
 impl Executor for MikrotikExecutor {
+    fn with_next(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        self.execute_with_next(context, None).await
+    }
+
+    async fn execute_with_next(
+        &self,
+        context: &mut DnsContext,
+        next: Option<ExecutorNext>,
+    ) -> Result<ExecStep> {
+        let step = continue_next!(next, context)?;
         // If the runtime never started, the plugin stays side-effect free.
         let Some(tx) = self.command_tx.as_ref() else {
-            return Ok(ExecStep::Next);
+            return Ok(step);
         };
 
         // This executor only reacts to successful final answers containing A/AAAA data.
         let Some((domain, addrs)) = extract_observation(context, &self.config) else {
-            return Ok(ExecStep::Next);
+            return Ok(step);
         };
 
         if self.config.async_mode {
@@ -308,7 +321,7 @@ impl Executor for MikrotikExecutor {
                     );
                 }
             }
-            return Ok(ExecStep::Next);
+            return Ok(step);
         }
 
         // Sync mode still preserves DNS behavior on RouterOS failures. The only
@@ -331,7 +344,7 @@ impl Executor for MikrotikExecutor {
                     plugin = %self.tag,
                     "mikrotik manager channel closed in sync mode, DNS response is kept unchanged"
                 );
-                return Ok(ExecStep::Next);
+                return Ok(step);
             }
             Err(_) => {
                 warn!(
@@ -339,28 +352,28 @@ impl Executor for MikrotikExecutor {
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
                     "mikrotik observe enqueue timed out in sync mode, DNS response is kept unchanged"
                 );
-                return Ok(ExecStep::Next);
+                return Ok(step);
             }
         }
 
         let wait_outcome =
             tokio::time::timeout(Duration::from_secs(SYNC_OBSERVE_TIMEOUT_SECS), wait_rx).await;
         match wait_outcome {
-            Ok(Ok(Ok(()))) => Ok(ExecStep::Next),
+            Ok(Ok(Ok(()))) => Ok(step),
             Ok(Ok(Err(e))) => {
                 warn!(
                     plugin = %self.tag,
                     err = %e,
                     "mikrotik observe failed in sync mode, DNS response is kept unchanged"
                 );
-                Ok(ExecStep::Next)
+                Ok(step)
             }
             Ok(Err(_)) => {
                 warn!(
                     plugin = %self.tag,
                     "mikrotik manager dropped sync observe response, DNS response is kept unchanged"
                 );
-                Ok(ExecStep::Next)
+                Ok(step)
             }
             Err(_) => {
                 warn!(
@@ -368,7 +381,7 @@ impl Executor for MikrotikExecutor {
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
                     "mikrotik observe timed out in sync mode, DNS response is kept unchanged"
                 );
-                Ok(ExecStep::Next)
+                Ok(step)
             }
         }
     }
