@@ -176,6 +176,12 @@ where
     pub fn remove(&self, key: &K) -> bool {
         self.map.remove(key).is_some()
     }
+
+    /// Remove all cached entries.
+    #[inline]
+    pub fn clear(&self) {
+        self.map.clear();
+    }
 }
 
 impl<K, V> TtlCache<K, V>

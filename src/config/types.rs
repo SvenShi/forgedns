@@ -27,6 +27,21 @@ pub enum ConfigError {
     #[error("runtime.worker_threads must be greater than 0")]
     InvalidRuntimeWorkerThreads,
 
+    #[error("api.http.listen cannot be empty")]
+    EmptyApiHttpListen,
+
+    #[error("api.http.auth.basic.username cannot be empty")]
+    EmptyApiBasicAuthUsername,
+
+    #[error("api.http.auth.basic.password cannot be empty")]
+    EmptyApiBasicAuthPassword,
+
+    #[error("api.http.ssl.cert and api.http.ssl.key must be configured together")]
+    IncompleteApiTlsConfig,
+
+    #[error("api.http.ssl.require_client_cert requires api.http.ssl.client_ca")]
+    MissingApiTlsClientCa,
+
     #[error(
         "Duplicate plugin tag '{tag}' found at plugins[{first_index}] and plugins[{duplicate_index}]"
     )]
@@ -43,6 +58,10 @@ pub struct Config {
     /// Tokio runtime configuration.
     #[serde(default)]
     pub runtime: RuntimeConfig,
+
+    /// Optional management API configuration.
+    #[serde(default)]
+    pub api: ApiConfig,
 
     /// Logging configuration (level, file output)
     #[serde(default)]
@@ -69,6 +88,33 @@ impl Config {
             _ => return Err(ConfigError::InvalidLogLevel(self.log.level.clone())),
         }
 
+        if let Some(http) = &self.api.http {
+            let resolved = http.resolve();
+            if resolved.listen.trim().is_empty() {
+                return Err(ConfigError::EmptyApiHttpListen);
+            }
+
+            if let Some(ssl) = &resolved.ssl {
+                let cert_present = ssl.cert.is_some();
+                let key_present = ssl.key.is_some();
+                if cert_present != key_present {
+                    return Err(ConfigError::IncompleteApiTlsConfig);
+                }
+                if ssl.require_client_cert.unwrap_or(false) && ssl.client_ca.is_none() {
+                    return Err(ConfigError::MissingApiTlsClientCa);
+                }
+            }
+
+            if let Some(ApiAuthConfig::Basic { username, password }) = &resolved.auth {
+                if username.trim().is_empty() {
+                    return Err(ConfigError::EmptyApiBasicAuthUsername);
+                }
+                if password.trim().is_empty() {
+                    return Err(ConfigError::EmptyApiBasicAuthPassword);
+                }
+            }
+        }
+
         // Validate plugins - basic structure checks
         let mut seen_tags = HashMap::new();
         for (idx, plugin) in self.plugins.iter().enumerate() {
@@ -92,6 +138,71 @@ impl Config {
 
         Ok(())
     }
+}
+
+/// Management API configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ApiConfig {
+    /// Optional HTTP management API configuration.
+    pub http: Option<ApiHttpConfig>,
+}
+
+/// `api.http` supports shorthand string and detailed object forms.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ApiHttpConfig {
+    Listen(String),
+    Detailed(ApiHttpDetailedConfig),
+}
+
+impl ApiHttpConfig {
+    /// Resolve user-facing config variants into one canonical structure.
+    pub fn resolve(&self) -> ResolvedApiHttpConfig {
+        match self {
+            Self::Listen(listen) => ResolvedApiHttpConfig {
+                listen: listen.clone(),
+                ssl: None,
+                auth: None,
+            },
+            Self::Detailed(config) => ResolvedApiHttpConfig {
+                listen: config.listen.clone(),
+                ssl: config.ssl.clone(),
+                auth: config.auth.clone(),
+            },
+        }
+    }
+}
+
+/// Expanded HTTP API configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiHttpDetailedConfig {
+    pub listen: String,
+    pub ssl: Option<ApiTlsConfig>,
+    pub auth: Option<ApiAuthConfig>,
+}
+
+/// TLS settings for the management API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiTlsConfig {
+    pub cert: Option<String>,
+    pub key: Option<String>,
+    pub client_ca: Option<String>,
+    pub require_client_cert: Option<bool>,
+}
+
+/// Authentication settings for the management API.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ApiAuthConfig {
+    Basic { username: String, password: String },
+}
+
+/// Canonical HTTP API configuration used at runtime.
+#[derive(Debug, Clone)]
+pub struct ResolvedApiHttpConfig {
+    pub listen: String,
+    pub ssl: Option<ApiTlsConfig>,
+    pub auth: Option<ApiAuthConfig>,
 }
 
 /// Tokio runtime configuration.
@@ -171,6 +282,7 @@ mod tests {
     fn test_validate_rejects_duplicate_plugin_tags() {
         let config = Config {
             runtime: RuntimeConfig::default(),
+            api: ApiConfig::default(),
             log: LogConfig::default(),
             plugins: vec![plugin("dup", "debug_print"), plugin("dup", "ttl")],
         };
@@ -185,6 +297,7 @@ mod tests {
     fn test_validate_rejects_empty_plugin_type() {
         let config = Config {
             runtime: RuntimeConfig::default(),
+            api: ApiConfig::default(),
             log: LogConfig::default(),
             plugins: vec![plugin("test", "")],
         };
@@ -199,6 +312,7 @@ mod tests {
     fn test_validate_accepts_basic_valid_config() {
         let config = Config {
             runtime: RuntimeConfig::default(),
+            api: ApiConfig::default(),
             log: LogConfig::default(),
             plugins: vec![plugin("ok", "debug_print")],
         };
@@ -212,6 +326,7 @@ mod tests {
             runtime: RuntimeConfig {
                 worker_threads: Some(0),
             },
+            api: ApiConfig::default(),
             log: LogConfig::default(),
             plugins: vec![plugin("ok", "debug_print")],
         };
@@ -232,5 +347,45 @@ mod tests {
             RuntimeConfig::default().effective_worker_threads(),
             expected
         );
+    }
+
+    #[test]
+    fn test_validate_accepts_api_http_string_shorthand() {
+        let config = Config {
+            runtime: RuntimeConfig::default(),
+            api: ApiConfig {
+                http: Some(ApiHttpConfig::Listen("0.0.0.0:8080".to_string())),
+            },
+            log: LogConfig::default(),
+            plugins: vec![plugin("ok", "debug_print")],
+        };
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_api_mtls_without_client_ca() {
+        let config = Config {
+            runtime: RuntimeConfig::default(),
+            api: ApiConfig {
+                http: Some(ApiHttpConfig::Detailed(ApiHttpDetailedConfig {
+                    listen: "127.0.0.1:9443".to_string(),
+                    ssl: Some(ApiTlsConfig {
+                        cert: Some("cert.pem".to_string()),
+                        key: Some("key.pem".to_string()),
+                        client_ca: None,
+                        require_client_cert: Some(true),
+                    }),
+                    auth: None,
+                })),
+            },
+            log: LogConfig::default(),
+            plugins: vec![plugin("ok", "debug_print")],
+        };
+
+        let err = config
+            .validate()
+            .expect_err("should reject mtls config without client_ca");
+        assert!(matches!(err, ConfigError::MissingApiTlsClientCa));
     }
 }

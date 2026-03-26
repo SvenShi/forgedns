@@ -18,6 +18,7 @@
 //! - periodic cleanup removes expired entries and trims overflow in batches.
 //! - IPv4-mapped IPv6 addresses are normalized to keep lookup keys consistent.
 
+use crate::api::{ApiHandler, ApiRegister, simple_response};
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
@@ -30,6 +31,8 @@ use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
+use bytes::Bytes;
+use http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -65,6 +68,7 @@ struct ReverseLookup {
     handle_ptr: bool,
     cleanup_started: AtomicBool,
     cleanup_task_id: Option<u64>,
+    api_register: Option<ApiRegister>,
 }
 
 #[async_trait]
@@ -74,6 +78,8 @@ impl Plugin for ReverseLookup {
     }
 
     async fn init(&mut self) -> Result<()> {
+        self.register_api_routes()?;
+
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
             return Ok(());
         }
@@ -175,6 +181,20 @@ impl Executor for ReverseLookup {
 }
 
 impl ReverseLookup {
+    fn register_api_routes(&self) -> Result<()> {
+        let Some(api_register) = &self.api_register else {
+            return Ok(());
+        };
+
+        api_register.register_plugin_get(
+            &self.tag,
+            "",
+            Arc::new(ReverseLookupQueryHandler {
+                cache: self.cache.clone(),
+            }),
+        )
+    }
+
     fn try_handle_ptr(&self, request: &crate::message::Message) -> Option<crate::message::Message> {
         if request.question_count() != 1 || request.first_qtype()? != RecordType::PTR {
             return None;
@@ -205,7 +225,7 @@ impl PluginFactory for ReverseLookupFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
         let cfg = plugin_config
             .args
@@ -226,8 +246,59 @@ impl PluginFactory for ReverseLookupFactory {
             handle_ptr: cfg.handle_ptr.unwrap_or(false),
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
+            api_register: registry.api_register(),
         })))
     }
+}
+
+#[derive(Debug)]
+struct ReverseLookupQueryHandler {
+    cache: TtlCache<IpAddr, Arc<CacheEntry>>,
+}
+
+#[async_trait]
+impl ApiHandler for ReverseLookupQueryHandler {
+    async fn handle(&self, request: Request<Bytes>) -> Response<Bytes> {
+        let Some(raw_ip) = get_single_query_value(request.uri().query(), "ip") else {
+            return simple_response(
+                StatusCode::BAD_REQUEST,
+                Bytes::from("missing required query parameter: ip"),
+            );
+        };
+
+        let Ok(ip) = raw_ip.parse::<IpAddr>() else {
+            return simple_response(
+                StatusCode::BAD_REQUEST,
+                Bytes::from("invalid ip query parameter"),
+            );
+        };
+
+        let ip = normalize_ip(ip);
+        let now = AppClock::elapsed_millis();
+        let Some(entry) = self.cache.get_fresh_cloned(&ip, now, 1000) else {
+            return simple_response(StatusCode::OK, Bytes::new());
+        };
+
+        simple_response(
+            StatusCode::OK,
+            Bytes::from(format_fqdn(&entry.value.domain)),
+        )
+    }
+}
+
+fn get_single_query_value<'a>(query: Option<&'a str>, key: &str) -> Option<&'a str> {
+    let query = query?;
+    query.split('&').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        if name != key || value.is_empty() {
+            return None;
+        }
+        Some(value)
+    })
+}
+
+fn format_fqdn(name: &Name) -> String {
+    name.to_fqdn()
 }
 
 fn normalize_ip(ip: IpAddr) -> IpAddr {
@@ -253,6 +324,7 @@ mod tests {
     use crate::message::{Name, RData, Record};
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_registry;
+    use http::Method;
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
@@ -291,6 +363,7 @@ mod tests {
             handle_ptr: true,
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
+            api_register: None,
         };
 
         let mut a_ctx = make_context("www.example.com.", RecordType::A);
@@ -333,6 +406,7 @@ mod tests {
             handle_ptr: false,
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
+            api_register: None,
         };
 
         let mut ctx = make_context("www.example.com.", RecordType::A);
@@ -352,5 +426,52 @@ mod tests {
             ctx.response().expect("response should exist").answers()[0].ttl(),
             120
         );
+    }
+
+    #[tokio::test]
+    async fn test_reverse_lookup_query_api_returns_fqdn() {
+        let cache = TtlCache::with_capacity(8);
+        let now = AppClock::elapsed_millis();
+        cache.insert_or_update(
+            IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            Arc::new(CacheEntry {
+                domain: Name::from_ascii("dns.google.").unwrap(),
+            }),
+            now,
+            now + 60_000,
+        );
+        let handler = ReverseLookupQueryHandler { cache };
+
+        let response = handler
+            .handle(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/plugins/reverse_lookup?ip=8.8.8.8")
+                    .body(Bytes::new())
+                    .expect("request should build"),
+            )
+            .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body(), &Bytes::from_static(b"dns.google."));
+    }
+
+    #[tokio::test]
+    async fn test_reverse_lookup_query_api_rejects_missing_ip() {
+        let handler = ReverseLookupQueryHandler {
+            cache: TtlCache::with_capacity(8),
+        };
+
+        let response = handler
+            .handle(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/plugins/reverse_lookup")
+                    .body(Bytes::new())
+                    .expect("request should build"),
+            )
+            .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

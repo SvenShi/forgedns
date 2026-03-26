@@ -15,6 +15,7 @@ use crate::core::error::DnsError;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::server::WebPkiClientVerifier;
 use rustls::{
     ClientConfig, DigitallySignedStruct, Error, RootCertStore, ServerConfig, SignatureScheme,
 };
@@ -116,12 +117,71 @@ pub fn load_tls_config(
     }
 }
 
+/// Load server-side TLS configuration with optional client certificate verification.
+pub fn load_server_tls_config(
+    cert: Option<&str>,
+    key: Option<&str>,
+    client_ca: Option<&str>,
+    require_client_cert: bool,
+) -> crate::core::error::Result<Option<ServerConfig>> {
+    match (cert, key) {
+        (Some(cert), Some(key)) => {
+            let certs = load_certificates(cert)?;
+            let private_key = load_private_key(key)?;
+            let builder = ServerConfig::builder();
+            let config = if require_client_cert {
+                let ca_path = client_ca.ok_or_else(|| {
+                    DnsError::plugin(
+                        "api.http.ssl.require_client_cert requires api.http.ssl.client_ca",
+                    )
+                })?;
+                let roots = Arc::new(load_root_store(ca_path)?);
+                let verifier = WebPkiClientVerifier::builder(roots).build().map_err(|e| {
+                    DnsError::plugin(format!(
+                        "Failed to build client certificate verifier: {}",
+                        e
+                    ))
+                })?;
+                builder
+                    .with_client_cert_verifier(verifier)
+                    .with_single_cert(certs, private_key)
+                    .map_err(|e| {
+                        DnsError::plugin(format!("Failed to build TLS configuration: {}", e))
+                    })?
+            } else {
+                builder
+                    .with_no_client_auth()
+                    .with_single_cert(certs, private_key)
+                    .map_err(|e| {
+                        DnsError::plugin(format!("Failed to build TLS configuration: {}", e))
+                    })?
+            };
+            Ok(Some(config))
+        }
+        (Some(_), None) | (None, Some(_)) => Err(DnsError::plugin(
+            "api.http.ssl.cert and api.http.ssl.key must be configured together",
+        )),
+        (None, None) => Ok(None),
+    }
+}
+
 fn load_tls_config_from_path(
     cert_path: &str,
     key_path: &str,
 ) -> crate::core::error::Result<ServerConfig> {
     install_default_provider();
-    // Load certificates
+    let certs = load_certificates(cert_path)?;
+    let private_key = load_private_key(key_path)?;
+
+    // Build TLS server configuration
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, private_key)
+        .map_err(|e| DnsError::plugin(format!("Failed to build TLS configuration: {}", e)))?;
+    Ok(config)
+}
+
+fn load_certificates(cert_path: &str) -> crate::core::error::Result<Vec<CertificateDer<'static>>> {
     let cert_file = File::open(cert_path).map_err(|e| {
         DnsError::plugin(format!(
             "Failed to open certificate file {}: {}",
@@ -129,7 +189,7 @@ fn load_tls_config_from_path(
         ))
     })?;
     let mut cert_reader = BufReader::new(cert_file);
-    let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut cert_reader)
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             DnsError::plugin(format!(
@@ -144,8 +204,12 @@ fn load_tls_config_from_path(
             cert_path
         )));
     }
+    Ok(certs)
+}
 
-    // Load private key
+fn load_private_key(
+    key_path: &str,
+) -> crate::core::error::Result<rustls::pki_types::PrivateKeyDer<'static>> {
     let key_file = File::open(key_path).map_err(|e| {
         DnsError::plugin(format!(
             "Failed to open private key file {}: {}",
@@ -153,23 +217,27 @@ fn load_tls_config_from_path(
         ))
     })?;
     let mut key_reader = BufReader::new(key_file);
-
-    // Try to read private key (supports PKCS8, RSA, EC formats)
-    let private_key = rustls_pemfile::private_key(&mut key_reader)
+    rustls_pemfile::private_key(&mut key_reader)
         .map_err(|e| {
             DnsError::plugin(format!(
                 "Failed to parse private key file {}: {}",
                 key_path, e
             ))
         })?
-        .ok_or_else(|| DnsError::plugin(format!("No private key found in {}", key_path)))?;
+        .ok_or_else(|| DnsError::plugin(format!("No private key found in {}", key_path)))
+}
 
-    // Build TLS server configuration
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, private_key)
-        .map_err(|e| DnsError::plugin(format!("Failed to build TLS configuration: {}", e)))?;
-    Ok(config)
+fn load_root_store(ca_path: &str) -> crate::core::error::Result<RootCertStore> {
+    let certs = load_certificates(ca_path)?;
+    let mut roots = RootCertStore::empty();
+    let (added, ignored) = roots.add_parsable_certificates(certs);
+    if added == 0 {
+        return Err(DnsError::plugin(format!(
+            "No CA certificates could be loaded from {} (ignored {})",
+            ca_path, ignored
+        )));
+    }
+    Ok(roots)
 }
 
 /// Certificate verifier that accepts any certificate (INSECURE!)

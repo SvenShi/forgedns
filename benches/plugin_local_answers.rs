@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use forgedns::config::types::{Config, LogConfig, PluginConfig, RuntimeConfig};
+use forgedns::config::types::{ApiConfig, Config, LogConfig, PluginConfig, RuntimeConfig};
 use forgedns::core::context::DnsContext;
 use forgedns::message::{DNSClass, Message, Name, Question, RecordType};
 use forgedns::plugin::{PluginRegistry, init as init_plugins};
@@ -24,6 +24,7 @@ fn plugin_config(tag: &str, plugin_type: &str, args: Value) -> PluginConfig {
 fn make_config(plugin: PluginConfig) -> Config {
     Config {
         runtime: RuntimeConfig::default(),
+        api: ApiConfig::default(),
         log: LogConfig::default(),
         plugins: vec![plugin],
     }

@@ -23,6 +23,7 @@ pub mod server;
 #[cfg(test)]
 pub(crate) mod test_utils;
 
+use crate::api::ApiHub;
 use crate::config::types::{Config, PluginConfig};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
@@ -88,8 +89,10 @@ impl UninitializedPlugin {
 /// * `Ok(Arc<PluginRegistry>)` - Initialized plugin registry
 /// * `Err(DnsError)` - Error message if initialization fails
 pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
+    let api_hub = ApiHub::from_config(&config.api)?;
+
     // Create and configure the registry
-    let mut registry = PluginRegistry::new();
+    let mut registry = PluginRegistry::with_api(api_hub);
 
     // Register all built-in plugin factories from inventory
     register_factories_from_inventory(&mut registry)?;
@@ -99,7 +102,13 @@ pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
 
     // Initialize all plugins (clone Arc to keep a reference)
     if let Err(err) = registry.clone().init_plugins(config.plugins).await {
-        registry.destroy_plugins().await;
+        registry.destory().await;
+        return Err(err);
+    }
+    registry.mark_plugins_initialized();
+
+    if let Err(err) = registry.start_api().await {
+        registry.destory().await;
         return Err(err);
     }
 

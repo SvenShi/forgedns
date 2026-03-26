@@ -1,6 +1,38 @@
 log:
  level: info
 
+# 管理 API：支持简写字符串和详配对象两种形式。
+# api:
+#   http: "127.0.0.1:9088"
+#
+# api:
+#   http:
+#     listen: "127.0.0.1:9443"
+#     ssl:
+#       cert: "/etc/forgedns/api.crt"
+#       key: "/etc/forgedns/api.key"
+#       # client_ca: "/etc/forgedns/client-ca.crt"
+#       # require_client_cert: true
+#     auth:
+#       type: basic
+#       username: "admin"
+#       password: "secret"
+#
+# 插件 API 入口格式：
+# http://<api_addr>/plugins/<plugin_tag>/<route>
+# reverse_lookup 查询接口：
+# - GET  /plugins/<plugin_tag>?ip=<ip_addr>
+# 例如 cache 插件：
+# - GET  /plugins/cache/flush
+# - GET  /plugins/cache/dump
+# - POST /plugins/cache/load_dump
+# Prometheus 指标入口：
+# - GET  /metrics
+# 健康检查接口：
+# - GET  /healthz  # 只检查进程与 API
+# - GET  /readyz   # 检查初始化和 server 启动是否完成
+# - GET  /health   # 返回 JSON 详情
+
 plugins:
   - tag: forward
     type: forward

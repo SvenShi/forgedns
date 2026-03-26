@@ -9,6 +9,7 @@
 //! (qtype/qclass/DO/CD and optional ECS scope). Cache entries expire by TTL and are
 //! periodically cleaned up.
 
+use crate::api::{ApiHandler, ApiRegister, json_error, json_ok, simple_response};
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
@@ -20,20 +21,24 @@ use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
-use serde::Deserialize;
+use bytes::Bytes;
+use http::{Method, Request, Response, StatusCode};
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::OnceCell;
-use tracing::{Level, debug, event_enabled, warn};
+use tracing::{Level, debug, event_enabled, info, warn};
 
 mod key;
 mod persistence;
 
 use self::key::{CacheKey, build_cache_key as build_cache_key_internal};
-use self::persistence::{dump_cache_to_file, load_cache_from_file};
+use self::persistence::{
+    dump_cache_to_bytes, dump_cache_to_file, load_cache_from_bytes, load_cache_from_file,
+};
 
 // Default cache size.
 const DEFAULT_CACHE_SIZE: usize = 1024;
@@ -156,6 +161,9 @@ pub struct Cache {
 
     /// Periodic cleanup task id.
     cleanup_task_id: Mutex<Option<u64>>,
+
+    /// Management API route register, when global API is enabled.
+    api_register: Option<ApiRegister>,
 }
 
 impl Cache {
@@ -428,6 +436,39 @@ impl Cache {
         cache_map.insert_or_update(key, Arc::new(item), now, expire_time);
         self.updated_keys.fetch_add(1, Ordering::Relaxed);
     }
+
+    fn register_api_routes(&self, cache_map: CacheMap) -> Result<()> {
+        let Some(api_register) = &self.api_register else {
+            return Ok(());
+        };
+
+        let tag = self.tag.clone();
+        let ecs_in_key = self.ecs_in_key;
+        api_register.register_plugin_get(
+            &tag,
+            "/flush",
+            Arc::new(CacheFlushHandler {
+                cache_map: cache_map.clone(),
+            }),
+        )?;
+        api_register.register_plugin_get(
+            &tag,
+            "/dump",
+            Arc::new(CacheDumpHandler {
+                cache_map: cache_map.clone(),
+                tag: tag.clone(),
+            }),
+        )?;
+        api_register.register_plugin_post(
+            &tag,
+            "/load_dump",
+            Arc::new(CacheLoadDumpHandler {
+                cache_map,
+                ecs_in_key,
+            }),
+        )?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -440,6 +481,7 @@ impl Plugin for Cache {
         let cache_map = CacheMap::with_capacity(self.cache_size);
 
         let _ = self.cache_map.set(cache_map.clone());
+        self.register_api_routes(cache_map.clone())?;
 
         if let Some(dump_file) = &self.config.dump_file {
             self.spawn_load_task(cache_map.clone(), dump_file.clone(), self.ecs_in_key);
@@ -614,7 +656,7 @@ impl PluginFactory for CacheFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
         let cache_config = parse_cache_config(plugin_config.args.clone())?;
         validate_cache_config(&cache_config)?;
@@ -636,7 +678,107 @@ impl PluginFactory for CacheFactory {
             updated_keys: Arc::new(AtomicU64::new(0)),
             dump_task_id: Mutex::new(None),
             cleanup_task_id: Mutex::new(None),
+            api_register: registry.api_register(),
         })))
+    }
+}
+
+#[derive(Debug)]
+struct CacheFlushHandler {
+    cache_map: CacheMap,
+}
+
+#[derive(Debug, Serialize)]
+struct CacheFlushResponse {
+    ok: bool,
+    cleared_entries: usize,
+}
+
+#[async_trait]
+impl ApiHandler for CacheFlushHandler {
+    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+        let cleared_entries = self.cache_map.len();
+        self.cache_map.clear();
+        info!("cache flushed, cleared entries {}", cleared_entries);
+        json_ok(
+            StatusCode::OK,
+            &CacheFlushResponse {
+                ok: true,
+                cleared_entries,
+            },
+        )
+    }
+}
+
+#[derive(Debug)]
+struct CacheDumpHandler {
+    cache_map: CacheMap,
+    tag: String,
+}
+
+#[async_trait]
+impl ApiHandler for CacheDumpHandler {
+    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+        match dump_cache_to_bytes(&self.cache_map) {
+            Ok(bytes) => {
+                let mut response = simple_response(StatusCode::OK, Bytes::from(bytes));
+                response.headers_mut().insert(
+                    http::header::CONTENT_TYPE,
+                    http::HeaderValue::from_static("application/octet-stream"),
+                );
+                if let Ok(value) = http::HeaderValue::from_str(&format!(
+                    "attachment; filename=\"{}.dump\"",
+                    self.tag
+                )) {
+                    response
+                        .headers_mut()
+                        .insert(http::header::CONTENT_DISPOSITION, value);
+                }
+                response
+            }
+            Err(err) => {
+                warn!("Failed to dump cache via API: {}", err);
+                simple_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Bytes::from("failed to dump cache"),
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CacheLoadDumpHandler {
+    cache_map: CacheMap,
+    ecs_in_key: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CacheLoadDumpResponse {
+    ok: bool,
+    loaded_entries: usize,
+}
+
+#[async_trait]
+impl ApiHandler for CacheLoadDumpHandler {
+    async fn handle(&self, request: Request<Bytes>) -> Response<Bytes> {
+        match load_cache_from_bytes(&self.cache_map, request.body(), self.ecs_in_key, true) {
+            Ok(loaded_entries) => json_ok(
+                StatusCode::OK,
+                &CacheLoadDumpResponse {
+                    ok: true,
+                    loaded_entries,
+                },
+            ),
+            Err(err) => {
+                warn!("Failed to load cache dump via API: {}", err);
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cache_dump",
+                    "failed to load cache dump",
+                )
+            }
+        }
     }
 }
 
@@ -671,6 +813,7 @@ mod tests {
             cache_size,
             dump_task_id: Mutex::new(None),
             cleanup_task_id: Mutex::new(None),
+            api_register: None,
         }
     }
 

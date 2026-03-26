@@ -220,7 +220,7 @@ async fn run_async_main(options: core::Options, config: Config) -> Result<()> {
         signal = shutdown_signal.as_str(),
         "Destroying plugins for shutdown"
     );
-    registry.destroy_plugins().await;
+    registry.destory().await;
     core::task_center::stop_all().await;
     info!(
         signal = shutdown_signal.as_str(),

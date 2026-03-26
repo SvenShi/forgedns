@@ -38,6 +38,18 @@ struct PersistedCacheEntry {
 }
 
 pub(super) async fn dump_cache_to_file(cache_map: &CacheMap, dump_path: &str) -> Result<()> {
+    let encoded = dump_cache_to_bytes(cache_map)?;
+
+    // Write-then-rename to avoid partially written cache dump on crash.
+    let tmp_path = format!("{}.tmp", dump_path);
+    let mut file = File::create(&tmp_path).await?;
+    file.write_all(&encoded).await?;
+    file.sync_all().await?;
+    fs::rename(&tmp_path, dump_path).await?;
+    Ok(())
+}
+
+pub(super) fn dump_cache_to_bytes(cache_map: &CacheMap) -> Result<Vec<u8>> {
     let now = AppClock::elapsed_millis();
     let mut entries: Vec<PersistedCacheEntry> = Vec::with_capacity(cache_map.len());
 
@@ -97,15 +109,7 @@ pub(super) async fn dump_cache_to_file(cache_map: &CacheMap, dump_path: &str) ->
         });
     }
 
-    let encoded = wincode::serialize(&entries)?;
-
-    // Write-then-rename to avoid partially written cache dump on crash.
-    let tmp_path = format!("{}.tmp", dump_path);
-    let mut file = File::create(&tmp_path).await?;
-    file.write_all(&encoded).await?;
-    file.sync_all().await?;
-    fs::rename(&tmp_path, dump_path).await?;
-    Ok(())
+    Ok(wincode::serialize(&entries)?)
 }
 
 fn parse_persisted_entries(data: &[u8]) -> Option<Vec<PersistedCacheEntry>> {
@@ -172,13 +176,29 @@ pub(super) async fn load_cache_from_file(
     }
 
     let data = fs::read(dump_path).await?;
-    let Some(entries) = parse_persisted_entries(&data) else {
-        warn!(
-            "Failed to deserialize cache dump {}, skip loading incompatible data",
-            dump_path
-        );
-        return Ok(());
+    let loaded = load_cache_from_bytes(cache_map, &data, ecs_in_key, false)?;
+
+    if loaded > 0 {
+        info!("Loaded {} cache entries from {}", loaded, dump_path);
+    }
+
+    Ok(())
+}
+
+pub(super) fn load_cache_from_bytes(
+    cache_map: &CacheMap,
+    data: &[u8],
+    ecs_in_key: bool,
+    replace: bool,
+) -> Result<usize> {
+    let Some(entries) = parse_persisted_entries(data) else {
+        warn!("Failed to deserialize cache dump, skip loading incompatible data");
+        return Ok(0);
     };
+
+    if replace {
+        cache_map.clear();
+    }
 
     let now = AppClock::elapsed_millis();
     let mut loaded = 0usize;
@@ -216,11 +236,7 @@ pub(super) async fn load_cache_from_file(
         loaded += 1;
     }
 
-    if loaded > 0 {
-        info!("Loaded {} cache entries from {}", loaded, dump_path);
-    }
-
-    Ok(())
+    Ok(loaded)
 }
 
 #[cfg(test)]

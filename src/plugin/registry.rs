@@ -15,6 +15,7 @@ use crate::plugin::executor::Executor;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::Provider;
 use crate::plugin::{PluginFactory, PluginInfo, PluginType};
+use crate::{api::ApiHub, api::ApiRegister};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -28,6 +29,8 @@ use tracing::{debug, error, info};
 /// - Proper dependency injection
 #[derive(Debug)]
 pub struct PluginRegistry {
+    api_hub: Option<Arc<ApiHub>>,
+
     /// Map of plugin type names to their factory implementations
     factories: HashMap<String, Box<dyn PluginFactory>>,
 
@@ -49,11 +52,18 @@ impl PluginRegistry {
     /// Create a new empty plugin registry
     pub fn new() -> Self {
         Self {
+            api_hub: None,
             factories: HashMap::new(),
             factory_kinds: HashMap::new(),
             plugins: DashMap::new(),
             init_order: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn with_api(api_hub: Option<Arc<ApiHub>>) -> Self {
+        let mut registry = Self::new();
+        registry.api_hub = api_hub;
+        registry
     }
 
     /// Register a plugin factory
@@ -219,6 +229,29 @@ impl PluginRegistry {
         self.plugins.get(tag).map(|entry| entry.clone())
     }
 
+    pub fn api_register(&self) -> Option<ApiRegister> {
+        self.api_hub.clone().map(ApiRegister::new)
+    }
+
+    pub async fn start_api(&self) -> Result<()> {
+        if let Some(api_hub) = &self.api_hub {
+            api_hub.start().await?;
+        }
+        Ok(())
+    }
+
+    pub fn mark_plugins_initialized(&self) {
+        let total_plugins = self.plugins.len();
+        let server_plugins = self
+            .plugins
+            .iter()
+            .filter(|entry| entry.plugin_type == PluginType::Server)
+            .count();
+        if let Some(api_hub) = &self.api_hub {
+            api_hub.mark_plugins_initialized(total_plugins, server_plugins);
+        }
+    }
+
     fn plugin_kind_name(plugin_type: PluginType) -> &'static str {
         match plugin_type {
             PluginType::Server => "server",
@@ -372,7 +405,11 @@ impl PluginRegistry {
     }
 
     /// Destroy all initialized plugins in reverse init order
-    pub async fn destroy_plugins(&self) {
+    pub async fn destory(&self) {
+        if let Some(api_hub) = &self.api_hub {
+            api_hub.stop().await;
+        }
+
         let order = self
             .init_order
             .lock()

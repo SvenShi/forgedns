@@ -104,7 +104,7 @@ plugins:
     );
     assert!(registry.get_plugin("debug").is_some());
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     assert_eq!(registry.plugin_count(), 0, "plugins should be destroyed");
     Ok(())
 }
@@ -141,7 +141,7 @@ plugins:
     assert_eq!(sequence.plugin_type, PluginType::Executor);
     assert_eq!(sequence.plugin_name, "sequence");
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     assert_eq!(registry.plugin_count(), 0);
     Ok(())
 }
@@ -184,7 +184,7 @@ plugins:
         Rcode::ServFail
     );
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     Ok(())
 }
 
@@ -278,7 +278,7 @@ plugins:
         Rcode::ServFail
     );
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     Ok(())
 }
 
@@ -320,7 +320,7 @@ plugins:
     assert!(!context.marks().contains("4"));
     assert!(context.response().is_none());
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     Ok(())
 }
 
@@ -368,7 +368,7 @@ plugins:
         Rcode::Refused
     );
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     Ok(())
 }
 
@@ -409,7 +409,7 @@ plugins:
     assert!(!context.marks().contains("3"));
     assert!(context.marks().contains("4"));
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     Ok(())
 }
 
@@ -450,7 +450,7 @@ plugins:
     assert!(!context.marks().contains("3"));
     assert!(!context.marks().contains("4"));
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     Ok(())
 }
 
@@ -491,7 +491,7 @@ plugins:
     let (registry, listen) =
         registry_and_addr.expect("UDP server should bind to a local port within retry budget");
     let response_result = exchange_udp_query(listen, "example.test.").await;
-    registry.destroy_plugins().await;
+    registry.destory().await;
     let response = response_result?;
 
     assert_eq!(response.id(), 0x1234);
@@ -537,7 +537,7 @@ plugins:
     assert!(provider.contains_name(&Name::from_ascii("www.shared.example").unwrap()));
     assert!(!provider.contains_name(&Name::from_ascii("missing.example").unwrap()));
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     Ok(())
 }
 
@@ -573,7 +573,7 @@ plugins:
     assert!(provider.contains_ip("198.51.100.42".parse().unwrap()));
     assert!(!provider.contains_ip("198.51.101.1".parse().unwrap()));
 
-    registry.destroy_plugins().await;
+    registry.destory().await;
     Ok(())
 }
 

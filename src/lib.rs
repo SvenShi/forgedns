@@ -5,6 +5,7 @@
 
 //! ForgeDNS library exports for unit/integration tests and embedding.
 
+pub mod api;
 pub mod config;
 pub mod core;
 pub mod message;
