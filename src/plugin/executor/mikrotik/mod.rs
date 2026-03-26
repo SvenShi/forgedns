@@ -33,9 +33,9 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::message::Rcode;
-use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
+use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::{continue_next, register_plugin_factory};
+use crate::register_plugin_factory;
 use ahash::{AHashMap, AHashSet};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -276,7 +276,6 @@ impl Plugin for MikrotikExecutor {
 
 #[async_trait]
 impl Executor for MikrotikExecutor {
-
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         // If the runtime never started, the plugin stays side-effect free.
         let Some(tx) = self.command_tx.as_ref() else {
@@ -324,7 +323,7 @@ impl Executor for MikrotikExecutor {
             Duration::from_secs(SYNC_OBSERVE_TIMEOUT_SECS),
             tx.send(send_cmd),
         )
-            .await;
+        .await;
         match send_outcome {
             Ok(Ok(())) => {}
             Ok(Err(_)) => {
@@ -341,7 +340,6 @@ impl Executor for MikrotikExecutor {
                     "mikrotik observe enqueue timed out in sync mode, DNS response is kept unchanged"
                 );
                 return Ok(ExecStep::Next);
-
             }
         }
 
