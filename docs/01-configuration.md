@@ -108,6 +108,7 @@ api:
   - 是否要求双向 TLS。
 - `http.auth`
   - 当前支持 `basic`。
+  - Basic Auth 的请求头编码方式见《管理 API》章节。
 
 校验规则：
 
@@ -366,13 +367,9 @@ upstreams:
 
 - `addr`
   - 上游地址。
-  - 支持：
-    - `udp://`
-    - `tcp://`
-    - `tls://`
-    - `quic://`
-    - `https://`
-    - 纯 IP 或 IP:port 也会按 UDP 解析
+  - 未写协议时按 UDP 处理。
+  - 支持 `udp://`、`tcp://`、`tcp+pipeline://`、`tls://`、`tls+pipeline://`、`quic://`、`doq://`、`https://`、`doh://`、`h3://`。
+  - DoH 应写完整路径，例如 `https://resolver.example/dns-query`。
 - `dial_addr`
   - 指定实际连接 IP，但仍保留 `addr` 中的主机名用于 SNI/校验。
 - `port`
@@ -383,9 +380,8 @@ upstreams:
   - `4` 或 `6`。
 - `socks5`
   - SOCKS5 代理。
-  - 支持：
-    - `host:port`
-    - `user:pass@host:port`
+  - 支持 `host:port` 与 `user:pass@host:port`。
+  - IPv6 需写成 `[addr]:port`。
 - `idle_timeout`
   - 空闲连接超时，单位秒。
 - `max_conns`

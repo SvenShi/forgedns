@@ -82,7 +82,7 @@ flowchart TD
 * 希望按“策略域名集合”驱动 RouterOS 地址列表，而不是手工维护大量目标 IP。
 * 需要让 DNS 层策略和网络层策略形成闭环。
 
-## ForgeDNS 侧配置思路
+## 配置示例与参数说明
 
 ### 最小联动示例
 
@@ -128,30 +128,11 @@ plugins:
   - tag: seq_main
     type: sequence
     args:
-      - exec: "$forward_main"
-      - matches:
-          - "$match_policy_domain"
+      - matches: "$match_policy_domain"
         exec: "$mikrotik_policy"
-```
-
-### 建议放置位置
-
-`mikrotik` 通常宜放置在以下位置之后：
-
-* 真实应答已经产生之后。
-* `has_wanted_ans` 之类的判断之后。
-* 观测或联动动作区，而不是主分支判断之前。
-
-典型顺序如下：
+      - exec: "$forward_main"
 
 ```
-本地应答/缓存/转发 -> 得到最终响应 -> 判断是否需要联动 -> mikrotik 写 address-list
-```
-
-原因如下：
-
-* `mikrotik` 插件只对最终 `A` / `AAAA` 响应有意义。
-* 它不负责决定“怎么解析”，只负责把解析结果同步给 RouterOS。
 
 ## `mikrotik` 插件在策略路由场景中的关键参数
 

@@ -11,7 +11,7 @@
             <option name="scope" value="" />
             <option name="skipCi" value="" />
             <option name="subject" value="" />
-            <option name="type" value="feat" />
+            <option name="type" value="style" />
           </CommitTemplate>
         </option>
       </MessageStorage>

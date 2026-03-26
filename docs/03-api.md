@@ -60,6 +60,40 @@ auth:
 
 开启后，所有 API 请求都需要通过 Basic Auth。
 
+请求头格式如下：
+
+```http
+Authorization: Basic YWRtaW46c2VjcmV0
+```
+
+编码规则如下：
+
+* 先按 `username:password` 拼接原始字符串。
+* 再对整个字符串做 Base64 编码。
+* 请求头前缀必须为 `Basic `。
+
+以上示例中，`admin:secret` 对应的 Base64 结果为 `YWRtaW46c2VjcmV0`。
+
+注意事项：
+
+* 这里使用的是标准 Base64，不是 URL-safe Base64。
+* 不需要分别对 `username` 和 `password` 单独编码。
+* 不使用百分号编码，也不应先做 URL encode。
+* 服务端按解码后的完整结果与 `username:password` 做直接比较。
+
+示例：
+
+```bash
+curl -u admin:secret http://127.0.0.1:9088/healthz
+```
+
+或：
+
+```bash
+curl -H 'Authorization: Basic YWRtaW46c2VjcmV0' \
+  http://127.0.0.1:9088/healthz
+```
+
 ## 路由组织
 
 API 路由分成三类：
