@@ -276,28 +276,16 @@ impl Plugin for MikrotikExecutor {
 
 #[async_trait]
 impl Executor for MikrotikExecutor {
-    fn with_next(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        self.execute_with_next(context, None).await
-    }
-
-    async fn execute_with_next(
-        &self,
-        context: &mut DnsContext,
-        next: Option<ExecutorNext>,
-    ) -> Result<ExecStep> {
-        let step = continue_next!(next, context)?;
         // If the runtime never started, the plugin stays side-effect free.
         let Some(tx) = self.command_tx.as_ref() else {
-            return Ok(step);
+            return Ok(ExecStep::Next);
         };
 
         // This executor only reacts to successful final answers containing A/AAAA data.
         let Some((domain, addrs)) = extract_observation(context, &self.config) else {
-            return Ok(step);
+            return Ok(ExecStep::Next);
         };
 
         if self.config.async_mode {
@@ -321,7 +309,7 @@ impl Executor for MikrotikExecutor {
                     );
                 }
             }
-            return Ok(step);
+            return Ok(ExecStep::Next);
         }
 
         // Sync mode still preserves DNS behavior on RouterOS failures. The only
@@ -336,7 +324,7 @@ impl Executor for MikrotikExecutor {
             Duration::from_secs(SYNC_OBSERVE_TIMEOUT_SECS),
             tx.send(send_cmd),
         )
-        .await;
+            .await;
         match send_outcome {
             Ok(Ok(())) => {}
             Ok(Err(_)) => {
@@ -344,7 +332,7 @@ impl Executor for MikrotikExecutor {
                     plugin = %self.tag,
                     "mikrotik manager channel closed in sync mode, DNS response is kept unchanged"
                 );
-                return Ok(step);
+                return Ok(ExecStep::Next);
             }
             Err(_) => {
                 warn!(
@@ -352,28 +340,29 @@ impl Executor for MikrotikExecutor {
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
                     "mikrotik observe enqueue timed out in sync mode, DNS response is kept unchanged"
                 );
-                return Ok(step);
+                return Ok(ExecStep::Next);
+
             }
         }
 
         let wait_outcome =
             tokio::time::timeout(Duration::from_secs(SYNC_OBSERVE_TIMEOUT_SECS), wait_rx).await;
         match wait_outcome {
-            Ok(Ok(Ok(()))) => Ok(step),
+            Ok(Ok(Ok(()))) => Ok(ExecStep::Next),
             Ok(Ok(Err(e))) => {
                 warn!(
                     plugin = %self.tag,
                     err = %e,
                     "mikrotik observe failed in sync mode, DNS response is kept unchanged"
                 );
-                Ok(step)
+                Ok(ExecStep::Next)
             }
             Ok(Err(_)) => {
                 warn!(
                     plugin = %self.tag,
                     "mikrotik manager dropped sync observe response, DNS response is kept unchanged"
                 );
-                Ok(step)
+                Ok(ExecStep::Next)
             }
             Err(_) => {
                 warn!(
@@ -381,7 +370,7 @@ impl Executor for MikrotikExecutor {
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
                     "mikrotik observe timed out in sync mode, DNS response is kept unchanged"
                 );
-                Ok(step)
+                Ok(ExecStep::Next)
             }
         }
     }
@@ -436,15 +425,16 @@ fn extract_observation(
     // The first question is the authoritative domain label written to the
     // RouterOS comment for dynamic entries. This is intentionally lightweight:
     // we do not inspect CNAME chains or reconstruct canonical names here.
-    let domain = context
-        .request
-        .first_question()
-        .map(|question| question.name().normalized().to_string())?;
 
     let response = context.response()?;
     if response.rcode() != Rcode::NoError {
         return None;
     }
+
+    let domain = context
+        .request
+        .first_question()
+        .map(|question| question.name().normalized().to_string())?;
 
     // Collapse duplicate IPs inside one DNS response before sending work to
     // the manager. For duplicates we keep the largest TTL because the manager
