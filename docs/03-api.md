@@ -2,11 +2,11 @@
 
 ForgeDNS 的管理 API 是独立控制平面，负责：
 
-- 进程与启动健康检查
-- 配置检查与配置文本校验
-- 重载与关闭控制
-- 插件扩展 API
-- Prometheus 指标导出
+* 进程与启动健康检查
+* 配置检查与配置文本校验
+* 重载与关闭控制
+* 插件扩展 API
+* Prometheus 指标导出
 
 本章介绍当前提供的管理 API。
 
@@ -44,10 +44,10 @@ api:
 
 可选增强：
 
-- `client_ca`
-  - 配置客户端 CA。
-- `require_client_cert`
-  - 强制双向认证。
+* `client_ca`
+  * 配置客户端 CA。
+* `require_client_cert`
+  * 强制双向认证。
 
 ### Basic Auth
 
@@ -64,12 +64,12 @@ auth:
 
 API 路由分成三类：
 
-- 全局路由
-  - 例如 `/healthz`、`/control`
-- 插件路由
-  - 统一格式：`/plugins/<plugin_tag>/<subpath>`
-- 观测路由
-  - 例如 `/metrics`
+* 全局路由
+  * 例如 `/healthz`、`/control`
+* 插件路由
+  * 统一格式：`/plugins/<plugin_tag>/<subpath>`
+* 观测路由
+  * 例如 `/metrics`
 
 ## 内置健康检查接口
 
@@ -77,29 +77,29 @@ API 路由分成三类：
 
 作用：
 
-- 只检查 API 监听是否已建立。
+* 只检查 API 监听是否已建立。
 
 返回：
 
-- `200 OK`：`ok`
-- `503 Service Unavailable`：`not_listening`
+* `200 OK`：`ok`
+* `503 Service Unavailable`：`not_listening`
 
 ### `GET /readyz`
 
 作用：
 
-- 检查插件初始化和 server 启动是否已完成。
+* 检查插件初始化和 server 启动是否已完成。
 
 返回：
 
-- `200 OK`：`ready`
-- `503 Service Unavailable`：`not_ready`
+* `200 OK`：`ready`
+* `503 Service Unavailable`：`not_ready`
 
 ### `GET /health`
 
 作用：
 
-- 返回 JSON 形式的健康详情。
+* 返回 JSON 形式的健康详情。
 
 示例结构：
 
@@ -126,59 +126,59 @@ API 路由分成三类：
 
 作用：
 
-- 返回当前进程控制面状态。
+* 返回当前进程控制面状态。
 
 返回内容包括：
 
-- 运行状态
-- 运行时长
-- 当前配置路径
-- 是否请求过 shutdown
-- reload 状态快照
+* 运行状态
+* 运行时长
+* 当前配置路径
+* 是否请求过 shutdown
+* reload 状态快照
 
 ### `POST /shutdown`
 
 作用：
 
-- 请求优雅关闭。
+* 请求优雅关闭。
 
 返回：
 
-- `202 Accepted`
+* `202 Accepted`
 
 ### `POST /reload`
 
 作用：
 
-- 请求重载配置。
+* 请求重载配置，重新加载所有插件。
 
 返回：
 
-- `202 Accepted`
-  - 已受理。
-- `409 Conflict`
-  - 已有 reload 在 pending / in_progress。
+* `202 Accepted`
+  * 已受理。
+* `409 Conflict`
+  * 已有 reload 在 pending / in\_progress。
 
 ### `GET /reload/status`
 
 作用：
 
-- 查询最近一次重载状态。
+* 查询最近一次重载状态。
 
 返回字段包括：
 
-- `status`
-  - `idle`
-  - `pending`
-  - `in_progress`
-  - `ok`
-  - `failed`
-- `pending`
-- `in_progress`
-- `last_started_ms`
-- `last_completed_ms`
-- `last_success_ms`
-- `last_error`
+* `status`
+  * `idle`
+  * `pending`
+  * `in_progress`
+  * `ok`
+  * `failed`
+* `pending`
+* `in_progress`
+* `last_started_ms`
+* `last_completed_ms`
+* `last_success_ms`
+* `last_error`
 
 ## 配置检查接口
 
@@ -186,36 +186,36 @@ API 路由分成三类：
 
 作用：
 
-- 校验当前配置文件路径对应的配置文件。
+* 校验当前配置文件路径对应的配置文件。
 
 适用场景：
 
-- 检查磁盘上现有配置是否能成功解析与通过插件依赖校验。
+* 检查磁盘上现有配置是否能成功解析与通过插件依赖校验。
 
 ### `POST /config/validate`
 
 作用：
 
-- 直接校验请求体中的 YAML 配置文本。
+* 直接校验请求体中的 YAML 配置文本。
 
 请求体要求：
 
-- UTF-8 文本
-- 非空
+* UTF-8 文本
+* 非空
 
 适用场景：
 
-- 控制平面先验校验配置，再决定是否落盘。
+* 控制平面先验校验配置，再决定是否落盘。
 
 ## 插件扩展 API
 
 ### 统一格式
 
-```text
+```
 /plugins/<plugin_tag>/<route>
 ```
 
-### `cache`
+### cache
 
 #### `GET /plugins/<cache_tag>/flush`
 
@@ -229,7 +229,7 @@ API 路由分成三类：
 
 导入缓存 dump。
 
-### `reverse_lookup`
+### reverse\_lookup
 
 #### `GET /plugins/<tag>?ip=<ip_addr>`
 
@@ -237,15 +237,15 @@ API 路由分成三类：
 
 示例：
 
-```text
+```
 GET /plugins/reverse_lookup_main?ip=8.8.8.8
 ```
 
 返回：
 
-- 命中：域名文本，通常为 fully-qualified domain name。
-- 未命中：空响应体。
-- 参数错误：`400 Bad Request`。
+* 命中：域名文本，通常为 fully-qualified domain name。
+* 未命中：空响应体。
+* 参数错误：`400 Bad Request`。
 
 ## Prometheus 指标
 
@@ -255,11 +255,11 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 
 当前导出的指标包括：
 
-- `forgedns_query_total`
-- `forgedns_query_error_total`
-- `forgedns_query_inflight`
-- `forgedns_query_latency_count`
-- `forgedns_query_latency_sum_ms`
+* `forgedns_query_total`
+* `forgedns_query_error_total`
+* `forgedns_query_inflight`
+* `forgedns_query_latency_count`
+* `forgedns_query_latency_sum_ms`
 
 这些指标带有插件级标签信息，可用于区分不同流水线观测点。
 
@@ -274,9 +274,9 @@ api:
 
 适用场景：
 
-- 本机运维
-- 进程自检
-- 指标抓取
+* 本机运维
+* 进程自检
+* 指标抓取
 
 ### 受保护控制面
 
@@ -295,8 +295,8 @@ api:
 
 适用场景：
 
-- 远程控制
-- 与上层运维平台集成
+* 远程控制
+* 与上层运维平台集成
 
 ### 双向认证控制面
 
@@ -313,5 +313,5 @@ api:
 
 适用场景：
 
-- 严格受控的自动化系统
-- 多租户或高敏感运维环境
+* 严格受控的自动化系统
+* 多租户或高敏感运维环境

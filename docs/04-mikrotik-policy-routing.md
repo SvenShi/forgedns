@@ -12,9 +12,9 @@
 
 该设计具备以下价值：
 
-- RouterOS 不需要重复做域名解析判断。
-- 策略路由判定落在 IP 层，和 RouterOS 的原生能力自然衔接。
-- ForgeDNS 负责“域名 -> 目标 IP”的动态映射维护，RouterOS 负责“目标 IP -> 走哪条出口”。
+* RouterOS 不需要重复做域名解析判断。
+* 策略路由判定落在 IP 层，和 RouterOS 的原生能力自然衔接。
+* ForgeDNS 负责“域名 -> 目标 IP”的动态映射维护，RouterOS 负责“目标 IP -> 走哪条出口”。
 
 ## 总体工作流
 
@@ -60,41 +60,27 @@ flowchart TD
 
 ### ForgeDNS 的职责
 
-- 接收 DNS 请求。
-- 按既定策略解析域名。
-- 从最终 DNS 响应中提取 `A` / `AAAA`。
-- 把需要走策略路由的目标 IP 同步到 RouterOS `address-list`。
-- 根据 TTL 持续刷新这些 IP 的有效期。
+* 接收 DNS 请求。
+* 按既定策略解析域名。
+* 从最终 DNS 响应中提取 `A` / `AAAA`。
+* 把需要走策略路由的目标 IP 同步到 RouterOS `address-list`。
+* 根据 TTL 持续刷新这些 IP 的有效期。
 
 ### RouterOS 的职责
 
-- 在连接首次建立时检查目标地址是否命中策略集合。
-- 命中时设置 `connection-mark` 与 `routing-mark`。
-- 让同一连接后续数据包继承相同标记，不重复做策略决策。
-- 根据 `routing-mark` 把流量送到对应的路由表或对应出口。
-
-## 为什么这个方案有效
-
-域名分流最难的点，不是“能不能匹配域名”，而是“客户端真正发起连接时，RouterOS 看到的已经是目标 IP，不是域名”。
-
-因此，RouterOS 若需实现基于域名的差异化出口控制，通常需要解决以下两个问题：
-
-1. 谁负责把域名解析结果转成 IP 集合。
-2. 谁负责在连接建立时把这些 IP 映射到正确出口。
-
-ForgeDNS + `mikrotik` 的方案正好把这两个问题拆开：
-
-- ForgeDNS 负责动态维护“应该被策略路由处理的目标 IP 列表”。
-- RouterOS 负责在 `prerouting` 里对这些目标 IP 进行连接标记和路由标记。
+* 在连接首次建立时检查目标地址是否命中策略集合。
+* 命中时设置 `connection-mark` 与 `routing-mark`。
+* 让同一连接后续数据包继承相同标记，不重复做策略决策。
+* 根据 `routing-mark` 把流量送到对应的路由表或对应出口。
 
 ## 适用场景
 
 这类方案尤其适合以下策略：
 
-- 某一组域名解析结果需要走特定出口链路。
-- 某类服务需要固定出口，避免不同连接被随机分流。
-- 希望按“策略域名集合”驱动 RouterOS 地址列表，而不是手工维护大量目标 IP。
-- 需要让 DNS 层策略和网络层策略形成闭环。
+* 某一组域名解析结果需要走特定出口链路。
+* 某类服务需要固定出口，避免不同连接被随机分流。
+* 希望按“策略域名集合”驱动 RouterOS 地址列表，而不是手工维护大量目标 IP。
+* 需要让 DNS 层策略和网络层策略形成闭环。
 
 ## ForgeDNS 侧配置思路
 
@@ -102,9 +88,9 @@ ForgeDNS + `mikrotik` 的方案正好把这两个问题拆开：
 
 以下示例说明：
 
-- 先用 `qname` 识别策略域名。
-- 命中后正常解析。
-- 若拿到了有效答案，再交给 `mikrotik` 把结果写入 RouterOS 的 `policy_set`。
+* 先用 `qname` 识别策略域名。
+* 命中后正常解析。
+* 若拿到了有效答案，再交给 `mikrotik` 把结果写入 RouterOS 的 `policy_set`。
 
 ```yaml
 plugins:
@@ -145,7 +131,6 @@ plugins:
       - exec: "$forward_main"
       - matches:
           - "$match_policy_domain"
-          - "$has_wanted_ans"
         exec: "$mikrotik_policy"
 ```
 
@@ -153,20 +138,20 @@ plugins:
 
 `mikrotik` 通常宜放置在以下位置之后：
 
-- 真实应答已经产生之后。
-- `has_wanted_ans` 之类的判断之后。
-- 观测或联动动作区，而不是主分支判断之前。
+* 真实应答已经产生之后。
+* `has_wanted_ans` 之类的判断之后。
+* 观测或联动动作区，而不是主分支判断之前。
 
 典型顺序如下：
 
-```text
+```
 本地应答/缓存/转发 -> 得到最终响应 -> 判断是否需要联动 -> mikrotik 写 address-list
 ```
 
 原因如下：
 
-- `mikrotik` 插件只对最终 `A` / `AAAA` 响应有意义。
-- 它不负责决定“怎么解析”，只负责把解析结果同步给 RouterOS。
+* `mikrotik` 插件只对最终 `A` / `AAAA` 响应有意义。
+* 它不负责决定“怎么解析”，只负责把解析结果同步给 RouterOS。
 
 ## `mikrotik` 插件在策略路由场景中的关键参数
 
@@ -178,8 +163,8 @@ address: "172.16.1.1:8728"
 
 含义：
 
-- RouterOS API 地址。
-- ForgeDNS 通过它连接 RouterOS 并执行 address-list 管理操作。
+* RouterOS API 地址。
+* ForgeDNS 通过它连接 RouterOS 并执行 address-list 管理操作。
 
 ### `address_list4` / `address_list6`
 
@@ -190,15 +175,15 @@ address_list6: "policy_set_v6"
 
 含义：
 
-- 分别指定 IPv4 / IPv6 目标结果应写入哪个 RouterOS `address-list`。
+* 分别指定 IPv4 / IPv6 目标结果应写入哪个 RouterOS `address-list`。
 
 配置建议：
 
-- IPv4 和 IPv6 分开管理。
-- 名称明确表达策略用途，例如：
-  - `policy_set_v4`
-  - `policy_media_v4`
-  - `policy_route_alt_v6`
+* IPv4 和 IPv6 分开管理。
+* 名称明确表达策略用途，例如：
+  * `policy_set_v4`
+  * `policy_media_v4`
+  * `policy_route_alt_v6`
 
 ### `async`
 
@@ -208,16 +193,16 @@ async: true
 
 含义：
 
-- 是否异步提交 RouterOS 写入。
+* 是否异步提交 RouterOS 写入。
 
 配置建议：
 
-- 在策略路由场景中，通常优先采用 `true`。
+* 在策略路由场景中，通常优先采用 `true`。
 
 原因：
 
-- DNS 响应不应该因为 RouterOS API 延迟而被明显拖慢。
-- `mikrotik` 的主要职责是联动，而非阻塞主解析路径。
+* DNS 响应不应该因为 RouterOS API 延迟而被明显拖慢。
+* `mikrotik` 的主要职责是联动，而非阻塞主解析路径。
 
 ### `min_ttl` / `max_ttl`
 
@@ -228,19 +213,19 @@ max_ttl: 1800
 
 含义：
 
-- 约束动态写入 address-list 的有效期。
+* 约束动态写入 address-list 的有效期。
 
 设计意义：
 
-- 防止 TTL 太小导致 RouterOS 高频刷新。
-- 防止 TTL 太大导致陈旧 IP 长时间滞留。
+* 防止 TTL 太小导致 RouterOS 高频刷新。
+* 防止 TTL 太大导致陈旧 IP 长时间滞留。
 
 参数设置原则：
 
-- `min_ttl`
-  - 不要太小，否则高频刷新会增加 RouterOS 压力。
-- `max_ttl`
-  - 不要过长，否则域名切换后旧 IP 会残留过久。
+* `min_ttl`
+  * 不要太小，否则高频刷新会增加 RouterOS 压力。
+* `max_ttl`
+  * 不要过长，否则域名切换后旧 IP 会残留过久。
 
 ### `fixed_ttl`
 
@@ -250,12 +235,12 @@ fixed_ttl: 300
 
 含义：
 
-- 如果配置，忽略响应中的原始 TTL，统一按固定值写入动态项。
+* 如果配置，忽略响应中的原始 TTL，统一按固定值写入动态项。
 
 适用场景：
 
-- 需要使策略集合刷新周期保持固定且可预测。
-- 需要避免不同上游 TTL 差异对策略路由行为产生影响。
+* 需要使策略集合刷新周期保持固定且可预测。
+* 需要避免不同上游 TTL 差异对策略路由行为产生影响。
 
 ### `persistent`
 
@@ -270,12 +255,12 @@ persistent:
 
 含义：
 
-- 除了 DNS 动态学习到的 IP，还可以配置常驻项。
+* 除了 DNS 动态学习到的 IP，还可以配置常驻项。
 
 适用场景：
 
-- 某些目标必须长期在策略集合中。
-- 需要把动态学习和静态策略合并管理。
+* 某些目标必须长期在策略集合中。
+* 需要把动态学习和静态策略合并管理。
 
 ## RouterOS 侧策略路由思路
 
@@ -295,7 +280,7 @@ RouterOS 读取目标 IP，检查它是否属于 ForgeDNS 维护的 `address-lis
 
 该步骤对应流程图中的：
 
-```text
+```
 查询目标 IP 是否在 policy_set
 ```
 
@@ -305,8 +290,8 @@ RouterOS 读取目标 IP，检查它是否属于 ForgeDNS 维护的 `address-lis
 
 意义：
 
-- 后续同一连接的包无需重复查询 `address-list`。
-- 可以避免连接过程中出口漂移。
+* 后续同一连接的包无需重复查询 `address-list`。
+* 可以避免连接过程中出口漂移。
 
 #### 第三步：把连接标记映射为路由标记
 
@@ -321,28 +306,28 @@ RouterOS 读取目标 IP，检查它是否属于 ForgeDNS 维护的 `address-lis
 
 因此更合理的模型是：
 
-- 首包基于 `address-list` 判断。
-- 一旦命中，写入 `connection-mark`。
-- 后续包基于已有连接状态走固定 `routing-mark`。
+* 首包基于 `address-list` 判断。
+* 一旦命中，写入 `connection-mark`。
+* 后续包基于已有连接状态走固定 `routing-mark`。
 
 该逻辑与前述 RouterOS 流程图一致：
 
-- 已有连接状态时直接沿用。
-- 新连接才去查询 `policy_set`。
+* 已有连接状态时直接沿用。
+* 新连接才去查询 `policy_set`。
 
 ## DNS 与连接建立之间的时序关系
 
 该方案基于以下关键前提：
 
-- 客户端通常先发起 DNS 查询。
-- 随后很快基于解析结果发起连接。
+* 客户端通常先发起 DNS 查询。
+* 随后很快基于解析结果发起连接。
 
 所以只要 ForgeDNS 在返回 DNS 响应后尽快把目标 IP 写进 RouterOS，后续连接大概率就能命中对应 address-list。
 
 同时需要明确以下边界条件：
 
-- `async: true` 时，写入是异步的。
-- 理论上可能出现“客户端已经开始连目标 IP，而 RouterOS address-list 还没完成更新”的短暂窗口。
+* `async: true` 时，写入是异步的。
+* 理论上可能出现“客户端已经开始连目标 IP，而 RouterOS address-list 还没完成更新”的短暂窗口。
 
 ### 如何降低这个窗口的影响
 
@@ -354,48 +339,48 @@ RouterOS 读取目标 IP，检查它是否属于 ForgeDNS 维护的 `address-lis
 
 若场景对“首包必须命中策略路由”具有极高敏感性，可采用以下方式：
 
-- 把极关键目标放入 `persistent`。
-- 或者使用 `async: false`，但要接受 DNS 路径延迟上升的代价。
+* 把极关键目标放入 `persistent`。
+* 或者使用 `async: false`，但要接受 DNS 路径延迟上升的代价。
 
 ## 常见组合方式
 
-### 方式一：命中特定域名集合才写 policy_set
+### 方式一：命中特定域名集合才写 policy\_set
 
 特点：
 
-- 只有策略域名对应的解析结果才会进入 RouterOS。
-- 默认流量仍走主路由。
+* 只有策略域名对应的解析结果才会进入 RouterOS。
+* 默认流量仍走主路由。
 
 适用场景：
 
-- 只对少量目标做策略路由。
+* 只对少量目标做策略路由。
 
 ### 方式二：所有成功解析都写入不同 address-list
 
 特点：
 
-- 通过多个 `sequence` 分支，把不同类别目标写入不同 list。
+* 通过多个 `sequence` 分支，把不同类别目标写入不同 list。
 
 例如：
 
-- `policy_media_v4`
-- `policy_backup_v4`
-- `policy_low_latency_v4`
+* `policy_media_v4`
+* `policy_backup_v4`
+* `policy_low_latency_v4`
 
 适用场景：
 
-- 需要多出口、多策略并存。
+* 需要多出口、多策略并存。
 
 ### 方式三：动态学习 + 持久策略合并
 
 特点：
 
-- 动态解析结果写入 address-list。
-- 固定关键网段或关键 IP 通过 `persistent` 常驻。
+* 动态解析结果写入 address-list。
+* 固定关键网段或关键 IP 通过 `persistent` 常驻。
 
 适用场景：
 
-- 需要同时保留动态策略与静态保底策略。
+* 需要同时保留动态策略与静态保底策略。
 
 ## 示例：多策略出口
 
@@ -455,18 +440,16 @@ plugins:
       - exec: "$forward_main"
       - matches:
           - "$media_match"
-          - "$has_wanted_ans"
         exec: "$mikrotik_media"
       - matches:
           - "$backup_match"
-          - "$has_wanted_ans"
         exec: "$mikrotik_backup"
 ```
 
 在 RouterOS 中，就可以把：
 
-- `policy_media_v4` 映射到出口 A
-- `policy_backup_v4` 映射到出口 B
+* `policy_media_v4` 映射到出口 A
+* `policy_backup_v4` 映射到出口 B
 
 ## 调试与排查
 
@@ -478,9 +461,9 @@ plugins:
 
 可以组合：
 
-- `debug_print`
-- `query_summary`
-- RouterOS API 日志
+* `debug_print`
+* `query_summary`
+* RouterOS API 日志
 
 ### 在 RouterOS 侧确认三件事
 
@@ -494,9 +477,9 @@ plugins:
 
 如果客户端：
 
-- 自己缓存 DNS 很久
-- 不使用 ForgeDNS
-- 使用其它解析结果
+* 自己缓存 DNS 很久
+* 不使用 ForgeDNS
+* 使用其它解析结果
 
 那么 RouterOS 侧的策略集合就不一定覆盖真实连接目标。
 
@@ -504,14 +487,14 @@ plugins:
 
 某些服务的地址变化频繁，这时需要更谨慎地设置：
 
-- `max_ttl`
-- `fixed_ttl`
-- `persistent`
+* `max_ttl`
+* `fixed_ttl`
+* `persistent`
 
 否则可能出现：
 
-- 旧 IP 残留过久
-- 写入过于频繁
+* 旧 IP 残留过久
+* 写入过于频繁
 
 ### 3. 异步写入存在极短暂窗口
 
@@ -527,9 +510,9 @@ plugins:
 
 先从：
 
-- 几个明确需要策略路由的域名集合
-- 一个单独的 `address-list`
-- 一条单独的 `routing-mark`
+* 几个明确需要策略路由的域名集合
+* 一个单独的 `address-list`
+* 一条单独的 `routing-mark`
 
 开始验证闭环。
 
@@ -537,12 +520,12 @@ plugins:
 
 ForgeDNS 负责：
 
-- 哪些域名属于哪类策略
-- 哪些解析结果要被同步
+* 哪些域名属于哪类策略
+* 哪些解析结果要被同步
 
 RouterOS 负责：
 
-- 这些 IP 属于哪条出口策略
+* 这些 IP 属于哪条出口策略
 
 该分层方式有助于明确职责边界，并降低排障复杂度。
 
@@ -552,16 +535,16 @@ RouterOS 负责：
 
 所以：
 
-- `connection-mark` 应该作为核心。
-- `routing-mark` 应该从连接标记派生。
-- `address-list` 只参与新连接的首轮判断。
+* `connection-mark` 应该作为核心。
+* `routing-mark` 应该从连接标记派生。
+* `address-list` 只参与新连接的首轮判断。
 
 ## 小结
 
 ForgeDNS 的 `mikrotik` 插件本质上是一个“DNS 结果同步器”：
 
-- 它把域名解析结果转换成 RouterOS 可消费的目标 IP 集合。
-- RouterOS 再基于这些 IP 集合完成真正的策略路由。
+* 它把域名解析结果转换成 RouterOS 可消费的目标 IP 集合。
+* RouterOS 再基于这些 IP 集合完成真正的策略路由。
 
 整套流程闭环如下：
 
