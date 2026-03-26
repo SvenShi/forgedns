@@ -3,34 +3,82 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Runtime configuration and command-line argument parsing
+//! Runtime configuration and command-line argument parsing.
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_appender::non_blocking::WorkerGuard;
 
-/// Core runtime container holding parsed command-line options
+/// Core runtime container holding parsed start options.
 pub struct Runtime {
-    pub options: Options,
+    pub options: StartOptions,
     /// Log worker guard to ensure logs are flushed on shutdown
     pub log_guard: Option<WorkerGuard>,
 }
 
-/// Command-line options for ForgeDNS server
-///
-/// Supports:
-/// - Configuration file path (default: config.yaml)
-/// - Log level override (overrides config file setting)
-#[derive(Parser, Clone)]
-#[clap(version = "1.0", author = "Sven Shi <isvenshi@gmail.com>")]
-pub struct Options {
+/// Top-level CLI definition.
+#[derive(Parser, Clone, Debug)]
+#[command(version = "1.0", author = "Sven Shi <isvenshi@gmail.com>")]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+/// Supported top-level commands.
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    /// Start ForgeDNS in the foreground.
+    Start(StartOptions),
+    /// Manage the operating system service.
+    Service(ServiceOptions),
+}
+
+/// Foreground start options.
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+pub struct StartOptions {
     /// Path to configuration file
-    #[clap(short, long, default_value = "config.yaml")]
+    #[arg(short = 'c', long = "config", default_value = "config.yaml")]
     pub config: PathBuf,
 
-    /// Log level (overrides config file): off, trace, debug, info, warn, error
-    #[clap(short, long)]
+    /// Working directory for ForgeDNS
+    #[arg(short = 'd', long = "working-dir")]
+    pub working_dir: Option<PathBuf>,
+
+    /// Log level override (overrides config file): off, trace, debug, info, warn, error
+    #[arg(short = 'l', long = "log-level")]
     pub log_level: Option<String>,
+}
+
+/// Service command options.
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+pub struct ServiceOptions {
+    #[command(subcommand)]
+    pub command: ServiceCommand,
+}
+
+/// Supported service manager actions.
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum ServiceCommand {
+    /// Install the system service. Installation only registers auto-start, it does not start immediately.
+    Install(ServiceInstallOptions),
+    /// Start the installed service.
+    Start,
+    /// Stop the installed service.
+    Stop,
+    /// Uninstall the installed service.
+    Uninstall,
+}
+
+/// Service installation options.
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+pub struct ServiceInstallOptions {
+    /// Absolute working directory for the installed service.
+    #[arg(short = 'd', long = "working-dir")]
+    pub working_dir: PathBuf,
+
+    /// Path to configuration file used by the installed service.
+    #[arg(short = 'c', long = "config")]
+    pub config: PathBuf,
 }
 
 #[cfg(test)]
@@ -39,22 +87,104 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn test_options_parse_uses_default_config_path() {
-        let args = ["forgedns"];
+    fn parse_start_command_with_explicit_flags() {
+        let args = [
+            "forgedns",
+            "start",
+            "-c",
+            "custom.yaml",
+            "-d",
+            "/tmp/forgedns",
+            "-l",
+            "debug",
+        ];
 
-        let options = Options::parse_from(args);
-
-        assert_eq!(options.config, PathBuf::from("config.yaml"));
-        assert_eq!(options.log_level, None);
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Start(StartOptions {
+                config: PathBuf::from("custom.yaml"),
+                working_dir: Some(PathBuf::from("/tmp/forgedns")),
+                log_level: Some("debug".to_string()),
+            })
+        );
     }
 
     #[test]
-    fn test_options_parse_accepts_explicit_config_and_log_level() {
-        let args = ["forgedns", "-c", "custom.yaml", "-l", "debug"];
+    fn parse_start_command_uses_default_config() {
+        let args = ["forgedns", "start"];
 
-        let options = Options::parse_from(args);
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Start(StartOptions {
+                config: PathBuf::from("config.yaml"),
+                working_dir: None,
+                log_level: None,
+            })
+        );
+    }
 
-        assert_eq!(options.config, PathBuf::from("custom.yaml"));
-        assert_eq!(options.log_level.as_deref(), Some("debug"));
+    #[test]
+    fn parse_service_install_command() {
+        let args = [
+            "forgedns",
+            "service",
+            "install",
+            "-d",
+            "/opt/forgedns",
+            "-c",
+            "/etc/forgedns/config.yaml",
+        ];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Service(ServiceOptions {
+                command: ServiceCommand::Install(ServiceInstallOptions {
+                    working_dir: PathBuf::from("/opt/forgedns"),
+                    config: PathBuf::from("/etc/forgedns/config.yaml"),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_service_start_command() {
+        let args = ["forgedns", "service", "start"];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Service(ServiceOptions {
+                command: ServiceCommand::Start,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_service_stop_command() {
+        let args = ["forgedns", "service", "stop"];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Service(ServiceOptions {
+                command: ServiceCommand::Stop,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_service_uninstall_command() {
+        let args = ["forgedns", "service", "uninstall"];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Service(ServiceOptions {
+                command: ServiceCommand::Uninstall,
+            })
+        );
     }
 }

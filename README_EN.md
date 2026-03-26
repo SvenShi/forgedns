@@ -435,8 +435,19 @@ ForgeDNS is a strong fit if you want:
 
 ```bash
 cargo build --release
-cargo run -- -c config.yaml
-cargo run -- -c config.yaml -l debug
+cargo run -- start -c config.yaml
+cargo run -- start -c config.yaml -l debug
+
+# Start with an explicit working directory
+cargo run -- start -c config.yaml -d /opt/forgedns
+
+# Install the system service (register only, does not auto-start immediately)
+cargo run -- service install -d /opt/forgedns -c /etc/forgedns/config.yaml
+
+# Start / stop / uninstall the installed service
+cargo run -- service start
+cargo run -- service stop
+cargo run -- service uninstall
 ```
 
 The sample `config.yaml` is the best starting point for understanding how ForgeDNS is assembled today.

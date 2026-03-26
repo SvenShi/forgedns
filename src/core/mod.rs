@@ -15,7 +15,6 @@ use crate::config::types::LogConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::log::ForgeDnsLogFormatter;
 use crate::core::runtime::Runtime;
-use clap::Parser;
 use tracing::{info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
@@ -32,11 +31,13 @@ pub mod ttl_cache;
 mod log;
 mod runtime;
 
-pub use crate::core::runtime::Options;
+pub use crate::core::runtime::{
+    Cli, Command, ServiceCommand, ServiceInstallOptions, ServiceOptions, StartOptions,
+};
 
-/// Parse command-line options for ForgeDNS startup.
-pub fn parse_options() -> Options {
-    Options::parse()
+/// Parse command-line options for ForgeDNS.
+pub fn parse_cli() -> Cli {
+    <Cli as clap::Parser>::parse()
 }
 
 /// Initialize the core runtime system
@@ -44,13 +45,16 @@ pub fn parse_options() -> Options {
 /// Parses command-line options and starts the application clock.
 /// The clock runs in the background to provide high-performance timestamps.
 pub fn init() -> Runtime {
-    init_with_options(parse_options())
+    match parse_cli().command {
+        Command::Start(options) => init_with_options(options),
+        Command::Service(_) => panic!("service commands cannot initialize the runtime directly"),
+    }
 }
 
 /// Initialize the core runtime system from pre-parsed options.
 ///
 /// Starts the application clock and stores the parsed options for later use.
-pub fn init_with_options(options: Options) -> Runtime {
+pub fn init_with_options(options: StartOptions) -> Runtime {
     // Start background clock for efficient timestamp generation
     AppClock::start();
 
