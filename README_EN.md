@@ -281,6 +281,62 @@ That is why it keeps insisting on:
 
 Without those constraints, performance work tends to decay as the project grows.
 
+## 📊 Performance Comparison With mosdns
+
+The numbers below come from an external `dnsperf` benchmark run. They are intended to show ForgeDNS's current performance profile under different policy shapes, not to claim a universal absolute winner.
+
+Test environment:
+
+- CPU: Intel N100, 4 cores
+- Memory: 1 GB
+- Runtime: LXC inside a PVE virtualized environment
+- OS: Linux 6.8.12-2-pve x86_64
+- Date: 2026-03-26
+- Benchmark binary labels: `forgedns 1.0`, mosdns `v5.3.4-0-gb732318`
+
+Benchmark parameters:
+
+- Tool: `dnsperf`
+- `warmup_seconds=2`
+- `bench_seconds=8`
+- `bench_repeats=3`
+- `dnsperf_clients=32`
+- `dnsperf_threads=4`
+- `dnsperf_outstanding=1024`
+- `dnsperf_max_qps=unlimited`
+
+The table below uses the average of 3 runs for each scenario:
+
+| Scenario | ForgeDNS QPS | mosdns QPS | QPS Delta | ForgeDNS Avg Latency | mosdns Avg Latency |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline UDP forward | 37,789.6 | 37,269.2 | +1.4% | 9.142 ms | 12.312 ms |
+| cache hotpath | 131,982.3 | 133,380.3 | -1.0% | 1.235 ms | 0.696 ms |
+| dual-entry UDP | 39,614.4 | 34,356.8 | +15.3% | 8.946 ms | 10.009 ms |
+| dual-entry TCP | 36,257.9 | 35,975.4 | +0.8% | 25.403 ms | 25.577 ms |
+| concurrent upstreams | 21,694.8 | 13,195.4 | +64.4% | 15.065 ms | 23.790 ms |
+| fallback standby | 22,259.9 | 23,223.9 | -4.2% | 16.376 ms | 10.616 ms |
+| local answers | 132,286.6 | 146,754.3 | -9.9% | 1.250 ms | 0.636 ms |
+| DoH upstream (HTTP/2) | 29,781.6 | 25,835.7 | +15.3% | 13.363 ms | 11.445 ms |
+| domain set | 172,061.7 | 35,966.1 | +378.4% | 0.901 ms | 4.210 ms |
+| ip set | 134,257.4 | 150,923.0 | -11.0% | 1.227 ms | 0.625 ms |
+| sequence base | 131,995.6 | 150,301.5 | -12.2% | 1.265 ms | 0.622 ms |
+| match true | 135,326.0 | 153,289.5 | -11.7% | 1.217 ms | 0.629 ms |
+| match false | 136,740.1 | 152,297.5 | -10.2% | 1.201 ms | 0.630 ms |
+| match qname | 132,289.4 | 152,203.6 | -13.1% | 1.248 ms | 0.638 ms |
+
+A few trends stand out from this run:
+
+- ForgeDNS is clearly stronger in scenarios closer to real policy complexity, such as concurrent upstream racing, dual-entry UDP, DoH upstream forwarding, and large `domain_set` matching.
+- mosdns is still faster in today's pure hot-path cases such as cache hits, local answers, base `sequence`, and lightweight matcher execution.
+- The `domain_set` gap is especially notable, which aligns with ForgeDNS's current design around provider flattening, rule-set reuse, and policy-path organization.
+- ForgeDNS does not yet lead in the `fallback standby` scenario, which suggests there is still meaningful room to optimize the primary/standby fallback path.
+
+Notes:
+
+- These numbers reflect this hardware, this configuration, and this scenario set only.
+- The benchmark was produced externally and is included here to show behavior trends, not to replace a full reproducible benchmark document.
+- The raw result set contains `14-match-qtype` data for ForgeDNS only, so it is intentionally omitted from the direct comparison table.
+
 ## Architecture At A Glance
 
 ```mermaid
@@ -341,6 +397,8 @@ ForgeDNS already includes:
 - ↔️ dual-stack preference helpers
 - 📚 reusable domain/IP rule-set providers
 - 🛰️ DNS-to-system integrations such as `ipset`, `nftset`, and MikroTik route sync
+- 🩺 management API, health checks, config validation, and hot-reload control
+- 📈 Prometheus text-format metrics export through `metrics_collector`
 
 ## 🧭 Use Cases
 
@@ -421,6 +479,22 @@ The most representative components today are:
 - `ipset`, `nftset`, `mikrotik`, `reverse_lookup`: DNS-to-system integration plugins
 - `metrics_collector`, `query_summary`, `debug_print`: lightweight observability helpers
 
+## 🔧 Operations And Management
+
+Beyond the DNS request path itself, ForgeDNS already includes a separate management API surface for health checks, runtime control, and operational introspection.
+
+Built-in endpoints currently include:
+
+- `/healthz`, `/readyz`, `/health`: process and readiness checks
+- `/control`: application control status
+- `/shutdown`: request graceful shutdown
+- `/reload`, `/reload/status`: configuration hot reload and status inspection
+- `/config/check`, `/config/validate`: configuration checking and validation
+- `/metrics`: Prometheus text-format metrics export
+
+These endpoints are distinct from the DoH server plugins.
+DoH is part of the data plane, while the management API is a separate operational control plane.
+
 ## 🎯 Who ForgeDNS Is For
 
 ForgeDNS is a strong fit if you want:
@@ -456,14 +530,13 @@ The sample `config.yaml` is the best starting point for understanding how ForgeD
 
 The next major items on the roadmap are:
 
-- management HTTP API
-- Prometheus integration and exporter support
 - family / parental control features
 - ad blocking with AdGuard rule support
 - loading domain and IP rule sets from URLs
 - reading V2Ray `.dat` rule files
+- continuing to expand the management API and plugin-specific API surface
 
-Note: ForgeDNS already includes `http_server` for DoH. The roadmap item above refers to a separate management HTTP interface.
+Note: the management API, health endpoints, hot reload control, and Prometheus text-format metrics export already exist. The roadmap here is about extending those operational features further, not introducing them from scratch.
 
 ## Acknowledgements
 
