@@ -5,8 +5,8 @@
 
 //! Operating system service management commands.
 
+use crate::app::cli::{ServiceCommand, ServiceInstallOptions, ServiceOptions};
 use crate::core::error::{DnsError, Result};
-use crate::core::{ServiceCommand, ServiceInstallOptions, ServiceOptions};
 use service_manager::{
     RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx,
     ServiceStopCtx, ServiceUninstallCtx, native_service_manager,

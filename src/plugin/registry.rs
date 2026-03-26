@@ -8,6 +8,7 @@
 //! Provides a centralized registry for managing plugin lifecycle,
 //! enabling better testability and support for multiple server instances.
 
+use crate::api::ApiRegister;
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::dependency::DependencyKind;
@@ -15,7 +16,6 @@ use crate::plugin::executor::Executor;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::Provider;
 use crate::plugin::{PluginFactory, PluginInfo, PluginType};
-use crate::{api::ApiHub, api::ApiRegister};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -29,7 +29,7 @@ use tracing::{debug, error, info};
 /// - Proper dependency injection
 #[derive(Debug)]
 pub struct PluginRegistry {
-    api_hub: Option<Arc<ApiHub>>,
+    api_register: Option<ApiRegister>,
 
     /// Map of plugin type names to their factory implementations
     factories: HashMap<String, Box<dyn PluginFactory>>,
@@ -52,7 +52,7 @@ impl PluginRegistry {
     /// Create a new empty plugin registry
     pub fn new() -> Self {
         Self {
-            api_hub: None,
+            api_register: None,
             factories: HashMap::new(),
             factory_kinds: HashMap::new(),
             plugins: DashMap::new(),
@@ -60,9 +60,9 @@ impl PluginRegistry {
         }
     }
 
-    pub fn with_api(api_hub: Option<Arc<ApiHub>>) -> Self {
+    pub fn with_api(api_register: Option<ApiRegister>) -> Self {
         let mut registry = Self::new();
-        registry.api_hub = api_hub;
+        registry.api_register = api_register;
         registry
     }
 
@@ -230,26 +230,7 @@ impl PluginRegistry {
     }
 
     pub fn api_register(&self) -> Option<ApiRegister> {
-        self.api_hub.clone().map(ApiRegister::new)
-    }
-
-    pub async fn start_api(&self) -> Result<()> {
-        if let Some(api_hub) = &self.api_hub {
-            api_hub.start().await?;
-        }
-        Ok(())
-    }
-
-    pub fn mark_plugins_initialized(&self) {
-        let total_plugins = self.plugins.len();
-        let server_plugins = self
-            .plugins
-            .iter()
-            .filter(|entry| entry.plugin_type == PluginType::Server)
-            .count();
-        if let Some(api_hub) = &self.api_hub {
-            api_hub.mark_plugins_initialized(total_plugins, server_plugins);
-        }
+        self.api_register.clone()
     }
 
     fn plugin_kind_name(plugin_type: PluginType) -> &'static str {
@@ -404,12 +385,15 @@ impl PluginRegistry {
         self.plugins.len()
     }
 
+    pub fn server_plugin_count(&self) -> usize {
+        self.plugins
+            .iter()
+            .filter(|entry| entry.plugin_type == PluginType::Server)
+            .count()
+    }
+
     /// Destroy all initialized plugins in reverse init order
     pub async fn destory(&self) {
-        if let Some(api_hub) = &self.api_hub {
-            api_hub.stop().await;
-        }
-
         let order = self
             .init_order
             .lock()

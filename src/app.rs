@@ -5,13 +5,17 @@
 
 //! Foreground application runner for ForgeDNS.
 
+pub mod bootstrap;
+pub mod cli;
+mod logging;
+
 use crate::api::control::{AppController, ControlCommand};
+use crate::app::bootstrap::AppAssembly;
+use crate::app::cli::StartOptions;
 use crate::config;
 use crate::config::types::Config;
 use crate::core;
-use crate::core::StartOptions;
 use crate::core::error::{DnsError, Result};
-use crate::plugin;
 use tokio::runtime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
@@ -60,7 +64,7 @@ fn load_config(options: &StartOptions) -> Result<Config> {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum ShutdownSignal {
+pub(super) enum ShutdownSignal {
     ApiRequest,
     #[cfg(unix)]
     SigInt,
@@ -166,8 +170,8 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
     let (app_controller, mut control_rx) = AppController::new(options.config.clone());
 
     let worker_threads = config.runtime.effective_worker_threads();
-    let mut runtime = core::init_with_options(options);
-    let options = runtime.options.clone();
+    core::app_clock::AppClock::start();
+    let options = options.clone();
 
     let mut log_config = config.log.clone();
     let configured_level = log_config.level.clone();
@@ -176,7 +180,7 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
     }
 
     let effective_log_level = log_config.level.clone();
-    runtime.log_guard = Some(core::init_log(log_config));
+    let _log_guard = logging::init_log(log_config);
     info!(
         config = %options.config.display(),
         plugins = config.plugins.len(),
@@ -196,22 +200,22 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
     info!(log_level = %effective_log_level, "ForgeDNS server initializing");
 
     let mut current_config = config;
-    let mut registry =
-        match plugin::init(current_config.clone(), Some(app_controller.clone())).await {
-            Ok(registry) => {
+    let mut assembly =
+        match bootstrap::assemble(&current_config, Some(app_controller.clone())).await {
+            Ok(assembly) => {
                 info!("ForgeDNS server started successfully");
-                registry
+                assembly
             }
-            Err(e) => {
-                error!("Plugin initialization failed: {}", e);
-                return Err(e);
+            Err(err) => {
+                error!("Plugin initialization failed: {}", err);
+                return Err(err);
             }
         };
 
     let shutdown_signal = wait_for_termination(
         &mut control_rx,
         shutdown_rx,
-        &mut registry,
+        &mut assembly,
         &mut current_config,
         app_controller.clone(),
     )
@@ -220,7 +224,7 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
         signal = shutdown_signal.as_str(),
         "Destroying plugins for shutdown"
     );
-    registry.destory().await;
+    bootstrap::stop(&assembly).await;
     core::task_center::stop_all().await;
     info!(
         signal = shutdown_signal.as_str(),
@@ -232,7 +236,7 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
 async fn wait_for_termination(
     control_rx: &mut mpsc::UnboundedReceiver<ControlCommand>,
     mut shutdown_rx: oneshot::Receiver<Result<ShutdownSignal>>,
-    registry: &mut std::sync::Arc<plugin::PluginRegistry>,
+    assembly: &mut AppAssembly,
     current_config: &mut Config,
     controller: std::sync::Arc<AppController>,
 ) -> Result<ShutdownSignal> {
@@ -254,7 +258,7 @@ async fn wait_for_termination(
                         return Ok(ShutdownSignal::ApiRequest);
                     }
                     Some(ControlCommand::Reload) => {
-                        handle_reload_command(registry, current_config, controller.clone()).await?;
+                        handle_reload_command(assembly, current_config, controller.clone()).await?;
                     }
                     None => return Err(DnsError::runtime("Control command channel closed unexpectedly")),
                 }
@@ -264,7 +268,7 @@ async fn wait_for_termination(
 }
 
 async fn handle_reload_command(
-    registry: &mut std::sync::Arc<plugin::PluginRegistry>,
+    assembly: &mut AppAssembly,
     current_config: &mut Config,
     controller: std::sync::Arc<AppController>,
 ) -> Result<()> {
@@ -284,12 +288,12 @@ async fn handle_reload_command(
         "Reloading configuration from management API"
     );
 
-    registry.destory().await;
+    bootstrap::stop(assembly).await;
     core::task_center::stop_all().await;
 
-    match plugin::init(candidate_config.clone(), Some(controller.clone())).await {
-        Ok(new_registry) => {
-            *registry = new_registry;
+    match bootstrap::assemble(&candidate_config, Some(controller.clone())).await {
+        Ok(new_assembly) => {
+            *assembly = new_assembly;
             *current_config = candidate_config;
             controller.mark_reload_succeeded();
             info!("Configuration reload completed successfully");
@@ -297,9 +301,9 @@ async fn handle_reload_command(
         }
         Err(reload_err) => {
             error!("Configuration reload failed: {}", reload_err);
-            match plugin::init(previous_config.clone(), Some(controller.clone())).await {
-                Ok(restored_registry) => {
-                    *registry = restored_registry;
+            match bootstrap::assemble(&previous_config, Some(controller.clone())).await {
+                Ok(restored_assembly) => {
+                    *assembly = restored_assembly;
                     controller.mark_reload_failed(format!(
                         "reload failed and previous configuration was restored: {}",
                         reload_err
@@ -330,6 +334,6 @@ fn load_config_from_path(path: &std::path::Path) -> Result<Config> {
             err
         ))
     })?;
-    plugin::validate_configuration(&config)?;
+    crate::plugin::validate_configuration(&config)?;
     Ok(config)
 }

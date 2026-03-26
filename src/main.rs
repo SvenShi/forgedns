@@ -5,12 +5,12 @@
 
 //! ForgeDNS CLI entry point.
 
+use forgedns::app::cli::{self, Command};
 use forgedns::core::error::Result;
-use forgedns::core::{self, Command};
 use forgedns::{app, service};
 
 fn main() -> Result<()> {
-    match core::parse_cli().command {
+    match cli::parse_cli().command {
         Command::Start(start) => app::run(start),
         Command::Service(service_opts) => service::run(service_opts),
     }

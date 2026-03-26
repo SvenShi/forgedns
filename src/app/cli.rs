@@ -3,18 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Runtime configuration and command-line argument parsing.
+//! Application CLI definition and startup options.
 
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
-use tracing_appender::non_blocking::WorkerGuard;
-
-/// Core runtime container holding parsed start options.
-pub struct Runtime {
-    pub options: StartOptions,
-    /// Log worker guard to ensure logs are flushed on shutdown
-    pub log_guard: Option<WorkerGuard>,
-}
 
 /// Top-level CLI definition.
 #[derive(Parser, Clone, Debug)]
@@ -79,6 +71,11 @@ pub struct ServiceInstallOptions {
     /// Path to configuration file used by the installed service.
     #[arg(short = 'c', long = "config")]
     pub config: PathBuf,
+}
+
+/// Parse command-line options for ForgeDNS.
+pub fn parse_cli() -> Cli {
+    <Cli as clap::Parser>::parse()
 }
 
 #[cfg(test)]

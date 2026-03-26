@@ -3,16 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
-use crate::core::error::{DnsError, Result};
 use crate::message::{Message, Rcode};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginRegistry};
-use std::io::Error;
 use std::net::SocketAddr;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{Level, debug, event_enabled, warn};
+
+pub(crate) use crate::network::listen::{normalize_listen_addr, parse_listen_addr};
 
 pub mod http;
 pub mod quic;
@@ -21,40 +20,6 @@ pub mod udp;
 
 pub trait Server: Plugin {
     fn run(&self);
-}
-
-/// Parse a server listen address.
-///
-/// Besides standard `SocketAddr` inputs, this also accepts `:port` shorthand
-/// and expands it to `0.0.0.0:port`.
-pub(crate) fn parse_listen_addr(listen: &str) -> Result<SocketAddr> {
-    let listen = listen.trim();
-
-    if let Ok(addr) = SocketAddr::from_str(listen) {
-        return Ok(addr);
-    }
-
-    if let Some(port) = listen.strip_prefix(':') {
-        let port = port.parse::<u16>().map_err(|e| {
-            DnsError::Io(Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Invalid listen address {}: {}", listen, e),
-            ))
-        })?;
-        return Ok(SocketAddr::from(([0, 0, 0, 0], port)));
-    }
-
-    Err(DnsError::Io(Error::new(
-        std::io::ErrorKind::InvalidInput,
-        format!(
-            "Invalid listen address {}: expected ip:port, [ipv6]:port, or :port",
-            listen
-        ),
-    )))
-}
-
-pub(crate) fn normalize_listen_addr(listen: &str) -> Result<String> {
-    Ok(parse_listen_addr(listen)?.to_string())
 }
 
 pub(crate) struct ConnectionGuard {
