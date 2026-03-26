@@ -292,7 +292,7 @@ Test environment:
 - Runtime: LXC inside a PVE virtualized environment
 - OS: Linux 6.8.12-2-pve x86_64
 - Date: 2026-03-26
-- Benchmark binary labels: `forgedns 1.0`, mosdns `v5.3.4-0-gb732318`
+- Benchmark binary labels: `forgedns v0.1.0`, mosdns `v5.3.4-0-gb732318`
 
 Benchmark parameters:
 
