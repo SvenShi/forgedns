@@ -2,6 +2,8 @@
 
 [中文](README.md) | [English](README_EN.md)
 
+文档地址：[https://forgedns.gitbook.io/docs](https://forgedns.gitbook.io/docs)
+
 **⚡ 一个面向现代网络、强调性能边界与策略编排能力的可编排 DNS 服务器。**
 
 ForgeDNS 是一个使用 Rust 编写的高性能 DNS 项目。

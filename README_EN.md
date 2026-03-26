@@ -2,6 +2,8 @@
 
 [中文](README.md) | [English](README_EN.md)
 
+Documentation: [https://forgedns.gitbook.io/docs](https://forgedns.gitbook.io/docs)
+
 **⚡ A programmable DNS server for modern networks, built with performance boundaries and policy orchestration in mind.**
 
 ForgeDNS is a high-performance DNS project written in Rust.
