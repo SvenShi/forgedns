@@ -77,11 +77,11 @@ Windows targets use `.zip`:
 
 ### Linux / macOS Example
 
-Replace `<tag>` below with the actual release tag, for example `v0.1.0`. Using `x86_64-unknown-linux-gnu` as an example:
+Replace `TAG` below with the actual release tag, for example `v0.1.0`. Using `x86_64-unknown-linux-gnu` as an example:
 
 ```bash
 curl -L -o forgedns.tar.gz \
-  https://github.com/SvenShi/forgedns/releases/download/<tag>/forgedns-x86_64-unknown-linux-gnu.tar.gz
+  https://github.com/SvenShi/forgedns/releases/download/TAG/forgedns-x86_64-unknown-linux-gnu.tar.gz
 
 mkdir -p forgedns
 tar -xzf forgedns.tar.gz -C forgedns
@@ -155,14 +155,14 @@ The Docker workflow builds:
 Pull and run:
 
 ```bash
-docker pull ghcr.io/svenshi/forgedns:<tag>
+docker pull ghcr.io/svenshi/forgedns:TAG
 
 docker run --rm \
   -p 53:53/udp \
   -p 53:53/tcp \
   -p 9088:9088/tcp \
   -v "$(pwd)/config.yaml:/etc/forgedns/config.yaml:ro" \
-  ghcr.io/svenshi/forgedns:<tag>
+  ghcr.io/svenshi/forgedns:TAG
 ```
 
 If the default-branch image is published, you can also use the `latest` tag.

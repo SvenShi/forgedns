@@ -77,11 +77,11 @@ Windows 平台使用 `.zip`：
 
 ### Linux / macOS 安装示例
 
-将下面的 `<tag>` 替换为实际 release 标签，例如 `v0.1.0`。以 `x86_64-unknown-linux-gnu` 为例：
+将下面的 `TAG` 替换为实际 release 标签，例如 `v0.1.0`。以 `x86_64-unknown-linux-gnu` 为例：
 
 ```bash
 curl -L -o forgedns.tar.gz \
-  https://github.com/SvenShi/forgedns/releases/download/<tag>/forgedns-x86_64-unknown-linux-gnu.tar.gz
+  https://github.com/SvenShi/forgedns/releases/download/TAG/forgedns-x86_64-unknown-linux-gnu.tar.gz
 
 mkdir -p forgedns
 tar -xzf forgedns.tar.gz -C forgedns
@@ -155,14 +155,14 @@ sudo systemctl enable --now forgedns
 拉取并运行：
 
 ```bash
-docker pull ghcr.io/svenshi/forgedns:<tag>
+docker pull ghcr.io/svenshi/forgedns:TAG
 
 docker run --rm \
   -p 53:53/udp \
   -p 53:53/tcp \
   -p 9088:9088/tcp \
   -v "$(pwd)/config.yaml:/etc/forgedns/config.yaml:ro" \
-  ghcr.io/svenshi/forgedns:<tag>
+  ghcr.io/svenshi/forgedns:TAG
 ```
 
 如果默认分支镜像已发布，也可以使用 `latest` 标签。
