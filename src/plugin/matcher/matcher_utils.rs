@@ -7,9 +7,9 @@
 
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
-use crate::message::{DNSClass, Rcode, RecordType};
 use crate::plugin::PluginRegistry;
 use crate::plugin::provider::Provider;
+use crate::proto::{DNSClass, Rcode, RecordType};
 use ahash::AHashSet;
 use serde_yml::Value;
 use std::fs::File;

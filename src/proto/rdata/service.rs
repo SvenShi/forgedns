@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-use crate::message::Name;
+use crate::proto::Name;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -227,7 +227,7 @@ impl SvcParamValue {
     fn from_wire(key: u16, value: &[u8]) -> Self {
         match key {
             0 => {
-                if value.len() % 2 != 0 {
+                if !value.len().is_multiple_of(2) {
                     return Self::Unknown;
                 }
                 let mut mandatory = Vec::with_capacity(value.len() / 2);
@@ -265,7 +265,7 @@ impl SvcParamValue {
                 }
             }
             4 => {
-                if value.len() % 4 != 0 {
+                if !value.len().is_multiple_of(4) {
                     return Self::Unknown;
                 }
                 let hints = value
@@ -276,7 +276,7 @@ impl SvcParamValue {
             }
             5 => Self::Ech(value.to_vec().into_boxed_slice()),
             6 => {
-                if value.len() % 16 != 0 {
+                if !value.len().is_multiple_of(16) {
                     return Self::Unknown;
                 }
                 let hints = value
@@ -362,7 +362,7 @@ impl AMTRELAY {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Name;
+    use crate::proto::Name;
 
     #[test]
     // Covers the key-specific interpretation layer separately from the wire codec so

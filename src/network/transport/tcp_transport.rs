@@ -4,7 +4,7 @@
  */
 
 use crate::core::error::{DnsError, Result};
-use crate::message::{Message, codec};
+use crate::proto::{Message, codec};
 use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 
@@ -138,8 +138,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{DNSClass, Question};
-    use crate::message::{Name, RecordType};
+    use crate::proto::{DNSClass, Question};
+    use crate::proto::{Name, RecordType};
     use tokio::io::{AsyncWriteExt, duplex};
 
     fn make_message(id: u16, qname: &str) -> Message {

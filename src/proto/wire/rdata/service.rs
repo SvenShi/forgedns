@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#![allow(clippy::type_complexity)]
+
 use super::*;
 
 fn validate_svc_param_key_order(last_key: Option<u16>, key: u16) -> Result<()> {

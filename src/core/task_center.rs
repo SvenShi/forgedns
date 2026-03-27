@@ -247,10 +247,9 @@ async fn run_due_tasks(
                 .running
                 .as_ref()
                 .is_some_and(|handle| handle.is_finished())
+                && let Some(handle) = task.running.take()
             {
-                if let Some(handle) = task.running.take() {
-                    finished.push((task.name.clone(), handle));
-                }
+                finished.push((task.name.clone(), handle));
             }
 
             if task.running.is_none() {
@@ -278,7 +277,7 @@ fn next_deadline(
     deadlines: &mut BinaryHeap<Reverse<(Instant, u64)>>,
 ) -> Option<Instant> {
     loop {
-        let Reverse((deadline, id)) = deadlines.peek()?.clone();
+        let Reverse((deadline, id)) = *deadlines.peek()?;
         match tasks.get(&id) {
             Some(task) if task.next_run == deadline => return Some(deadline),
             _ => {

@@ -1,4 +1,4 @@
-use crate::message::Name;
+use crate::proto::Name;
 use ahash::{AHashMap, AHashSet};
 
 const MAX_COMPRESSION_POINTER_OFFSET: usize = 0x4000;

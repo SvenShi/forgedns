@@ -6,11 +6,11 @@
 //! Owned DNS message model.
 
 use crate::core::error::{DnsError, Result};
-use crate::message::rdata::{A, AAAA, Edns};
-use crate::message::wire::{
+use crate::proto::rdata::{A, AAAA, Edns};
+use crate::proto::wire::{
     decode_message, edns_record_len, encode_message_into, encode_message_with_limit,
 };
-use crate::message::{
+use crate::proto::{
     DNSClass, EdnsFlags, Header, MessageType, Name, Opcode, Question, RData, Rcode, Record,
     RecordType,
 };
@@ -585,22 +585,12 @@ impl Message {
             .any(&mut pred)
     }
 
-    pub fn answer_ip_ttls(&self) -> Vec<(IpAddr, u32)> {
-        let mut out = Vec::new();
-        for record in &self.answers {
-            if let Some(ip) = record.ip_addr() {
-                out.push((ip, record.ttl()));
-            }
-        }
-        out
-    }
-
     pub fn cnames(&self) -> Vec<&Name> {
         self.answers
             .iter()
             .chain(self.authorities.iter())
             .chain(self.additionals.iter())
-            .filter_map(|record| record.cname_target().map(|name| name))
+            .filter_map(|record| record.cname_target())
             .collect()
     }
 
@@ -640,8 +630,8 @@ impl Message {
                 || !self.signature().is_empty()
                 || self.edns().is_some());
 
-        let mut compression = crate::message::codec::LenCompressionMap::new(can_compress);
-        let mut len = crate::message::codec::DNS_HEADER_LEN;
+        let mut compression = crate::proto::codec::LenCompressionMap::new(can_compress);
+        let mut len = crate::proto::codec::DNS_HEADER_LEN;
 
         for question in self.questions() {
             len += question.bytes_len(&mut compression);
@@ -715,8 +705,8 @@ impl Message {
                 || !self.signature.is_empty()
                 || self.edns.is_some());
 
-        let mut compression = crate::message::codec::LenCompressionMap::new(can_compress);
-        let mut len = crate::message::codec::DNS_HEADER_LEN;
+        let mut compression = crate::proto::codec::LenCompressionMap::new(can_compress);
+        let mut len = crate::proto::codec::DNS_HEADER_LEN;
 
         for question in &self.questions {
             len += question.bytes_len(&mut compression);
@@ -783,10 +773,16 @@ pub(crate) struct TruncationLens {
     pub total_len: usize,
 }
 
+impl Default for Message {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::rdata::{Edns, TXT};
+    use crate::proto::rdata::{Edns, TXT};
 
     #[test]
     // Verifies the classic DNS truncation rule that TC must be set and OPT must remain
@@ -853,7 +849,7 @@ mod tests {
             message.add_answer(Record::from_rdata(
                 owner,
                 10,
-                RData::SRV(crate::message::rdata::SRV::new(0, 0, 80, target)),
+                RData::SRV(crate::proto::rdata::SRV::new(0, 0, 80, target)),
             ));
         }
 
@@ -900,7 +896,7 @@ mod tests {
         compressed.add_additional(Record::from_rdata(
             Name::from_ascii("alias.example.com.").unwrap(),
             60,
-            RData::CNAME(crate::message::rdata::CNAME(
+            RData::CNAME(crate::proto::rdata::CNAME(
                 Name::from_ascii("example.com.").unwrap(),
             )),
         ));
@@ -928,7 +924,7 @@ mod tests {
             message.add_answer(Record::from_rdata(
                 owner,
                 10,
-                RData::SRV(crate::message::rdata::SRV::new(0, 0, 80, target)),
+                RData::SRV(crate::proto::rdata::SRV::new(0, 0, 80, target)),
             ));
         }
         for index in 0..16 {
@@ -981,19 +977,17 @@ mod tests {
         message.signature_mut().push(Record::from_rdata(
             Name::from_ascii("large.example.com.").unwrap(),
             0,
-            RData::SIG(crate::message::rdata::SIG(
-                crate::message::rdata::RRSIG::new(
-                    u16::from(RecordType::A),
-                    8,
-                    2,
-                    300,
-                    400,
-                    200,
-                    1234,
-                    Name::from_ascii("sig.example.com.").unwrap(),
-                    vec![1, 2, 3, 4].into_boxed_slice(),
-                ),
-            )),
+            RData::SIG(crate::proto::rdata::SIG(crate::proto::rdata::RRSIG {
+                type_covered: u16::from(RecordType::A),
+                algorithm: 8,
+                labels: 2,
+                orig_ttl: 300,
+                expiration: 400,
+                inception: 200,
+                key_tag: 1234,
+                signer_name: Name::from_ascii("sig.example.com.").unwrap(),
+                signature: vec![1, 2, 3, 4].into_boxed_slice(),
+            })),
         ));
 
         message.truncate(512).unwrap();
@@ -1015,8 +1009,8 @@ mod tests {
         ));
         let mut edns = Edns::new();
         edns.set_udp_payload_size(1232);
-        edns.insert(crate::message::EdnsOption::Local(
-            crate::message::EdnsLocal::new(65001, vec![1, 2, 3]),
+        edns.insert(crate::proto::EdnsOption::Local(
+            crate::proto::EdnsLocal::new(65001, vec![1, 2, 3]),
         ));
         request.set_edns(edns);
 
@@ -1024,15 +1018,15 @@ mod tests {
         let response_edns = response.ensure_edns_mut();
         response_edns.set_udp_payload_size(4096);
         response_edns.flags_mut().z = 9;
-        response_edns.insert(crate::message::EdnsOption::Local(
-            crate::message::EdnsLocal::new(65001, vec![9, 9, 9]),
+        response_edns.insert(crate::proto::EdnsOption::Local(
+            crate::proto::EdnsLocal::new(65001, vec![9, 9, 9]),
         ));
 
         let request_edns = request.edns().as_ref().expect("request edns should exist");
         assert_eq!(request_edns.udp_payload_size(), 1232);
         assert_eq!(request_edns.flags().z, 0);
-        let Some(crate::message::EdnsOption::Local(local)) =
-            request_edns.option(crate::message::EdnsCode::Unknown(65001))
+        let Some(crate::proto::EdnsOption::Local(local)) =
+            request_edns.option(crate::proto::EdnsCode::Unknown(65001))
         else {
             panic!("expected request local edns option");
         };
@@ -1044,17 +1038,11 @@ mod tests {
             .expect("response edns should exist");
         assert_eq!(response_edns.udp_payload_size(), 4096);
         assert_eq!(response_edns.flags().z, 9);
-        let Some(crate::message::EdnsOption::Local(local)) =
-            response_edns.option(crate::message::EdnsCode::Unknown(65001))
+        let Some(crate::proto::EdnsOption::Local(local)) =
+            response_edns.option(crate::proto::EdnsCode::Unknown(65001))
         else {
             panic!("expected response local edns option");
         };
         assert_eq!(local.data(), &[9, 9, 9]);
-    }
-}
-
-impl Default for Message {
-    fn default() -> Self {
-        Self::new()
     }
 }

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-use crate::message::Name;
-use crate::message::rdata::basic::TXT;
+use crate::proto::Name;
+use crate::proto::rdata::basic::TXT;
 use std::net::Ipv4Addr;
 
 #[derive(Debug, Clone, Eq, PartialEq)]

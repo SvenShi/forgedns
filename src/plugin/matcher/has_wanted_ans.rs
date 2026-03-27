@@ -42,12 +42,12 @@ impl PluginFactory for HasWantedAnsFactory {
         param: Option<String>,
         _registry: Arc<PluginRegistry>,
     ) -> DnsResult<UninitializedPlugin> {
-        if let Some(param) = param {
-            if !param.trim().is_empty() {
-                return Err(DnsError::plugin(
-                    "has_wanted_ans does not accept parameters",
-                ));
-            }
+        if let Some(param) = param
+            && !param.trim().is_empty()
+        {
+            return Err(DnsError::plugin(
+                "has_wanted_ans does not accept parameters",
+            ));
         }
         Ok(UninitializedPlugin::Matcher(Box::new(
             HasWantedAnsMatcher {
@@ -102,10 +102,10 @@ impl Matcher for HasWantedAnsMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Question;
-    use crate::message::rdata::A;
-    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::test_utils::{test_context, test_registry};
+    use crate::proto::Question;
+    use crate::proto::rdata::A;
+    use crate::proto::{Name, RData, Record, RecordType};
 
     #[test]
     fn test_has_wanted_ans_quick_setup_rejects_param() {
@@ -131,10 +131,10 @@ mod tests {
         ctx.request.questions_mut().push(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
 
-        let mut response = crate::message::Message::new();
+        let mut response = crate::proto::Message::new();
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             60,
@@ -144,7 +144,7 @@ mod tests {
 
         assert!(matcher.is_match(&mut ctx));
 
-        ctx.set_response(crate::message::Message::new());
+        ctx.set_response(crate::proto::Message::new());
         assert!(!matcher.is_match(&mut ctx));
     }
 }

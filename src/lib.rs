@@ -9,7 +9,7 @@ pub mod api;
 pub mod app;
 pub mod config;
 pub mod core;
-pub mod message;
 pub mod network;
 pub mod plugin;
+pub mod proto;
 pub mod service;

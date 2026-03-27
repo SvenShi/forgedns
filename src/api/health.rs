@@ -75,6 +75,12 @@ impl HealthState {
     }
 }
 
+impl Default for HealthState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct HealthSnapshot {
     status: &'static str,

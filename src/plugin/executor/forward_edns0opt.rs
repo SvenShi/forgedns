@@ -22,9 +22,9 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::{EdnsCode, EdnsOption};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::{EdnsCode, EdnsOption};
 use crate::{continue_next, register_plugin_factory};
 use ahash::AHashSet;
 use async_trait::async_trait;
@@ -162,7 +162,7 @@ fn parse_codes_from_value(args: Option<serde_yml::Value>) -> Result<AHashSet<u16
 }
 
 fn collect_selected_options(
-    message: &crate::message::Message,
+    message: &crate::proto::Message,
     code_set: &AHashSet<u16>,
 ) -> Vec<EdnsOption> {
     let Some(edns) = message.edns() else {
@@ -180,7 +180,7 @@ fn collect_selected_options(
 }
 
 fn collect_selected_codes(
-    message: &crate::message::Message,
+    message: &crate::proto::Message,
     code_set: &AHashSet<u16>,
 ) -> AHashSet<u16> {
     let Some(edns) = message.edns() else {
@@ -197,7 +197,7 @@ fn collect_selected_codes(
     out
 }
 
-fn ensure_opt_record(message: &mut crate::message::Message) -> &mut crate::message::Edns {
+fn ensure_opt_record(message: &mut crate::proto::Message) -> &mut crate::proto::Edns {
     message.ensure_edns_mut()
 }
 
@@ -212,9 +212,9 @@ fn split_tokens(raw: &str) -> Vec<&str> {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::{ClientSubnet, DNSClass, Message, Question};
-    use crate::message::{Name, RecordType};
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::{ClientSubnet, DNSClass, Message, Question};
+    use crate::proto::{Name, RecordType};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     #[test]

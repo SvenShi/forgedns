@@ -5,7 +5,7 @@
 
 //! Shared high-performance rule matchers used by providers and matchers.
 
-use crate::message::Name;
+use crate::proto::Name;
 use ahash::{AHashMap, AHashSet};
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::{RegexBuilder, RegexSet, RegexSetBuilder};
@@ -20,6 +20,8 @@ const IPV4_BITMAP_WORDS: usize = 1 << (IPV4_PAGE_SHIFT - 6);
 const SMALL_IPV4_PAGE_RANGE_THRESHOLD: usize = 16;
 const SMALL_IPV6_LINEAR_THRESHOLD: usize = 8;
 const DENSE_IPV4_PAGE_THRESHOLD: usize = 4096;
+
+type Ipv4Pages = Vec<(u16, SmallVec<[(u16, u16); 4]>)>;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct Ipv4Range {
@@ -73,18 +75,13 @@ impl Ipv6Range {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum Ipv4Page {
+    #[default]
     Empty,
     Full,
     Small(Box<[(u16, u16)]>),
     Bitmap(Box<[u64]>),
-}
-
-impl Default for Ipv4Page {
-    fn default() -> Self {
-        Self::Empty
-    }
 }
 
 impl Ipv4Page {
@@ -282,7 +279,7 @@ fn compile_ipv4_matcher(ranges: &mut Vec<Ipv4Range>) -> Option<Ipv4Matcher> {
         });
     }
 
-    let mut active_pages = Vec::<(u16, SmallVec<[(u16, u16); 4]>)>::new();
+    let mut active_pages = Ipv4Pages::new();
     for range in ranges.iter().copied() {
         let start_page = (range.start >> IPV4_PAGE_SHIFT) as usize;
         let end_page = (range.end >> IPV4_PAGE_SHIFT) as usize;
@@ -346,12 +343,7 @@ fn contains_ipv6_uncompiled(ranges: &[Ipv6Range], value: u128) -> bool {
 }
 
 #[inline]
-fn push_ipv4_page_range(
-    pages: &mut Vec<(u16, SmallVec<[(u16, u16); 4]>)>,
-    page: u16,
-    start: u16,
-    end: u16,
-) {
+fn push_ipv4_page_range(pages: &mut Ipv4Pages, page: u16, start: u16, end: u16) {
     if let Some((last_page, ranges)) = pages.last_mut()
         && *last_page == page
     {

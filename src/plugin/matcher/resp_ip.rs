@@ -125,10 +125,10 @@ impl Matcher for RespIpMatcher {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::rdata::A;
-    use crate::message::{Message, Question};
-    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
+    use crate::proto::rdata::A;
+    use crate::proto::{Message, Question};
+    use crate::proto::{Name, RData, Record, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
@@ -136,7 +136,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
 
         DnsContext::new(

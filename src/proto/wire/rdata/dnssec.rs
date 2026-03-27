@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#![allow(clippy::type_complexity)]
+
 use super::*;
 
 /// Decode SIG(0) wire data using the SIG/RRSIG layout from RFC 2931 and RFC 4034.
@@ -521,7 +523,7 @@ fn parse_rrsig_rdata(packet: &[u8], start: usize, end: usize) -> Result<RRSIG> {
     if cursor > end {
         return Err(DnsError::protocol("invalid RRSIG rdata length"));
     }
-    Ok(RRSIG::new(
+    Ok(RRSIG {
         type_covered,
         algorithm,
         labels,
@@ -530,8 +532,8 @@ fn parse_rrsig_rdata(packet: &[u8], start: usize, end: usize) -> Result<RRSIG> {
         inception,
         key_tag,
         signer_name,
-        copy_boxed(packet, cursor, end),
-    ))
+        signature: copy_boxed(packet, cursor, end),
+    })
 }
 
 /// Parse the NSEC next domain name and type bitmap per RFC 4034 section 4.

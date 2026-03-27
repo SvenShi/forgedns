@@ -5,7 +5,7 @@
 
 //! Owned DNS question model.
 
-use crate::message::{DNSClass, Name, RecordType};
+use crate::proto::{DNSClass, Name, RecordType};
 
 /// Owned DNS question used by the message representation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -58,7 +58,7 @@ impl Question {
     /// Return encoded byte length at offset `off`, including QTYPE and QCLASS.
     pub(crate) fn bytes_len<'a>(
         &'a self,
-        compression: &mut crate::message::codec::LenCompressionMap<'a>,
+        compression: &mut crate::proto::codec::LenCompressionMap<'a>,
     ) -> usize {
         self.name.bytes_len_at(true, compression) + 4
     }

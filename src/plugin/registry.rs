@@ -177,7 +177,7 @@ impl PluginRegistry {
 
             // Create plugin using the factory and registry
             let plugin_info = self
-                .create_plugin_info_and_init(plugin_config, factory)
+                .create_plugin_info_and_init(plugin_config, factory.as_ref())
                 .await?;
 
             // DashMap allows insertion even with Arc<Self>
@@ -206,7 +206,7 @@ impl PluginRegistry {
     async fn create_plugin_info_and_init(
         self: &Arc<Self>,
         config: &PluginConfig,
-        factory: &Box<dyn PluginFactory>,
+        factory: &dyn PluginFactory,
     ) -> Result<PluginInfo> {
         // Factory creates uninitialized plugin
         let uninitialized = factory.create(config, self.clone())?;

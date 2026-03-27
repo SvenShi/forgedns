@@ -122,10 +122,10 @@ impl Matcher for CnameMatcher {
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context.response().is_some_and(|response| {
             response.cnames().into_iter().any(|cname| {
-                if self.cname_rules.is_match_name(&cname) {
+                if self.cname_rules.is_match_name(cname) {
                     return true;
                 }
-                self.domain_sets.iter().any(|set| set.contains_name(&cname))
+                self.domain_sets.iter().any(|set| set.contains_name(cname))
             })
         })
     }
@@ -135,10 +135,10 @@ impl Matcher for CnameMatcher {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::rdata::{A, CNAME};
-    use crate::message::{Message, Question};
-    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
+    use crate::proto::rdata::{A, CNAME};
+    use crate::proto::{Message, Question};
+    use crate::proto::{Name, RData, Record, RecordType};
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
 
@@ -147,7 +147,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
 
         DnsContext::new(

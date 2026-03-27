@@ -10,7 +10,7 @@ use super::{CacheItem, CacheMap};
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 use crate::core::ttl_cache::TtlCacheEntry;
-use crate::message::{DNSClass, Message, RecordType};
+use crate::proto::{DNSClass, Message, RecordType};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;

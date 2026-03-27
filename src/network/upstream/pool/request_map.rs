@@ -14,7 +14,7 @@
 //! - No locks or async operations
 //! - Cache-friendly: slots are inline in the array
 
-use crate::message::Message;
+use crate::proto::Message;
 use rand::random;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU16, Ordering};

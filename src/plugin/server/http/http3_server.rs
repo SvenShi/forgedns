@@ -85,24 +85,21 @@ pub async fn run_server(
                 }
             }
             accept_result = endpoint.accept() => {
-                match accept_result {
-                    Some(connecting) => {
-                        let active = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
-                        let dispatcher = dispatcher.clone();
-                        let src_ip_header = src_ip_header.clone();
-                        let task_shutdown = shutdown_token.clone();
-                        let active_connections = active_connections.clone();
-                        tasks.spawn(async move {
-                            let _connection_guard =
-                                ConnectionGuard::new(active_connections.clone(), connecting.remote_address(), "HTTP/3");
-                            tokio::select! {
-                                _ = task_shutdown.cancelled() => {}
-                                _ = handle_h3_connection(connecting, dispatcher, src_ip_header) => {}
-                            }
-                        });
-                        debug!("New QUIC connection started (active: {})", active);
-                    }
-                    _ => {}
+                if let Some(connecting) = accept_result {
+                    let active = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
+                    let dispatcher = dispatcher.clone();
+                    let src_ip_header = src_ip_header.clone();
+                    let task_shutdown = shutdown_token.clone();
+                    let active_connections = active_connections.clone();
+                    tasks.spawn(async move {
+                        let _connection_guard =
+                            ConnectionGuard::new(active_connections.clone(), connecting.remote_address(), "HTTP/3");
+                        tokio::select! {
+                            _ = task_shutdown.cancelled() => {}
+                            _ = handle_h3_connection(connecting, dispatcher, src_ip_header) => {}
+                        }
+                    });
+                    debug!("New QUIC connection started (active: {})", active);
                 }
             }
         }

@@ -234,10 +234,10 @@ register_plugin_factory!("udp_server", UdpServerFactory {});
 impl PluginFactory for UdpServerFactory {
     /// Get dependencies (the entry executor plugin)
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
-        if let Some(args) = &plugin_config.args {
-            if let Ok(config) = serde_yml::from_value::<UdpServerConfig>(args.clone()) {
-                return vec![DependencySpec::executor("args.entry", config.entry)];
-            }
+        if let Some(args) = &plugin_config.args
+            && let Ok(config) = serde_yml::from_value::<UdpServerConfig>(args.clone())
+        {
+            return vec![DependencySpec::executor("args.entry", config.entry)];
         }
         vec![]
     }

@@ -39,10 +39,10 @@ impl PluginFactory for HasRespFactory {
         param: Option<String>,
         _registry: Arc<PluginRegistry>,
     ) -> DnsResult<UninitializedPlugin> {
-        if let Some(param) = param {
-            if !param.trim().is_empty() {
-                return Err(DnsError::plugin("has_resp does not accept parameters"));
-            }
+        if let Some(param) = param
+            && !param.trim().is_empty()
+        {
+            return Err(DnsError::plugin("has_resp does not accept parameters"));
         }
         Ok(UninitializedPlugin::Matcher(Box::new(HasRespMatcher {
             tag: tag.to_string(),
@@ -98,7 +98,7 @@ mod tests {
         };
         let mut ctx = test_context();
         assert!(!matcher.is_match(&mut ctx));
-        ctx.set_response(crate::message::Message::new());
+        ctx.set_response(crate::proto::Message::new());
         assert!(matcher.is_match(&mut ctx));
     }
 }

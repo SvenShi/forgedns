@@ -19,9 +19,9 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
-use crate::message::{Rcode, RecordType};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::{Rcode, RecordType};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -229,10 +229,10 @@ impl DualSelector {
         // Probe errors mean preferred-type availability is unknown.
         // Never cache/block in this case to avoid false positive suppression.
         if probe.preferred_error.is_some() {
-            if context.response().is_none() {
-                if let Some(err) = probe.original_error {
-                    return Err(DnsError::plugin(err));
-                }
+            if context.response().is_none()
+                && let Some(err) = probe.original_error
+            {
+                return Err(DnsError::plugin(err));
             }
             return Ok(());
         }
@@ -249,10 +249,10 @@ impl DualSelector {
             self.cache_probe_result(domain, false);
         }
 
-        if context.response().is_none() {
-            if let Some(err) = probe.original_error {
-                return Err(DnsError::plugin(err));
-            }
+        if context.response().is_none()
+            && let Some(err) = probe.original_error
+        {
+            return Err(DnsError::plugin(err));
         }
 
         Ok(())
@@ -361,10 +361,10 @@ impl PluginFactory for DualSelectorFactory {
 mod tests {
     use super::*;
     use crate::core::context::ExecFlowState;
-    use crate::message::rdata::{A, AAAA};
-    use crate::message::{DNSClass, Message, Question};
-    use crate::message::{Name, RData, Record};
     use crate::plugin::executor::ExecStep;
+    use crate::proto::rdata::{A, AAAA};
+    use crate::proto::{DNSClass, Message, Question};
+    use crate::proto::{Name, RData, Record};
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn make_context(qtype: RecordType) -> DnsContext {

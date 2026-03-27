@@ -5,7 +5,7 @@
 
 //! Owned DNS resource records.
 
-use crate::message::{DNSClass, Name, RData, RecordType};
+use crate::proto::{DNSClass, Name, RData, RecordType};
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -124,7 +124,7 @@ impl Record {
     /// Return encoded RR byte length at offset `off`.
     pub(crate) fn bytes_len<'a>(
         &'a self,
-        compression: &mut crate::message::codec::LenCompressionMap<'a>,
+        compression: &mut crate::proto::codec::LenCompressionMap<'a>,
     ) -> usize {
         let owner_len = self.name().bytes_len_at(true, compression);
         owner_len + 10 + self.data().bytes_len(compression)
@@ -134,7 +134,7 @@ impl Record {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::rdata::{A, TXT};
+    use crate::proto::rdata::{A, TXT};
     use std::net::Ipv4Addr;
 
     #[test]

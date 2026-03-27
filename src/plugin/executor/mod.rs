@@ -43,8 +43,8 @@ macro_rules! continue_next {
         if let Some(next) = $next {
             next.next($ctx).await
         } else {
-            if $ctx.flow() == crate::core::context::ExecFlowState::Running {
-                $ctx.set_flow(crate::core::context::ExecFlowState::ReachedTail);
+            if $ctx.flow() == $crate::core::context::ExecFlowState::Running {
+                $ctx.set_flow($crate::core::context::ExecFlowState::ReachedTail);
             }
             Ok($crate::plugin::executor::ExecStep::Next)
         }

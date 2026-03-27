@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::error::{DnsError, Result};
-use crate::message::Message;
+use crate::proto::Message;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 
 /// QUIC connection transport that can accept or open bidirectional streams

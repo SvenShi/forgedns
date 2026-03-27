@@ -355,13 +355,13 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::Result;
-    use crate::message::{Message, Question, Rcode};
-    use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::server::RequestHandle;
     use crate::plugin::server::http::http_dispatcher::DnsPostHandler;
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::{Message, Question, Rcode};
+    use crate::proto::{Name, RecordType};
     use async_trait::async_trait;
     use bytes::Bytes;
     use http::Request;
@@ -425,7 +425,7 @@ mod tests {
         message.add_question(Question::new(
             Name::from_ascii("example.com.").expect("query name should be valid"),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         message
     }

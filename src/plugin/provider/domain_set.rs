@@ -19,11 +19,11 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::DomainRuleMatcher;
-use crate::message::Name;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::plugin::provider::provider_utils::{for_each_nonempty_rule_line, push_unique_matcher};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::Name;
 use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
@@ -278,8 +278,8 @@ impl PluginFactory for DomainSetFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Name;
     use crate::plugin::provider::provider_utils::for_each_nonempty_rule_text;
+    use crate::proto::Name;
     use std::net::IpAddr;
 
     fn load_rules_text(

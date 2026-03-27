@@ -86,10 +86,11 @@ impl From<u8> for Opcode {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, PartialOrd, Copy, Clone, Hash)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Copy, Clone, Hash, Default)]
 #[allow(dead_code)]
 pub enum Rcode {
     /// No Error [RFC 1035](https://tools.ietf.org/html/rfc1035)
+    #[default]
     NoError,
 
     /// Format Error [RFC 1035](https://tools.ietf.org/html/rfc1035)
@@ -253,12 +254,6 @@ impl Rcode {
     }
 }
 
-impl Default for Rcode {
-    fn default() -> Self {
-        Self::NoError
-    }
-}
-
 impl Display for Rcode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
         f.write_str(self.to_str())
@@ -380,7 +375,7 @@ impl FromStr for DNSClass {
             "HS" => Ok(Self::HS),
             "NONE" => Ok(Self::NONE),
             "ANY" | "*" => Ok(Self::ANY),
-            _ => Err(DnsError::UnknownDnsClassStr(str.to_string()).into()),
+            _ => Err(DnsError::UnknownDnsClassStr(str.to_string())),
         }
     }
 }
@@ -916,7 +911,7 @@ impl FromStr for RecordType {
             "ANY" | "*" => Ok(Self::ANY),
             "TA" => Ok(Self::TA),
             "DLV" => Ok(Self::DLV),
-            _ => Err(DnsError::UnknownRecordTypeStr(str.to_string()).into()),
+            _ => Err(DnsError::UnknownRecordTypeStr(str.to_string())),
         }
     }
 }

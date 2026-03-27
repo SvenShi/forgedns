@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use forgedns::message::{
+use forgedns::proto::{
     DNSClass, EdnsCode, EdnsOption, Message, MessageType, Opcode, Question, RData, Rcode, Record,
     RecordType,
     rdata::{self},
@@ -8,8 +8,8 @@ use std::hint::black_box;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
-fn forgedns_name(raw: &str) -> forgedns::message::Name {
-    forgedns::message::Name::from_ascii(raw).expect("fixture name should be valid")
+fn forgedns_name(raw: &str) -> forgedns::proto::Name {
+    forgedns::proto::Name::from_ascii(raw).expect("fixture name should be valid")
 }
 
 fn txt_wire(parts: &[&[u8]]) -> Box<[u8]> {

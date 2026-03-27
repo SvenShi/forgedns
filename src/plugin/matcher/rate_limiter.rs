@@ -324,8 +324,8 @@ fn mask_ip(ip: IpAddr, mask4: u8, mask6: u8) -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Message;
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::Message;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     fn make_context(ip: Ipv4Addr) -> DnsContext {

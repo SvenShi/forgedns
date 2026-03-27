@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#![allow(clippy::type_complexity)]
+
 use super::*;
 
 /// Decode an IPv4 address RDATA from exactly 4 octets as defined by RFC 1035 section 3.4.1.

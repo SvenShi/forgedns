@@ -6,8 +6,8 @@
 //! Cache key composition helpers.
 
 use crate::core::context::DnsContext;
-use crate::message::Message;
-use crate::message::{ClientSubnet, DNSClass, EdnsCode, EdnsOption, RecordType};
+use crate::proto::Message;
+use crate::proto::{ClientSubnet, DNSClass, EdnsCode, EdnsOption, RecordType};
 use std::net::IpAddr;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -132,9 +132,9 @@ pub(super) fn build_cache_key(context: &mut DnsContext, ecs_in_key: bool) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{DNSClass, Edns, Message, Question};
-    use crate::message::{EdnsOption, Name, RecordType};
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::{DNSClass, Edns, Message, Question};
+    use crate::proto::{EdnsOption, Name, RecordType};
     use std::net::SocketAddr;
 
     fn make_context(name: &str) -> DnsContext {

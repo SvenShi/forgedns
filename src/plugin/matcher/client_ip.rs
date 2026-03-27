@@ -123,9 +123,9 @@ impl Matcher for ClientIpMatcher {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::{DNSClass, Name, RecordType};
-    use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
+    use crate::proto::{DNSClass, Name, RecordType};
+    use crate::proto::{Message, Question};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
@@ -133,7 +133,7 @@ mod tests {
         let mut query = Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         );
         query.set_qclass(DNSClass::IN);
         request.add_question(query);

@@ -20,10 +20,10 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::Message;
-use crate::message::{ClientSubnet, DNSClass, Edns, EdnsCode, EdnsOption};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::Message;
+use crate::proto::{ClientSubnet, DNSClass, Edns, EdnsCode, EdnsOption};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -233,9 +233,7 @@ fn request_has_ecs(message: &Message) -> bool {
 fn strip_ecs_from_message(message: &mut Message) {
     if let Some(edns) = message.edns_mut() {
         edns.remove(EdnsCode::Subnet);
-    } else {
-        return;
-    };
+    }
 }
 
 fn ensure_opt_record(message: &mut Message) -> &mut Edns {
@@ -256,9 +254,9 @@ fn unmap_ip(ip: IpAddr) -> IpAddr {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::{Message, Question};
-    use crate::message::{Name, RecordType};
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::{Message, Question};
+    use crate::proto::{Name, RecordType};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     #[test]

@@ -6,18 +6,18 @@
 use forgedns::config::types::Config;
 use forgedns::core::context::{DnsContext, ExecFlowState};
 use forgedns::core::error::{DnsError, Result};
-use forgedns::message::{DNSClass, Message, Question, Rcode};
-use forgedns::message::{Name, RecordType};
 use forgedns::network::transport::udp_transport::UdpTransport;
 use forgedns::plugin;
 use forgedns::plugin::executor::ExecStep;
 use forgedns::plugin::{PluginRegistry, PluginType};
+use forgedns::proto::{DNSClass, Message, Question, Rcode};
+use forgedns::proto::{Name, RecordType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
 #[cfg(target_os = "linux")]
 use std::process::Command;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::time::{Duration, sleep, timeout};
+use tokio::time::{Duration, timeout};
 
 fn parse_config(yaml: &str) -> Result<Config> {
     let config: Config = serde_yml::from_str(yaml)?;

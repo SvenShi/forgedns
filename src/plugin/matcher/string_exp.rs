@@ -359,10 +359,10 @@ where
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::rdata::A;
-    use crate::message::{Message, Question, Rcode};
-    use crate::message::{Name, RData, Record, RecordType};
     use crate::plugin::matcher::Matcher;
+    use crate::proto::rdata::A;
+    use crate::proto::{Message, Question, Rcode};
+    use crate::proto::{Name, RData, Record, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
@@ -370,7 +370,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("www.example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         let mut context = DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),

@@ -132,12 +132,8 @@ pub fn resolve_dependencies(
             )));
         }
         in_degree.insert(config.tag.clone(), 0);
-        reverse_graph
-            .entry(config.tag.clone())
-            .or_insert_with(Vec::new);
-        forward_graph
-            .entry(config.tag.clone())
-            .or_insert_with(Vec::new);
+        reverse_graph.entry(config.tag.clone()).or_default();
+        forward_graph.entry(config.tag.clone()).or_default();
     }
 
     // Build the reverse dependency graph and calculate in-degrees.
@@ -189,13 +185,13 @@ pub fn resolve_dependencies(
                 ));
             }
 
-            if let Some(expected_plugin_type) = dep.expected_plugin_type.as_deref() {
-                if dep_config.plugin_type != expected_plugin_type {
-                    errors.push(format!(
-                        "plugin '{}' field '{}' expects plugin type '{}', but '{}' has type '{}'",
-                        config.tag, field, expected_plugin_type, dep_tag, dep_config.plugin_type
-                    ));
-                }
+            if let Some(expected_plugin_type) = dep.expected_plugin_type.as_deref()
+                && dep_config.plugin_type != expected_plugin_type
+            {
+                errors.push(format!(
+                    "plugin '{}' field '{}' expects plugin type '{}', but '{}' has type '{}'",
+                    config.tag, field, expected_plugin_type, dep_tag, dep_config.plugin_type
+                ));
             }
 
             unique_deps.insert(dep_tag.to_string());
@@ -211,7 +207,7 @@ pub fn resolve_dependencies(
         for dep in unique_deps {
             reverse_graph
                 .entry(dep.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(config.tag.clone());
         }
     }
@@ -354,15 +350,14 @@ mod tests {
     fn mock_get_deps(config: &PluginConfig) -> Vec<DependencySpec> {
         match config.plugin_type.as_str() {
             "udp_server" | "tcp_server" => {
-                if let Some(args) = &config.args {
-                    if let Some(entry) = args.get("entry") {
-                        if let Some(entry_str) = entry.as_str() {
-                            return vec![DependencySpec::executor(
-                                "args.entry",
-                                entry_str.to_string(),
-                            )];
-                        }
-                    }
+                if let Some(args) = &config.args
+                    && let Some(entry) = args.get("entry")
+                    && let Some(entry_str) = entry.as_str()
+                {
+                    return vec![DependencySpec::executor(
+                        "args.entry",
+                        entry_str.to_string(),
+                    )];
                 }
                 vec![]
             }
@@ -474,10 +469,10 @@ mod tests {
     #[test]
     fn test_reports_cycle_path() {
         fn get_cycle_deps(config: &PluginConfig) -> Vec<DependencySpec> {
-            if let Some(args) = &config.args {
-                if let Some(dep) = args.get("dep").and_then(|value| value.as_str()) {
-                    return vec![DependencySpec::new("args.dep", dep.to_string())];
-                }
+            if let Some(args) = &config.args
+                && let Some(dep) = args.get("dep").and_then(|value| value.as_str())
+            {
+                return vec![DependencySpec::new("args.dep", dep.to_string())];
             }
             vec![]
         }

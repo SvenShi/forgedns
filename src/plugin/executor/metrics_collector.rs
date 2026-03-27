@@ -149,7 +149,7 @@ impl MetricsCollector {
             .fetch_add(elapsed, Ordering::Relaxed);
 
         let total = self.stats.query_total.load(Ordering::Relaxed);
-        if total % 1024 == 0 {
+        if total.is_multiple_of(1024) {
             let count = self.stats.latency_count.load(Ordering::Relaxed);
             let sum = self.stats.latency_sum_ms.load(Ordering::Relaxed);
             let avg = if count == 0 { 0 } else { sum / count };
@@ -310,9 +310,7 @@ fn escape_label_value(value: &str) -> String {
 }
 
 fn parse_name(args: Option<serde_yml::Value>) -> Option<String> {
-    let Some(args) = args else {
-        return None;
-    };
+    let args = args?;
 
     if let Some(s) = args.as_str() {
         let s = s.trim();
@@ -380,7 +378,7 @@ mod tests {
     async fn test_metrics_collector_records_success_latency() {
         let plugin = make_collector();
         let mut ctx = test_context();
-        ctx.set_response(crate::message::Message::new());
+        ctx.set_response(crate::proto::Message::new());
 
         plugin
             .execute_with_next(&mut ctx, None)

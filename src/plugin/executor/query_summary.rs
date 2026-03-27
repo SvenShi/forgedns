@@ -149,9 +149,7 @@ impl PluginFactory for QuerySummaryFactory {
 }
 
 fn parse_msg(args: Option<serde_yml::Value>) -> Option<String> {
-    let Some(args) = args else {
-        return None;
-    };
+    let args = args?;
 
     if let Some(s) = args.as_str() {
         let s = s.trim();
@@ -173,9 +171,9 @@ fn parse_msg(args: Option<serde_yml::Value>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::core::error::DnsError;
-    use crate::message::Message;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_context;
+    use crate::proto::Message;
     use std::io;
     use std::sync::{Arc, Mutex};
     use tracing::dispatcher::Dispatch;

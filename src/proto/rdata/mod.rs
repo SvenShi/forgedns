@@ -5,7 +5,7 @@
 
 //! Owned RDATA payloads and EDNS helpers.
 
-use crate::message::RecordType;
+use crate::proto::RecordType;
 use std::net::IpAddr;
 
 mod basic;
@@ -318,7 +318,7 @@ impl RData {
     /// Return encoded RDATA byte length at offset `off`.
     pub(crate) fn bytes_len<'a>(
         &'a self,
-        compression: &mut crate::message::codec::LenCompressionMap<'a>,
+        compression: &mut crate::proto::codec::LenCompressionMap<'a>,
     ) -> usize {
         match self {
             RData::A(_) => 4,

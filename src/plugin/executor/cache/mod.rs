@@ -16,9 +16,9 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
-use crate::message::{Message, Rcode};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::{Message, Rcode};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -785,10 +785,10 @@ impl ApiHandler for CacheLoadDumpHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::rdata::SOA;
-    use crate::message::{DNSClass, Edns, EdnsOption, Question};
-    use crate::message::{Message, Name, RData, Record, RecordType};
     use crate::plugin::PluginRegistry;
+    use crate::proto::rdata::SOA;
+    use crate::proto::{DNSClass, Edns, EdnsOption, Question};
+    use crate::proto::{Message, Name, RData, Record, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     fn test_cache(config: CacheConfig) -> Cache {
@@ -857,7 +857,7 @@ mod tests {
     }
 
     fn add_ecs(request: &mut Message, subnet: &str) {
-        let mut edns = request.edns().clone().unwrap_or_else(Edns::new);
+        let mut edns = request.edns().clone().unwrap_or_default();
         edns.insert(EdnsOption::Subnet(subnet.parse().unwrap()));
         request.set_edns(edns);
     }
@@ -929,7 +929,7 @@ mod tests {
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             300,
-            RData::A(crate::message::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+            RData::A(crate::proto::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
         ));
         let mut edns = Edns::new();
         edns.set_udp_payload_size(1232);
@@ -1041,7 +1041,7 @@ mod tests {
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             120,
-            RData::A(crate::message::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+            RData::A(crate::proto::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
         ));
 
         cache.update_cache_entry(cache.cache_map.get().unwrap(), key, response, 120);

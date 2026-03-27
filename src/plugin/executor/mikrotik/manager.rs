@@ -944,9 +944,7 @@ async fn run_manager_worker(
 fn dynamic_refresh_lead_ms(timeout_ms: u64) -> u64 {
     // Refresh slightly ahead of the estimated remote expiry while keeping both
     // extremely short and extremely long TTLs within practical bounds.
-    (timeout_ms / 4)
-        .max(MIN_DYNAMIC_REFRESH_LEAD_MS)
-        .min(MAX_DYNAMIC_REFRESH_LEAD_MS)
+    (timeout_ms / 4).clamp(MIN_DYNAMIC_REFRESH_LEAD_MS, MAX_DYNAMIC_REFRESH_LEAD_MS)
 }
 
 fn now_millis() -> u64 {

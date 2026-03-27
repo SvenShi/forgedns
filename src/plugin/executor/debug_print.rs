@@ -101,9 +101,7 @@ impl PluginFactory for DebugPrintFactory {
 }
 
 fn parse_msg_from_value(args: Option<serde_yml::Value>) -> Option<String> {
-    let Some(args) = args else {
-        return None;
-    };
+    let args = args?;
 
     if let Some(s) = args.as_str() {
         let s = s.trim();

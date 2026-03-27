@@ -25,10 +25,10 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
-use crate::message::Rcode;
-use crate::message::{Name, PTR, RData, Record, RecordType};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::Rcode;
+use crate::proto::{Name, PTR, RData, Record, RecordType};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -195,7 +195,7 @@ impl ReverseLookup {
         )
     }
 
-    fn try_handle_ptr(&self, request: &crate::message::Message) -> Option<crate::message::Message> {
+    fn try_handle_ptr(&self, request: &crate::proto::Message) -> Option<crate::proto::Message> {
         if request.question_count() != 1 || request.first_qtype()? != RecordType::PTR {
             return None;
         }
@@ -319,11 +319,11 @@ fn parse_ptr_name(name: &Name) -> Option<IpAddr> {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::rdata::A;
-    use crate::message::{Message, Question};
-    use crate::message::{Name, RData, Record};
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::rdata::A;
+    use crate::proto::{Message, Question};
+    use crate::proto::{Name, RData, Record};
     use http::Method;
     use std::net::{Ipv4Addr, SocketAddr};
 
@@ -344,7 +344,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii(name).unwrap(),
             qtype,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         DnsContext::new(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),

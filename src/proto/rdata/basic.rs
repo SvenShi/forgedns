@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use crate::core::error::DnsError;
-use crate::message::Name;
+use crate::proto::Name;
 use std::net::IpAddr;
 use std::net::IpAddr::{V4, V6};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -821,14 +821,8 @@ impl Edns {
 }
 
 /// Wrapper type used when an RR stores owned EDNS state.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct OPT(pub Edns);
-
-impl Default for OPT {
-    fn default() -> Self {
-        Self(Edns::new())
-    }
-}
 
 impl OPT {
     pub fn insert(&mut self, option: EdnsOption) {
@@ -1137,7 +1131,7 @@ impl SOA {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::EdnsLocal;
+    use crate::proto::EdnsLocal;
 
     #[test]
     fn edns_code_roundtrip_covers_named_registry_values() {
