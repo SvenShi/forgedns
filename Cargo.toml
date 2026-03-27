@@ -95,16 +95,15 @@ depends = "$auto"
 section = "net"
 priority = "optional"
 license-file = ["LICENSE", "0"]
-
 extended-description = """\
 A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability.
 """
-
 assets = [
     ["target/release/forgedns", "usr/bin/forgedns", "755"],
     ["config.yaml", "etc/forgedns/config.yaml", "644"],
-    ["packaging/forgedns.service", "lib/systemd/system/forgedns.service", "644"],
 ]
-
-systemd-units = { enable = true }
 maintainer-scripts = "packaging/debian"
+
+[package.metadata.deb.systemd-units]
+enable = true
+unit-scripts = "packaging"

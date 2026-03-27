@@ -2,9 +2,8 @@
 set -e
 
 mkdir -p /var/lib/forgedns
-
 mkdir -p /etc/forgedns
 
-systemctl daemon-reload || true
+#DEBHELPER#
 
 exit 0
