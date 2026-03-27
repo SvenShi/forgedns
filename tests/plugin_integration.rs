@@ -15,6 +15,8 @@ use forgedns::proto::{Name, RecordType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
 #[cfg(target_os = "linux")]
 use std::process::Command;
+#[cfg(target_os = "linux")]
+use tokio::time::sleep;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, timeout};
