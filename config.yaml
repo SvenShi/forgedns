@@ -1,131 +1,38 @@
-log:
- level: info
+# ForgeDNS example configuration file
+#
+# See full examples and documentation at:
+# https://forgedns.cn
 
-# 管理 API：支持简写字符串和详配对象两种形式。
-# api:
-#   http: "127.0.0.1:9088"
-#
-# api:
-#   http:
-#     listen: "127.0.0.1:9443"
-#     ssl:
-#       cert: "/etc/forgedns/api.crt"
-#       key: "/etc/forgedns/api.key"
-#       # client_ca: "/etc/forgedns/client-ca.crt"
-#       # require_client_cert: true
-#     auth:
-#       type: basic
-#       username: "admin"
-#       password: "secret"
-#
-# 插件 API 入口格式：
-# http://<api_addr>/plugins/<plugin_tag>/<route>
-# reverse_lookup 查询接口：
-# - GET  /plugins/<plugin_tag>?ip=<ip_addr>
-# 例如 cache 插件：
-# - GET  /plugins/cache/flush
-# - GET  /plugins/cache/dump
-# - POST /plugins/cache/load_dump
-# Prometheus 指标入口：
-# - GET  /metrics
-# 健康检查接口：
-# - GET  /healthz  # 只检查进程与 API
-# - GET  /readyz   # 检查初始化和 server 启动是否完成
-# - GET  /health   # 返回 JSON 详情
-# 应用级控制接口：
-# - GET  /control
-# - POST /shutdown
-# - POST /reload
-# - GET  /reload/status
-# - GET  /config/check
-# - POST /config/validate
+log:
+  level: info
 
 plugins:
+  -
+  # Forward to upstream DNS servers
   - tag: forward
     type: forward
     args:
+      concurrent: 2
       upstreams:
-        - addr: "223.5.5.5"  # 阿里 DNS
-          # dial_addr: "223.5.5.5"  # 阿里 DNS
-          # socks5: "127.0.0.1:7897"
-          # insecure_skip_verify: true
-          # bootstrap: 223.5.5.5
-          # enable_pipeline: true
-        # 配置多个上游时，forward 默认并发为 1（随机起点），可通过 concurrent 调整（最大 3）
-        # - addr: "119.29.29.29"  # 腾讯 DNS
-        # - addr: "114.114.114.114"  # 114 DNS
-  - tag: debug_print
-    type: debug_print
-    args:
-      before:
-        - from {src_addr}
-      after:
-        - response success
+        - addr: "223.5.5.5"
+        - addr: "8.8.8.8"
 
-  - tag: cache
-    type: cache
-    args:
-      ecs_in_key: false
-      short_circuit: true
-      dump_file: "./dns_cache.dump"
-      dump_interval: 10
-
-  - tag: seq
+  - tag: main_sequence
     type: sequence
     args:
-      - matches: ["qtype A", "qname example.com"]
-        exec: $cache
-      # 在选中的策略分支里先放 mikrotik，再放实际 forward：
-      # - matches: ["mark route_via_mikrotik"]
-      #   exec: $mikrotik_dynamic_route
-      - exec: forward 223.5.5.5
+      - exec: $forward
+      - exec: accept
 
-  # - tag: mikrotik_dynamic_route
-  #   type: mikrotik
-  #   args:
-  #     address: "172.16.1.1:8728"
-  #     username: "api-user"
-  #     password: "secret"
-  #     async: true
-  #     address_list4: "forgedns_ipv4"
-  #     address_list6: "forgedns_ipv6"
-  #     # 常驻 address-list 项（不会过期）：
-  #     # - 支持 IP 或 CIDR（IP 会自动归一化为 /32 或 /128）
-  #     # - 若未开启对应 address list 家族（address_list4/address_list6），该项会被忽略并汇总提示一次
-  #     persistent:
-  #       ips:
-  #         - "1.1.1.1"
-  #         - "100.64.1.0/24"
-  #         - "0.0.0.0/0"
-  #         - "2606:4700:4700::1111"
-  #         - "2001:db8::/64"
-  #       files:
-  #         - "/etc/forgedns/persistent_ips.txt"
-  #     comment_prefix: "forgedns"
-  #     # 可选：固定动态 address-list timeout（秒），配置后会忽略响应内 TTL
-  #     # fixed_ttl: 300
-  #     min_ttl: 60
-  #     max_ttl: 3600
-  #     cleanup_on_shutdown: true
-
-  # - tag: only_a
-  #   type: qtype
-  #   args: ["A"]
-  #
-  # - tag: has_cached_resp
-  #   type: has_resp
-  #
-  # - tag: rollout_gate
-  #   type: random
-  #   args: ["0.1"]
-  #
-  # - tag: only_noerror
-  #   type: rcode
-  #   # rcode matcher 当前只支持数字映射值，例如 NOERROR=0、SERVFAIL=2
-  #   args: ["0"]
-
-  - tag: "udp_server"
-    type: "udp_server"
+  # UDP server listening on :5335
+  - tag: udp_server
+    type: udp_server
     args:
-      entry: "seq"
-      listen: "0.0.0.0:5367"
+      entry: main_sequence
+      listen: ":5335"
+
+  # TCP server listening on :5335
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: ":5335"
