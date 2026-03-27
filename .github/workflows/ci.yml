@@ -91,4 +91,19 @@ jobs:
 
       # detect unused dependencies
       - name: Machete
+        if: runner.os == 'Linux'
         uses: bnjbvr/cargo-machete@main
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check documentation
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings

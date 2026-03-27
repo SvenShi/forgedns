@@ -917,8 +917,8 @@ impl ConnectionBuilderFactory {
     ///    based on `connection_info.connection_type`
     /// 2. `connection_info.connection_type` is immutable and never changes at runtime
     /// 3. The match ensures we always transmute the correct concrete type to `C`:
-    ///    - ConnectionType::UDP �?always used with DomainUpstream<UdpConnection>
-    ///    - ConnectionType::TCP �?always used with DomainUpstream<TcpConnection>
+    ///    - `ConnectionType::UDP` is always used with `DomainUpstream<UdpConnection>`
+    ///    - `ConnectionType::TCP` is always used with `DomainUpstream<TcpConnection>`
     ///    - etc.
     ///
     /// The type invariant is established in `UpstreamBuilder::with_upstream_config()`

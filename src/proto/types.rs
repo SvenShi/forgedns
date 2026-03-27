@@ -393,7 +393,6 @@ impl From<u16> for DNSClass {
     }
 }
 
-/// ```
 impl From<DNSClass> for u16 {
     fn from(rt: DNSClass) -> Self {
         match rt {
