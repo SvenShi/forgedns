@@ -740,11 +740,11 @@ fn parse_persistent_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::PluginRegistry;
     use crate::plugin::executor::mikrotik::api::RouterListEntry;
     use crate::plugin::executor::mikrotik::manager::{
-        decode_owned_comment, encode_comment, OwnedCommentKind,
+        OwnedCommentKind, decode_owned_comment, encode_comment,
     };
-    use crate::plugin::PluginRegistry;
     use crate::proto::rdata::{A, AAAA};
     use crate::proto::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};

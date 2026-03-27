@@ -27,7 +27,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
-use tracing::{debug, event_enabled, info, warn, Level};
+use tracing::{Level, debug, event_enabled, info, warn};
 
 const PROBE_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_CONCURRENT_QUERIES: usize = 3;
