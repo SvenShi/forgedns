@@ -7,7 +7,6 @@ log:
   level: info
 
 plugins:
-  -
   # Forward to upstream DNS servers
   - tag: forward
     type: forward
