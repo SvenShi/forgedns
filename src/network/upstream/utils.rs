@@ -390,7 +390,7 @@ fn is_connect_in_progress(err: &std::io::Error) -> bool {
 
     #[cfg(target_os = "linux")]
     {
-        return err.raw_os_error() == Some(115);
+        err.raw_os_error() == Some(115)
     }
 
     #[cfg(target_os = "macos")]
