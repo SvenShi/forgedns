@@ -25,14 +25,14 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yml = "0.0.12"
 wincode = { version = "0.4", features = ["derive"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 tracing-appender = "0.2"
 lazy_static = "1.5"
 dashmap = "6"
 url = "2.5"
 rustls = { version = "0.23.32", features = ["ring"] }
 webpki-roots = "1.0.2"
-arc-swap = "1.7.1"
+arc-swap = "1.9.0"
 bytes = "1.11"
 rand = "0.10"
 crossbeam-queue = "0.3.12"
