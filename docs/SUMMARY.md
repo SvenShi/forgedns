@@ -10,3 +10,5 @@
 - [管理 API](03-api.md)
 - [MikroTik 策略路由](04-mikrotik-policy-routing.md)
 - [常见策略场景](05-scenarios.md)
+- [架构与设计](06-architecture-and-design.md)
+- [性能与基准](07-benchmarks.md)
