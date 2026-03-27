@@ -1,14 +1,14 @@
 # ForgeDNS 文档
 
-本文档重点说明 ForgeDNS 的配置结构、插件体系、管理 API、常见策略组合，以及补充 README 没有展开的架构与性能说明。
+本文档重点说明 ForgeDNS 的配置结构、插件体系、管理 API、常见策略组合，以及架构与性能说明。
 
 建议按照以下顺序阅读本文档：
 
-1. 阅读《配置总览》，了解顶层 YAML 结构与 `sequence` 编排方式。
-2. 阅读《插件总览》下的四类插件文档，建立 `server / executor / matcher / provider` 的结构认知。
-3. 在接入运维平台、控制平面或观测系统时，阅读《管理 API》。
-4. 在进行策略落地与组合设计时，阅读《常见策略场景》。
-5. 在理解内部设计与性能方向时，阅读《架构与设计》与《性能与基准》。
+1. 阅读《[配置总览](01-configuration.md)》，了解顶层 YAML 结构与 `sequence` 编排方式。
+2. 阅读《[插件总览](02-plugin-reference/)》下的四类插件文档，建立 `server / executor / matcher / provider` 的结构认知。
+3. 在接入运维平台、控制平面或观测系统时，阅读《[管理 API](03-api.md)》。
+4. 在进行策略落地与组合设计时，阅读《[常见策略场景](05-scenarios.md)》。
+5. 在理解内部设计与性能方向时，阅读《[架构与设计](06-architecture-and-design.md)》与《[性能与基准](07-benchmarks.md)》。
 
 ## 文档范围
 
