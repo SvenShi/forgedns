@@ -142,7 +142,6 @@ fn set_header(
     Ok(())
 }
 
-#[hotpath::measure]
 /// Decode a full DNS message from wire format.
 ///
 /// Section layout follows RFC 1035 section 4.1. Message-level EDNS handling follows
@@ -268,7 +267,6 @@ fn bounded_section_capacity(
     declared_count.min((remaining_len / min_entry_len).min(u16::MAX as usize) as u16) as usize
 }
 
-#[hotpath::measure]
 /// Decode the fixed 12-byte DNS header defined by RFC 1035 section 4.1.1.
 fn parse_header(packet: &[u8]) -> Result<(Header, usize, u16, u16, u16, u16, u16)> {
     if packet.len() < DNS_HEADER_LEN {
@@ -335,7 +333,6 @@ fn parse_records_into(
     Ok(())
 }
 
-#[hotpath::measure]
 /// Decode a DNS question entry as defined by RFC 1035 section 4.1.2.
 fn parse_question(packet: &[u8], offset: usize) -> Result<(Question, usize)> {
     let (name, next_offset) = Name::parse(packet, offset)?;
@@ -349,7 +346,6 @@ fn parse_question(packet: &[u8], offset: usize) -> Result<(Question, usize)> {
     Ok((Question::new(name, qtype, qclass), next_offset + 4))
 }
 
-#[hotpath::measure]
 /// Decode a DNS resource record header and its RDATA payload per RFC 1035 section 4.1.3.
 fn parse_record(packet: &[u8], offset: usize) -> Result<(Record, usize)> {
     let (name, next_offset) = Name::parse(packet, offset)?;

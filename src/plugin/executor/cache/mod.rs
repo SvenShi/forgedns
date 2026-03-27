@@ -302,7 +302,6 @@ impl Cache {
     }
 
     #[inline]
-    #[hotpath::measure]
     fn try_cache_hit(
         &self,
         context: &mut DnsContext,
@@ -424,7 +423,6 @@ impl Cache {
     }
 
     #[inline]
-    #[hotpath::measure]
     fn update_cache_entry(&self, cache_map: &CacheMap, key: CacheKey, response: Message, ttl: u32) {
         let now = AppClock::elapsed_millis();
         let expire_time = self.compute_expire_time(now, ttl);
@@ -537,12 +535,10 @@ impl Executor for Cache {
         true
     }
 
-    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         self.execute_with_next(context, None).await
     }
 
-    #[hotpath::measure]
     async fn execute_with_next(
         &self,
         context: &mut DnsContext,

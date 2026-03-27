@@ -61,7 +61,6 @@ impl RequestMap {
     /// # Panics
     /// Panics if all slots are occupied (extremely rare in practice)
     #[inline(always)]
-    #[hotpath::measure]
     pub fn store(&self, tx: Sender<Message>) -> u16 {
         let ptr = Box::into_raw(Box::new(tx));
         let start = random::<u16>() as usize;
@@ -127,7 +126,6 @@ impl RequestMap {
     /// # Returns
     /// The response sender if it exists, None otherwise
     #[inline(always)]
-    #[hotpath::measure]
     pub fn take(&self, id: u16) -> Option<Sender<Message>> {
         let slot = &self.slots[id as usize];
         let ptr = slot.swap(ptr::null_mut(), Ordering::AcqRel);
@@ -140,7 +138,6 @@ impl RequestMap {
     }
 
     #[inline(always)]
-    #[hotpath::measure]
     pub fn remove(&self, id: u16) -> bool {
         let slot = &self.slots[id as usize];
         let ptr = slot.swap(ptr::null_mut(), Ordering::AcqRel);

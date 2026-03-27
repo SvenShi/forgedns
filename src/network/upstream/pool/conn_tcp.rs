@@ -357,7 +357,6 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
     /// - TCP_NODELAY enabled for low-latency queries
     /// - Async I/O with separate reader/writer tasks
     /// - TLS handshake performed asynchronously if enabled
-    #[hotpath::measure]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<TcpConnection>> {
         let stream = connect_stream(
             self.remote_ip,

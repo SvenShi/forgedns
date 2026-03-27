@@ -51,7 +51,6 @@ pub struct ReusePool<C: Connection> {
 #[async_trait]
 impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
     /// Obtain a connection, execute query, and release it back to the pool
-    #[hotpath::measure]
     async fn query(&self, request: Message) -> Result<Message> {
         let conn = self.get().await?;
         debug!(
@@ -178,7 +177,6 @@ impl<C: Connection> ReusePool<C> {
     }
 
     /// Borrow a connection from the pool or create a new one if needed
-    #[hotpath::measure]
     async fn get(&self) -> Result<Arc<C>> {
         loop {
             if let Some(conn) = self.connections.pop() {
@@ -204,7 +202,6 @@ impl<C: Connection> ReusePool<C> {
     }
 
     /// Return a connection back to the pool or close it if invalid
-    #[hotpath::measure]
     fn release(&self, conn: Arc<C>) {
         if !conn.available() || self.connections.push(conn.clone()).is_err() {
             warn!("Releasing invalid or overflowed connection, closing it");
@@ -217,7 +214,6 @@ impl<C: Connection> ReusePool<C> {
     }
 
     /// Expand pool by creating new connections up to desired size
-    #[hotpath::measure]
     async fn expand(&self) -> Result<()> {
         let conns_len = self.active_count.load(Ordering::Relaxed);
         if conns_len >= self.max_size {

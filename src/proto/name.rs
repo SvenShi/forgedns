@@ -459,7 +459,6 @@ impl Name {
         Err(DnsError::protocol("name is not a supported arpa name"))
     }
 
-    #[hotpath::measure]
     pub(crate) fn parse(packet: &[u8], start: usize) -> Result<(Self, usize)> {
         if start >= packet.len() {
             return Err(DnsError::protocol("dns name offset exceeds packet length"));

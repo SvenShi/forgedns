@@ -46,7 +46,6 @@ impl Connection for H2Connection {
         self.close_notify.notify_waiters();
     }
 
-    #[hotpath::measure]
     async fn query(&self, request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol("DoH connection closed"));
@@ -134,7 +133,6 @@ impl H2ConnectionBuilder {
 
 #[async_trait]
 impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
-    #[hotpath::measure]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<H2Connection>> {
         let stream = connect_stream(
             self.remote_ip,

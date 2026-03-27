@@ -162,7 +162,6 @@ impl Plugin for Sequence {
 
 #[async_trait]
 impl Executor for Sequence {
-    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> DnsResult<ExecStep> {
         self.program.get().unwrap().run(context).await?;
         if context.flow() == ExecFlowState::Running {

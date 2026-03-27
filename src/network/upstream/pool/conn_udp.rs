@@ -82,7 +82,6 @@ impl Connection for UdpConnection {
     ///
     /// This two-stage approach improves resilience against UDP packet loss
     /// while maintaining low latency for successful queries.
-    #[hotpath::measure]
     async fn query(&self, request: Message) -> Result<Message> {
         let raw_id = request.id();
         let mut current_timeout = RETRY_TIMEOUT;
@@ -285,7 +284,6 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
     /// - Non-blocking socket I/O
     /// - Single listener task handles all responses for this connection
     /// - Zero-copy where possible (direct socket buffer to DNS parser)
-    #[hotpath::measure]
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<UdpConnection>> {
         let socket = connect_socket(
             self.remote_ip,
