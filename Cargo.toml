@@ -6,7 +6,6 @@ authors = ["Sven Shi <isvenshi@gmail.com>"]
 description = "A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability."
 repository = "https://github.com/SvenShi/forgedns"
 license = "GPL-3.0-or-later"
-license-file = "LICENSE"
 readme = "README_EN.md"
 keywords = ["dns", "rustdns", "pipeline", "flow", "dns-server"]
 categories = ["network-programming"]
