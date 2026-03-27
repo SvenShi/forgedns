@@ -196,7 +196,7 @@ jobs:
         with:
           version: v5.0.2
           files: |
-            target\${{ matrix.target }}\release\${{ matrix.exe }}
+            target/${{ matrix.target }}/release/${{ matrix.exe }}
           args: -q --best --lzma
 
       - name: Package release (non-Windows)
