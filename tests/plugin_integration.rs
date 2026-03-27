@@ -13,9 +13,11 @@ use forgedns::plugin;
 use forgedns::plugin::executor::ExecStep;
 use forgedns::plugin::{PluginRegistry, PluginType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
+#[cfg(target_os = "linux")]
+use std::process::Command;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, sleep, timeout};
 
 fn parse_config(yaml: &str) -> Result<Config> {
     let config: Config = serde_yml::from_str(yaml)?;
@@ -66,6 +68,104 @@ async fn exchange_udp_query(server_addr: SocketAddr, qname: &str) -> Result<Mess
     timeout(Duration::from_secs(1), transport.read_message(&mut buf))
         .await
         .map_err(|_| DnsError::runtime("timed out waiting for UDP server response"))?
+}
+
+#[cfg(target_os = "linux")]
+fn linux_system_plugin_tests_enabled() -> bool {
+    std::env::var_os("TEST_LINUX_SYSTEM_PLUGINS").is_some()
+}
+
+#[cfg(target_os = "linux")]
+fn running_as_root() -> bool {
+    Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|uid| uid.trim() == "0")
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn command_exists(program: &str, version_arg: &str) -> bool {
+    Command::new(program)
+        .arg(version_arg)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn should_run_linux_system_plugin_tests(program: &str, version_arg: &str) -> bool {
+    linux_system_plugin_tests_enabled() && running_as_root() && command_exists(program, version_arg)
+}
+
+#[cfg(target_os = "linux")]
+fn unique_system_object_name(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    let suffix = format!("{:x}", nanos);
+    let max_prefix_len = 31usize.saturating_sub(1 + suffix.len());
+    let trimmed_prefix = prefix.chars().take(max_prefix_len).collect::<String>();
+    format!("{trimmed_prefix}_{suffix}")
+}
+
+#[cfg(target_os = "linux")]
+fn run_command(program: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| DnsError::runtime(format!("failed to execute {program}: {e}")))?;
+    if !output.status.success() {
+        return Err(DnsError::runtime(format!(
+            "{program} {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(target_os = "linux")]
+struct CommandCleanup {
+    steps: Vec<(String, Vec<String>)>,
+}
+
+#[cfg(target_os = "linux")]
+impl CommandCleanup {
+    fn new(steps: Vec<(String, Vec<String>)>) -> Self {
+        Self { steps }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for CommandCleanup {
+    fn drop(&mut self) {
+        for (program, args) in &self.steps {
+            let _ = Command::new(program).args(args).output();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_command_output_contains(
+    program: &str,
+    args: &[&str],
+    wanted: &str,
+) -> Result<()> {
+    for _ in 0..20 {
+        let output = run_command(program, args)?;
+        if output.contains(wanted) {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    Err(DnsError::runtime(format!(
+        "{program} {} did not contain '{wanted}' within timeout",
+        args.join(" ")
+    )))
 }
 
 #[test]
@@ -685,5 +785,144 @@ plugins:
     );
     assert!(msg.contains("'debug'"));
     assert!(msg.contains("debug_print"));
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn test_linux_ipset_executor_writes_masked_prefix_to_kernel_set() -> Result<()> {
+    if !should_run_linux_system_plugin_tests("ipset", "help") {
+        return Ok(());
+    }
+
+    let set_name = unique_system_object_name("forgedns_test_ipset");
+    let _cleanup = CommandCleanup::new(vec![(
+        "ipset".to_string(),
+        vec!["destroy".to_string(), set_name.clone()],
+    )]);
+    run_command(
+        "ipset",
+        &["create", &set_name, "hash:net", "family", "inet"],
+    )?;
+
+    let listen = reserve_local_udp_addr()?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: hosts
+    type: hosts
+    args:
+      entries:
+        - "full:example.test 192.0.2.10"
+  - tag: ipset_main
+    type: ipset
+    args:
+      set_name4: "{set_name}"
+      mask4: 24
+  - tag: seq
+    type: sequence
+    args:
+      - exec: $hosts
+      - exec: $ipset_main
+  - tag: udp
+    type: udp_server
+    args:
+      entry: seq
+      listen: "{listen}"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let response_result = exchange_udp_query(listen, "example.test.").await;
+    let kernel_result =
+        wait_for_command_output_contains("ipset", &["list", &set_name], "192.0.2.0/24").await;
+    registry.destory().await;
+
+    let response = response_result?;
+    assert_eq!(response.rcode(), Rcode::NoError);
+    kernel_result?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn test_linux_nftset_executor_writes_masked_prefix_to_kernel_set() -> Result<()> {
+    if !should_run_linux_system_plugin_tests("nft", "--version") {
+        return Ok(());
+    }
+
+    let table_name = unique_system_object_name("forgedns_test_nft");
+    let set_name = "forgedns_test_v4".to_string();
+    let _cleanup = CommandCleanup::new(vec![(
+        "nft".to_string(),
+        vec![
+            "delete".to_string(),
+            "table".to_string(),
+            "ip".to_string(),
+            table_name.clone(),
+        ],
+    )]);
+    run_command("nft", &["add", "table", "ip", &table_name])?;
+    run_command(
+        "nft",
+        &[
+            "add",
+            "set",
+            "ip",
+            &table_name,
+            &set_name,
+            "{ type ipv4_addr; flags interval; }",
+        ],
+    )?;
+
+    let listen = reserve_local_udp_addr()?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: hosts
+    type: hosts
+    args:
+      entries:
+        - "full:example.test 192.0.2.10"
+  - tag: nftset_main
+    type: nftset
+    args:
+      ipv4:
+        table_family: ip
+        table_name: "{table_name}"
+        set_name: "{set_name}"
+        mask: 24
+  - tag: seq
+    type: sequence
+    args:
+      - exec: $hosts
+      - exec: $nftset_main
+  - tag: udp
+    type: udp_server
+    args:
+      entry: seq
+      listen: "{listen}"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let response_result = exchange_udp_query(listen, "example.test.").await;
+    let kernel_result = wait_for_command_output_contains(
+        "nft",
+        &["list", "table", "ip", &table_name],
+        "192.0.2.0/24",
+    )
+    .await;
+    registry.destory().await;
+
+    let response = response_result?;
+    assert_eq!(response.rcode(), Rcode::NoError);
+    kernel_result?;
     Ok(())
 }
