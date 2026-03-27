@@ -53,7 +53,11 @@ fn install_service(options: ServiceInstallOptions) -> Result<()> {
         working_directory: Some(working_dir),
         environment: None,
         autostart: true,
-        restart_policy: RestartPolicy::Always { delay_secs: None },
+        restart_policy: RestartPolicy::OnFailure {
+            delay_secs: Some(3),
+            max_retries: None,
+            reset_after_secs: None,
+        },
     };
     manager
         .install(ctx)

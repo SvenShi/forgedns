@@ -1,0 +1,11 @@
+[Unit]
+Description=ForgeDNS Server
+
+[Service]
+WorkingDirectory=/var/lib/forgedns
+ExecStart=/usr/bin/forgedns start -c /etc/forgedns/config.yaml -d /var/lib/forgedns
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

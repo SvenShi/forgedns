@@ -2,6 +2,15 @@
 name = "forgedns"
 version = "0.1.0"
 edition = "2024"
+authors = ["Sven Shi <isvenshi@gmail.com>"]
+description = "A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability."
+repository = "https://github.com/SvenShi/forgedns"
+license = "GPL-3.0-or-later"
+license-file = "LICENSE"
+readme = "README_EN.md"
+keywords = ["dns", "rustdns", "pipeline", "flow", "dns-server"]
+categories = ["network-programming"]
+
 
 [dependencies]
 futures = "0.3.31"
@@ -69,3 +78,34 @@ harness = false
 [[bench]]
 name = "plugin_local_answers"
 harness = false
+
+
+[[bin]]
+name = "forgedns"
+path = "src/main.rs"
+
+[lib]
+name = "forgedns"
+path = "src/lib.rs"
+
+
+[package.metadata.deb]
+maintainer = "Sven Shi <isvenshi@gmail.com>"
+copyright = "2026, Sven Shi"
+depends = "$auto"
+section = "net"
+priority = "optional"
+license-file = ["LICENSE", "0"]
+
+extended-description = """\
+A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability.
+"""
+
+assets = [
+    ["target/release/forgedns", "usr/bin/forgedns", "755"],
+    ["config.yaml", "etc/forgedns/config.yaml", "644"],
+    ["packaging/forgedns.service", "lib/systemd/system/forgedns.service", "644"],
+]
+
+systemd-units = { enable = true }
+maintainer-scripts = "packaging/debian"
