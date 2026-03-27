@@ -2,7 +2,7 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-Documentation: [https://forgedns.gitbook.io/docs](https://forgedns.gitbook.io/docs)
+[Documentation](https://forgedns.cn/en/)
 
 **⚡ A high-performance, programmable DNS server for modern networks.**
 
@@ -39,16 +39,17 @@ cargo run -- -c config.yaml -l debug
 cargo test
 ```
 
-See the runnable example in [`config.yaml`](/Users/sven/Codes/Rust/forgedns/config.yaml).
+See the runnable example in [`config.yaml`](config.yaml).
 
 ## Documentation Map
 
-- Configuration: [`docs/01-configuration.md`](/Users/sven/Codes/Rust/forgedns/docs/01-configuration.md)
-- Plugin reference: [`docs/02-plugin-reference/README.md`](/Users/sven/Codes/Rust/forgedns/docs/02-plugin-reference/README.md)
-- Management API: [`docs/03-api.md`](/Users/sven/Codes/Rust/forgedns/docs/03-api.md)
-- Common scenarios: [`docs/05-scenarios.md`](/Users/sven/Codes/Rust/forgedns/docs/05-scenarios.md)
-- Architecture and design: [`docs/06-architecture-and-design.md`](/Users/sven/Codes/Rust/forgedns/docs/06-architecture-and-design.md)
-- Performance and benchmarks: [`docs/07-benchmarks.md`](/Users/sven/Codes/Rust/forgedns/docs/07-benchmarks.md)
+- [Configuration](https://forgedns.cn/en/configuration)
+- [Plugin overview](https://forgedns.cn/en/plugin-reference/overview)
+- [Management API](https://forgedns.cn/en/api)
+- [MikroTik policy routing](https://forgedns.cn/en/mikrotik-policy-routing)
+- [Common scenarios](https://forgedns.cn/en/scenarios)
+- [Architecture and design](https://forgedns.cn/en/architecture-and-design)
+- [Performance and benchmarks](https://forgedns.cn/en/benchmarks)
 
 ## Good Fits
 

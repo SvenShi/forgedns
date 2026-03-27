@@ -2,7 +2,7 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-文档地址：[https://forgedns.gitbook.io/docs](https://forgedns.gitbook.io/docs)
+[文档地址](https://forgedns.cn/)
 
 **⚡ 一个面向现代网络的高性能、可编排 DNS 服务器。**
 
@@ -39,16 +39,17 @@ cargo run -- -c config.yaml -l debug
 cargo test
 ```
 
-示例配置见 [`config.yaml`](/Users/sven/Codes/Rust/forgedns/config.yaml)。
+示例配置见 [`config.yaml`](config.yaml)。
 
 ## 文档导航
 
-- 配置总览：[`docs/01-configuration.md`](/Users/sven/Codes/Rust/forgedns/docs/01-configuration.md)
-- 插件手册：[`docs/02-plugin-reference/README.md`](/Users/sven/Codes/Rust/forgedns/docs/02-plugin-reference/README.md)
-- 管理 API：[`docs/03-api.md`](/Users/sven/Codes/Rust/forgedns/docs/03-api.md)
-- 常见场景：[`docs/05-scenarios.md`](/Users/sven/Codes/Rust/forgedns/docs/05-scenarios.md)
-- 架构与设计：[`docs/06-architecture-and-design.md`](/Users/sven/Codes/Rust/forgedns/docs/06-architecture-and-design.md)
-- 性能与基准：[`docs/07-benchmarks.md`](/Users/sven/Codes/Rust/forgedns/docs/07-benchmarks.md)
+- [配置总览](https://forgedns.cn/configuration)
+- [插件总览](https://forgedns.cn/plugin-reference/overview)
+- [管理 API](https://forgedns.cn/api)
+- [MikroTik 策略路由](https://forgedns.cn/mikrotik-policy-routing)
+- [常见场景](https://forgedns.cn/scenarios)
+- [架构与设计](https://forgedns.cn/architecture-and-design)
+- [性能与基准](https://forgedns.cn/benchmarks)
 
 ## 适合什么场景
 

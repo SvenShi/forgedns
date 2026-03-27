@@ -20,7 +20,15 @@ const config = {
 
   i18n: {
     defaultLocale: 'zh-Hans',
-    locales: ['zh-Hans'],
+    locales: ['zh-Hans', 'en'],
+    localeConfigs: {
+      'zh-Hans': {
+        label: '中文',
+      },
+      en: {
+        label: 'English',
+      },
+    },
   },
 
   markdown: {
@@ -78,6 +86,10 @@ const config = {
       navbar: {
         title: 'ForgeDNS',
         items: [
+          {
+            type: 'localeDropdown',
+            position: 'right',
+          },
           {
             href: 'https://github.com/SvenShi/forgedns',
             'aria-label': 'GitHub repository',
