@@ -139,17 +139,17 @@ impl Plugin for Sequence {
     async fn destroy(&self) -> DnsResult<()> {
         let mut first_err: Option<DnsError> = None;
         for executor in &self.quick_setup_executors {
-            if let Err(e) = executor.destroy().await {
-                if first_err.is_none() {
-                    first_err = Some(e);
-                }
+            if let Err(e) = executor.destroy().await
+                && first_err.is_none()
+            {
+                first_err = Some(e);
             }
         }
         for matcher in &self.quick_setup_matchers {
-            if let Err(e) = matcher.destroy().await {
-                if first_err.is_none() {
-                    first_err = Some(e);
-                }
+            if let Err(e) = matcher.destroy().await
+                && first_err.is_none()
+            {
+                first_err = Some(e);
             }
         }
         if let Some(e) = first_err {
@@ -179,10 +179,10 @@ fn parse_control_flow_dependency(exec: &str) -> Option<String> {
     if arg.is_empty() {
         return None;
     }
-    if op == "jump" || op == "goto" {
-        if let Ok(tag) = parse_control_flow_sequence_tag(op, arg) {
-            return Some(tag);
-        }
+    if (op == "jump" || op == "goto")
+        && let Ok(tag) = parse_control_flow_sequence_tag(op, arg)
+    {
+        return Some(tag);
     }
     None
 }

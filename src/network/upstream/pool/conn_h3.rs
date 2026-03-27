@@ -4,13 +4,13 @@
  */
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
-use crate::message::Message;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
     build_dns_get_request, build_doh_request_uri, connect_quic, connect_socket,
     get_cap_buf_with_context_len,
 };
 use crate::network::upstream::{Connection, ConnectionInfo};
+use crate::proto::Message;
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes};
 use futures::future::poll_fn;

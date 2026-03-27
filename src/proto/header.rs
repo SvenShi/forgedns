@@ -5,7 +5,7 @@
 
 //! DNS message header flags and identity fields.
 
-use crate::message::{MessageType, Opcode, Rcode};
+use crate::proto::{MessageType, Opcode, Rcode};
 
 /// Public message header carried by the owned DNS message model.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Eq, Hash)]

@@ -14,12 +14,12 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::RecordType;
-use crate::message::{Message, Rcode};
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::dual_selector::{ForwardProbeRequest, ForwardProbeResult};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::RecordType;
+use crate::proto::{Message, Rcode};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use rand::RngExt;
@@ -27,7 +27,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
-use tracing::{Level, debug, event_enabled, info, warn};
+use tracing::{debug, event_enabled, info, warn, Level};
 
 const PROBE_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_CONCURRENT_QUERIES: usize = 3;
@@ -155,10 +155,9 @@ impl SingleDnsForwarder {
         let preferred_result = if let Some(result) = preferred_early {
             Some(result)
         } else {
-            match tokio::time::timeout(PROBE_WAIT_TIMEOUT, &mut preferred_fut).await {
-                Ok(result) => Some(result),
-                Err(_) => None,
-            }
+            tokio::time::timeout(PROBE_WAIT_TIMEOUT, &mut preferred_fut)
+                .await
+                .ok()
         };
 
         let (preferred_has_answer, preferred_error) = match preferred_result {
@@ -364,10 +363,9 @@ impl ConcurrentForwarder {
         let preferred_outcome = if let Some(result) = preferred_early {
             Some(result)
         } else {
-            match tokio::time::timeout(PROBE_WAIT_TIMEOUT, &mut preferred_fut).await {
-                Ok(result) => Some(result),
-                Err(_) => None,
-            }
+            tokio::time::timeout(PROBE_WAIT_TIMEOUT, &mut preferred_fut)
+                .await
+                .ok()
         };
 
         let (preferred_has_answer, preferred_error) =
@@ -377,13 +375,13 @@ impl ConcurrentForwarder {
                     None,
                 )
             } else if let Some((None, err)) = preferred_outcome {
-                if event_enabled!(Level::DEBUG) {
-                    if let Some(err) = err.as_ref() {
-                        debug!(
-                            "forward plugin '{}' dual probe query failed: {}",
-                            self.tag, err
-                        );
-                    }
+                if event_enabled!(Level::DEBUG)
+                    && let Some(err) = err.as_ref()
+                {
+                    debug!(
+                        "forward plugin '{}' dual probe query failed: {}",
+                        self.tag, err
+                    );
                 }
                 (
                     false,
@@ -473,7 +471,7 @@ fn build_upstream(upstream_config: UpstreamConfig) -> Result<Box<dyn Upstream>> 
 
 #[inline]
 fn resolve_active_concurrent(concurrent: Option<usize>) -> usize {
-    concurrent.unwrap_or(1).max(1).min(MAX_CONCURRENT_QUERIES)
+    concurrent.unwrap_or(1).clamp(1, MAX_CONCURRENT_QUERIES)
 }
 
 fn parse_quick_setup_upstream_addrs(param: Option<String>) -> Result<Vec<String>> {
@@ -622,8 +620,8 @@ impl PluginFactory for ForwardFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Name;
-    use crate::message::{Question, Rcode};
+    use crate::proto::Name;
+    use crate::proto::{Question, Rcode};
 
     #[derive(Debug)]
     struct MockUpstream {
@@ -682,7 +680,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         DnsContext::new(
             "127.0.0.1:5533".parse().unwrap(),

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-use crate::message::Message;
+use crate::proto::Message;
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#![allow(clippy::type_complexity)]
+
 //! RDATA wire encoding and decoding helpers.
 
 mod basic;
@@ -11,9 +13,9 @@ mod legacy;
 mod service;
 
 use crate::core::error::{DnsError, Result};
-use crate::message::rdata::*;
-use crate::message::wire::{push_u16, push_u32, read_u16_be, set_u16};
-use crate::message::{Name, RData, RecordType};
+use crate::proto::rdata::*;
+use crate::proto::wire::{push_u16, push_u32, read_u16_be, set_u16};
+use crate::proto::{Name, RData, RecordType};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 #[inline]
@@ -511,7 +513,7 @@ mod tests {
             &packet,
             &Name::from_ascii("owner.example.com.").unwrap(),
             RecordType::A,
-            u16::from(crate::message::DNSClass::IN),
+            u16::from(crate::proto::DNSClass::IN),
             300,
             0,
             packet.len(),

@@ -9,8 +9,8 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::message::Message;
 use crate::plugin::PluginRegistry;
+use crate::proto::Message;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 

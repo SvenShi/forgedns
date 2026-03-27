@@ -7,8 +7,8 @@ use std::net::IpAddr;
  */
 use async_trait::async_trait;
 
-use crate::message::Name;
 use crate::plugin::Plugin;
+use crate::proto::Name;
 
 pub mod domain_set;
 pub mod ip_set;

@@ -6,11 +6,11 @@
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
-use crate::message::Message;
 use crate::network::upstream::pool::{
     Connection, ConnectionBuilder, ConnectionPool, ManagedMaintenanceTask, start_maintenance,
 };
 use crate::network::upstream::utils::close_conns;
+use crate::proto::Message;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -170,7 +170,7 @@ impl<C: Connection> PipelinePool<C> {
 
             // Check if we can expand
             if self.connections.load().len() < self.max_size {
-                if let Err(_) = self.expand().await {
+                if self.expand().await.is_err() {
                     yield_now().await;
                 }
             } else {
@@ -246,7 +246,7 @@ impl<C: Connection> PipelinePool<C> {
             inserted_count.store(to_add, Ordering::Relaxed);
 
             let mut new_vec = Vec::with_capacity(current_len + to_add);
-            new_vec.extend_from_slice(&old_conns);
+            new_vec.extend_from_slice(old_conns);
             new_vec.extend(created.iter().take(to_add).cloned());
 
             debug!(

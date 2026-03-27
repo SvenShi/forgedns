@@ -408,38 +408,37 @@ pub fn extract_client_ip(
     src_ip_header: &Option<Arc<str>>,
     tcp_src: SocketAddr,
 ) -> SocketAddr {
-    if let Some(header_name) = src_ip_header {
-        if let Some(header_value) = headers.get(header_name.as_ref()) {
-            if let Ok(ip_str) = header_value.to_str() {
-                // Try to parse as complete SocketAddr (IP:Port)
-                if let Ok(addr) = SocketAddr::from_str(ip_str) {
-                    debug!("Extracted real IP: {} (from header {})", addr, header_name);
-                    return addr;
-                }
-                // Try to parse as IP only, use TCP port
-                if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
-                    let addr = SocketAddr::new(ip, tcp_src.port());
-                    debug!(
-                        "Extracted real IP: {} (from header {}, port from TCP)",
-                        addr, header_name
-                    );
-                    return addr;
-                }
-                // X-Forwarded-For may contain multiple IPs, take the first one (original client)
-                if let Some(first_ip) = ip_str.split(',').next() {
-                    let first_ip = first_ip.trim();
-                    if let Ok(ip) = first_ip.parse::<std::net::IpAddr>() {
-                        let addr = SocketAddr::new(ip, tcp_src.port());
-                        debug!(
-                            "Extracted real IP: {} (from header {}, first in X-Forwarded-For)",
-                            addr, header_name
-                        );
-                        return addr;
-                    }
-                }
-                warn!("Failed to parse IP from header {}: {}", header_name, ip_str);
+    if let Some(header_name) = src_ip_header
+        && let Some(header_value) = headers.get(header_name.as_ref())
+        && let Ok(ip_str) = header_value.to_str()
+    {
+        // Try to parse as complete SocketAddr (IP:Port)
+        if let Ok(addr) = SocketAddr::from_str(ip_str) {
+            debug!("Extracted real IP: {} (from header {})", addr, header_name);
+            return addr;
+        }
+        // Try to parse as IP only, use TCP port
+        if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+            let addr = SocketAddr::new(ip, tcp_src.port());
+            debug!(
+                "Extracted real IP: {} (from header {}, port from TCP)",
+                addr, header_name
+            );
+            return addr;
+        }
+        // X-Forwarded-For may contain multiple IPs, take the first one (original client)
+        if let Some(first_ip) = ip_str.split(',').next() {
+            let first_ip = first_ip.trim();
+            if let Ok(ip) = first_ip.parse::<std::net::IpAddr>() {
+                let addr = SocketAddr::new(ip, tcp_src.port());
+                debug!(
+                    "Extracted real IP: {} (from header {}, first in X-Forwarded-For)",
+                    addr, header_name
+                );
+                return addr;
             }
         }
+        warn!("Failed to parse IP from header {}: {}", header_name, ip_str);
     }
     tcp_src
 }

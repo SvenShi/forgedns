@@ -19,9 +19,9 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::{A, AAAA, RData, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::{A, AAAA, RData, RecordType};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -188,10 +188,10 @@ fn split_ips(ips: Vec<IpAddr>) -> (Vec<Arc<RData>>, Vec<Arc<RData>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{DNSClass, Name};
-    use crate::message::{Message, Question};
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::{DNSClass, Name};
+    use crate::proto::{Message, Question};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     fn make_context(qtype: RecordType) -> DnsContext {

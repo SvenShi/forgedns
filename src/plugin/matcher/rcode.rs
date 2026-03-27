@@ -95,9 +95,9 @@ impl Matcher for RcodeMatcher {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::{Message, Question, Rcode};
-    use crate::message::{Name, RecordType};
     use crate::plugin::matcher::Matcher;
+    use crate::proto::{Message, Question, Rcode};
+    use crate::proto::{Name, RecordType};
     use std::net::SocketAddr;
 
     fn make_context() -> DnsContext {
@@ -105,7 +105,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
 
         DnsContext::new(

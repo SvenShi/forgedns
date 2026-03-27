@@ -109,7 +109,7 @@ pub fn load_tls_config(
     match (cert, key) {
         (Some(cert), Some(key)) => {
             info!("Loading TLS configuration: cert={}, key={}", cert, key);
-            Some(load_tls_config_from_path(&cert, &key))
+            Some(load_tls_config_from_path(cert, key))
         }
         (Some(_), None) => Some(Err(DnsError::plugin(" cert specified but key is missing"))),
         (None, Some(_)) => Some(Err(DnsError::plugin("key specified but cert is missing"))),

@@ -5,12 +5,12 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
-use crate::message::Message;
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::network::upstream::ConnectionInfo;
 use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::connect_socket;
+use crate::proto::Message;
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::net::IpAddr;

@@ -1,4 +1,4 @@
-use forgedns::message::{
+use forgedns::proto::{
     DNSClass, Message, MessageType, Opcode, Question, RData, Rcode, Record, RecordType,
     rdata::{self, ClientSubnet, EdnsCode, EdnsOption},
 };
@@ -189,8 +189,8 @@ fn fixture_snapshot() -> MessageSnapshot {
     }
 }
 
-fn forgedns_name(raw: &str) -> forgedns::message::Name {
-    forgedns::message::Name::from_ascii(raw).expect("fixture name should be valid")
+fn forgedns_name(raw: &str) -> forgedns::proto::Name {
+    forgedns::proto::Name::from_ascii(raw).expect("fixture name should be valid")
 }
 
 fn hickory_name(raw: &str) -> hp_rr::Name {

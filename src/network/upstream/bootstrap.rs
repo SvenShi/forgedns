@@ -16,9 +16,9 @@
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
-use crate::message::{DNSClass, Message, MessageType, Opcode, Question};
-use crate::message::{Name, RecordType};
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder};
+use crate::proto::{DNSClass, Message, MessageType, Opcode, Question};
+use crate::proto::{Name, RecordType};
 use rand::random;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -245,46 +245,48 @@ impl Bootstrap {
         message.set_id(random());
         match self.upstream.query(message).await {
             Ok(response) => {
-                for (ip, ttl_seconds) in response.answer_ip_ttls() {
-                    let ttl = ttl_seconds as u64 * 1000;
-                    info!(
-                        domain = %self.domain,
-                        ip = %ip,
-                        ttl_seconds,
-                        "Bootstrap DNS resolution successful"
-                    );
+                for answer in response.answers() {
+                    if let Some(ip) = answer.ip_addr() {
+                        let ttl = answer.ttl() as u64 * 1000;
+                        info!(
+                            domain = %self.domain,
+                            ip = %ip,
+                            ttl,
+                            "Bootstrap DNS resolution successful"
+                        );
 
-                    let expires_at = AppClock::elapsed_millis() + ttl;
-                    *self.cache.write().await = Some(CacheData { ip, expires_at });
-                    self.state.store(STATE_CACHED, Ordering::Release);
-                    self.query_done.notify_waiters();
-                    return;
+                        let expires_at = AppClock::elapsed_millis() + ttl;
+                        *self.cache.write().await = Some(CacheData { ip, expires_at });
+                        self.state.store(STATE_CACHED, Ordering::Release);
+                        self.query_done.notify_waiters();
+                        return;
+                    }
                 }
 
                 let answers = response.answers();
 
                 // Find the first matching A (IPv4) or AAAA (IPv6) record
                 for answer in answers {
-                    if answer.rr_type() == RecordType::A || answer.rr_type() == RecordType::AAAA {
-                        if let Some(ip) = answer.data().ip_addr() {
-                            let ttl = answer.ttl() as u64 * 1000; // Convert seconds to milliseconds
-                            info!(
-                                domain = %self.domain,
-                                ip = %ip,
-                                ttl_seconds = ttl / 1000,
-                                record_type = ?answer.rr_type(),
-                                "Bootstrap DNS resolution successful"
-                            );
+                    if (answer.rr_type() == RecordType::A || answer.rr_type() == RecordType::AAAA)
+                        && let Some(ip) = answer.data().ip_addr()
+                    {
+                        let ttl = answer.ttl() as u64 * 1000; // Convert seconds to milliseconds
+                        info!(
+                            domain = %self.domain,
+                            ip = %ip,
+                            ttl_seconds = ttl / 1000,
+                            record_type = ?answer.rr_type(),
+                            "Bootstrap DNS resolution successful"
+                        );
 
-                            // Update cache with new IP and expiration time
-                            let expires_at = AppClock::elapsed_millis() + ttl;
-                            *self.cache.write().await = Some(CacheData { ip, expires_at });
+                        // Update cache with new IP and expiration time
+                        let expires_at = AppClock::elapsed_millis() + ttl;
+                        *self.cache.write().await = Some(CacheData { ip, expires_at });
 
-                            // Transition to CACHED state and wake all waiting tasks
-                            self.state.store(STATE_CACHED, Ordering::Release);
-                            self.query_done.notify_waiters();
-                            return;
-                        }
+                        // Transition to CACHED state and wake all waiting tasks
+                        self.state.store(STATE_CACHED, Ordering::Release);
+                        self.query_done.notify_waiters();
+                        return;
                     }
                 }
 

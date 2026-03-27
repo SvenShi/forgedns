@@ -17,7 +17,6 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
-use crate::message::Message;
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::dependency::DependencySpec;
@@ -25,6 +24,7 @@ use crate::plugin::server::{
     ConnectionGuard, RequestHandle, RequestMeta, Server, normalize_listen_addr, parse_listen_addr,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::proto::Message;
 use crate::register_plugin_factory;
 
 use async_trait::async_trait;
@@ -298,10 +298,10 @@ async fn handle_dns_stream<S>(
 
     let handle = tokio::spawn(async move {
         loop {
-            if let Some(response) = receiver.recv().await {
-                if let Err(e) = writer.write_message(&response).await {
-                    warn!("Failed to write TCP response to {}: {}", src, e);
-                }
+            if let Some(response) = receiver.recv().await
+                && let Err(e) = writer.write_message(&response).await
+            {
+                warn!("Failed to write TCP response to {}: {}", src, e);
             }
         }
     });
@@ -369,10 +369,10 @@ register_plugin_factory!("tcp_server", TcpServerFactory {});
 impl PluginFactory for TcpServerFactory {
     /// Get dependencies (the entry executor plugin)
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
-        if let Some(args) = &plugin_config.args {
-            if let Ok(config) = serde_yml::from_value::<TcpServerConfig>(args.clone()) {
-                return vec![DependencySpec::executor("args.entry", config.entry)];
-            }
+        if let Some(args) = &plugin_config.args
+            && let Ok(config) = serde_yml::from_value::<TcpServerConfig>(args.clone())
+        {
+            return vec![DependencySpec::executor("args.entry", config.entry)];
         }
         vec![]
     }
@@ -435,10 +435,10 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::Result;
-    use crate::message::Rcode;
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::{plugin_config, test_registry};
+    use crate::proto::Rcode;
     use async_trait::async_trait;
     use serde_yml::from_str;
     use std::net::{IpAddr, Ipv4Addr};

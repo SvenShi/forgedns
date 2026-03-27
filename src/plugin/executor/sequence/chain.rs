@@ -4,7 +4,6 @@
  */
 use crate::core::context::{DnsContext, ExecFlowState};
 use crate::core::error::{DnsError, Result};
-use crate::message::Rcode;
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{
@@ -13,6 +12,7 @@ use crate::plugin::executor::sequence::{
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{PluginHolder, PluginRegistry};
+use crate::proto::Rcode;
 use ahash::AHashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -196,6 +196,13 @@ pub struct ChainBuilder {
     /// Runtime-created quick-setup matchers that require lifecycle management.
     quick_setup_matchers: Vec<Arc<dyn Matcher>>,
 }
+
+type BuildArtifacts = (
+    Arc<ChainProgram>,
+    Vec<Arc<dyn Executor>>,
+    Vec<Arc<dyn Matcher>>,
+);
+
 impl ChainBuilder {
     pub fn new(registry: Arc<PluginRegistry>, sequence_tag: impl Into<String>) -> Self {
         ChainBuilder {
@@ -216,13 +223,7 @@ impl ChainBuilder {
         Ok(())
     }
 
-    pub fn build(
-        self,
-    ) -> (
-        Arc<ChainProgram>,
-        Vec<Arc<dyn Executor>>,
-        Vec<Arc<dyn Matcher>>,
-    ) {
+    pub fn build(self) -> BuildArtifacts {
         (
             Arc::new(ChainProgram {
                 instructions: self.instructions,
@@ -449,9 +450,9 @@ mod tests {
     use super::*;
     use crate::continue_next;
     use crate::core::context::ExecFlowState;
-    use crate::message::{Message, Question};
-    use crate::message::{Name, RecordType};
     use crate::plugin::Plugin;
+    use crate::proto::{Message, Question};
+    use crate::proto::{Name, RecordType};
     use async_trait::async_trait;
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Mutex;
@@ -555,7 +556,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
 
         DnsContext::new(

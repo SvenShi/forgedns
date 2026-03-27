@@ -32,9 +32,9 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::Rcode;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::Rcode;
 use crate::{continue_next, register_plugin_factory};
 use ahash::{AHashMap, AHashSet};
 use async_trait::async_trait;
@@ -451,17 +451,20 @@ fn extract_observation(
     // the manager. For duplicates we keep the largest TTL because the manager
     // should observe the strongest expiry hint from this response batch.
     let mut dedup = AHashMap::<IpAddr, u32>::new();
-    for (ip, ttl_secs) in response.answer_ip_ttls() {
-        match ip {
-            IpAddr::V4(_) if config.address_list4.is_none() => continue,
-            IpAddr::V6(_) if config.address_list6.is_none() => continue,
-            _ => {}
-        }
+    for answer in response.answers() {
+        if let Some(ip) = answer.ip_addr() {
+            let ttl_secs = answer.ttl();
+            match ip {
+                IpAddr::V4(_) if config.address_list4.is_none() => continue,
+                IpAddr::V6(_) if config.address_list6.is_none() => continue,
+                _ => {}
+            }
 
-        dedup
-            .entry(ip)
-            .and_modify(|ttl| *ttl = (*ttl).max(ttl_secs))
-            .or_insert(ttl_secs);
+            dedup
+                .entry(ip)
+                .and_modify(|ttl| *ttl = (*ttl).max(ttl_secs))
+                .or_insert(ttl_secs);
+        }
     }
 
     if dedup.is_empty() {
@@ -737,13 +740,13 @@ fn parse_persistent_item(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::rdata::{A, AAAA};
-    use crate::message::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
-    use crate::plugin::PluginRegistry;
     use crate::plugin::executor::mikrotik::api::RouterListEntry;
     use crate::plugin::executor::mikrotik::manager::{
-        OwnedCommentKind, decode_owned_comment, encode_comment,
+        decode_owned_comment, encode_comment, OwnedCommentKind,
     };
+    use crate::plugin::PluginRegistry;
+    use crate::proto::rdata::{A, AAAA};
+    use crate::proto::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[derive(Debug, Default)]
@@ -1483,10 +1486,11 @@ persistent:
         })
         .await;
 
-        let state = api.state.lock().unwrap();
-        assert_eq!(state.upsert_v4, 0);
-        assert!(state.upsert_v6 >= 1);
-        drop(state);
+        {
+            let state = api.state.lock().unwrap();
+            assert_eq!(state.upsert_v4, 0);
+            assert!(state.upsert_v6 >= 1);
+        }
         let _ = executor.destroy().await;
     }
 

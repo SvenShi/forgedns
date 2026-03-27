@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::context::{DnsContext, ExecFlowState};
-use crate::message::{Message, Rcode};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginRegistry};
+use crate::proto::{Message, Rcode};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,7 +52,7 @@ impl Drop for ConnectionGuard {
             "{} connection from {} closed (active: {})",
             self.protocol, self.src, active
         );
-        if active > 0 && active % 10 == 0 {
+        if active > 0 && active.is_multiple_of(10) {
             debug!("Active connections: {}", active);
         }
     }
@@ -185,9 +185,9 @@ mod tests {
     use super::*;
     use crate::continue_next;
     use crate::core::error::{DnsError, Result};
-    use crate::message::Question;
-    use crate::message::{Name, RecordType};
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::Question;
+    use crate::proto::{Name, RecordType};
     use async_trait::async_trait;
     use std::sync::Mutex;
 
@@ -218,7 +218,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii(qname).expect("query name should be valid"),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         request
     }

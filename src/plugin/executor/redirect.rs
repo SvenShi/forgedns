@@ -20,10 +20,10 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::Question;
-use crate::message::{CNAME, DNSClass, Name, RData, Record};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::Question;
+use crate::proto::{CNAME, DNSClass, Name, RData, Record};
 use crate::{continue_next, register_plugin_factory};
 use ahash::AHashMap;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
@@ -405,10 +405,10 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::DnsError;
-    use crate::message::Message;
-    use crate::message::rdata::A;
-    use crate::message::{RData, RecordType};
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::Message;
+    use crate::proto::rdata::A;
+    use crate::proto::{RData, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]

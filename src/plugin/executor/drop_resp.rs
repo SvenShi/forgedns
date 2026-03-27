@@ -88,7 +88,7 @@ mod tests {
             tag: "drop_resp".to_string(),
         };
         let mut ctx = test_context();
-        ctx.set_response(crate::message::Message::new());
+        ctx.set_response(crate::proto::Message::new());
 
         let step = plugin
             .execute(&mut ctx)

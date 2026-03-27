@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#![allow(clippy::type_complexity)]
+
 use super::*;
 
 /// Decode MD as a single domain name per RFC 1035 section 3.3.4.

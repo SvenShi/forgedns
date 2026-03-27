@@ -14,7 +14,7 @@ use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
 const MAX_NAME_WIRE_OCTETS: usize = 255;
-const MAX_COMPRESSION_POINTERS: usize = (MAX_NAME_WIRE_OCTETS + 1) / 2 - 2;
+const MAX_COMPRESSION_POINTERS: usize = (MAX_NAME_WIRE_OCTETS + 1).div_ceil(2) - 2;
 
 type WireBuf = SmallVec<[u8; 96]>;
 type CanonicalFqdnBuf = SmallVec<[u8; 128]>;
@@ -400,9 +400,9 @@ impl Name {
     pub(crate) fn bytes_len_at<'a>(
         &'a self,
         compress: bool,
-        compression: &mut crate::message::codec::LenCompressionMap<'a>,
+        compression: &mut crate::proto::codec::LenCompressionMap<'a>,
     ) -> usize {
-        crate::message::codec::domain_name_len(self, compression, compress)
+        crate::proto::codec::domain_name_len(self, compression, compress)
     }
 
     /// Parse `in-addr.arpa` and `ip6.arpa` names into concrete IP addresses.
@@ -620,7 +620,7 @@ fn build_presentation_from_wire(
 
 #[inline(always)]
 fn append_presentation_octet_unchecked(out: &mut CanonicalFqdnBuf, byte: u8) {
-    if byte >= b' ' && byte <= b'~' {
+    if (b' '..=b'~').contains(&byte) {
         let special = unsafe { *SPECIAL_TABLE.get_unchecked(byte as usize) };
         if special {
             out.push(b'\\');

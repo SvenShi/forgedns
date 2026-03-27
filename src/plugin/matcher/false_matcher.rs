@@ -39,10 +39,10 @@ impl PluginFactory for FalseMatcherFactory {
         param: Option<String>,
         _registry: Arc<PluginRegistry>,
     ) -> DnsResult<UninitializedPlugin> {
-        if let Some(param) = param {
-            if !param.trim().is_empty() {
-                return Err(DnsError::plugin("_false does not accept parameters"));
-            }
+        if let Some(param) = param
+            && !param.trim().is_empty()
+        {
+            return Err(DnsError::plugin("_false does not accept parameters"));
         }
         Ok(UninitializedPlugin::Matcher(Box::new(FalseMatcher {
             tag: tag.to_string(),

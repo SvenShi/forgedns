@@ -4,11 +4,11 @@
  */
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
-use crate::message::Message;
 use crate::network::transport::quic_transport::QuicTransport;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
 use crate::network::upstream::{Connection, ConnectionInfo};
+use crate::proto::Message;
 
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};

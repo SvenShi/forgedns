@@ -4,7 +4,7 @@
  */
 
 use crate::core::error::DnsError;
-use crate::message::{Name, RecordType};
+use crate::proto::{Name, RecordType};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DS {
@@ -339,40 +339,17 @@ impl CERT {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RRSIG {
-    type_covered: u16,
-    algorithm: u8,
-    labels: u8,
-    orig_ttl: u32,
-    expiration: u32,
-    inception: u32,
-    key_tag: u16,
-    signer_name: Name,
-    signature: Box<[u8]>,
+    pub(crate) type_covered: u16,
+    pub(crate) algorithm: u8,
+    pub(crate) labels: u8,
+    pub(crate) orig_ttl: u32,
+    pub(crate) expiration: u32,
+    pub(crate) inception: u32,
+    pub(crate) key_tag: u16,
+    pub(crate) signer_name: Name,
+    pub(crate) signature: Box<[u8]>,
 }
 impl RRSIG {
-    pub fn new(
-        type_covered: u16,
-        algorithm: u8,
-        labels: u8,
-        orig_ttl: u32,
-        expiration: u32,
-        inception: u32,
-        key_tag: u16,
-        signer_name: Name,
-        signature: Box<[u8]>,
-    ) -> Self {
-        Self {
-            type_covered,
-            algorithm,
-            labels,
-            orig_ttl,
-            expiration,
-            inception,
-            key_tag,
-            signer_name,
-            signature,
-        }
-    }
     pub fn type_covered(&self) -> u16 {
         self.type_covered
     }

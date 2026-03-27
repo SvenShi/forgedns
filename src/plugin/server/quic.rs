@@ -327,11 +327,11 @@ fn extract_tls_server_name(connection: &quinn::Connection) -> Option<String> {
 }
 
 pub fn build_quic_endpoint(
-    addr: &String,
+    addr: &str,
     server_config: ServerConfig,
     timeout: Option<u64>,
 ) -> Result<Endpoint> {
-    let socket = udp::build_udp_socket(&addr)?;
+    let socket = udp::build_udp_socket(addr)?;
 
     let quic_crypto = quinn::crypto::rustls::QuicServerConfig::try_from(Arc::new(server_config))?;
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_crypto));
@@ -361,10 +361,10 @@ register_plugin_factory!("quic_server", QuicServerFactory {});
 impl PluginFactory for QuicServerFactory {
     /// Get dependencies (the entry executor plugin)
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
-        if let Some(args) = &plugin_config.args {
-            if let Ok(config) = serde_yml::from_value::<QuicServerConfig>(args.clone()) {
-                return vec![DependencySpec::executor("args.entry", config.entry)];
-            }
+        if let Some(args) = &plugin_config.args
+            && let Ok(config) = serde_yml::from_value::<QuicServerConfig>(args.clone())
+        {
+            return vec![DependencySpec::executor("args.entry", config.entry)];
         }
         vec![]
     }

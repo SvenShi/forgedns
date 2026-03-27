@@ -206,10 +206,10 @@ fn parse_policy_from_expr(raw: &str) -> Result<TtlPolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::rdata::{A, Edns};
-    use crate::message::{Name, RData, Record};
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+    use crate::proto::rdata::{A, Edns};
+    use crate::proto::{Name, RData, Record};
 
     #[test]
     fn test_parse_policy_from_expr_supports_fix_and_range() {
@@ -233,7 +233,7 @@ mod tests {
             },
         };
 
-        let mut response = crate::message::Message::new();
+        let mut response = crate::proto::Message::new();
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             120,
@@ -281,7 +281,7 @@ mod tests {
             },
         };
 
-        let mut response = crate::message::Message::new();
+        let mut response = crate::proto::Message::new();
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             120,

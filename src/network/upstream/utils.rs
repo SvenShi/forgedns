@@ -395,7 +395,7 @@ fn is_connect_in_progress(err: &std::io::Error) -> bool {
 
     #[cfg(target_os = "macos")]
     {
-        return err.raw_os_error() == Some(36);
+        err.raw_os_error() == Some(36)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -556,7 +556,7 @@ pub async fn connect_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Message;
+    use crate::proto::Message;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

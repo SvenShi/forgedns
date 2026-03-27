@@ -12,11 +12,11 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::Rcode;
-use crate::message::rdata::{A, AAAA, MX, TXT};
-use crate::message::{CNAME, DNSClass, NS, Name, PTR, RData, Record, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::Rcode;
+use crate::proto::rdata::{A, AAAA, MX, TXT};
+use crate::proto::{CNAME, DNSClass, NS, Name, PTR, RData, Record, RecordType};
 use crate::register_plugin_factory;
 use ahash::AHashMap;
 use async_trait::async_trait;
@@ -488,10 +488,10 @@ fn parse_name(raw: &str) -> std::result::Result<Name, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{Message, Question};
-    use crate::message::{Name, RecordType};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::{Message, Question};
+    use crate::proto::{Name, RecordType};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]

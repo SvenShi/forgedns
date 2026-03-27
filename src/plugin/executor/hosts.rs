@@ -23,9 +23,9 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::message::{A, AAAA, DNSClass, RData, RecordType};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::{A, AAAA, DNSClass, RData, RecordType};
 use crate::register_plugin_factory;
 use ahash::AHashMap;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
@@ -375,10 +375,10 @@ fn normalize_name(raw: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::{DNSClass, Name, RecordType};
-    use crate::message::{Message, Question};
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::{DNSClass, Name, RecordType};
+    use crate::proto::{Message, Question};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]

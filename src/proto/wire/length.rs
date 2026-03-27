@@ -5,7 +5,7 @@
 
 //! Wire-length helpers for DNS message encoding.
 
-use crate::message::{Edns, EdnsOption};
+use crate::proto::{Edns, EdnsOption};
 
 pub(crate) fn edns_record_len(edns: &Edns) -> usize {
     let mut rdlen = 0usize;
@@ -24,7 +24,7 @@ pub(crate) fn edns_option_len(option: &EdnsOption) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{ClientSubnet, Edns};
+    use crate::proto::{ClientSubnet, Edns};
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
@@ -38,7 +38,7 @@ mod tests {
         ));
         assert_eq!(edns_option_len(&subnet), 11);
 
-        let local = EdnsOption::Local(crate::message::EdnsLocal::new(65001, vec![1, 2, 3]));
+        let local = EdnsOption::Local(crate::proto::EdnsLocal::new(65001, vec![1, 2, 3]));
         assert_eq!(edns_option_len(&local), 7);
     }
 
@@ -47,7 +47,7 @@ mod tests {
     fn edns_record_len_matches_encoded_opt_rr_size() {
         let mut edns = Edns::new();
         edns.set_udp_payload_size(1400);
-        edns.insert(EdnsOption::Local(crate::message::EdnsLocal::new(
+        edns.insert(EdnsOption::Local(crate::proto::EdnsLocal::new(
             65001,
             vec![1, 2, 3],
         )));

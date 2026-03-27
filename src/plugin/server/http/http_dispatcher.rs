@@ -9,8 +9,8 @@
 //! - GET method: DNS query passed via URL parameter (base64url encoded)
 //! - POST method: DNS query passed in request body (binary format)
 
-use crate::message::Message;
 use crate::plugin::server::{RequestHandle, RequestMeta};
+use crate::proto::Message;
 use ahash::AHashMap;
 use async_trait::async_trait;
 use base64::Engine;
@@ -308,11 +308,11 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::Result;
-    use crate::message::{Name, RecordType};
-    use crate::message::{Question, Rcode};
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
+    use crate::proto::{Name, RecordType};
+    use crate::proto::{Question, Rcode};
     use async_trait::async_trait;
     use std::sync::Mutex;
 
@@ -393,7 +393,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii(qname).expect("query name should be valid"),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         request
     }

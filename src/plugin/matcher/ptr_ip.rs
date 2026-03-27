@@ -11,7 +11,6 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::core::rule_matcher::IpPrefixMatcher;
-use crate::message::RecordType;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 #[cfg(test)]
@@ -21,6 +20,7 @@ use crate::plugin::matcher::matcher_utils::{
     resolve_provider_tags, validate_non_empty_ip_rules_or_set_tags,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::RecordType;
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use std::fmt::Debug;
@@ -126,7 +126,7 @@ impl Matcher for PtrIpMatcher {
     }
 }
 
-fn parse_ptr_name_ip(name: &crate::message::Name) -> Option<IpAddr> {
+fn parse_ptr_name_ip(name: &crate::proto::Name) -> Option<IpAddr> {
     name.parse_arpa_name()
         .ok()
         .map(|net| normalize_ip(net.addr()))
@@ -146,9 +146,9 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::{Message, Question};
-    use crate::message::{Name, RecordType};
     use crate::plugin::matcher::Matcher;
+    use crate::proto::{Message, Question};
+    use crate::proto::{Name, RecordType};
     use std::net::SocketAddr;
 
     #[tokio::test]
@@ -157,7 +157,7 @@ mod tests {
         request.add_question(Question::new(
             Name::from_ascii("1.0.168.192.in-addr.arpa.").unwrap(),
             RecordType::PTR,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         let mut ctx = DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
@@ -190,7 +190,7 @@ mod tests {
         non_ptr_request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
             RecordType::A,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         let mut non_ptr_ctx = DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
@@ -203,7 +203,7 @@ mod tests {
         invalid_ptr_request.add_question(Question::new(
             Name::from_ascii("bad.ptr.example.com.").unwrap(),
             RecordType::PTR,
-            crate::message::DNSClass::IN,
+            crate::proto::DNSClass::IN,
         ));
         let mut invalid_ptr_ctx = DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),

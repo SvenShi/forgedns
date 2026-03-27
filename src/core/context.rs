@@ -5,8 +5,8 @@
 
 //! DNS request/response context management.
 
-use crate::message::Message;
 use crate::plugin::PluginRegistry;
+use crate::proto::Message;
 use ahash::{AHashMap, AHashSet};
 use std::any::Any;
 use std::net::SocketAddr;
@@ -331,9 +331,9 @@ impl DnsContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::rdata::A;
-    use crate::message::{DNSClass, Question};
-    use crate::message::{Message, Name, RData, Record, RecordType};
+    use crate::proto::rdata::A;
+    use crate::proto::{DNSClass, Question};
+    use crate::proto::{Message, Name, RData, Record, RecordType};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     fn make_context() -> DnsContext {
@@ -382,7 +382,7 @@ mod tests {
     fn test_response_is_mutated_directly() {
         let mut ctx = make_context();
         let mut response = Message::new();
-        response.set_message_type(crate::message::MessageType::Response);
+        response.set_message_type(crate::proto::MessageType::Response);
         response.add_question(Question::new(
             Name::from_ascii("www.example.com.").unwrap(),
             RecordType::A,

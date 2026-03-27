@@ -6,9 +6,9 @@
 //! Shared message encoder and decoder.
 
 use crate::core::error::{DnsError, Result};
-use crate::message::wire::CompressionState;
-use crate::message::wire::{encode_edns_record, encode_rdata, parse_rdata};
-use crate::message::{
+use crate::proto::wire::CompressionState;
+use crate::proto::wire::{encode_edns_record, encode_rdata, parse_rdata};
+use crate::proto::{
     DNSClass, Header, Message, MessageType, Name, Question, RData, Rcode, Record, RecordType,
 };
 
@@ -44,6 +44,7 @@ pub(crate) fn read_u32_be(packet: &[u8], offset: usize) -> u32 {
 }
 
 #[inline(always)]
+#[allow(clippy::uninit_vec)]
 pub(crate) fn push_u16(out: &mut Vec<u8>, value: u16) {
     let len = out.len();
     out.reserve(2);
@@ -55,6 +56,7 @@ pub(crate) fn push_u16(out: &mut Vec<u8>, value: u16) {
 }
 
 #[inline(always)]
+#[allow(clippy::uninit_vec)]
 pub(crate) fn push_u32(out: &mut Vec<u8>, value: u32) {
     let len = out.len();
     out.reserve(4);
@@ -75,6 +77,7 @@ pub(crate) fn set_u16(buf: &mut [u8], offset: usize, value: u16) {
     }
 }
 #[inline(always)]
+#[allow(clippy::uninit_vec)]
 fn prepare_output_buffer_append(out: &mut Vec<u8>) -> usize {
     let start = out.len();
     out.reserve(DNS_HEADER_LEN);
@@ -686,7 +689,7 @@ fn encode_record<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::*;
+    use crate::proto::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     fn roundtrip_with_answer(data: RData, answer_name: &str) -> Record {
@@ -837,17 +840,17 @@ mod tests {
         signed.signature_mut().push(Record::from_rdata(
             Name::from_ascii("example.com.").unwrap(),
             0,
-            RData::SIG(SIG(RRSIG::new(
-                u16::from(RecordType::A),
-                8,
-                2,
-                300,
-                400,
-                200,
-                1234,
-                Name::from_ascii("sig.example.com.").unwrap(),
-                vec![1, 2, 3].into_boxed_slice(),
-            ))),
+            RData::SIG(SIG(RRSIG {
+                type_covered: u16::from(RecordType::A),
+                algorithm: 8,
+                labels: 2,
+                orig_ttl: 300,
+                expiration: 400,
+                inception: 200,
+                key_tag: 1234,
+                signer_name: Name::from_ascii("sig.example.com.").unwrap(),
+                signature: vec![1, 2, 3].into_boxed_slice(),
+            })),
         ));
 
         let cases = vec![query, response, response_with_edns, compressed, signed];
@@ -1165,17 +1168,17 @@ mod tests {
                 5,
             )),
             RData::OPT(OPT(opt)),
-            RData::SIG(SIG(RRSIG::new(
-                u16::from(RecordType::A),
-                8,
-                2,
-                300,
-                400,
-                200,
-                1234,
-                name("sig.example.com."),
-                vec![1, 2, 3].into_boxed_slice(),
-            ))),
+            RData::SIG(SIG(RRSIG {
+                type_covered: u16::from(RecordType::A),
+                algorithm: 8,
+                labels: 2,
+                orig_ttl: 300,
+                expiration: 400,
+                inception: 200,
+                key_tag: 1234,
+                signer_name: name("sig.example.com."),
+                signature: vec![1, 2, 3].into_boxed_slice(),
+            })),
             RData::KEY(KEY(DNSKEY::new(
                 256,
                 3,
@@ -1185,17 +1188,17 @@ mod tests {
             RData::DS(DS::new(1234, 8, 2, vec![1, 2, 3, 4].into_boxed_slice())),
             RData::SSHFP(SSHFP::new(1, 1, vec![1, 2, 3].into_boxed_slice())),
             RData::CERT(CERT::new(1, 1234, 8, vec![1, 2, 3].into_boxed_slice())),
-            RData::RRSIG(RRSIG::new(
-                u16::from(RecordType::AAAA),
-                8,
-                2,
-                600,
-                700,
-                500,
-                4321,
-                name("rrsig.example.com."),
-                vec![9, 8, 7].into_boxed_slice(),
-            )),
+            RData::SIG(SIG(RRSIG {
+                type_covered: u16::from(RecordType::AAAA),
+                algorithm: 8,
+                labels: 2,
+                orig_ttl: 600,
+                expiration: 700,
+                inception: 500,
+                key_tag: 4321,
+                signer_name: name("rrsig.example.com."),
+                signature: vec![9, 8, 7].into_boxed_slice(),
+            })),
             RData::NSEC(NSEC::new(
                 name("next.example.com."),
                 TypeBitMaps::from_types(vec![RecordType::A, RecordType::AAAA]),
@@ -1468,17 +1471,17 @@ mod tests {
         message.signature_mut().push(Record::from_rdata(
             Name::from_ascii("tail.shared.example.com.").unwrap(),
             0,
-            RData::SIG(SIG(RRSIG::new(
-                u16::from(RecordType::TXT),
-                8,
-                2,
-                300,
-                400,
-                200,
-                1234,
-                Name::from_ascii("sig.shared.example.com.").unwrap(),
-                vec![1, 2, 3, 4].into_boxed_slice(),
-            ))),
+            RData::SIG(SIG(RRSIG {
+                type_covered: u16::from(RecordType::TXT),
+                algorithm: 8,
+                labels: 2,
+                orig_ttl: 300,
+                expiration: 400,
+                inception: 200,
+                key_tag: 1234,
+                signer_name: Name::from_ascii("sig.shared.example.com.").unwrap(),
+                signature: vec![1, 2, 3, 4].into_boxed_slice(),
+            })),
         ));
 
         let encoded = message

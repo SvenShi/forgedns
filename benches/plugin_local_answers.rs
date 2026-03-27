@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use forgedns::config::types::{ApiConfig, Config, LogConfig, PluginConfig, RuntimeConfig};
 use forgedns::core::context::DnsContext;
-use forgedns::message::{DNSClass, Message, Name, Question, RecordType};
 use forgedns::plugin::{PluginRegistry, init as init_plugins};
+use forgedns::proto::{DNSClass, Message, Name, Question, RecordType};
 use serde_yml::Value;
 use std::hint::black_box;
 use std::net::{Ipv4Addr, SocketAddr};

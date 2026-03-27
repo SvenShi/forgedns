@@ -93,9 +93,9 @@ impl Matcher for QtypeMatcher {
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::message::{DNSClass, Name, RecordType};
-    use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
+    use crate::proto::{DNSClass, Name, RecordType};
+    use crate::proto::{Message, Question};
     use std::net::SocketAddr;
 
     fn make_context(qtypes: &[RecordType]) -> DnsContext {
@@ -104,7 +104,7 @@ mod tests {
             let mut query = Question::new(
                 Name::from_ascii("example.com.").unwrap(),
                 *qtype,
-                crate::message::DNSClass::IN,
+                DNSClass::IN,
             );
             query.set_qclass(DNSClass::IN);
             request.add_question(query);

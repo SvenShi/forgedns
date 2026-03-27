@@ -28,9 +28,9 @@ use serde::Serialize;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{Mutex, oneshot, watch};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
 
@@ -100,7 +100,7 @@ impl Debug for ApiRegister {
 
 pub struct ApiHub {
     config: ResolvedApiHttpConfig,
-    routes: Mutex<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
+    routes: StdMutex<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
     health: Arc<HealthState>,
     shutdown_tx: watch::Sender<bool>,
     task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -138,15 +138,14 @@ impl ApiHub {
                 ssl: resolved.ssl,
                 auth: resolved.auth,
             },
-            routes: Mutex::new(AHashMap::new()),
+            routes: StdMutex::new(AHashMap::new()),
             health: Arc::new(HealthState::new()),
             shutdown_tx,
             task_handle: Mutex::new(None),
         }))
-        .map(|hub| {
+        .inspect(|hub| {
             health::register_builtin_routes(&ApiRegister::new(hub.clone()), hub.health.clone())
                 .expect("builtin API routes should register");
-            hub
         }))
     }
 
@@ -189,10 +188,7 @@ impl ApiHub {
     }
 
     pub async fn start(&self) -> Result<()> {
-        let mut task_slot = self
-            .task_handle
-            .lock()
-            .map_err(|_| DnsError::runtime("API server task lock poisoned"))?;
+        let mut task_slot = self.task_handle.lock().await;
         if task_slot.is_some() {
             return Ok(());
         }
@@ -233,11 +229,7 @@ impl ApiHub {
 
     pub async fn stop(&self) {
         let _ = self.shutdown_tx.send(true);
-        let handle = match self.task_handle.lock() {
-            Ok(mut guard) => guard.take(),
-            Err(_) => None,
-        };
-        if let Some(handle) = handle {
+        if let Some(handle) = self.task_handle.lock().await.take() {
             let _ = handle.await;
         }
     }

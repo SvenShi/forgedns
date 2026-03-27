@@ -354,7 +354,7 @@ mod tests {
                 return Err(DnsError::plugin("stub failed"));
             }
             if self.produce_response {
-                context.set_response(crate::message::Message::new());
+                context.set_response(crate::proto::Message::new());
             }
             Ok(ExecStep::Next)
         }
@@ -366,7 +366,7 @@ mod tests {
         ) -> Result<ExecStep> {
             if self.refused_with_next {
                 let _ = next;
-                context.set_response(context.request.response(crate::message::Rcode::Refused));
+                context.set_response(context.request.response(crate::proto::Rcode::Refused));
                 return Ok(ExecStep::Next);
             }
             self.execute(context).await
@@ -450,7 +450,7 @@ mod tests {
                 .response()
                 .expect("with-next executor should set response")
                 .rcode(),
-            crate::message::Rcode::Refused
+            crate::proto::Rcode::Refused
         );
         assert!(outcome.error.is_none());
     }

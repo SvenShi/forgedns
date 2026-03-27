@@ -129,9 +129,9 @@ impl Matcher for QnameMatcher {
 mod tests {
     use super::*;
     use crate::core::context::{DnsContext, ExecFlowState};
-    use crate::message::{DNSClass, Name, RecordType};
-    use crate::message::{Message, Question};
     use crate::plugin::matcher::Matcher;
+    use crate::proto::{DNSClass, Name, RecordType};
+    use crate::proto::{Message, Question};
     use std::net::SocketAddr;
 
     fn make_context(name: &str) -> DnsContext {
