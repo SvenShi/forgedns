@@ -24,39 +24,87 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cargo
+            make_deb: true
+
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cross
+            make_deb: false
+
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cross
+            make_deb: true
+
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cross
+            make_deb: false
+
           - os: ubuntu-latest
             target: i686-unknown-linux-musl
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cross
+            make_deb: false
+
           - os: ubuntu-latest
             target: arm-unknown-linux-musleabihf
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cross
+            make_deb: false
+
           - os: macos-latest
             target: x86_64-apple-darwin
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cargo
+            make_deb: false
+
           - os: macos-latest
             target: aarch64-apple-darwin
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cargo
+            make_deb: false
+
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
             exe: forgedns
+            archive_ext: tar.gz
+            build_tool: cross
+            make_deb: false
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             exe: forgedns.exe
+            archive_ext: zip
+            build_tool: cargo
+            make_deb: false
+
           - os: windows-latest
             target: i686-pc-windows-msvc
             exe: forgedns.exe
+            archive_ext: zip
+            build_tool: cargo
+            make_deb: false
+
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             exe: forgedns.exe
+            archive_ext: zip
+            build_tool: cargo
+            make_deb: false
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -70,9 +118,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cross
+        if: matrix.build_tool == 'cross'
         run: cargo install cross --version 0.2.5 --locked
 
-      - name: Install cross toolchain for aarch64
+      - name: Install cross toolchain for aarch64 GNU
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
@@ -80,102 +129,102 @@ jobs:
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
-      - name: Install cargo-deb (only for deb targets)
-        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cargo install cargo-deb
+      - name: Install cargo-deb
+        if: matrix.make_deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build release binary with cargo
+        if: matrix.build_tool == 'cargo'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "${{ matrix.target }}"
 
       - name: Build release binary with cross
+        if: matrix.build_tool == 'cross'
         shell: bash
         run: |
           set -euo pipefail
           cross build --locked --release --target "${{ matrix.target }}"
 
-      - name: Generate deb for target
-        # Generate .deb packages for Linux targets x86_64 and ARM64 only
-        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          cargo deb --no-build --target ${{ matrix.target }}
-          
-
       - name: Run UPX (non-Windows)
-        # UPX may not support some platforms; ignore errors
         if: matrix.os != 'windows-latest'
         continue-on-error: true
-        uses: crazy-max/ghaction-upx@v1
+        uses: crazy-max/ghaction-upx@v3
         with:
           version: v5.0.2
           files: |
-            target/${{ matrix.target }}/release/forgedns
+            target/${{ matrix.target }}/release/${{ matrix.exe }}
           args: -q --best --lzma
 
       - name: Run UPX (Windows)
-        # Use .exe paths on Windows runners
         if: matrix.os == 'windows-latest'
         continue-on-error: true
-        uses: crazy-max/ghaction-upx@v1
+        uses: crazy-max/ghaction-upx@v3
         with:
           version: v5.0.2
           files: |
-            target\${{ matrix.target }}\release\forgedns.exe
+            target\${{ matrix.target }}\release\${{ matrix.exe }}
           args: -q --best --lzma
 
+      - name: Generate deb for target
+        if: matrix.make_deb
+        run: cargo deb --no-build --target ${{ matrix.target }}
 
       - name: Package release (non-Windows)
         if: matrix.os != 'windows-latest'
         shell: bash
         run: |
           set -euo pipefail
-          TARGET=${{ matrix.target }}
+          TARGET="${{ matrix.target }}"
           EXE="${{ matrix.exe }}"
-          DIR=target/${{ matrix.target }}/release
-          # Ensure the executable exists
-          ls -lah "$DIR" || true
-          # Create an unversioned archive matching installer expectations:
-          # forgedns-<target>.tar.gz
+          DIR="target/${{ matrix.target }}/release"
+
+          ls -lah "$DIR"
           cp config.yaml LICENSE "$DIR"/
-          tar czf "$DIR/forgedns-${TARGET}.tar.gz" -C "$DIR" forgedns config.yaml LICENSE
+          tar czf "$DIR/forgedns-${TARGET}.tar.gz" -C "$DIR" "$EXE" config.yaml LICENSE
 
       - name: Package release (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           $TARGET = '${{ matrix.target }}'
-          $EXE = 'forgedns.exe'
+          $EXE = '${{ matrix.exe }}'
           $DIR = "target/${{ matrix.target }}/release"
-          # Use ${} to avoid accidental variable-token parsing when followed by punctuation
+
           Write-Output "Files in ${DIR}`n"
           Get-ChildItem -Path $DIR | Write-Output
-          # Copy config and license files
+
           Copy-Item -Path "config.yaml" -Destination "$DIR/"
           Copy-Item -Path "LICENSE" -Destination "$DIR/"
-          # Create an unversioned zip matching installer expectations: forgedns-<target>.zip
-          Compress-Archive -Path "$DIR/$EXE", "$DIR/config.yaml", "$DIR/LICENSE" -DestinationPath "$DIR/forgedns-$TARGET.zip" -Force
 
-      - name: Upload artifact (non-Windows)
-        if: matrix.os != 'windows-latest'
+          Compress-Archive `
+            -Path "$DIR/$EXE", "$DIR/config.yaml", "$DIR/LICENSE" `
+            -DestinationPath "$DIR/forgedns-$TARGET.zip" `
+            -Force
+
+      - name: Upload archive artifact
         uses: actions/upload-artifact@v5
         with:
-          name: forgedns-${{ matrix.target }}.tar.gz
-          path: target/${{ matrix.target }}/release/forgedns-${{ matrix.target }}.tar.gz
-
-      - name: Upload artifact (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v5
-        with:
-          name: forgedns-${{ matrix.target }}.zip
-          path: target/${{ matrix.target }}/release/forgedns-${{ matrix.target }}.zip
+          name: forgedns-${{ matrix.target }}.${{ matrix.archive_ext }}
+          path: target/${{ matrix.target }}/release/forgedns-${{ matrix.target }}.${{ matrix.archive_ext }}
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Find deb artifacts
+        if: matrix.make_deb
         run: |
           echo 'Listing created .deb artifacts:'
-          find target -type f -name "*.deb" -print || true
+          find target -type f -name "*.deb" -print
 
       - name: Upload built .deb artifacts
+        if: matrix.make_deb
         uses: actions/upload-artifact@v5
         with:
           name: forgedns-${{ matrix.target }}.deb
-          path: |
-            target/debian/*.deb
+          path: target/debian/*.deb
+          compression-level: 0
+          if-no-files-found: error
 
   publish:
     name: Publish release
@@ -183,20 +232,24 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [release]
     steps:
-      - name: Download all artifacts
+      - name: Download all release artifacts
         uses: actions/download-artifact@v6
         with:
+          pattern: forgedns-*
+          merge-multiple: true
           path: artifacts
+
       - name: List artifacts
         run: |
-          # List only release assets we intend to attach to the GitHub release
           find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.deb" \) | sort
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          # Support .zip, .tar.gz and .deb release artifacts
           files: |
-            artifacts/**/*.{zip,tar.gz,deb}
+            artifacts/*.zip
+            artifacts/*.tar.gz
+            artifacts/*.deb
           generate_release_notes: true
           draft: false
 
@@ -207,17 +260,21 @@ jobs:
     needs: publish
     steps:
       - uses: actions/checkout@v5
+
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify package
+        run: cargo publish --locked --dry-run
+
       - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
-        run: cargo publish
+        run: cargo publish --locked
 
   docker:
     name: Publish Docker Images
     if: startsWith(github.ref, 'refs/tags/')
-    needs:
-      - publish
+    needs: publish
     uses: ./.github/workflows/docker.yml
     with:
       FORGEDNS_VERSION: ${{ github.ref_name }}
