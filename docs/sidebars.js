@@ -1,6 +1,7 @@
 const sidebars = {
   docsSidebar: [
     'intro',
+    'quickstart',
     'configuration',
     {
       type: 'category',

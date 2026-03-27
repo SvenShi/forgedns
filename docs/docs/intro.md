@@ -9,11 +9,12 @@ slug: /
 
 建议按照以下顺序阅读本文档：
 
-1. 阅读《[配置总览](configuration.md)》，了解顶层 YAML 结构与 `sequence` 编排方式。
-2. 阅读《[插件总览](plugin-reference/overview.md)》下的四类插件文档，建立 `server / executor / matcher / provider` 的结构认知。
-3. 在接入运维平台、控制平面或观测系统时，阅读《[管理 API](api.md)》。
-4. 在进行策略落地与组合设计时，阅读《[常见策略场景](scenarios.md)》。
-5. 在理解内部设计与性能方向时，阅读《[架构与设计](architecture-and-design.md)》与《[性能与基准](benchmarks.md)》。
+1. 阅读《[快速开始](quickstart.md)》，先根据你的环境选择合适的安装方式并完成首次启动。
+2. 阅读《[配置总览](configuration.md)》，了解顶层 YAML 结构与 `sequence` 编排方式。
+3. 阅读《[插件总览](plugin-reference/overview.md)》下的四类插件文档，建立 `server / executor / matcher / provider` 的结构认知。
+4. 在接入运维平台、控制平面或观测系统时，阅读《[管理 API](api.md)》。
+5. 在进行策略落地与组合设计时，阅读《[常见策略场景](scenarios.md)》。
+6. 在理解内部设计与性能方向时，阅读《[架构与设计](architecture-and-design.md)》与《[性能与基准](benchmarks.md)》。
 
 ## 文档范围
 
