@@ -570,6 +570,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_format_nft_prefix_uses_masked_network() {
         assert_eq!(
             format_nft_prefix(IpAddr::V4("192.0.2.10".parse().unwrap()), 24),

@@ -403,6 +403,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_normalize_ip_for_mask_truncates_host_bits() {
         assert_eq!(
             normalize_ip_for_mask(IpAddr::V4("192.0.2.10".parse().unwrap()), 24),
@@ -411,6 +412,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_format_ipset_prefix_uses_masked_network() {
         assert_eq!(
             format_ipset_prefix(IpAddr::V4("192.0.2.10".parse().unwrap()), 24),
