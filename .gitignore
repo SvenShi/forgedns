@@ -94,3 +94,7 @@ fabric.properties
 .idea/caches/build_file_checksums.ser
 /.codex/
 .DS_Store
+docs/.docusaurus/
+docs/build/
+docs/node_modules/
+docs/package-lock.json

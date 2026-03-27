@@ -1,4 +1,7 @@
-# MikroTik 策略路由
+---
+title: MikroTik 策略路由
+sidebar_position: 5
+---
 
 本章说明 ForgeDNS 的 `mikrotik` 执行器如何与 RouterOS `address-list`、`mangle` 和策略路由机制配合，形成“DNS 解析结果驱动后续流量出口选择”的策略路由体系。
 

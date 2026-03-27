@@ -1,4 +1,7 @@
-# 插件总览
+---
+title: 插件总览
+sidebar_position: 1
+---
 
 ForgeDNS 的插件可分为四层：
 

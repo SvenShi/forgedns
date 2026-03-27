@@ -1,4 +1,7 @@
-# 架构与设计
+---
+title: 架构与设计
+sidebar_position: 7
+---
 
 本文档补充 README 没有展开的设计背景，重点解释 ForgeDNS 的请求路径、分层方式，以及为什么项目会把性能边界当作架构约束。
 
@@ -19,22 +22,22 @@ ForgeDNS 围绕下面这条主路径工作：
 ```mermaid
 flowchart TB
 
-A[Client]
-B[Server Plugins]
-C[DnsContext]
+A[客户端]
+B[服务端插件]
+C[DnsContext 请求上下文]
 
-subgraph D[Sequence Pipeline]
-    D1[Matcher]
-    D2[Executor]
-    D3[Provider]
+subgraph D[Sequence 策略流水线]
+    D1[匹配器 Matcher]
+    D2[执行器 Executor]
+    D3[数据提供器 Provider]
 
     D1 --> D2
     D3 --> D2
 end
 
-E[Upstream]
-F[System Integrations]
-G[Response]
+E[上游 DNS]
+F[系统联动]
+G[响应返回]
 
 A --> B
 B --> C

@@ -1,4 +1,7 @@
-# 匹配器插件
+---
+title: 匹配器插件
+sidebar_position: 4
+---
 
 匹配器插件返回 `true` 或 `false`，主要供 `sequence` 的 `matches` 使用。
 
@@ -33,7 +36,7 @@ quick setup：
 
 ---
 
-## `_true`
+## `_true` {#true}
 
 ### 作用
 
@@ -54,7 +57,7 @@ quick setup：
 
 ---
 
-## `_false`
+## `_false` {#false}
 
 ### 作用
 

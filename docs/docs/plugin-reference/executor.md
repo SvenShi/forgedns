@@ -1,4 +1,7 @@
-# 执行器插件
+---
+title: 执行器插件
+sidebar_position: 3
+---
 
 执行器是 ForgeDNS 的核心动作层。它们可以读写请求、设置响应、调用上游、缓存结果、做回退、记录日志，或触发系统联动。
 
@@ -968,7 +971,7 @@
 
 ---
 
-## `prefer_ipv4` / `prefer_ipv6`
+## `prefer_ipv4` / `prefer_ipv6` {#prefer_ipv4-prefer_ipv6}
 
 ### 作用
 

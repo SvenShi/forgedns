@@ -1,4 +1,7 @@
-# 管理 API
+---
+title: 管理 API
+sidebar_position: 4
+---
 
 ForgeDNS 的管理 API 是独立控制平面，负责：
 
