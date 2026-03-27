@@ -75,9 +75,11 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Check formatting
+        if: runner.os == 'Linux'
         run: cargo fmt -- --check
 
       - name: Run clippy
+        if: runner.os == 'Linux'
         run: |
           cargo clippy --all-targets --all-features -- -D warnings
           cargo clippy --all-targets --no-default-features -- -D warnings
