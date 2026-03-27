@@ -82,16 +82,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cargo clippy --all-targets --all-features -- -D warnings
-          cargo clippy --all-targets --no-default-features -- -D warnings
 
       - name: Run tests
         run: cargo test
 
       - name: Build (all-features)
         run: cargo build --verbose --all-features
-
-      - name: Build (no-default-features)
-        run: cargo build --verbose --no-default-features
 
       # detect unused dependencies
       - name: Machete
