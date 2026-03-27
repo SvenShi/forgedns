@@ -85,7 +85,7 @@ jobs:
           cargo clippy --all-targets --no-default-features -- -D warnings
 
       - name: Run tests
-        run: make test
+        run: cargo test
 
       - name: Build (all-features)
         run: cargo build --verbose --all-features
