@@ -2,21 +2,26 @@
 
 ## 项目定位
 - ForgeDNS 是一个用 Rust 编写的高性能、插件驱动型 DNS 服务器。
-- 当前 README 描述的项目形态包括：UDP/TCP/DoT/DoQ/DoH 服务端与上游支持、基于 `sequence` 的策略编排、带负缓存的 TTL 感知缓存、主备回退链路、本地与合成应答、查询与响应重写、ECS 处理、双栈偏好控制、基于 provider 的域名/IP 规则集，以及 `ipset`、`nftset`、MikroTik 路由同步等系统联动能力。
+- 当前项目已经包含：UDP/TCP/DoT/DoQ/DoH 服务端与上游支持、基于 `sequence` 的策略编排、带负缓存的 TTL 感知缓存、主备回退链路、本地与合成应答、查询与响应重写、ECS 处理、双栈偏好控制、基于 provider 的域名/IP 规则集、管理 API、健康检查、指标，以及 `ipset`、`nftset`、MikroTik 路由同步等系统联动能力。
 - 设计时优先保持核心请求路径清晰稳定：`server -> DnsContext -> matcher/executor/provider pipeline -> upstream or side effects -> response`。
 
 ## 项目结构与模块组织
-- `src/main.rs` 负责启动 Tokio 运行时、解析 CLI 参数、加载配置、初始化日志、启动插件并处理优雅退出。
-- `src/lib.rs` 暴露库接口，供测试和嵌入式使用场景复用。
-- `src/core/` 包含运行时选项、日志、错误、`DnsContext`、缓存基础设施和请求处理工具。
+- `src/main.rs` 负责启动 Tokio 运行时、解析 CLI 参数、加载配置、初始化日志、启动应用并处理优雅退出。
+- `src/lib.rs` 暴露库接口，供测试和嵌入式使用场景复用，包含 `api`、`app`、`config`、`core`、`message`、`network`、`plugin` 和 `service` 等模块。
+- `src/app/` 包含从配置到运行时服务的 bootstrap 和日志装配逻辑。
+- `src/api/` 包含管理/控制接口和健康检查 HTTP 端点。
+- `src/message/` 包含 ForgeDNS 自己的 DNS 消息模型和 wire codec 实现。
+- `src/core/` 包含 `DnsContext`、错误、规则匹配辅助、任务编排和 TTL 缓存基础设施等共享运行时类型。
 - `src/config/` 定义运行时 YAML 配置结构与校验逻辑。
-- `src/network/` 包含传输层协议、TLS 配置、上游解析、连接池、bootstrap 逻辑，以及 Linux 平台相关网络辅助模块。
-- `src/plugin/` 是主要扩展面，当前拆分为四类插件：
-- `src/plugin/server/` 处理入站 DNS 协议，包括 UDP、TCP、QUIC 以及基于 HTTP 的 DNS。
-- `src/plugin/executor/` 包含请求处理插件，如 `sequence`、`forward`、`cache`、`fallback`、`hosts`、`arbitrary`、`redirect`、`ecs_handler`、`prefer_ipv4`、`prefer_ipv6`，以及观测类和系统联动类插件。
-- `src/plugin/matcher/` 包含规则匹配器，如 qname/qtype/qclass、客户端 IP、响应 IP、mark、env、随机放量、限速等谓词。
+- `src/network/` 包含监听器、传输层协议、TLS 配置、上游解析、bootstrap、连接池，以及 Linux 平台相关网络辅助模块。
+- `src/plugin/` 是主要扩展面，当前拆分为 server、executor、matcher、provider 四类插件。
+- `src/plugin/server/` 处理入站 DNS 协议，包括 UDP、TCP、QUIC 以及基于 HTTP 的 DNS；`src/plugin/server/http/` 下包含专门的 HTTP/2 和 HTTP/3 支持。
+- `src/plugin/executor/` 包含请求处理插件，如 `sequence`、`forward`、`cache`、`fallback`、`hosts`、`arbitrary`、`redirect`、`ecs_handler`、`ttl`、`dual_selector`，以及观测类和系统联动类插件。
+- `src/plugin/matcher/` 包含规则匹配器，如 qname/qtype/qclass、客户端 IP、响应 IP、CNAME、响应存在性、RCODE、mark、env、随机放量、限速等谓词。
 - `src/plugin/provider/` 包含可复用的域名/IP 数据集，供 matcher 和 executor 使用。
-- `tests/plugin_integration.rs` 覆盖配置解析、插件注册表装配、`sequence` 快速写法以及真实 UDP 服务集成测试。
+- `src/service.rs` 包含把 ForgeDNS 安装或控制为系统服务的集成逻辑。
+- `tests/plugin_integration.rs` 覆盖配置解析、插件注册表装配、`sequence` 快速写法以及真实服务集成测试。
+- `tests/message_hickory_compat.rs` 用于验证消息编解码与 Hickory 的兼容性行为。
 - `config.yaml` 是当前推荐的、可直接运行的插件装配示例。
 - `README.md` 与 `README_EN.md` 描述整体架构和能力边界；行为变化时应保持同步。
 
@@ -60,6 +65,7 @@
 ## 配置与文档
 - 保持 `config.yaml` 可运行、可读，并用于展示当前推荐的装配方式，而不是堆满所有可选项。
 - 如果改动新增或重命名了插件类型、配置字段、默认行为、支持协议或用户可见能力，必要时应在同一次变更中同步更新 `config.yaml`、`README.md` 和 `README_EN.md`。
+- 如果改动新增、删除或修改了插件，还必须同步更新 `docs/` 中对应的中文和英文文档。凡是插件的行为、配置形态、依赖、生命周期、副作用或示例发生变化，都应把插件代码变更和插件文档更新放在同一次变更里完成。
 - 配置中的插件 tag 应尽量语义明确，例如 `forward_main`、`cache_main`、`udp_server`、`seq_main`。
 - `sequence` 示例保持易读；当逻辑开始复杂时，优先拆成带 tag 的可复用插件。
 
