@@ -14,8 +14,6 @@
 
 当前内置插件如下：
 
-{% columns %}
-{% column %}
 * [`server`](02-plugin-reference/server.md)
   * [`udp_server`](02-plugin-reference/server.md#udp_server)
   * [`tcp_server`](02-plugin-reference/server.md#tcp_server)
@@ -44,9 +42,6 @@
   * [`ipset`](02-plugin-reference/executor.md#ipset)
   * [`nftset`](02-plugin-reference/executor.md#nftset)
   * [`mikrotik`](02-plugin-reference/executor.md#mikrotik)
-{% endcolumn %}
-
-{% column %}
 * [`matcher`](02-plugin-reference/matcher.md)
   * [`_true`](02-plugin-reference/matcher.md#true)
   * [`_false`](02-plugin-reference/matcher.md#false)
@@ -68,5 +63,3 @@
 * [`provider`](02-plugin-reference/provider.md)
   * [`domain_set`](02-plugin-reference/provider.md#domain_set)
   * [`ip_set`](02-plugin-reference/provider.md#ip_set)
-{% endcolumn %}
-{% endcolumns %}
