@@ -10,11 +10,11 @@ ForgeDNS 围绕下面这条主路径工作：
 
 对应职责如下：
 
-- `server`：负责接入 UDP、TCP、DoT、DoQ、DoH
-- `DnsContext`：承载一次请求处理过程中的查询、响应和附加属性
-- `matcher`：判断条件是否命中
-- `executor`：执行缓存、转发、回退、重写、本地应答等动作
-- `provider`：提供可复用的 domain/ip 数据集
+* `server`：负责接入 UDP、TCP、DoT、DoQ、DoH
+* `DnsContext`：承载一次请求处理过程中的查询、响应和附加属性
+* `matcher`：判断条件是否命中
+* `executor`：执行缓存、转发、回退、重写、本地应答等动作
+* `provider`：提供可复用的 domain/ip 数据集
 
 ```mermaid
 flowchart TB
@@ -49,10 +49,10 @@ F --> G
 
 ForgeDNS 不把复杂行为散落在监听器或 transport 分支里，而是尽量统一收敛到策略层。这样做有几个直接收益：
 
-- 请求主路径更短，更容易优化
-- 功能组合更自然，不需要为每个协议写一套特殊逻辑
-- 新能力更适合以插件形式演进，而不是污染核心流程
-- 配置表达更稳定，用户更容易理解策略执行顺序
+* 请求主路径更短，更容易优化
+* 功能组合更自然，不需要为每个协议写一套特殊逻辑
+* 新能力更适合以插件形式演进，而不是污染核心流程
+* 配置表达更稳定，用户更容易理解策略执行顺序
 
 ## 设计重点
 
@@ -60,10 +60,10 @@ ForgeDNS 不把复杂行为散落在监听器或 transport 分支里，而是尽
 
 项目更看重“复杂策略下仍然可控”，而不是“简单路径下堆很多开关”。因此会优先做这些事情：
 
-- 缩短热路径
-- 减少每请求重复工作
-- 复用上游连接和协议状态
-- 把观测与副作用尽量移出最敏感响应路径
+* 缩短热路径
+* 减少每请求重复工作
+* 复用上游连接和协议状态
+* 把观测与副作用尽量移出最敏感响应路径
 
 ### 2. 策略是第一等能力
 
@@ -79,14 +79,14 @@ ForgeDNS 不把 DNS 只看作“收到请求然后返回响应”。解析结果
 
 ForgeDNS 使用自己的 DNS 消息模型和 wire 编解码层，而不是把整条数据路径都建立在第三方消息对象之上。主要原因有三点：
 
-- 更容易围绕实际热点做定向优化
-- 更方便让策略层直接读写消息语义
-- 更容易把协议正确性和服务端行为放在同一套代码里维护
+* 更容易围绕实际热点做定向优化
+* 更方便让策略层直接读写消息语义
+* 更容易把协议正确性和服务端行为放在同一套代码里维护
 
 当前可以简单理解为两层：
 
-- model 层：`Message`、`Name`、`Record`、`RData`
-- wire 层：`message/wire` 下的编解码、压缩、长度估算、截断和 RDATA 规则
+* model 层：`Message`、`Name`、`Record`、`RData`
+* wire 层：`message/wire` 下的编解码、压缩、长度估算、截断和 RDATA 规则
 
 ## 性能设计原则
 
@@ -98,10 +98,3 @@ ForgeDNS 当前的性能思路可以概括为：
 4. 日志、指标、路由同步等副作用尽量离开主响应路径
 5. 缓存不仅要快，还要尊重 TTL 与负缓存语义
 6. 控制锁竞争和共享状态膨胀
-
-## 延伸阅读
-
-- 配置总览：[`01-configuration.md`](/Users/sven/Codes/Rust/forgedns/docs/01-configuration.md)
-- 插件手册：[`02-plugin-reference/README.md`](/Users/sven/Codes/Rust/forgedns/docs/02-plugin-reference/README.md)
-- 常见场景：[`05-scenarios.md`](/Users/sven/Codes/Rust/forgedns/docs/05-scenarios.md)
-- 性能与基准：[`07-benchmarks.md`](/Users/sven/Codes/Rust/forgedns/docs/07-benchmarks.md)
