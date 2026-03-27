@@ -5,7 +5,7 @@
 
 //! `ipset` executor plugin.
 //!
-//! Writes response IP addresses into Linux ipset sets via netlink.
+//! Writes response IP addresses into Linux ipset sets via system ipset.
 //!
 //! Runtime flow:
 //! - scans response answers and extracts unique A/AAAA addresses.
@@ -28,6 +28,8 @@ use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::net::IpAddr;
+#[cfg(target_os = "linux")]
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
@@ -37,12 +39,6 @@ use std::thread;
 use tracing::debug;
 #[cfg(target_os = "linux")]
 use tracing::warn;
-
-#[cfg(target_os = "linux")]
-use crate::network::netlink_nf::{
-    NLM_F_REQUEST_ACK, NfNetlinkSocket, nla_put, nla_put_nested, nla_put_strz, nla_put_u8,
-    nla_put_u32,
-};
 
 #[cfg(target_os = "linux")]
 const IPSET_WRITER_QUEUE_SIZE: usize = 256;
@@ -81,50 +77,40 @@ struct IpSetExecutor {
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct IpSetBackend {
-    socket: NfNetlinkSocket,
+    command: &'static str,
 }
 
 #[cfg(target_os = "linux")]
 impl IpSetBackend {
     fn new() -> Result<Self> {
-        Ok(Self {
-            socket: NfNetlinkSocket::open()?,
-        })
+        let output = Command::new("ipset")
+            .arg("help")
+            .output()
+            .map_err(|e| DnsError::plugin(format!("failed to execute ipset: {}", e)))?;
+        if !output.status.success() {
+            return Err(DnsError::plugin(format!(
+                "ipset help failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(Self { command: "ipset" })
     }
 
     fn add_entries(&mut self, entries: &[IpSetEntry]) -> Result<()> {
         for entry in entries {
-            let mut attrs = Vec::with_capacity(96);
-            nla_put_u8(&mut attrs, IPSET_ATTR_PROTOCOL, IPSET_PROTOCOL);
-            nla_put_strz(&mut attrs, IPSET_ATTR_SETNAME, &entry.set_name);
-
-            let mut data = Vec::with_capacity(64);
-            let mut ip = Vec::with_capacity(32);
-            match entry.addr {
-                IpAddr::V4(v4) => {
-                    nla_put(&mut ip, IPSET_ATTR_IPADDR_IPV4, &v4.octets());
-                }
-                IpAddr::V6(v6) => {
-                    nla_put(&mut ip, IPSET_ATTR_IPADDR_IPV6, &v6.octets());
-                }
+            let prefix = format_ipset_prefix(entry.addr, entry.mask);
+            let output = Command::new(self.command)
+                .args(["add", &entry.set_name, &prefix, "-exist"])
+                .output()
+                .map_err(|e| DnsError::plugin(format!("failed to execute ipset add: {}", e)))?;
+            if !output.status.success() {
+                return Err(DnsError::plugin(format!(
+                    "ipset add failed for set '{}' and prefix '{}': {}",
+                    entry.set_name,
+                    prefix,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
             }
-            nla_put_nested(&mut data, IPSET_ATTR_IP, &ip);
-            nla_put_u8(&mut data, IPSET_ATTR_CIDR, entry.mask);
-            nla_put_u32(&mut data, IPSET_ATTR_CADT_FLAGS, IPSET_FLAG_EXIST);
-            nla_put_nested(&mut attrs, IPSET_ATTR_DATA, &data);
-
-            let family = match entry.addr {
-                IpAddr::V4(_) => NFPROTO_IPV4,
-                IpAddr::V6(_) => NFPROTO_IPV6,
-            };
-            self.socket.request(
-                NFNL_SUBSYS_IPSET,
-                IPSET_CMD_ADD,
-                NLM_F_REQUEST_ACK,
-                family,
-                &attrs,
-                true,
-            )?;
         }
         Ok(())
     }
@@ -162,26 +148,28 @@ impl Executor for IpSetExecutor {
         let Some(response) = context.response() else {
             return Ok(ExecStep::Next);
         };
-        let answers = response.answer_ip_ttls();
+        let answers = response.answers();
         if answers.is_empty() {
             return Ok(ExecStep::Next);
         }
 
         let mut entries = AHashSet::new();
-        for (ip, _) in answers {
-            let (set_name, mask) = match ip {
-                IpAddr::V4(_) => (self.set_name4.as_deref(), self.mask4),
-                IpAddr::V6(_) => (self.set_name6.as_deref(), self.mask6),
-            };
-            let Some(set_name) = set_name else {
-                continue;
-            };
+        for answer in answers {
+            if let Some(ip) = answer.ip_addr() {
+                let (set_name, mask) = match ip {
+                    IpAddr::V4(_) => (self.set_name4.as_deref(), self.mask4),
+                    IpAddr::V6(_) => (self.set_name6.as_deref(), self.mask6),
+                };
+                let Some(set_name) = set_name else {
+                    continue;
+                };
 
-            entries.insert(IpSetEntry {
-                set_name: set_name.to_string(),
-                addr: ip,
-                mask,
-            });
+                entries.insert(IpSetEntry {
+                    set_name: set_name.to_string(),
+                    addr: ip,
+                    mask,
+                });
+            }
         }
 
         if entries.is_empty() {
@@ -374,38 +362,34 @@ fn spawn_ipset_writer(tag: &str, enabled: Arc<AtomicBool>) -> Result<SyncSender<
 }
 
 #[cfg(target_os = "linux")]
-const NFPROTO_IPV4: u8 = 2;
-#[cfg(target_os = "linux")]
-const NFPROTO_IPV6: u8 = 10;
+fn normalize_ip_for_mask(addr: IpAddr, mask: u8) -> IpAddr {
+    match addr {
+        IpAddr::V4(v4) if mask < 32 => {
+            let host_bits = 32u32 - mask as u32;
+            let network_mask = if host_bits == 32 {
+                0
+            } else {
+                u32::MAX << host_bits
+            };
+            IpAddr::V4((u32::from(v4) & network_mask).into())
+        }
+        IpAddr::V6(v6) if mask < 128 => {
+            let host_bits = 128u32 - mask as u32;
+            let network_mask = if host_bits == 128 {
+                0
+            } else {
+                u128::MAX << host_bits
+            };
+            IpAddr::V6((u128::from(v6) & network_mask).into())
+        }
+        _ => addr,
+    }
+}
 
 #[cfg(target_os = "linux")]
-const NFNL_SUBSYS_IPSET: u8 = 6;
-#[cfg(target_os = "linux")]
-const IPSET_PROTOCOL: u8 = 7;
-#[cfg(target_os = "linux")]
-const IPSET_CMD_ADD: u8 = 9;
-
-#[cfg(target_os = "linux")]
-const IPSET_ATTR_PROTOCOL: u16 = 1;
-#[cfg(target_os = "linux")]
-const IPSET_ATTR_SETNAME: u16 = 2;
-#[cfg(target_os = "linux")]
-const IPSET_ATTR_DATA: u16 = 7;
-
-#[cfg(target_os = "linux")]
-const IPSET_ATTR_IP: u16 = 1;
-#[cfg(target_os = "linux")]
-const IPSET_ATTR_CIDR: u16 = 4;
-#[cfg(target_os = "linux")]
-const IPSET_ATTR_CADT_FLAGS: u16 = 10;
-
-#[cfg(target_os = "linux")]
-const IPSET_ATTR_IPADDR_IPV4: u16 = 1;
-#[cfg(target_os = "linux")]
-const IPSET_ATTR_IPADDR_IPV6: u16 = 2;
-
-#[cfg(target_os = "linux")]
-const IPSET_FLAG_EXIST: u32 = 1;
+fn format_ipset_prefix(addr: IpAddr, mask: u8) -> String {
+    format!("{}/{}", normalize_ip_for_mask(addr, mask), mask)
+}
 
 #[cfg(test)]
 mod tests {
@@ -416,5 +400,21 @@ mod tests {
         assert!(validate_masks(33, 32).is_err());
         assert!(validate_masks(24, 129).is_err());
         assert!(validate_masks(24, 32).is_ok());
+    }
+
+    #[test]
+    fn test_normalize_ip_for_mask_truncates_host_bits() {
+        assert_eq!(
+            normalize_ip_for_mask(IpAddr::V4("192.0.2.10".parse().unwrap()), 24),
+            IpAddr::V4("192.0.2.0".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_format_ipset_prefix_uses_masked_network() {
+        assert_eq!(
+            format_ipset_prefix(IpAddr::V4("192.0.2.10".parse().unwrap()), 24),
+            "192.0.2.0/24"
+        );
     }
 }
