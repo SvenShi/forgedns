@@ -152,7 +152,7 @@ impl MetricsCollector {
         if total.is_multiple_of(1024) {
             let count = self.stats.latency_count.load(Ordering::Relaxed);
             let sum = self.stats.latency_sum_ms.load(Ordering::Relaxed);
-            let avg = if count == 0 { 0 } else { sum / count };
+            let avg = sum.checked_div(count);
             debug!(
                 plugin = %self.stats.tag,
                 name = %self.stats.name,
