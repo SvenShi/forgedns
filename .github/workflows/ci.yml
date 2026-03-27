@@ -39,7 +39,7 @@ jobs:
     name: Lint / Fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install system packages on Linux
         run: |
@@ -74,7 +74,7 @@ jobs:
         rust: [stable, beta]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install system packages on Linux
         if: runner.os == 'Linux'
@@ -100,7 +100,7 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
