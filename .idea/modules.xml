@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/rustdns.iml" filepath="$PROJECT_DIR$/.idea/rustdns.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/forgedns.iml" filepath="$PROJECT_DIR$/.idea/forgedns.iml" />
     </modules>
   </component>
 </project>
