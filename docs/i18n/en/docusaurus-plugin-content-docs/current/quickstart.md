@@ -53,7 +53,7 @@ The release workflow generates standalone binaries for multiple platforms. Each 
 
 Release page:
 
-- <https://github.com/SvenShi/forgedns/releases>
+- [https://github.com/SvenShi/forgedns/releases](https://github.com/SvenShi/forgedns/releases)
 
 ### Supported Archive Targets
 
