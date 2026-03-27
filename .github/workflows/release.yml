@@ -27,6 +27,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cargo
             make_deb: true
+            upx_kind: linux
 
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
@@ -34,6 +35,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
+            upx_kind: linux
 
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
@@ -41,6 +43,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cross
             make_deb: true
+            upx_kind: linux
 
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
@@ -48,6 +51,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
+            upx_kind: linux
 
           - os: ubuntu-latest
             target: i686-unknown-linux-musl
@@ -55,6 +59,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
+            upx_kind: linux
 
           - os: ubuntu-latest
             target: arm-unknown-linux-musleabihf
@@ -62,6 +67,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
+            upx_kind: linux
 
           - os: macos-latest
             target: x86_64-apple-darwin
@@ -69,6 +75,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cargo
             make_deb: false
+            upx_kind: none
 
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -76,6 +83,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cargo
             make_deb: false
+            upx_kind: none
 
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
@@ -83,6 +91,7 @@ jobs:
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
+            upx_kind: none
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -90,6 +99,7 @@ jobs:
             archive_ext: zip
             build_tool: cargo
             make_deb: false
+            upx_kind: windows
 
           - os: windows-latest
             target: i686-pc-windows-msvc
@@ -97,6 +107,7 @@ jobs:
             archive_ext: zip
             build_tool: cargo
             make_deb: false
+            upx_kind: windows
 
           - os: windows-latest
             target: aarch64-pc-windows-msvc
@@ -104,6 +115,7 @@ jobs:
             archive_ext: zip
             build_tool: cargo
             make_deb: false
+            upx_kind: none
 
     steps:
       - name: Checkout code
@@ -147,8 +159,28 @@ jobs:
           set -euo pipefail
           cross build --locked --release --target "${{ matrix.target }}"
 
-      - name: Run UPX (non-Windows)
-        if: matrix.os != 'windows-latest'
+      # Build .deb BEFORE UPX so cargo-deb strips the original binary, not a packed one.
+      - name: Generate deb for target
+        if: matrix.make_deb
+        run: cargo deb --no-build --target ${{ matrix.target }}
+
+      - name: Find deb artifacts
+        if: matrix.make_deb
+        run: |
+          echo 'Listing created .deb artifacts:'
+          find target -type f -name "*.deb" -print
+
+      - name: Upload built .deb artifacts
+        if: matrix.make_deb
+        uses: actions/upload-artifact@v6
+        with:
+          name: forgedns-${{ matrix.target }}.deb
+          path: target/debian/*.deb
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Run UPX (supported Linux targets only)
+        if: matrix.upx_kind == 'linux'
         continue-on-error: true
         uses: crazy-max/ghaction-upx@v4
         with:
@@ -157,8 +189,8 @@ jobs:
             target/${{ matrix.target }}/release/${{ matrix.exe }}
           args: -q --best --lzma
 
-      - name: Run UPX (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Run UPX (supported Windows targets only)
+        if: matrix.upx_kind == 'windows'
         continue-on-error: true
         uses: crazy-max/ghaction-upx@v4
         with:
@@ -166,10 +198,6 @@ jobs:
           files: |
             target\${{ matrix.target }}\release\${{ matrix.exe }}
           args: -q --best --lzma
-
-      - name: Generate deb for target
-        if: matrix.make_deb
-        run: cargo deb --no-build --target ${{ matrix.target }}
 
       - name: Package release (non-Windows)
         if: matrix.os != 'windows-latest'
@@ -208,21 +236,6 @@ jobs:
         with:
           name: forgedns-${{ matrix.target }}.${{ matrix.archive_ext }}
           path: target/${{ matrix.target }}/release/forgedns-${{ matrix.target }}.${{ matrix.archive_ext }}
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Find deb artifacts
-        if: matrix.make_deb
-        run: |
-          echo 'Listing created .deb artifacts:'
-          find target -type f -name "*.deb" -print
-
-      - name: Upload built .deb artifacts
-        if: matrix.make_deb
-        uses: actions/upload-artifact@v7
-        with:
-          name: forgedns-${{ matrix.target }}.deb
-          path: target/debian/*.deb
           compression-level: 0
           if-no-files-found: error
 
