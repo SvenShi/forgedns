@@ -38,22 +38,28 @@ ForgeDNS 关注的不是“最简单场景下的极限数字”，而是下面�
 
 下表为每个场景 3 次测试平均值：
 
-| 场景                    | ForgeDNS QPS | mosdns QPS |  QPS 对比 | ForgeDNS 平均延迟 | mosdns 平均延迟 |
+说明：
+
+* <span className="benchmark-delta benchmark-delta--up">绿色</span> 表示 ForgeDNS 在该指标上更优
+* <span className="benchmark-delta benchmark-delta--down">红色</span> 表示 mosdns 在该指标上更优
+* <span className="benchmark-delta benchmark-delta--neutral">中性色</span> 表示差距较小，仅用于辅助阅读，不代表统计显著性
+
+| 场景                    | ForgeDNS QPS | mosdns QPS | QPS 对比 | ForgeDNS 平均延迟 | mosdns 平均延迟 |
 | --------------------- | -----------: | ---------: | ------: | ------------: | ----------: |
-| baseline UDP forward  |     37,789.6 |   37,269.2 |   +1.4% |      9.142 ms |   12.312 ms |
-| cache hotpath         |    131,982.3 |  133,380.3 |   -1.0% |      1.235 ms |    0.696 ms |
-| dual-entry UDP        |     39,614.4 |   34,356.8 |  +15.3% |      8.946 ms |   10.009 ms |
-| dual-entry TCP        |     36,257.9 |   35,975.4 |   +0.8% |     25.403 ms |   25.577 ms |
-| concurrent upstreams  |     21,694.8 |   13,195.4 |  +64.4% |     15.065 ms |   23.790 ms |
-| fallback standby      |     22,259.9 |   23,223.9 |   -4.2% |     16.376 ms |   10.616 ms |
-| local answers         |    132,286.6 |  146,754.3 |   -9.9% |      1.250 ms |    0.636 ms |
-| DoH upstream (HTTP/2) |     29,781.6 |   25,835.7 |  +15.3% |     13.363 ms |   11.445 ms |
-| domain set            |    172,061.7 |   35,966.1 | +378.4% |      0.901 ms |    4.210 ms |
-| ip set                |    134,257.4 |  150,923.0 |  -11.0% |      1.227 ms |    0.625 ms |
-| sequence base         |    131,995.6 |  150,301.5 |  -12.2% |      1.265 ms |    0.622 ms |
-| match true            |    135,326.0 |  153,289.5 |  -11.7% |      1.217 ms |    0.629 ms |
-| match false           |    136,740.1 |  152,297.5 |  -10.2% |      1.201 ms |    0.630 ms |
-| match qname           |    132,289.4 |  152,203.6 |  -13.1% |      1.248 ms |    0.638 ms |
+| baseline UDP forward  |     37,789.6 |   37,269.2 | <span className="benchmark-delta benchmark-delta--neutral">+1.4%</span> | <span className="benchmark-latency benchmark-latency--better">9.142 ms</span> | <span className="benchmark-latency benchmark-latency--worse">12.312 ms</span> |
+| cache hotpath         |    131,982.3 |  133,380.3 | <span className="benchmark-delta benchmark-delta--neutral">-1.0%</span> | <span className="benchmark-latency benchmark-latency--worse">1.235 ms</span> | <span className="benchmark-latency benchmark-latency--better">0.696 ms</span> |
+| dual-entry UDP        |     39,614.4 |   34,356.8 | <span className="benchmark-delta benchmark-delta--up">+15.3%</span> | <span className="benchmark-latency benchmark-latency--better">8.946 ms</span> | <span className="benchmark-latency benchmark-latency--worse">10.009 ms</span> |
+| dual-entry TCP        |     36,257.9 |   35,975.4 | <span className="benchmark-delta benchmark-delta--neutral">+0.8%</span> | <span className="benchmark-latency benchmark-latency--better">25.403 ms</span> | <span className="benchmark-latency benchmark-latency--worse">25.577 ms</span> |
+| concurrent upstreams  |     21,694.8 |   13,195.4 | <span className="benchmark-delta benchmark-delta--up">+64.4%</span> | <span className="benchmark-latency benchmark-latency--better">15.065 ms</span> | <span className="benchmark-latency benchmark-latency--worse">23.790 ms</span> |
+| fallback standby      |     22,259.9 |   23,223.9 | <span className="benchmark-delta benchmark-delta--neutral">-4.2%</span> | <span className="benchmark-latency benchmark-latency--worse">16.376 ms</span> | <span className="benchmark-latency benchmark-latency--better">10.616 ms</span> |
+| local answers         |    132,286.6 |  146,754.3 | <span className="benchmark-delta benchmark-delta--down">-9.9%</span> | <span className="benchmark-latency benchmark-latency--worse">1.250 ms</span> | <span className="benchmark-latency benchmark-latency--better">0.636 ms</span> |
+| DoH upstream (HTTP/2) |     29,781.6 |   25,835.7 | <span className="benchmark-delta benchmark-delta--up">+15.3%</span> | <span className="benchmark-latency benchmark-latency--worse">13.363 ms</span> | <span className="benchmark-latency benchmark-latency--better">11.445 ms</span> |
+| domain set            |    172,061.7 |   35,966.1 | <span className="benchmark-delta benchmark-delta--up">+378.4%</span> | <span className="benchmark-latency benchmark-latency--better">0.901 ms</span> | <span className="benchmark-latency benchmark-latency--worse">4.210 ms</span> |
+| ip set                |    134,257.4 |  150,923.0 | <span className="benchmark-delta benchmark-delta--down">-11.0%</span> | <span className="benchmark-latency benchmark-latency--worse">1.227 ms</span> | <span className="benchmark-latency benchmark-latency--better">0.625 ms</span> |
+| sequence base         |    131,995.6 |  150,301.5 | <span className="benchmark-delta benchmark-delta--down">-12.2%</span> | <span className="benchmark-latency benchmark-latency--worse">1.265 ms</span> | <span className="benchmark-latency benchmark-latency--better">0.622 ms</span> |
+| match true            |    135,326.0 |  153,289.5 | <span className="benchmark-delta benchmark-delta--down">-11.7%</span> | <span className="benchmark-latency benchmark-latency--worse">1.217 ms</span> | <span className="benchmark-latency benchmark-latency--better">0.629 ms</span> |
+| match false           |    136,740.1 |  152,297.5 | <span className="benchmark-delta benchmark-delta--down">-10.2%</span> | <span className="benchmark-latency benchmark-latency--worse">1.201 ms</span> | <span className="benchmark-latency benchmark-latency--better">0.630 ms</span> |
+| match qname           |    132,289.4 |  152,203.6 | <span className="benchmark-delta benchmark-delta--down">-13.1%</span> | <span className="benchmark-latency benchmark-latency--worse">1.248 ms</span> | <span className="benchmark-latency benchmark-latency--better">0.638 ms</span> |
 
 ## 结果怎么看
 
