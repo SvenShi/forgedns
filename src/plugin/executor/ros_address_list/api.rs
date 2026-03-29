@@ -107,9 +107,11 @@ impl RouterReply {
     }
 
     fn require(&self, key: &str, action: &str) -> Result<String> {
-        self.get(key)
-            .map(str::to_string)
-            .ok_or_else(|| DnsError::plugin(format!("ros_address_list {action} response missing '{key}'")))
+        self.get(key).map(str::to_string).ok_or_else(|| {
+            DnsError::plugin(format!(
+                "ros_address_list {action} response missing '{key}'"
+            ))
+        })
     }
 }
 
@@ -320,7 +322,9 @@ impl MikrotikRsClient {
             .map(|entry| entry.id)
             .next()
             .ok_or_else(|| {
-                DnsError::plugin("ros_address_list add address-list entry succeeded but entry id not found")
+                DnsError::plugin(
+                    "ros_address_list add address-list entry succeeded but entry id not found",
+                )
             })
     }
 }

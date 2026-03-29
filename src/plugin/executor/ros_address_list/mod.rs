@@ -492,7 +492,9 @@ fn parse_plugin_config(
 
 fn required_non_empty(value: Option<String>, field: &str) -> Result<String> {
     let Some(value) = value else {
-        return Err(DnsError::plugin(format!("ros_address_list '{field}' is required")));
+        return Err(DnsError::plugin(format!(
+            "ros_address_list '{field}' is required"
+        )));
     };
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -698,12 +700,16 @@ fn parse_persistent_item(
 ) -> Result<Option<AddressListKey>> {
     let value = raw.trim();
     if value.is_empty() {
-        return Err(DnsError::plugin(format!("ros_address_list {source} is empty")));
+        return Err(DnsError::plugin(format!(
+            "ros_address_list {source} is empty"
+        )));
     }
 
     let (ip, prefix) = if let Some((ip_raw, prefix_raw)) = value.split_once('/') {
         let ip = ip_raw.trim().parse::<IpAddr>().map_err(|e| {
-            DnsError::plugin(format!("ros_address_list {source} has invalid ip '{ip_raw}': {e}"))
+            DnsError::plugin(format!(
+                "ros_address_list {source} has invalid ip '{ip_raw}': {e}"
+            ))
         })?;
         let prefix = prefix_raw.trim().parse::<u8>().map_err(|e| {
             DnsError::plugin(format!(
@@ -713,7 +719,9 @@ fn parse_persistent_item(
         (ip, prefix)
     } else {
         let ip = value.parse::<IpAddr>().map_err(|e| {
-            DnsError::plugin(format!("ros_address_list {source} has invalid ip '{value}': {e}"))
+            DnsError::plugin(format!(
+                "ros_address_list {source} has invalid ip '{value}': {e}"
+            ))
         })?;
         let family = AddressListFamily::from_ip(ip);
         (ip, family.host_prefix())
