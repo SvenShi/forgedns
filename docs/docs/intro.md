@@ -66,7 +66,7 @@ slug: /
         <li><a href="plugin-reference/executor#metrics_collector">metrics_collector</a></li>
         <li><a href="plugin-reference/executor#ipset">ipset</a></li>
         <li><a href="plugin-reference/executor#nftset">nftset</a></li>
-        <li><a href="plugin-reference/executor#mikrotik">mikrotik</a></li>
+        <li><a href="plugin-reference/executor#ros_address_list">ros_address_list</a></li>
       </ul>
     </section>
   </div>

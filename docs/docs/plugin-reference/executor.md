@@ -1482,7 +1482,7 @@ args:
 
 ---
 
-## `mikrotik`
+## `ros_address_list`
 
 ### 作用
 
@@ -1491,8 +1491,8 @@ args:
 ### 参数
 
 ```yaml
-- tag: mikrotik_main
-  type: mikrotik
+- tag: ros_address_list_main
+  type: ros_address_list
   args:
     address: "172.16.1.1:8728"
     username: "api-user"

@@ -1,4 +1,4 @@
-//! RouterOS API adapter for mikrotik executor.
+//! RouterOS API adapter for ros_address_list executor.
 //!
 //! This module isolates all RouterOS address-list command paths and response
 //! decoding so manager logic does not depend on `mikrotik-rs` protocol details.
@@ -109,7 +109,7 @@ impl RouterReply {
     fn require(&self, key: &str, action: &str) -> Result<String> {
         self.get(key)
             .map(str::to_string)
-            .ok_or_else(|| DnsError::plugin(format!("mikrotik {action} response missing '{key}'")))
+            .ok_or_else(|| DnsError::plugin(format!("ros_address_list {action} response missing '{key}'")))
     }
 }
 
@@ -175,13 +175,13 @@ impl MikrotikRsClient {
             Ok(Ok(device)) => device,
             Ok(Err(e)) => {
                 return Err(DnsError::plugin(format!(
-                    "mikrotik connect failed to {}: {}",
+                    "ros_address_list connect failed to {}: {}",
                     self.address, e
                 )));
             }
             Err(_) => {
                 return Err(DnsError::plugin(format!(
-                    "mikrotik connect timeout after {}s to {}",
+                    "ros_address_list connect timeout after {}s to {}",
                     CONNECT_TIMEOUT_SECS, self.address
                 )));
             }
@@ -210,13 +210,13 @@ impl MikrotikRsClient {
             Ok(Err(e)) => {
                 self.invalidate_connection().await;
                 return Err(DnsError::plugin(format!(
-                    "mikrotik {action} send failed: {e}"
+                    "ros_address_list {action} send failed: {e}"
                 )));
             }
             Err(_) => {
                 self.invalidate_connection().await;
                 return Err(DnsError::plugin(format!(
-                    "mikrotik {action} send timeout after {}s",
+                    "ros_address_list {action} send timeout after {}s",
                     SEND_TIMEOUT_SECS
                 )));
             }
@@ -231,7 +231,7 @@ impl MikrotikRsClient {
                 Err(_) => {
                     self.invalidate_connection().await;
                     return Err(DnsError::plugin(format!(
-                        "mikrotik {action} receive timeout after {}s",
+                        "ros_address_list {action} receive timeout after {}s",
                         RECV_TIMEOUT_SECS
                     )));
                 }
@@ -244,7 +244,7 @@ impl MikrotikRsClient {
                 Err(e) => {
                     self.invalidate_connection().await;
                     return Err(DnsError::plugin(format!(
-                        "mikrotik {action} receive failed: {e}"
+                        "ros_address_list {action} receive failed: {e}"
                     )));
                 }
             };
@@ -256,14 +256,14 @@ impl MikrotikRsClient {
                 CommandResponse::Done(_) | CommandResponse::Empty(_) => {}
                 CommandResponse::Trap(trap) => {
                     return Err(DnsError::plugin(format!(
-                        "mikrotik {action} trap: {}",
+                        "ros_address_list {action} trap: {}",
                         trap.message
                     )));
                 }
                 CommandResponse::Fatal(reason) => {
                     self.invalidate_connection().await;
                     return Err(DnsError::plugin(format!(
-                        "mikrotik {action} fatal: {reason}"
+                        "ros_address_list {action} fatal: {reason}"
                     )));
                 }
             }
@@ -320,7 +320,7 @@ impl MikrotikRsClient {
             .map(|entry| entry.id)
             .next()
             .ok_or_else(|| {
-                DnsError::plugin("mikrotik add address-list entry succeeded but entry id not found")
+                DnsError::plugin("ros_address_list add address-list entry succeeded but entry id not found")
             })
     }
 }
@@ -362,19 +362,19 @@ fn parse_router_list_entry(
         .or_else(|| fallback_list.map(str::to_string))
         .ok_or_else(|| {
             DnsError::plugin(format!(
-                "mikrotik {action} response missing '{ADDRESS_LIST_FIELD}'"
+                "ros_address_list {action} response missing '{ADDRESS_LIST_FIELD}'"
             ))
         })?;
     let address_raw = reply.require(ADDRESS_FIELD, action)?;
     let (address, prefix) =
         parse_router_address(family, address_raw.as_str()).ok_or_else(|| {
             DnsError::plugin(format!(
-                "mikrotik {action} response has invalid '{ADDRESS_FIELD}' value '{address_raw}'"
+                "ros_address_list {action} response has invalid '{ADDRESS_FIELD}' value '{address_raw}'"
             ))
         })?;
     let key = AddressListKey::new_with_prefix(address, prefix, list).ok_or_else(|| {
         DnsError::plugin(format!(
-            "mikrotik {action} response has invalid normalized address '{address_raw}'"
+            "ros_address_list {action} response has invalid normalized address '{address_raw}'"
         ))
     })?;
     let timeout = reply.get(TIMEOUT_FIELD).map(str::to_string);

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! `mikrotik` executor plugin.
+//! `ros_address_list` executor plugin.
 //!
 //! This executor is an observer-side effect stage designed to integrate with
 //! ForgeDNS sequence pipelines. It does not alter DNS decisions or response
@@ -155,7 +155,7 @@ impl MikrotikConfigArgs {
         let address_list6 = optional_non_empty(self.address_list6);
         if address_list4.is_none() && address_list6.is_none() {
             return Err(DnsError::plugin(
-                "mikrotik requires at least one of address_list4 or address_list6",
+                "ros_address_list requires at least one of address_list4 or address_list6",
             ));
         }
 
@@ -167,13 +167,13 @@ impl MikrotikConfigArgs {
         let max_ttl = self.max_ttl.unwrap_or(DEFAULT_MAX_TTL);
         if min_ttl > max_ttl {
             return Err(DnsError::plugin(format!(
-                "mikrotik ttl range is invalid: min_ttl({min_ttl}) > max_ttl({max_ttl})"
+                "ros_address_list ttl range is invalid: min_ttl({min_ttl}) > max_ttl({max_ttl})"
             )));
         }
         let fixed_ttl = match self.fixed_ttl {
             Some(0) => {
                 return Err(DnsError::plugin(
-                    "mikrotik fixed_ttl must be greater than 0",
+                    "ros_address_list fixed_ttl must be greater than 0",
                 ));
             }
             Some(ttl) => Some(ttl),
@@ -188,7 +188,7 @@ impl MikrotikConfigArgs {
         if emit_warnings && parsed_persistent.ignored_by_family > 0 {
             warn!(
                 ignored = parsed_persistent.ignored_by_family,
-                "mikrotik persistent ignored entries without corresponding address list family"
+                "ros_address_list persistent ignored entries without corresponding address list family"
             );
         }
 
@@ -311,13 +311,13 @@ impl Executor for MikrotikExecutor {
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     warn!(
                         plugin = %self.tag,
-                        "mikrotik observe queue is full, observation dropped"
+                        "ros_address_list observe queue is full, observation dropped"
                     );
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     warn!(
                         plugin = %self.tag,
-                        "mikrotik manager channel closed, observation dropped"
+                        "ros_address_list manager channel closed, observation dropped"
                     );
                 }
             }
@@ -342,7 +342,7 @@ impl Executor for MikrotikExecutor {
             Ok(Err(_)) => {
                 warn!(
                     plugin = %self.tag,
-                    "mikrotik manager channel closed in sync mode, DNS response is kept unchanged"
+                    "ros_address_list manager channel closed in sync mode, DNS response is kept unchanged"
                 );
                 return Ok(step);
             }
@@ -350,7 +350,7 @@ impl Executor for MikrotikExecutor {
                 warn!(
                     plugin = %self.tag,
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
-                    "mikrotik observe enqueue timed out in sync mode, DNS response is kept unchanged"
+                    "ros_address_list observe enqueue timed out in sync mode, DNS response is kept unchanged"
                 );
                 return Ok(step);
             }
@@ -364,14 +364,14 @@ impl Executor for MikrotikExecutor {
                 warn!(
                     plugin = %self.tag,
                     err = %e,
-                    "mikrotik observe failed in sync mode, DNS response is kept unchanged"
+                    "ros_address_list observe failed in sync mode, DNS response is kept unchanged"
                 );
                 Ok(step)
             }
             Ok(Err(_)) => {
                 warn!(
                     plugin = %self.tag,
-                    "mikrotik manager dropped sync observe response, DNS response is kept unchanged"
+                    "ros_address_list manager dropped sync observe response, DNS response is kept unchanged"
                 );
                 Ok(step)
             }
@@ -379,7 +379,7 @@ impl Executor for MikrotikExecutor {
                 warn!(
                     plugin = %self.tag,
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
-                    "mikrotik observe timed out in sync mode, DNS response is kept unchanged"
+                    "ros_address_list observe timed out in sync mode, DNS response is kept unchanged"
                 );
                 Ok(step)
             }
@@ -390,7 +390,7 @@ impl Executor for MikrotikExecutor {
 #[derive(Debug, Clone)]
 pub struct MikrotikFactory;
 
-register_plugin_factory!("mikrotik", MikrotikFactory {});
+register_plugin_factory!("ros_address_list", MikrotikFactory {});
 
 impl PluginFactory for MikrotikFactory {
     fn create(
@@ -483,21 +483,21 @@ fn parse_plugin_config(
     emit_warnings: bool,
 ) -> Result<MikrotikConfig> {
     let Some(args) = args else {
-        return Err(DnsError::plugin("mikrotik plugin requires args"));
+        return Err(DnsError::plugin("ros_address_list plugin requires args"));
     };
     let raw = serde_yml::from_value::<MikrotikConfigArgs>(args)
-        .map_err(|e| DnsError::plugin(format!("failed to parse mikrotik config: {e}")))?;
+        .map_err(|e| DnsError::plugin(format!("failed to parse ros_address_list config: {e}")))?;
     raw.into_config(emit_warnings)
 }
 
 fn required_non_empty(value: Option<String>, field: &str) -> Result<String> {
     let Some(value) = value else {
-        return Err(DnsError::plugin(format!("mikrotik '{field}' is required")));
+        return Err(DnsError::plugin(format!("ros_address_list '{field}' is required")));
     };
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(DnsError::plugin(format!(
-            "mikrotik '{field}' cannot be empty"
+            "ros_address_list '{field}' cannot be empty"
         )));
     }
     Ok(trimmed.to_string())
@@ -517,7 +517,7 @@ fn contains_comment_delimiter(value: &str) -> bool {
 fn validate_comment_token(field: &str, value: &str) -> Result<()> {
     if contains_comment_delimiter(value) {
         return Err(DnsError::plugin(format!(
-            "mikrotik '{field}' cannot contain ';' or '='"
+            "ros_address_list '{field}' cannot contain ';' or '='"
         )));
     }
     Ok(())
@@ -588,7 +588,7 @@ fn parse_persistent_files(files: Option<Vec<String>>) -> Result<Vec<String>> {
         let file = file_raw.trim();
         if file.is_empty() {
             return Err(DnsError::plugin(format!(
-                "mikrotik persistent.files[{index}] cannot be empty"
+                "ros_address_list persistent.files[{index}] cannot be empty"
             )));
         }
         out.push(file.to_string());
@@ -641,7 +641,7 @@ fn load_persistent_items_from_files(
     for (index, file) in files.iter().enumerate() {
         let content = fs::read_to_string(file).map_err(|e| {
             DnsError::plugin(format!(
-                "mikrotik failed to read persistent file '{file}': {e}"
+                "ros_address_list failed to read persistent file '{file}': {e}"
             ))
         })?;
         let source_prefix = format!("persistent.files[{index}]");
@@ -669,7 +669,7 @@ async fn load_persistent_items_from_files_async(
     for (index, file) in files.iter().enumerate() {
         let content = tokio_fs::read_to_string(file).await.map_err(|e| {
             DnsError::plugin(format!(
-                "mikrotik failed to read persistent file '{file}': {e}"
+                "ros_address_list failed to read persistent file '{file}': {e}"
             ))
         })?;
         let source_prefix = format!("persistent.files[{index}]");
@@ -698,22 +698,22 @@ fn parse_persistent_item(
 ) -> Result<Option<AddressListKey>> {
     let value = raw.trim();
     if value.is_empty() {
-        return Err(DnsError::plugin(format!("mikrotik {source} is empty")));
+        return Err(DnsError::plugin(format!("ros_address_list {source} is empty")));
     }
 
     let (ip, prefix) = if let Some((ip_raw, prefix_raw)) = value.split_once('/') {
         let ip = ip_raw.trim().parse::<IpAddr>().map_err(|e| {
-            DnsError::plugin(format!("mikrotik {source} has invalid ip '{ip_raw}': {e}"))
+            DnsError::plugin(format!("ros_address_list {source} has invalid ip '{ip_raw}': {e}"))
         })?;
         let prefix = prefix_raw.trim().parse::<u8>().map_err(|e| {
             DnsError::plugin(format!(
-                "mikrotik {source} has invalid prefix '{prefix_raw}': {e}"
+                "ros_address_list {source} has invalid prefix '{prefix_raw}': {e}"
             ))
         })?;
         (ip, prefix)
     } else {
         let ip = value.parse::<IpAddr>().map_err(|e| {
-            DnsError::plugin(format!("mikrotik {source} has invalid ip '{value}': {e}"))
+            DnsError::plugin(format!("ros_address_list {source} has invalid ip '{value}': {e}"))
         })?;
         let family = AddressListFamily::from_ip(ip);
         (ip, family.host_prefix())
@@ -731,7 +731,7 @@ fn parse_persistent_item(
     AddressListKey::new_with_prefix(ip, prefix, list.to_string())
         .ok_or_else(|| {
             DnsError::plugin(format!(
-                "mikrotik {source} has invalid prefix /{prefix} for {ip}"
+                "ros_address_list {source} has invalid prefix /{prefix} for {ip}"
             ))
         })
         .map(Some)
@@ -741,8 +741,8 @@ fn parse_persistent_item(
 mod tests {
     use super::*;
     use crate::plugin::PluginRegistry;
-    use crate::plugin::executor::mikrotik::api::RouterListEntry;
-    use crate::plugin::executor::mikrotik::manager::{
+    use crate::plugin::executor::ros_address_list::api::RouterListEntry;
+    use crate::plugin::executor::ros_address_list::manager::{
         OwnedCommentKind, decode_owned_comment, encode_comment,
     };
     use crate::proto::rdata::{A, AAAA};

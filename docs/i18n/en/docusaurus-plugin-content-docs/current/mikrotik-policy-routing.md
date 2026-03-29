@@ -7,7 +7,7 @@ This page explains how ForgeDNS can coordinate with MikroTik route rules.
 
 ## Purpose
 
-The `mikrotik` executor uses DNS results to drive route policy updates on MikroTik devices. This is useful when domain resolution is part of the decision for policy routing or traffic steering.
+The `ros_address_list` executor uses DNS results to drive route policy updates on MikroTik devices. This is useful when domain resolution is part of the decision for policy routing or traffic steering.
 
 ## Typical Flow
 
@@ -23,7 +23,7 @@ flowchart TD
 
 1. Match a domain group with `domain_set`.
 2. Resolve with `forward`.
-3. Pass the response through the `mikrotik` executor.
+3. Pass the response through the `ros_address_list` executor.
 4. Push address information into the MikroTik side.
 
 ## Notes
@@ -41,7 +41,7 @@ flowchart TD
     - matches: "$streaming_domains"
       exec: "$forward_main"
     - matches: "$has_resp"
-      exec: "$mikrotik_main"
+      exec: "$ros_address_list_main"
 ```
 
 ## Operational Advice
@@ -49,4 +49,3 @@ flowchart TD
 - Isolate MikroTik credentials and management endpoints.
 - Measure sync latency separately from DNS latency.
 - Keep route sync side effects observable and debuggable.
-

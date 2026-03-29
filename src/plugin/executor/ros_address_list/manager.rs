@@ -1,4 +1,4 @@
-//! Address-list manager state machine for mikrotik executor.
+//! Address-list manager state machine for ros_address_list executor.
 //!
 //! Responsibilities:
 //! - maintain desired persistent address-list entries
@@ -283,7 +283,7 @@ impl AddressListManagerRuntime {
         // solely to keep the write-suppression cache bounded.
         let prune_tx = tx.clone();
         let prune_task_id = Some(task_center::spawn_fixed(
-            format!("mikrotik:{tag}:dynamic_cache_prune"),
+            format!("ros_address_list:{tag}:dynamic_cache_prune"),
             Duration::from_secs(DYNAMIC_CACHE_PRUNE_INTERVAL_SECS),
             move || {
                 let prune_tx = prune_tx.clone();
@@ -300,7 +300,7 @@ impl AddressListManagerRuntime {
         let reconcile_task_id = reconcile_enabled.then(|| {
             let reconcile_tx = tx.clone();
             task_center::spawn_fixed(
-                format!("mikrotik:{tag}:reconcile"),
+                format!("ros_address_list:{tag}:reconcile"),
                 Duration::from_secs(RECONCILE_INTERVAL_SECS),
                 move || {
                     let reconcile_tx = reconcile_tx.clone();
@@ -323,7 +323,7 @@ impl AddressListManagerRuntime {
             let last_loaded_items =
                 Arc::new(tokio::sync::Mutex::new(reload_cfg.initial_items.clone()));
             Some(task_center::spawn_fixed(
-                format!("mikrotik:{maintain_tag}:persistent_reload"),
+                format!("ros_address_list:{maintain_tag}:persistent_reload"),
                 Duration::from_secs(PERSISTENT_RELOAD_INTERVAL_SECS),
                 move || {
                     let maintain_tx = maintain_tx.clone();
@@ -343,7 +343,7 @@ impl AddressListManagerRuntime {
                                     debug!(
                                         plugin = %maintain_tag,
                                         ignored = ignored_by_family,
-                                        "mikrotik persistent file reload ignored entries without corresponding address list family"
+                                        "ros_address_list persistent file reload ignored entries without corresponding address list family"
                                     );
                                 }
 
@@ -370,7 +370,7 @@ impl AddressListManagerRuntime {
                                 warn!(
                                     plugin = %maintain_tag,
                                     err = %e,
-                                    "mikrotik persistent file reload failed"
+                                    "ros_address_list persistent file reload failed"
                                 );
                             }
                         }
@@ -601,7 +601,7 @@ impl AddressListManager {
                         plugin = %self.cfg.plugin_tag,
                         list = %key.list,
                         address = %key.normalized_value(),
-                        "mikrotik persistent entry conflicts with foreign address-list entry, skipping"
+                        "ros_address_list persistent entry conflicts with foreign address-list entry, skipping"
                     );
                 }
             }
@@ -691,7 +691,7 @@ impl AddressListManager {
                         plugin = %self.cfg.plugin_tag,
                         list = %key.list,
                         address = %key.normalized_value(),
-                        "mikrotik dynamic entry conflicts with foreign address-list entry, skipping"
+                        "ros_address_list dynamic entry conflicts with foreign address-list entry, skipping"
                     );
                 }
                 Err(err) => {
@@ -894,7 +894,7 @@ async fn run_manager_worker(
                         warn!(
                             plugin = %tag,
                             err = %e,
-                            "mikrotik observe failed in async mode"
+                            "ros_address_list observe failed in async mode"
                         );
                     }
                 }
@@ -904,7 +904,7 @@ async fn run_manager_worker(
                     warn!(
                         plugin = %tag,
                         err = %e,
-                        "mikrotik persistent address-list maintenance failed"
+                        "ros_address_list persistent address-list maintenance failed"
                     );
                 }
             }
@@ -913,10 +913,10 @@ async fn run_manager_worker(
                     warn!(
                         plugin = %tag,
                         err = %e,
-                        "mikrotik periodic reconcile failed"
+                        "ros_address_list periodic reconcile failed"
                     );
                 } else {
-                    debug!(plugin = %tag, "mikrotik reconcile completed");
+                    debug!(plugin = %tag, "ros_address_list reconcile completed");
                 }
             }
             ManagerCommand::PruneDynamicCache => {
@@ -924,13 +924,13 @@ async fn run_manager_worker(
                     warn!(
                         plugin = %tag,
                         err = %e,
-                        "mikrotik dynamic cache prune failed"
+                        "ros_address_list dynamic cache prune failed"
                     );
                 }
             }
             ManagerCommand::Shutdown { cleanup, done } => {
                 if let Err(e) = manager.shutdown(cleanup).await {
-                    warn!(plugin = %tag, err = %e, "mikrotik shutdown cleanup failed");
+                    warn!(plugin = %tag, err = %e, "ros_address_list shutdown cleanup failed");
                 }
                 let _ = done.send(());
                 break;
@@ -938,7 +938,7 @@ async fn run_manager_worker(
         }
     }
 
-    debug!(plugin = %tag, "mikrotik manager worker exited");
+    debug!(plugin = %tag, "ros_address_list manager worker exited");
 }
 
 fn dynamic_refresh_lead_ms(timeout_ms: u64) -> u64 {

@@ -3,7 +3,7 @@ title: MikroTik 策略路由
 sidebar_position: 5
 ---
 
-本章说明 ForgeDNS 的 `mikrotik` 执行器如何与 RouterOS `address-list`、`mangle` 和策略路由机制配合，形成“DNS 解析结果驱动后续流量出口选择”的策略路由体系。
+本章说明 ForgeDNS 的 `ros_address_list` 执行器如何与 RouterOS `address-list`、`mangle` 和策略路由机制配合，形成“DNS 解析结果驱动后续流量出口选择”的策略路由体系。
 
 该方案的核心设计并非在 RouterOS 侧直接匹配域名，而是采用以下处理流程：
 
@@ -93,7 +93,7 @@ flowchart TD
 
 * 先用 `qname` 识别策略域名。
 * 命中后正常解析。
-* 若拿到了有效答案，再交给 `mikrotik` 把结果写入 RouterOS 的 `policy_set`。
+* 若拿到了有效答案，再交给 `ros_address_list` 把结果写入 RouterOS 的 `policy_set`。
 
 ```yaml
 plugins:
@@ -115,8 +115,8 @@ plugins:
       upstreams:
         - addr: "udp://1.1.1.1:53"
 
-  - tag: mikrotik_policy
-    type: mikrotik
+  - tag: ros_address_list_policy
+    type: ros_address_list
     args:
       address: "172.16.1.1:8728"
       username: "api-user"
@@ -132,12 +132,12 @@ plugins:
     type: sequence
     args:
       - matches: "$match_policy_domain"
-        exec: "$mikrotik_policy"
+        exec: "$ros_address_list_policy"
       - exec: "$forward_main"
 
 ```
 
-## `mikrotik` 插件在策略路由场景中的关键参数
+## `ros_address_list` 插件在策略路由场景中的关键参数
 
 ### `address`
 
@@ -186,7 +186,7 @@ async: true
 原因：
 
 * DNS 响应不应该因为 RouterOS API 延迟而被明显拖慢。
-* `mikrotik` 的主要职责是联动，而非阻塞主解析路径。
+* `ros_address_list` 的主要职责是联动，而非阻塞主解析路径。
 
 ### `min_ttl` / `max_ttl`
 
@@ -400,8 +400,8 @@ plugins:
       upstreams:
         - addr: "udp://1.1.1.1:53"
 
-  - tag: mikrotik_media
-    type: mikrotik
+  - tag: ros_address_list_media
+    type: ros_address_list
     args:
       address: "172.16.1.1:8728"
       username: "api-user"
@@ -409,8 +409,8 @@ plugins:
       async: true
       address_list4: "policy_media_v4"
 
-  - tag: mikrotik_backup
-    type: mikrotik
+  - tag: ros_address_list_backup
+    type: ros_address_list
     args:
       address: "172.16.1.1:8728"
       username: "api-user"
@@ -424,10 +424,10 @@ plugins:
       - exec: "$forward_main"
       - matches:
           - "$media_match"
-        exec: "$mikrotik_media"
+        exec: "$ros_address_list_media"
       - matches:
           - "$backup_match"
-        exec: "$mikrotik_backup"
+        exec: "$ros_address_list_backup"
 ```
 
 在 RouterOS 中，就可以把：
@@ -441,7 +441,7 @@ plugins:
 
 1. 域名是否确实命中目标策略分支。
 2. DNS 响应里是否真的出现了 `A` / `AAAA`。
-3. `mikrotik` 是否成功连接 RouterOS 并提交了观察结果。
+3. `ros_address_list` 是否成功连接 RouterOS 并提交了观察结果。
 
 可以组合：
 
@@ -525,7 +525,7 @@ RouterOS 负责：
 
 ## 小结
 
-ForgeDNS 的 `mikrotik` 插件本质上是一个“DNS 结果同步器”：
+ForgeDNS 的 `ros_address_list` 插件本质上是一个“DNS 结果同步器”：
 
 * 它把域名解析结果转换成 RouterOS 可消费的目标 IP 集合。
 * RouterOS 再基于这些 IP 集合完成真正的策略路由。
@@ -538,4 +538,4 @@ ForgeDNS 的 `mikrotik` 插件本质上是一个“DNS 结果同步器”：
 4. RouterOS 根据连接标记派生路由标记。
 5. 流量走向指定出口。
 
-对于“使特定域名的后续连接稳定经由指定出口转发”这一目标，上述方案是 ForgeDNS 当前 `mikrotik` 插件最典型、也最具代表性的使用方式之一。
+对于“使特定域名的后续连接稳定经由指定出口转发”这一目标，上述方案是 ForgeDNS 当前 `ros_address_list` 插件最典型、也最具代表性的使用方式之一。

@@ -28,7 +28,7 @@ ForgeDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor
 | 执行器 | `forward`、`cache`、`fallback`、`hosts`、`arbitrary`、`redirect`、`ecs_handler`、`ttl` |
 | 匹配器 | `qname`、`qtype`、`qclass`、`client_ip`、`resp_ip`、`rcode`、`rate_limiter` 等 |
 | 数据集 | `domain_set`、`ip_set` |
-| 系统联动 | `ipset`、`nftset`、`mikrotik`、`reverse_lookup` |
+| 系统联动 | `ipset`、`nftset`、`ros_address_list`、`reverse_lookup` |
 
 ## 快速开始
 

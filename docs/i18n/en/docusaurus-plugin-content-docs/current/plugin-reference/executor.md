@@ -97,7 +97,7 @@ Pushes response IPs into Linux `ipset`.
 
 Pushes response IPs into nftables sets.
 
-### `mikrotik`
+### `ros_address_list`
 
 Synchronizes selected response results into MikroTik routing or address policies.
 
@@ -106,4 +106,3 @@ Synchronizes selected response results into MikroTik routing or address policies
 - Keep `sequence` as the main coordination point.
 - Avoid placing expensive side effects early in the critical path unless needed.
 - Reuse shared datasets and upstream pools instead of duplicating logic in executor config.
-

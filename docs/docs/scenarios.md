@@ -245,8 +245,8 @@ plugins:
         set_name: "dns_v4"
         mask: 24
 
-  - tag: mikrotik_main
-    type: mikrotik
+  - tag: ros_address_list_main
+    type: ros_address_list
     args:
       address: "172.16.1.1:8728"
       username: "api-user"
@@ -258,7 +258,7 @@ plugins:
     type: sequence
     args:
       - exec: "$forward_main"
-      - exec: "$mikrotik_main"
+      - exec: "$ros_address_list_main"
 ```
 
 适用场景：
@@ -327,7 +327,7 @@ plugins:
 3. 最后加观测和联动。
    * `query_summary`
    * `metrics_collector`
-   * `ipset` / `nftset` / `mikrotik`
+   * `ipset` / `nftset` / `ros_address_list`
 
 ### 能放到 provider 的规则，不要重复写在多个 matcher 里
 

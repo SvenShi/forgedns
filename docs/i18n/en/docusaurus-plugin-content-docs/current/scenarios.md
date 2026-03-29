@@ -56,7 +56,7 @@ Use executors such as:
 
 - `ipset`
 - `nftset`
-- `mikrotik`
+- `ros_address_list`
 - `reverse_lookup`
 
 These allow DNS answers to drive routing, firewall, and inventory state outside the DNS server itself.
@@ -70,4 +70,3 @@ Use:
 - plugin-specific HTTP endpoints
 
 Keep observability available, but avoid pushing every side effect directly into the latency-critical path unless necessary.
-

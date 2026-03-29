@@ -28,7 +28,7 @@ The project is under active development.
 | Executors | `forward`, `cache`, `fallback`, `hosts`, `arbitrary`, `redirect`, `ecs_handler`, `ttl` |
 | Matchers | `qname`, `qtype`, `qclass`, `client_ip`, `resp_ip`, `rcode`, `rate_limiter`, and more |
 | Data Sets | `domain_set`, `ip_set` |
-| Integrations | `ipset`, `nftset`, `mikrotik`, `reverse_lookup` |
+| Integrations | `ipset`, `nftset`, `ros_address_list`, `reverse_lookup` |
 
 ## Quick Start
 
