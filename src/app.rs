@@ -3,7 +3,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Foreground application runner for ForgeDNS.
+//! Foreground application runtime entry used by the CLI `start` command.
+//!
+//! This module owns the non-service startup path:
+//!
+//! - applies CLI overrides such as working directory and log level;
+//! - loads and validates configuration;
+//! - builds the Tokio runtime;
+//! - assembles the API hub and plugin registry; and
+//! - coordinates shutdown and reload flows for the live process.
+//!
+//! The goal is to keep process-level concerns here so the lower-level modules
+//! (`config`, `plugin`, `network`, `api`) stay focused on their own domains.
 
 pub mod bootstrap;
 pub mod cli;

@@ -3,12 +3,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Configuration module
+//! Runtime configuration loading and validation entry points.
 //!
-//! Handles loading and parsing of YAML configuration files.
-//! Defines the structure for server configuration including:
-//! - Logging settings
-//! - Plugin configurations
+//! ForgeDNS configuration is defined as YAML and deserialized into
+//! [`types::Config`]. This module keeps the file-loading boundary small:
+//!
+//! - read the configuration file from disk;
+//! - deserialize it into strongly typed Rust structures; and
+//! - trigger semantic validation before the runtime starts.
+//!
+//! The detailed schema lives in [`types`]. Keeping I/O and schema definitions
+//! separate makes it easier to reuse the same validation path from the CLI,
+//! tests, and future embedding scenarios.
 
 use crate::config::types::Config;
 use crate::core::error::Result;

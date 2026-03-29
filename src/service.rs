@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Operating system service management commands.
+//! Operating-system service management commands.
+//!
+//! This module wraps the `service-manager` crate to install, start, stop, and
+//! uninstall ForgeDNS as a system service. It keeps platform-specific service
+//! manager details outside the normal foreground application runner.
 
 use crate::app::cli::{ServiceCommand, ServiceInstallOptions, ServiceOptions};
 use crate::core::error::{DnsError, Result};

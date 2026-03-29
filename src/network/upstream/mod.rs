@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Upstream DNS resolver infrastructure
+//! Upstream DNS resolver infrastructure.
 //!
-//! Provides comprehensive support for various DNS protocols with connection
-//! pooling, automatic failover, and performance optimizations.
+//! This module builds outbound resolvers used by forwarding-style executors.
+//! It turns upstream configuration into protocol-specific clients with shared
+//! pooling, bootstrap resolution, timeout handling, and fallback behavior.
 //!
 //! # Supported Protocols
 //! - **UDP**: Standard DNS over UDP (port 53)
@@ -27,6 +28,10 @@
 //! - Request pipelining for TCP/TLS
 //! - Connection reuse with idle management
 //! - Zero-copy DNS message handling where possible
+//!
+//! This code sits on the outbound edge of the request pipeline. It should keep
+//! network concerns isolated from policy composition while remaining explicit
+//! about connection reuse, timeout boundaries, and protocol semantics.
 
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::bootstrap::Bootstrap;

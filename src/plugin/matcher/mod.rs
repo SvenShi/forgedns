@@ -2,6 +2,21 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
+//! Matcher plugin category.
+//!
+//! Matchers are pure predicates used by executors such as `sequence` to branch
+//! on request or response state without embedding policy logic directly into
+//! the server path.
+//!
+//! Typical matcher inputs include:
+//!
+//! - query name, type, and class;
+//! - client IP or derived request metadata;
+//! - response content such as answer IPs, CNAMEs, or rcode; and
+//! - internal marks, random rollout state, or environment-derived signals.
+//!
+//! Matchers should stay fast and side-effect free. They read from
+//! [`DnsContext`] and return a boolean decision through [`Matcher::is_match`].
 use crate::{core::context::DnsContext, plugin::Plugin};
 
 pub mod client_ip;

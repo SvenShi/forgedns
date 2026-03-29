@@ -3,7 +3,24 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Management HTTP API hub and plugin route registration.
+//! Management HTTP API hub and route registration.
+//!
+//! This module provides the optional control-plane HTTP server used for health
+//! endpoints, lifecycle control, and plugin-specific API surfaces.
+//!
+//! Core responsibilities:
+//!
+//! - normalize and validate the configured API listen address;
+//! - host a small in-process route registry keyed by method and path;
+//! - provide [`ApiRegister`] so built-in components and plugins can expose
+//!   endpoints without coupling to the HTTP server implementation;
+//! - enforce optional basic authentication and TLS; and
+//! - publish shared health state about startup, plugin initialization, and
+//!   shutdown.
+//!
+//! The API layer is intentionally separate from the DNS request path. It shares
+//! runtime state with the application, but it does not participate in query
+//! matching or response generation.
 
 pub mod control;
 pub mod health;

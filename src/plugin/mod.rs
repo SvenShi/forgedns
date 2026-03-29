@@ -3,15 +3,30 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! Plugin system for ForgeDNS
+//! Plugin system and registry for ForgeDNS.
 //!
-//! Provides a flexible plugin architecture supporting:
-//! - Server plugins (UDP/TCP listeners)
-//! - Executor plugins (DNS forwarding, filtering, etc.)
-//! - Matcher plugins (query matching rules)
-//! - DataProvider plugins (IP sets, domain lists, etc.)
+//! ForgeDNS is assembled around plugins instead of hard-coded protocol or
+//! policy branches. This module provides the common lifecycle and registration
+//! machinery for four plugin categories:
 //!
-//! All plugins are registered via factories and instantiated from config.
+//! - [`server`]: inbound protocol listeners that translate network traffic into
+//!   request handling.
+//! - [`executor`]: active processing stages that forward, cache, rewrite, or
+//!   produce side effects.
+//! - [`matcher`]: predicates used by sequence logic to branch on request or
+//!   response state.
+//! - [`provider`]: reusable datasets such as domain and IP membership sources.
+//!
+//! Initialization flow:
+//!
+//! - factories are registered through [`crate::register_plugin_factory!`];
+//! - runtime configuration is validated against the registered plugin types;
+//! - plugin dependencies are resolved in category-aware order; and
+//! - concrete plugin instances are initialized and stored in [`PluginRegistry`].
+//!
+//! This keeps protocol handling, policy logic, and reusable datasets composable
+//! while preserving a single request pipeline centered on
+//! [`crate::core::context::DnsContext`].
 
 pub(crate) mod dependency;
 pub mod executor;

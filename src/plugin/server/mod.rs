@@ -2,6 +2,24 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
+//! Server plugin category.
+//!
+//! Server plugins terminate inbound DNS transports and feed normalized requests
+//! into the executor pipeline. They own protocol-specific listener concerns
+//! such as socket binding, connection lifecycle, TLS or QUIC setup, and request
+//! decoding, while delegating policy execution to [`RequestHandle`].
+//!
+//! Main responsibilities:
+//!
+//! - accept UDP, TCP, DoT, DoQ, or HTTP-based DNS traffic;
+//! - construct [`DnsContext`] inputs from decoded DNS messages plus transport
+//!   metadata;
+//! - invoke the configured entry executor chain; and
+//! - translate the resulting [`crate::proto::Message`] back into the transport's
+//!   response format.
+//!
+//! This separation keeps protocol code isolated from matchers, executors, and
+//! providers, while preserving a common request lifecycle across all servers.
 use crate::core::context::{DnsContext, ExecFlowState};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginRegistry};

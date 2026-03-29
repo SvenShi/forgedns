@@ -3,9 +3,9 @@ title: Configuration Overview
 sidebar_position: 2
 ---
 
-## Overview
+## Before You Start
 
-ForgeDNS configuration is written in YAML. The top-level structure is composed of four sections:
+ForgeDNS uses YAML configuration. The current top-level layout has four parts:
 
 ```yaml
 runtime:
@@ -25,14 +25,16 @@ plugins:
       - exec: "forward 1.1.1.1"
 ```
 
+Where:
+
 - `runtime`
   - Runtime parameters.
 - `api`
-  - Management API listeners and authentication.
+  - Management API settings.
 - `log`
-  - Log level and optional output file.
+  - Log output settings.
 - `plugins`
-  - All plugin instances. ForgeDNS assembles the full DNS path through plugins.
+  - All plugin instance definitions. ForgeDNS composes the full DNS pipeline from plugins.
 
 ## Top-Level Fields
 
@@ -43,10 +45,12 @@ runtime:
   worker_threads: 4
 ```
 
+Field notes:
+
 - `worker_threads`
-  - Number of Tokio multi-threaded worker threads.
-  - Default: system parallelism.
-  - Constraint: must not be `0`.
+  - Meaning: Number of Tokio multi-thread runtime workers.
+  - Default: Uses system available parallelism when omitted.
+  - Constraint: Must not be `0`.
 
 ### `log`
 
@@ -56,15 +60,18 @@ log:
   file: ./forgedns.log
 ```
 
+Field notes:
+
 - `level`
-  - Available values: `off` `trace` `debug` `info` `warn` `error`
+  - Allowed values: `off` `trace` `debug` `info` `warn` `error`
   - Default: `info`
 - `file`
-  - Optional log file path. If omitted, logs are written to stdout only.
+  - Meaning: Optional log file path.
+  - If omitted, logs go only to stdout.
 
 ### `api`
 
-`api.http` supports both shorthand and expanded syntax.
+`api.http` supports two forms.
 
 Shorthand:
 
@@ -73,7 +80,7 @@ api:
   http: "127.0.0.1:9088"
 ```
 
-Expanded:
+Expanded form:
 
 ```yaml
 api:
@@ -90,29 +97,32 @@ api:
       password: "secret"
 ```
 
+Field notes:
+
 - `http.listen`
-  - Listener address.
+  - API listen address.
 - `http.ssl.cert`
-  - Server certificate path.
+  - API certificate file.
 - `http.ssl.key`
-  - Server private key path.
+  - API private key file.
 - `http.ssl.client_ca`
-  - Optional client CA bundle.
+  - Optional client certificate CA.
 - `http.ssl.require_client_cert`
   - Whether mutual TLS is required.
 - `http.auth`
   - Currently supports `basic`.
+  - See the Management API chapter for the Basic Auth header encoding rules.
 
 Validation rules:
 
 - `listen` must not be empty.
-- `cert` and `key` must appear together.
+- `cert` and `key` must be configured together.
 - `require_client_cert: true` requires `client_ca`.
 - `basic.username` and `basic.password` must both be non-empty.
 
 ### `plugins`
 
-Each plugin instance uses a shared shape:
+Each plugin definition uses the same outer structure:
 
 ```yaml
 - tag: cache_main
@@ -121,58 +131,73 @@ Each plugin instance uses a shared shape:
     size: 4096
 ```
 
-- `tag`
-  - Unique plugin instance identifier in the whole config.
-- `type`
-  - Registered plugin type name.
-- `args`
-  - Plugin-specific arguments. Depending on the plugin, this can be an object, string, array, or null.
+General rules:
 
-## Plugin Responsibilities
+- `tag`
+  - Unique plugin instance identifier.
+  - Must not be empty.
+  - Must be unique across the whole config.
+- `type`
+  - Plugin type name.
+  - Must match a registered plugin factory.
+- `args`
+  - Plugin parameters.
+  - Different plugins accept different shapes: object, string, array, or null.
+
+## Responsibilities of the Four Plugin Categories
 
 ### `server`
 
-Receives DNS requests and hands them into an executor entrypoint.
+Purpose: Accept DNS requests and send them into an executor entry.
 
-- Focuses on listening sockets and transport details.
-- Typically configures bind addresses, TLS, and an entry executor.
+Traits:
+
+- Does not implement complex policy logic.
+- Usually configures a bind address, TLS parameters, and an entry executor.
 
 ### `executor`
 
-Performs actions such as:
+Purpose: Perform actions.
 
-- Upstream lookup
-- Local answer generation
-- Cache read/write
-- TTL rewriting
-- ECS handling
-- Fallback and racing
-- Observability and system integration
+Typical actions include:
+
+- Query upstreams
+- Generate local answers
+- Read and write cache
+- Adjust TTL
+- Handle ECS
+- Run fallback and concurrent races
+- Perform observability and system integrations
 
 ### `matcher`
 
-Evaluates conditions for `sequence` rules, for example:
+Purpose: Evaluate conditions for use in `sequence` rules.
 
-- Query name, type, class
+Typical match dimensions include:
+
+- Query name
+- Query type
 - Client IP
 - Response IP
-- RCODE
+- Response code
 - Environment variables
-- Random rollout
-- Rate limit state
+- Sampling outcome
+- Rate-limit state
 
 ### `provider`
 
-Supplies reusable datasets for matchers and executors.
+Purpose: Provide reusable datasets for matchers or other plugins.
 
-Current built-ins:
+Current main provider types:
 
 - `domain_set`
 - `ip_set`
 
-## The `sequence` Model
+## The `sequence` Orchestration Model
 
-`sequence` is the control plane of non-trivial ForgeDNS configurations.
+`sequence` is the policy hub of ForgeDNS. Most non-trivial configs use it as the primary entry.
+
+Example:
 
 ```yaml
 - tag: seq_main
@@ -187,30 +212,192 @@ Current built-ins:
     - exec: "accept"
 ```
 
-Each rule has two core fields:
+Each rule has two key fields:
 
 - `matches`
   - One matcher expression or an array of expressions.
-  - All expressions in the array must evaluate to true.
+  - When it is an array, every condition must be true for the rule to match.
 - `exec`
-  - The executor to run after the rule matches.
+  - The action to execute when the rule matches.
 
-Execution semantics:
+## Referencing Plugins and Quick Setup
 
-1. Rules are evaluated in order.
-2. A rule runs when all match conditions succeed.
-3. Some executors continue the pipeline, while others terminate it.
-4. Typical terminal operations include local answers, upstream responses, `accept`, or `return`.
+### Reference Existing Plugins
 
-## Naming Suggestions
+Use `$tag` to reference a plugin that has already been defined:
 
-Prefer descriptive plugin tags such as:
+```yaml
+- exec: "$forward_main"
+- matches:
+    - "$is_internal"
+    - "!$has_resp"
+  exec: "$cache_main"
+```
 
-- `udp_server`
-- `seq_main`
-- `forward_main`
-- `cache_main`
-- `fallback_main`
+### Quick Setup
 
-This makes large policy graphs much easier to read and maintain.
+If a `sequence` rule uses `type + arguments` instead of `$tag`, ForgeDNS creates a temporary plugin on the fly.
 
+Example:
+
+```yaml
+- exec: "forward 1.1.1.1 8.8.8.8"
+- matches: "qname domain:example.com"
+  exec: "ttl 300"
+```
+
+Common quick setup forms today:
+
+- matcher
+  - `_true`
+  - `_false`
+  - `qname ...`
+  - `qtype ...`
+  - `qclass ...`
+  - `client_ip ...`
+  - `resp_ip ...`
+  - `ptr_ip ...`
+  - `cname ...`
+  - `mark ...`
+  - `env ...`
+  - `random ...`
+  - `rate_limiter ...`
+  - `rcode ...`
+  - `has_resp`
+  - `has_wanted_ans`
+  - `string_exp ...`
+- executor
+  - `forward ...`
+  - `ttl ...`
+  - `sleep ...`
+  - `debug_print ...`
+  - `query_summary ...`
+  - `metrics_collector ...`
+  - `black_hole ...`
+  - `drop_resp`
+  - `ecs_handler ...`
+  - `forward_edns0opt ...`
+  - `ipset ...`
+  - `nftset ...`
+
+## Built-In `sequence` Control Flow
+
+Besides calling plugins, `sequence` also supports built-in control flow:
+
+- `accept`
+  - Terminates the current `sequence` and marks processing complete.
+- `return`
+  - Ends the current `sequence` and returns to the caller.
+- `reject [rcode]`
+  - Generates a response immediately.
+  - Default is `REFUSED`.
+  - The current parameter form is a decimal integer.
+- `mark 1,2,3`
+  - Writes marks into the context.
+- `jump seq_tag`
+  - Calls another `sequence` and then resumes at the next rule in the current one.
+- `goto seq_tag`
+  - Calls another `sequence` and does not return to the current one afterward.
+
+Example:
+
+```yaml
+- matches: "$rate_ok"
+  exec: "mark 100"
+- matches: "!$rate_ok"
+  exec: "reject 2"
+```
+
+## Common Rule Syntax
+
+### Domain Rules
+
+These forms appear in plugins such as `qname`, `cname`, `domain_set`, `hosts`, and `redirect`:
+
+- `full:example.com`
+  - Exact match.
+- `domain:example.com`
+  - Suffix match.
+- `keyword:cdn`
+  - Substring match.
+- `regexp:^api[0-9]+\\.example\\.com$`
+  - Regular-expression match.
+- `example.com`
+  - Without a prefix, this usually behaves like `domain:example.com`.
+
+### IP Rules
+
+These forms appear in `client_ip`, `resp_ip`, `ptr_ip`, `ip_set`, and related plugins:
+
+- Single IP: `1.1.1.1`
+- CIDR: `192.168.0.0/16`
+- IPv6 CIDR: `2400:3200::/32`
+
+### Provider References
+
+Matchers and providers can reference providers through:
+
+- `$tag`
+  - References a defined `domain_set` or `ip_set`.
+- `&/path/to/file`
+  - Loads rules directly from a file.
+
+Example:
+
+```yaml
+args:
+  - "domain:example.com"
+  - "$core_domains"
+  - "&/etc/forgedns/domains.txt"
+```
+
+## Unified Upstream Structure
+
+`forward.upstreams` uses a shared `UpstreamConfig` shape.
+
+Example:
+
+```yaml
+upstreams:
+  - addr: "udp://1.1.1.1:53"
+  - addr: "https://resolver.example/dns-query"
+    bootstrap: "8.8.8.8:53"
+    timeout: 5s
+    enable_http3: true
+```
+
+Common fields:
+
+- `addr`
+  - Upstream address.
+  - Defaults to UDP when no scheme is given.
+  - Supports `udp://`, `tcp://`, `tcp+pipeline://`, `tls://`, `tls+pipeline://`, `quic://`, `doq://`, `https://`, `doh://`, and `h3://`.
+  - DoH should include the full path, for example `https://resolver.example/dns-query`.
+- `dial_addr`
+  - Actual connection IP, while keeping the hostname from `addr` for SNI and certificate validation.
+- `port`
+  - Overrides the port.
+- `bootstrap`
+  - Bootstrap DNS used to resolve the upstream hostname when `addr` is domain-based.
+- `bootstrap_version`
+  - `4` or `6`.
+- `socks5`
+  - SOCKS5 proxy.
+  - Supports `host:port` and `user:pass@host:port`.
+  - IPv6 must use `[addr]:port`.
+- `idle_timeout`
+  - Idle connection timeout in seconds.
+- `max_conns`
+  - Maximum pool size.
+- `insecure_skip_verify`
+  - Skips TLS certificate validation. Recommended only for test environments.
+- `timeout`
+  - Per-query timeout. Default: `5s`.
+- `enable_pipeline`
+  - Enables TCP or DoT pipelining.
+- `enable_http3`
+  - Uses HTTP/3 for DoH.
+- `so_mark`
+  - Linux `SO_MARK`.
+- `bind_to_device`
+  - Linux `SO_BINDTODEVICE`.
