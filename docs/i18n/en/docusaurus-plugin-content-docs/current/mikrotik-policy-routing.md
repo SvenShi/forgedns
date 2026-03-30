@@ -220,6 +220,7 @@ fixed_ttl: 300
 Meaning:
 
 * Ignores the original DNS TTL and always writes dynamic entries with a fixed lifetime.
+* If set to `0`, dynamic entries are written without a RouterOS `timeout`.
 
 Good fits:
 

@@ -1214,7 +1214,7 @@ Writes response IPs into MikroTik RouterOS address lists.
 #### `fixed_ttl`
 
 - Type: `duration`; Required: no
-- Purpose: Force one fixed timeout value.
+- Purpose: Force one fixed timeout value. Set it to `0` to create dynamic entries without a RouterOS `timeout`.
 
 #### `cleanup_on_shutdown`
 

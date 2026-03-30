@@ -95,6 +95,7 @@ struct MikrotikConfigArgs {
     /// Maximum effective TTL clamp (seconds) for observed records.
     max_ttl: Option<u32>,
     /// Optional fixed TTL override (seconds) for dynamic observed records.
+    /// `0` means do not set RouterOS timeout.
     fixed_ttl: Option<u32>,
     /// Whether to clean managed address-list entries on shutdown.
     cleanup_on_shutdown: Option<bool>,
@@ -136,6 +137,7 @@ struct MikrotikConfig {
     /// Maximum TTL clamp for dynamic entries.
     max_ttl: u32,
     /// Optional fixed TTL override for dynamic entries.
+    /// `0` means do not set RouterOS timeout.
     fixed_ttl: Option<u32>,
     /// Whether shutdown should remove owned entries from RouterOS.
     cleanup_on_shutdown: bool,
@@ -170,15 +172,7 @@ impl MikrotikConfigArgs {
                 "ros_address_list ttl range is invalid: min_ttl({min_ttl}) > max_ttl({max_ttl})"
             )));
         }
-        let fixed_ttl = match self.fixed_ttl {
-            Some(0) => {
-                return Err(DnsError::plugin(
-                    "ros_address_list fixed_ttl must be greater than 0",
-                ));
-            }
-            Some(ttl) => Some(ttl),
-            None => None,
-        };
+        let fixed_ttl = self.fixed_ttl;
 
         let parsed_persistent = parse_persistent_items(
             self.persistent,
@@ -1086,7 +1080,7 @@ address_list4: "forgedns_ipv4"
     }
 
     #[test]
-    fn config_validation_rejects_zero_fixed_ttl() {
+    fn config_validation_allows_zero_fixed_ttl() {
         let cfg = serde_yml::from_str::<serde_yml::Value>(
             r#"
 address: "1.1.1.1:8728"
@@ -1097,8 +1091,8 @@ fixed_ttl: 0
 "#,
         )
         .unwrap();
-        let err = parse_plugin_config(Some(cfg), false).unwrap_err();
-        assert!(err.to_string().contains("fixed_ttl"));
+        let parsed = parse_plugin_config(Some(cfg), false).unwrap();
+        assert_eq!(parsed.fixed_ttl, Some(0));
     }
 
     #[test]
@@ -1194,6 +1188,29 @@ persistent:
         let entry = state.entries.values().next().unwrap();
         assert_eq!(entry.key.list, "forgedns_ipv4");
         assert_eq!(entry.timeout.as_deref(), Some("120s"));
+    }
+
+    #[tokio::test]
+    async fn dynamic_observation_with_zero_fixed_ttl_creates_timeless_entry() {
+        let api = Arc::new(MockMikrotikApi::default());
+        let mut cfg = default_cfg("mk");
+        cfg.fixed_ttl = Some(0);
+        let mut manager = AddressListManager::new(api.clone(), cfg);
+        manager
+            .observe_domain(
+                "example.com".to_string(),
+                vec![ObservedAddr {
+                    addr: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 2)),
+                    ttl_secs: 120,
+                }],
+            )
+            .await
+            .unwrap();
+
+        let state = api.state.lock().unwrap();
+        let entry = state.entries.values().next().unwrap();
+        assert_eq!(entry.key.list, "forgedns_ipv4");
+        assert_eq!(entry.timeout, None);
     }
 
     #[tokio::test]

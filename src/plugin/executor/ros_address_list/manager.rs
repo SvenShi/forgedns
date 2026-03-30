@@ -161,6 +161,8 @@ pub(super) struct OwnedCommentMeta {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct DynamicRefreshState {
+    /// Whether the remote entry was created without RouterOS timeout.
+    timeless: bool,
     /// Timeout value written on the last successful RouterOS update.
     written_timeout_ms: u64,
     /// Local estimate of when the remote timeout will naturally expire.
@@ -183,11 +185,28 @@ impl DynamicRefreshState {
         let near_expiry_refresh_at_ms = expires_at_ms.saturating_sub(refresh_lead_ms);
         let max_skip_refresh_at_ms = now_ms.saturating_add(MAX_DYNAMIC_REFRESH_SUPPRESS_MS);
         Self {
+            timeless: false,
             written_timeout_ms: timeout_ms,
             expires_at_ms,
             next_refresh_at_ms: near_expiry_refresh_at_ms.min(max_skip_refresh_at_ms),
         }
     }
+
+    #[inline]
+    fn timeless() -> Self {
+        Self {
+            timeless: true,
+            written_timeout_ms: 0,
+            expires_at_ms: u64::MAX,
+            next_refresh_at_ms: u64::MAX,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum DynamicTimeout {
+    Timed(u32),
+    Timeless,
 }
 
 #[derive(Debug, Clone)]
@@ -483,13 +502,17 @@ impl AddressListManager {
     }
 
     #[inline]
-    fn clamp_ttl(&self, ttl_secs: u32) -> u32 {
+    fn effective_dynamic_timeout(&self, ttl_secs: u32) -> DynamicTimeout {
         // TTL policy is centralized here so dynamic observations and tests use
         // identical clamping semantics.
         if let Some(ttl) = self.cfg.fixed_ttl {
-            return ttl;
+            return if ttl == 0 {
+                DynamicTimeout::Timeless
+            } else {
+                DynamicTimeout::Timed(ttl)
+            };
         }
-        ttl_secs.clamp(self.cfg.min_ttl, self.cfg.max_ttl)
+        DynamicTimeout::Timed(ttl_secs.clamp(self.cfg.min_ttl, self.cfg.max_ttl))
     }
 
     #[inline]
@@ -523,7 +546,7 @@ impl AddressListManager {
     fn should_refresh_dynamic_entry(
         &self,
         key: &AddressListKey,
-        timeout_secs: u32,
+        timeout: DynamicTimeout,
         now_ms: u64,
     ) -> bool {
         // Missing or expired cache means we have no recent successful remote write
@@ -531,6 +554,11 @@ impl AddressListManager {
         let Some(state) = self.dynamic_refresh_cache.get(key) else {
             return true;
         };
+        match timeout {
+            DynamicTimeout::Timeless => return !state.timeless,
+            DynamicTimeout::Timed(_) if state.timeless => return true,
+            DynamicTimeout::Timed(_) => {}
+        }
         if now_ms >= state.expires_at_ms {
             return true;
         }
@@ -538,6 +566,9 @@ impl AddressListManager {
         // A longer TTL is always worth pushing immediately. Shorter TTLs are
         // intentionally ignored until the normal refresh window to avoid
         // excessive rewrite churn on frequently queried names.
+        let DynamicTimeout::Timed(timeout_secs) = timeout else {
+            return false;
+        };
         let timeout_ms = u64::from(timeout_secs).saturating_mul(1000);
         timeout_ms > state.written_timeout_ms || now_ms >= state.next_refresh_at_ms
     }
@@ -636,7 +667,7 @@ impl AddressListManager {
         now_ms: u64,
     ) -> Result<()> {
         // Keep the local suppression cache healthy before evaluating refreshes.
-        let mut dedup = AHashMap::<AddressListKey, u32>::new();
+        let mut dedup = AHashMap::<AddressListKey, DynamicTimeout>::new();
         for observed in addrs {
             let family = AddressListFamily::from_ip(observed.addr);
             let Some(list) = self.list_name_for(family) else {
@@ -646,11 +677,17 @@ impl AddressListManager {
             if self.persistent_items.contains(&key) {
                 continue;
             }
-            let ttl = self.clamp_ttl(observed.ttl_secs.max(1));
+            let timeout = self.effective_dynamic_timeout(observed.ttl_secs.max(1));
             dedup
                 .entry(key)
-                .and_modify(|existing| *existing = (*existing).max(ttl))
-                .or_insert(ttl);
+                .and_modify(|existing| {
+                    if let (DynamicTimeout::Timed(existing_ttl), DynamicTimeout::Timed(ttl)) =
+                        (existing, timeout)
+                    {
+                        *existing_ttl = (*existing_ttl).max(ttl);
+                    }
+                })
+                .or_insert(timeout);
         }
 
         if dedup.is_empty() {
@@ -661,27 +698,33 @@ impl AddressListManager {
         // key with the strongest TTL, so each key below represents at most one
         // remote write decision for this DNS observation.
         let comment = self.comment_for_dynamic(domain.as_str());
-        for (key, ttl) in dedup {
-            if !self.should_refresh_dynamic_entry(&key, ttl, now_ms) {
+        for (key, timeout) in dedup {
+            if !self.should_refresh_dynamic_entry(&key, timeout, now_ms) {
                 continue;
             }
-            let timeout = format!("{ttl}s");
+            let timeout_value = match timeout {
+                DynamicTimeout::Timed(ttl) => Some(format!("{ttl}s")),
+                DynamicTimeout::Timeless => None,
+            };
             let upsert_result = self
                 .api
                 .upsert_owned_entry(
                     &key,
-                    Some(timeout.as_str()),
+                    timeout_value.as_deref(),
                     comment.as_str(),
                     self.cfg.comment_prefix.as_str(),
                     self.cfg.plugin_tag.as_str(),
-                    true,
+                    matches!(timeout, DynamicTimeout::Timed(_)),
                 )
                 .await;
             match upsert_result {
                 Ok(Some(_)) => {
                     // Only successful remote writes advance the suppression cache.
-                    self.dynamic_refresh_cache
-                        .insert(key.clone(), DynamicRefreshState::from_write(now_ms, ttl));
+                    let state = match timeout {
+                        DynamicTimeout::Timed(ttl) => DynamicRefreshState::from_write(now_ms, ttl),
+                        DynamicTimeout::Timeless => DynamicRefreshState::timeless(),
+                    };
+                    self.dynamic_refresh_cache.insert(key.clone(), state);
                 }
                 Ok(None) => {
                     // Foreign ownership conflict: drop any local cache so future
