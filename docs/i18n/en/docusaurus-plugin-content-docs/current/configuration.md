@@ -192,6 +192,7 @@ Current main provider types:
 
 - `domain_set`
 - `ip_set`
+- `adguard_rule`
 
 ## The `sequence` Orchestration Model
 

@@ -7,6 +7,49 @@ Providers turn rule sets from one-off literals into reusable data assets. In lar
 
 ---
 
+## `adguard_rule`
+
+### Purpose
+
+Provides a reusable subset of AdGuard Home DNS rule evaluation as a provider.
+
+This provider exposes two semantics:
+
+- `contains_question`: full request-question evaluation, including `dnstype`
+- `contains_name`: a name-only projection that ignores all `dnstype` rules
+
+### Parameters
+
+```yaml
+- tag: ad_rules
+  type: adguard_rule
+  args:
+    rules:
+      - "||ads.example.com^"
+      - "@@||safe.ads.example.com^"
+    files:
+      - "/etc/forgedns/adguard.txt"
+```
+
+### Behavior
+
+- Supports: basic domain rules, `@@`, `important`, `badfilter`, `denyallow`,
+  and request-side `dnstype`
+- Unsupported but skipped with warnings: `/etc/hosts` style rules,
+  `dnsrewrite`, `$client`, `$ctag`, and unknown modifiers
+- Full precedence order:
+  - `important` exceptions
+  - `important` blocks
+  - normal exceptions
+  - normal blocks
+
+### Typical Uses
+
+- Reuse AdGuard rule files through the `question` matcher.
+- Centralize complex AdGuard-style blocking semantics at the provider layer.
+
+---
+
 ## `domain_set`
 
 ### Purpose

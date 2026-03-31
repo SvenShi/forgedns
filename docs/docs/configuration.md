@@ -192,6 +192,7 @@ api:
 
 - `domain_set`
 - `ip_set`
+- `adguard_rule`
 
 ## sequence 编排模型
 

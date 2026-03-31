@@ -13,6 +13,7 @@ use forgedns::plugin::{PluginRegistry, PluginType};
 use forgedns::proto::{DNSClass, Message, Question, Rcode};
 use forgedns::proto::{Name, RecordType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
+use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 use std::sync::Arc;
@@ -28,10 +29,18 @@ fn parse_config(yaml: &str) -> Result<Config> {
 }
 
 fn make_context(registry: Arc<PluginRegistry>, qname: &str) -> DnsContext {
+    make_context_with_qtype(registry, qname, RecordType::A)
+}
+
+fn make_context_with_qtype(
+    registry: Arc<PluginRegistry>,
+    qname: &str,
+    qtype: RecordType,
+) -> DnsContext {
     let mut request = Message::new();
     request.add_question(Question::new(
         Name::from_ascii(qname).expect("query name should be valid"),
-        RecordType::A,
+        qtype,
         DNSClass::IN,
     ));
 
@@ -40,6 +49,16 @@ fn make_context(registry: Arc<PluginRegistry>, qname: &str) -> DnsContext {
         request,
         registry,
     )
+}
+
+fn test_rule_path(relative_name: &str) -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("testdata")
+        .join("rules")
+        .join(relative_name)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn reserve_local_udp_addr() -> Result<SocketAddr> {
@@ -644,6 +663,43 @@ plugins:
 }
 
 #[tokio::test]
+async fn test_domain_set_provider_loads_rules_from_file() -> Result<()> {
+    let domain_rules = test_rule_path("domain_set_1.txt");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: domain_rules
+    type: domain_set
+    args:
+      files:
+        - "{domain_rules}"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+
+    let provider = registry
+        .get_plugin("domain_rules")
+        .expect("domain_rules provider should exist")
+        .to_provider();
+
+    assert!(provider.contains_name(&Name::from_ascii("www.example.test").unwrap()));
+    assert!(provider.contains_name(&Name::from_ascii("img.cdn.example.test").unwrap()));
+    assert!(provider.contains_name(&Name::from_ascii("exact-only.test").unwrap()));
+    assert!(provider.contains_name(&Name::from_ascii("cdn.analytics-node.test").unwrap()));
+    assert!(provider.contains_name(&Name::from_ascii("api12.service.test").unwrap()));
+    assert!(!provider.contains_name(&Name::from_ascii("www.exact-only.test").unwrap()));
+    assert!(!provider.contains_name(&Name::from_ascii("api.service.test").unwrap()));
+    assert!(!provider.contains_name(&Name::from_ascii("missing.example").unwrap()));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_ip_set_provider_flattens_referenced_sets() -> Result<()> {
     let yaml = r#"
 log:
@@ -680,6 +736,43 @@ plugins:
 }
 
 #[tokio::test]
+async fn test_ip_set_provider_loads_rules_from_file() -> Result<()> {
+    let ip_rules = test_rule_path("ip_set_1.txt");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: ip_rules
+    type: ip_set
+    args:
+      files:
+        - "{ip_rules}"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+
+    let provider = registry
+        .get_plugin("ip_rules")
+        .expect("ip_rules provider should exist")
+        .to_provider();
+
+    assert!(provider.contains_ip("203.0.113.7".parse().unwrap()));
+    assert!(provider.contains_ip("198.51.100.42".parse().unwrap()));
+    assert!(provider.contains_ip("2001:db8::7".parse().unwrap()));
+    assert!(provider.contains_ip("2001:db8:abcd::1234".parse().unwrap()));
+    assert!(!provider.contains_ip("203.0.113.8".parse().unwrap()));
+    assert!(!provider.contains_ip("198.51.101.1".parse().unwrap()));
+    assert!(!provider.contains_ip("2001:db8::8".parse().unwrap()));
+    assert!(!provider.contains_ip("2001:db8:abce::1".parse().unwrap()));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_plugin_system_init_reports_dependency_kind_mismatch() -> Result<()> {
     let yaml = r#"
 log:
@@ -705,6 +798,293 @@ plugins:
     assert!(msg.contains("args[0].matches[0]"));
     assert!(msg.contains("expects matcher plugin"));
     assert!(msg.contains("'debug' is executor"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_adguard_rule_provider_drives_question_matcher_branch() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: agh_rules
+    type: adguard_rule
+    args:
+      rules:
+        - "||ads.example.com^"
+        - "@@||safe.ads.example.com^"
+        - "||rewrite.example.com^$dnsrewrite=1.2.3.4"
+  - tag: agh_match
+    type: question
+    args:
+      - "$agh_rules"
+  - tag: blocked
+    type: sequence
+    args:
+      - exec: "black_hole 0.0.0.0 ::"
+      - exec: accept
+  - tag: main
+    type: sequence
+    args:
+      - matches: $agh_match
+        exec: goto blocked
+      - exec: reject 2
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let main = registry
+        .get_plugin("main")
+        .expect("main sequence should exist")
+        .to_executor();
+
+    let mut blocked_ctx = make_context(registry.clone(), "ads.example.com.");
+    let blocked_step = main.execute(&mut blocked_ctx).await?;
+    assert!(matches!(blocked_step, ExecStep::Next));
+    assert_eq!(blocked_ctx.flow(), ExecFlowState::Broken);
+    let blocked_response = blocked_ctx
+        .response()
+        .expect("blocked query should synthesize a response");
+    assert_eq!(blocked_response.rcode(), Rcode::NoError);
+    assert_eq!(blocked_response.answers().len(), 1);
+    assert_eq!(blocked_response.answers()[0].rr_type(), RecordType::A);
+
+    let mut allow_ctx = make_context(registry.clone(), "safe.ads.example.com.");
+    let allow_step = main.execute(&mut allow_ctx).await?;
+    assert!(matches!(allow_step, ExecStep::Next));
+    assert_eq!(allow_ctx.flow(), ExecFlowState::Broken);
+    assert_eq!(
+        allow_ctx
+            .response()
+            .expect("fallback reject should build response")
+            .rcode(),
+        Rcode::ServFail
+    );
+
+    let mut unsupported_ctx = make_context(registry.clone(), "rewrite.example.com.");
+    let unsupported_step = main.execute(&mut unsupported_ctx).await?;
+    assert!(matches!(unsupported_step, ExecStep::Next));
+    assert_eq!(unsupported_ctx.flow(), ExecFlowState::Broken);
+    assert_eq!(
+        unsupported_ctx
+            .response()
+            .expect("unsupported dnsrewrite rule should be skipped")
+            .rcode(),
+        Rcode::ServFail
+    );
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_adguard_rule_provider_loads_rules_from_file() -> Result<()> {
+    let adguard_rules = test_rule_path("adguard_rule_1.txt");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: agh_rules
+    type: adguard_rule
+    args:
+      files:
+        - "{adguard_rules}"
+  - tag: agh_match
+    type: question
+    args:
+      - "$agh_rules"
+  - tag: blocked
+    type: sequence
+    args:
+      - exec: "black_hole 0.0.0.0"
+      - exec: accept
+  - tag: main
+    type: sequence
+    args:
+      - matches: $agh_match
+        exec: goto blocked
+      - exec: reject 2
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let agh_rules = registry
+        .get_plugin("agh_rules")
+        .expect("agh_rules provider should exist")
+        .to_provider();
+    let main = registry
+        .get_plugin("main")
+        .expect("main sequence should exist")
+        .to_executor();
+
+    let assert_blocked = |label: &str, ctx: &DnsContext| {
+        assert_eq!(ctx.flow(), ExecFlowState::Broken);
+        let response = ctx
+            .response()
+            .unwrap_or_else(|| panic!("{label} should synthesize a blocked response"));
+        assert_eq!(response.rcode(), Rcode::NoError);
+        assert_eq!(response.answers().len(), 1);
+        assert_eq!(
+            response.answers()[0].rr_type(),
+            ctx.request
+                .first_question()
+                .expect("request should contain one question")
+                .qtype()
+        );
+    };
+
+    let assert_rejected = |label: &str, ctx: &DnsContext| {
+        assert_eq!(ctx.flow(), ExecFlowState::Broken);
+        assert_eq!(
+            ctx.response()
+                .unwrap_or_else(|| panic!("{label} should fall through to reject"))
+                .rcode(),
+            Rcode::ServFail
+        );
+    };
+
+    let mut plain_exact = make_context(registry.clone(), "plain-match.example.");
+    assert!(matches!(
+        main.execute(&mut plain_exact).await?,
+        ExecStep::Next
+    ));
+    assert_blocked("plain_exact", &plain_exact);
+
+    let mut plain_subdomain = make_context(registry.clone(), "www.plain-match.example.");
+    assert!(matches!(
+        main.execute(&mut plain_subdomain).await?,
+        ExecStep::Next
+    ));
+    assert_rejected("plain_subdomain", &plain_subdomain);
+
+    let mut suffix = make_context(registry.clone(), "cdn.suffix.example.");
+    assert!(matches!(main.execute(&mut suffix).await?, ExecStep::Next));
+    assert_blocked("suffix", &suffix);
+
+    let mut exception = make_context(registry.clone(), "allow.suffix.example.");
+    assert!(matches!(
+        main.execute(&mut exception).await?,
+        ExecStep::Next
+    ));
+    assert_rejected("exception", &exception);
+
+    let mut wildcard = make_context(registry.clone(), "ad-banner.wild.example.");
+    assert!(matches!(main.execute(&mut wildcard).await?, ExecStep::Next));
+    assert_blocked("wildcard", &wildcard);
+
+    let mut regex = make_context(registry.clone(), "metrics12.service.test.");
+    assert!(matches!(main.execute(&mut regex).await?, ExecStep::Next));
+    assert_blocked("regex", &regex);
+
+    let mut denyallow_root = make_context(registry.clone(), "deny.example.");
+    assert!(matches!(
+        main.execute(&mut denyallow_root).await?,
+        ExecStep::Next
+    ));
+    assert_blocked("denyallow_root", &denyallow_root);
+
+    let mut denyallow_sub = make_context(registry.clone(), "sub.deny.example.");
+    assert!(matches!(
+        main.execute(&mut denyallow_sub).await?,
+        ExecStep::Next
+    ));
+    assert_rejected("denyallow_sub", &denyallow_sub);
+
+    let dnstype_aaaa =
+        make_context_with_qtype(registry.clone(), "ipv6-only.example.", RecordType::AAAA);
+    assert!(
+        agh_rules.contains_question(
+            dnstype_aaaa
+                .request()
+                .first_question()
+                .expect("question should exist")
+        )
+    );
+
+    let dnstype_a = make_context_with_qtype(registry.clone(), "ipv6-only.example.", RecordType::A);
+    assert!(
+        !agh_rules.contains_question(
+            dnstype_a
+                .request()
+                .first_question()
+                .expect("question should exist")
+        )
+    );
+
+    assert!(agh_rules.contains_name(&Name::from_ascii("plain-match.example.").unwrap()));
+    assert!(!agh_rules.contains_name(&Name::from_ascii("ipv6-only.example.").unwrap()));
+
+    let mut important_exception = make_context(registry.clone(), "important.example.");
+    assert!(matches!(
+        main.execute(&mut important_exception).await?,
+        ExecStep::Next
+    ));
+    assert_rejected("important_exception", &important_exception);
+
+    let mut badfilter_disabled = make_context(registry.clone(), "disabled.example.");
+    assert!(matches!(
+        main.execute(&mut badfilter_disabled).await?,
+        ExecStep::Next
+    ));
+    assert_rejected("badfilter_disabled", &badfilter_disabled);
+
+    let mut unsupported_modifier = make_context(registry.clone(), "rewrite.example.");
+    assert!(matches!(
+        main.execute(&mut unsupported_modifier).await?,
+        ExecStep::Next
+    ));
+    assert_rejected("unsupported_modifier", &unsupported_modifier);
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_question_matcher_matches_when_any_question_matches() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: domain_rules
+    type: domain_set
+    args:
+      exps:
+        - full:second.example
+  - tag: q_match
+    type: question
+    args:
+      - "$domain_rules"
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let matcher = registry
+        .get_plugin("q_match")
+        .expect("question matcher should exist")
+        .to_matcher();
+
+    let mut request = Message::new();
+    request.add_question(Question::new(
+        Name::from_ascii("first.example.").unwrap(),
+        RecordType::A,
+        DNSClass::IN,
+    ));
+    request.add_question(Question::new(
+        Name::from_ascii("second.example.").unwrap(),
+        RecordType::AAAA,
+        DNSClass::IN,
+    ));
+    let mut ctx = DnsContext::new(
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+        request,
+        registry.clone(),
+    );
+
+    assert!(matcher.is_match(&mut ctx));
+
+    registry.destory().await;
     Ok(())
 }
 

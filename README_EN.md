@@ -26,8 +26,8 @@ The project is under active development.
 | Protocols | UDP, TCP, DoT, DoQ, DoH |
 | Policy | `sequence`, `matcher`, `executor`, `provider` |
 | Executors | `forward`, `cache`, `fallback`, `hosts`, `arbitrary`, `redirect`, `ecs_handler`, `ttl` |
-| Matchers | `qname`, `qtype`, `qclass`, `client_ip`, `resp_ip`, `rcode`, `rate_limiter`, and more |
-| Data Sets | `domain_set`, `ip_set` |
+| Matchers | `qname`, `question`, `qtype`, `qclass`, `client_ip`, `resp_ip`, `rcode`, `rate_limiter`, and more |
+| Data Sets | `domain_set`, `ip_set`, `adguard_rule` |
 | Integrations | `ipset`, `nftset`, `ros_address_list`, `reverse_lookup` |
 
 ## Quick Start

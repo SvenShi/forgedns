@@ -23,8 +23,9 @@ use std::net::IpAddr;
 use async_trait::async_trait;
 
 use crate::plugin::Plugin;
-use crate::proto::Name;
+use crate::proto::{Name, Question};
 
+pub mod adguard_rule;
 pub mod domain_set;
 pub mod ip_set;
 pub(crate) mod provider_utils;
@@ -38,6 +39,12 @@ pub trait Provider: Plugin {
     /// Domain membership check using an owned DNS name.
     #[inline]
     fn contains_name(&self, _name: &Name) -> bool {
+        false
+    }
+
+    /// Question-level membership check for providers that need request question context.
+    #[inline]
+    fn contains_question(&self, _question: &Question) -> bool {
         false
     }
 
