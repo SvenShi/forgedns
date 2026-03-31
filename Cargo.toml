@@ -70,6 +70,14 @@ harness = false
 name = "plugin_local_answers"
 harness = false
 
+[[bench]]
+name = "domain_rule_matcher"
+harness = false
+
+[[bench]]
+name = "ip_rule_matcher"
+harness = false
+
 
 [[bin]]
 name = "forgedns"
