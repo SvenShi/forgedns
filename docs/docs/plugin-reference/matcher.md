@@ -125,6 +125,43 @@ quick setup：
 
 ---
 
+## `question`
+
+### 作用
+
+按 provider 的 `contains_question` 语义匹配请求中的 question。
+
+这个插件会遍历当前请求里的所有 question，只要任意 question 被任意一个 provider 命中，就返回 `true`。
+
+### 参数
+
+```yaml
+- tag: match_ad
+  type: question
+  args:
+    - "$ad_rules"
+    - "$shared_domains"
+```
+
+### 配置项详解
+
+- `args`
+  - 类型：`array[string]`；必填：是；默认值：无
+  - 作用：使用 `"$provider_tag"` 形式引用实现了 `contains_question` 的 provider。
+
+### 行为说明
+
+- 会遍历请求中的所有 question。
+- 任意 question 被任意 provider 命中时返回 `true`。
+- quick setup 也支持同样的 `"$provider_tag"` 写法。
+
+### 典型用途
+
+- 让 `adguard_rule`、`domain_set` 这类 provider 直接参与请求 question 匹配。
+- 在 `sequence` 中先做 question 级匹配，再交给 `black_hole`、`reject` 或其它动作执行。
+
+---
+
 ## `qtype`
 
 ### 作用
@@ -136,7 +173,9 @@ quick setup：
 ```yaml
 - tag: only_a_aaaa
   type: qtype
-  args: ["A", "AAAA"]
+  args: 
+    - "A"
+    - "AAAA"
 ```
 
 支持类型名称或对应值。
@@ -176,7 +215,8 @@ quick setup：
 ```yaml
 - tag: only_in
   type: qclass
-  args: ["IN"]
+  args: 
+    - "IN"
 ```
 
 ### 配置项详解
@@ -379,7 +419,9 @@ quick setup：
 ```yaml
 - tag: marked_100
   type: mark
-  args: ["100", "200"]
+  args:
+    - "100"
+    - "200"
 ```
 
 说明：
@@ -421,13 +463,16 @@ quick setup：
 ```yaml
 - tag: env_profile_prod
   type: env
-  args: ["PROFILE", "prod"]
+  args:
+    - "PROFILE"
+    - "prod"
 ```
 
 或只校验存在：
 
 ```yaml
-args: ["FEATURE_X"]
+args:
+  - "FEATURE_X"
 ```
 
 ### 配置项详解
@@ -470,7 +515,8 @@ args: ["FEATURE_X"]
 ```yaml
 - tag: rollout_10p
   type: random
-  args: ["0.1"]
+  args:
+    - "0.1"
 ```
 
 - 参数必须是一个 `0.0..=1.0` 浮点数。
@@ -586,7 +632,8 @@ args: ["FEATURE_X"]
 ```yaml
 - tag: only_noerror
   type: rcode
-  args: ["0"]
+  args:
+    - "0"
 ```
 
 说明：
@@ -689,7 +736,10 @@ args: ["FEATURE_X"]
 也支持字符串数组：
 
 ```yaml
-args: ["client_ip", "prefix", "192.168."]
+args:
+  - "client_ip"
+  - "prefix"
+  - "192.168."
 ```
 
 ### 配置项详解

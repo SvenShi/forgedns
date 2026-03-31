@@ -190,11 +190,6 @@ Policy goals:
 
 ```yaml
 plugins:
-  - tag: group_a
-    type: client_ip
-    args:
-      - "192.168.10.0/24"
-
   - tag: forward_a
     type: forward
     args:
@@ -210,7 +205,7 @@ plugins:
   - tag: seq_main
     type: sequence
     args:
-      - matches: "$group_a"
+      - matches: "client_ip 192.168.10.0/24"
         exec: "$forward_a"
       - matches: "!has_resp"
         exec: "$forward_b"
@@ -237,11 +232,6 @@ plugins:
       exps:
         - "domain:stream.example"
 
-  - tag: match_target
-    type: qname
-    args:
-      - "$target_domains"
-
   - tag: forward_main
     type: forward
     args:
@@ -261,7 +251,7 @@ plugins:
     type: sequence
     args:
       - exec: "$forward_main"
-      - matches: "$match_target"
+      - matches: "qname $target_domains"
         exec: "$route_sync"
 ```
 
@@ -271,7 +261,49 @@ Good fits:
 * Firewall address lists
 * Systems that consume DNS-learned targets
 
-## Scenario 7: Separate the Control Plane and Observability Plane
+## Scenario 7: AdGuard-Based Ad Blocking
+
+Policy goals:
+
+* Reuse existing AdGuard DNS rule files
+* Return sinkhole answers immediately when rules match
+* Forward unmatched traffic through the normal upstream path
+
+```yaml
+plugins:
+  - tag: ad_rules
+    type: adguard_rule
+    args:
+      files:
+        - "/etc/forgedns/adguard.txt"
+
+  - tag: blocked
+    type: sequence
+    args:
+      - exec: "black_hole 0.0.0.0 ::"
+      - exec: accept
+
+  - tag: forward_main
+    type: forward
+    args:
+      upstreams:
+        - addr: "udp://1.1.1.1:53"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - matches: "question $ad_rules"
+        exec: goto blocked
+      - exec: "$forward_main"
+```
+
+Good fits:
+
+* Home networks or gateways that want DNS-level ad blocking
+* Deployments that prefer to reuse maintained AdGuard rule files
+* Policy graphs that want a clear split between blocking and normal resolution
+
+## Scenario 8: Separate the Control Plane and Observability Plane
 
 Policy goals:
 

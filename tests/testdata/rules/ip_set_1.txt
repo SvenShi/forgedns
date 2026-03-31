@@ -1,0 +1,11 @@
+# Exact IPv4 rule.
+203.0.113.7
+
+# IPv4 CIDR rule with inline comment.
+198.51.100.0/24 # documentation subnet
+
+# Exact IPv6 rule.
+2001:db8::7
+
+# IPv6 CIDR rule.
+2001:db8:abcd::/48

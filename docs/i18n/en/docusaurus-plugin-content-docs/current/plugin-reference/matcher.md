@@ -120,6 +120,46 @@ Supports domain expressions, `domain_set` references, and file references.
 
 ---
 
+## `question`
+
+### Purpose
+
+Matches request questions using provider implementations of `contains_question`.
+
+The matcher scans every question in the current request. It returns `true` as
+soon as any question is matched by any referenced provider.
+
+### Parameters
+
+```yaml
+- tag: match_ad
+  type: question
+  args:
+    - "$ad_rules"
+    - "$shared_domains"
+```
+
+### Configuration Details
+
+- `args`
+  - Type: `array[string]`; Required: yes; Default: none
+  - Purpose: References providers that implement `contains_question` using `"$provider_tag"` entries.
+
+### Behavior
+
+- Scans all questions in the request.
+- Returns `true` when any question is matched by any referenced provider.
+- quick setup supports the same `"$provider_tag"` entries.
+
+### Typical Uses
+
+- Let providers such as `adguard_rule` or `domain_set` participate directly in
+  question-level matching.
+- Branch in `sequence`, then hand off to `black_hole`, `reject`, or another
+  executor.
+
+---
+
 ## `qtype`
 
 ### Purpose
@@ -131,7 +171,9 @@ Matches request qtypes.
 ```yaml
 - tag: only_a_aaaa
   type: qtype
-  args: ["A", "AAAA"]
+  args:
+    - "A"
+    - "AAAA"
 ```
 
 ### Configuration Details
@@ -166,7 +208,8 @@ Matches request qclasses.
 ```yaml
 - tag: only_in
   type: qclass
-  args: ["IN"]
+  args:
+    - "IN"
 ```
 
 ### Configuration Details
@@ -350,7 +393,9 @@ Matches marks already written into the DNS context.
 ```yaml
 - tag: mark_internal
   type: mark
-  args: [100, 200]
+  args:
+    - 100
+    - 200
 ```
 
 ### Configuration Details
@@ -517,7 +562,8 @@ Matches the current response code.
 ```yaml
 - tag: is_nxdomain
   type: rcode
-  args: ["NXDOMAIN"]
+  args:
+    - "NXDOMAIN"
 ```
 
 ### Configuration Details

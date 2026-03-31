@@ -23,7 +23,7 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::plugin::provider::provider_utils::{for_each_nonempty_rule_line, push_unique_matcher};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::proto::Name;
+use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
@@ -159,6 +159,11 @@ impl Provider for DomainSet {
         self.matchers
             .iter()
             .any(|matcher| matcher.contains_name(name))
+    }
+
+    #[inline]
+    fn contains_question(&self, question: &Question) -> bool {
+        self.contains_name(question.name())
     }
 }
 

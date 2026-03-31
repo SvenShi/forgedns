@@ -1,0 +1,34 @@
+! Comment lines should be ignored.
+# Hash comments should also be ignored.
+
+# Plain AdGuard domain rule matches exact qname only.
+plain-match.example
+
+# Domain-anchor rule matches the domain and its subdomains.
+||suffix.example^
+
+# Exception rule excludes a matched subdomain.
+@@||allow.suffix.example^
+
+# Wildcard pattern should be translated and matched.
+||ad-*.wild.example^
+
+# Regex rule should work on the request qname.
+/^metrics[0-9]+\.service\.test$/
+
+# denyallow excludes selected names from a broad blocking rule.
+||deny.example^$denyallow=sub.deny.example
+
+# dnstype is evaluated against request qtype.
+||ipv6-only.example^$dnstype=AAAA
+
+# important exception should override important block.
+||important.example^$important
+@@||important.example^$important
+
+# badfilter disables the matching blocking rule.
+||disabled.example^
+||disabled.example^$badfilter
+
+# Unsupported modifiers should be ignored with a warning instead of failing init.
+||rewrite.example^$dnsrewrite=1.2.3.4

@@ -190,11 +190,6 @@ plugins:
 
 ```yaml
 plugins:
-  - tag: group_a
-    type: client_ip
-    args:
-      - "192.168.10.0/24"
-
   - tag: forward_a
     type: forward
     args:
@@ -210,7 +205,7 @@ plugins:
   - tag: seq_main
     type: sequence
     args:
-      - matches: "$group_a"
+      - matches: "client_ip 192.168.10.0/24"
         exec: "$forward_a"
       - matches: "!has_resp"
         exec: "$forward_b"
@@ -266,7 +261,49 @@ plugins:
 * DNS 驱动的路由或防火墙控制
 * 需要把解析结果同步到外部网络系统
 
-## 场景七：管理面与观测面独立开放
+## 场景七：基于 AdGuard 规则的广告过滤
+
+策略目标：
+
+* 复用现成 AdGuard DNS 规则文件
+* 规则匹配命中后直接返回黑洞应答
+* 未命中流量继续走正常上游
+
+```yaml
+plugins:
+  - tag: ad_rules
+    type: adguard_rule
+    args:
+      files:
+        - "/etc/forgedns/adguard.txt"
+
+  - tag: blocked
+    type: sequence
+    args:
+      - exec: "black_hole 0.0.0.0 ::"
+      - exec: accept
+
+  - tag: forward_main
+    type: forward
+    args:
+      upstreams:
+        - addr: "udp://1.1.1.1:53"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - matches: "question $ad_rules"
+        exec: goto blocked
+      - exec: "$forward_main"
+```
+
+适用场景：
+
+* 家庭网络或网关侧广告拦截
+* 希望复用上游维护好的 AdGuard 规则文件
+* 需要把广告过滤和正常解析链路明确分开
+
+## 场景八：管理面与观测面独立开放
 
 策略目标：
 

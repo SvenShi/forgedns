@@ -105,6 +105,10 @@ impl DependencySpec {
             expected_plugin_type: Some(expected_plugin_type.into()),
         }
     }
+
+    pub fn provider(field: impl Into<String>, target_tag: impl Into<String>) -> Self {
+        Self::with_kind(field, target_tag, DependencyKind::Provider)
+    }
 }
 
 /// Resolve plugin dependencies and return plugins in initialization order.

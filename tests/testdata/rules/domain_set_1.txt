@@ -1,0 +1,14 @@
+# Plain rule defaults to domain suffix matching.
+example.test
+
+# Explicit suffix rule.
+domain:cdn.example.test
+
+# Exact full match rule.
+full:exact-only.test
+
+# Keyword rule.
+keyword:analytics
+
+# Regular expression rule.
+regexp:^api[0-9]+\.service\.test$
