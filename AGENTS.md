@@ -22,13 +22,13 @@
 - `src/service.rs` contains service-management integration for installing or controlling ForgeDNS as a system service.
 - `tests/plugin_integration.rs` covers config parsing, plugin registry wiring, sequence quick-setup, and live server integration.
 - `tests/message_hickory_compat.rs` validates message codec compatibility behavior against Hickory.
-- `config.yaml` is the canonical runnable example of current plugin composition.
+- `config.yaml` is the canonical runnable default configuration for the current plugin composition.
 - `README.md` and `README_EN.md` describe the architecture and capability set; keep them aligned with behavior changes.
 
 ## Build, Test, and Development Commands
 - `cargo check` is the fastest default sanity check during iteration.
 - `cargo build --release` builds the optimized binary used for realistic performance testing.
-- `cargo run -- -c config.yaml` runs ForgeDNS with the example config.
+- `cargo run -- -c config.yaml` runs ForgeDNS with the default config.
 - `cargo run --release -- -c config.yaml` is the preferred way to validate real runtime behavior or performance-sensitive changes.
 - `cargo run -- -c config.yaml -l debug` overrides the configured log level for local debugging.
 - `cargo test` runs unit tests and integration tests.

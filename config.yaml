@@ -1,6 +1,6 @@
-# ForgeDNS example configuration file
+# ForgeDNS default configuration file
 #
-# See full examples and documentation at:
+# See full documentation at:
 # https://forgedns.cn
 
 log:

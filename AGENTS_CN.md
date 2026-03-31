@@ -22,13 +22,13 @@
 - `src/service.rs` 包含把 ForgeDNS 安装或控制为系统服务的集成逻辑。
 - `tests/plugin_integration.rs` 覆盖配置解析、插件注册表装配、`sequence` 快速写法以及真实服务集成测试。
 - `tests/message_hickory_compat.rs` 用于验证消息编解码与 Hickory 的兼容性行为。
-- `config.yaml` 是当前推荐的、可直接运行的插件装配示例。
+- `config.yaml` 是当前推荐的、可直接运行的默认插件配置。
 - `README.md` 与 `README_EN.md` 描述整体架构和能力边界；行为变化时应保持同步。
 
 ## 构建、测试与开发命令
 - `cargo check` 是日常迭代时最快的默认检查方式。
 - `cargo build --release` 构建用于真实性能验证的优化二进制。
-- `cargo run -- -c config.yaml` 使用示例配置运行 ForgeDNS。
+- `cargo run -- -c config.yaml` 使用默认配置运行 ForgeDNS。
 - `cargo run --release -- -c config.yaml` 是验证真实运行行为或性能相关改动时更推荐的方式。
 - `cargo run -- -c config.yaml -l debug` 在不改配置文件的情况下覆盖日志级别，便于本地调试。
 - `cargo test` 运行单元测试和集成测试。
