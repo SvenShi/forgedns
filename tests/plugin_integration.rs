@@ -57,8 +57,8 @@ fn test_rule_path(relative_name: &str) -> String {
         .join("testdata")
         .join("rules")
         .join(relative_name)
-        .display()
-        .to_string()
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn reserve_local_udp_addr() -> Result<SocketAddr> {
