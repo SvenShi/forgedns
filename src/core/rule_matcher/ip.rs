@@ -353,11 +353,9 @@ fn compile_v4_matcher(ranges: &mut Vec<Ipv4Range>) -> Option<V4Matcher> {
     merge_v4_ranges(ranges);
     let rule_count = ranges.len();
 
-    let owned_ranges = std::mem::take(ranges);
-
     let mut page_ranges: Vec<Vec<(u16, u16)>> = (0..V4_PAGE_COUNT).map(|_| Vec::new()).collect();
 
-    for range in owned_ranges {
+    for range in ranges.iter().copied() {
         let start_page = (range.start >> V4_PAGE_BITS) as usize;
         let end_page = (range.end >> V4_PAGE_BITS) as usize;
 
@@ -496,7 +494,7 @@ fn compile_v6_matcher(ranges: &mut Vec<Ipv6Range>) -> Option<V6Matcher> {
 
     merge_v6_ranges(ranges);
     let rule_count = ranges.len();
-    let ranges = std::mem::take(ranges).into_boxed_slice();
+    let ranges = ranges.clone().into_boxed_slice();
 
     Some(V6Matcher { ranges, rule_count })
 }
