@@ -18,7 +18,7 @@ sidebar_position: 3
 
 把多个 matcher 和 executor 编排成一条流水线，是最常用的入口执行器。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: seq_main
@@ -32,19 +32,7 @@ sidebar_position: 3
       exec: "$forward_main"
 ```
 
-每条规则字段：
-
-- `matches`
-  - 可选。
-  - 单个 matcher 字符串或 matcher 字符串数组。
-- `exec`
-  - 可选。
-  - 可以是：
-    - `$tag`
-    - quick setup 语法
-    - 内建控制流
-
-### 配置项详解
+### 配置项
 
 `sequence` 的 `args` 为规则数组，数组中的每个元素代表一条顺序执行规则。
 
@@ -105,7 +93,7 @@ sidebar_position: 3
 
 向上游发起 DNS 查询。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: forward_main
@@ -120,15 +108,7 @@ sidebar_position: 3
         enable_http3: true
 ```
 
-- `concurrent`
-  - 多上游并发扇出数量。
-  - 默认 `1`。
-  - 实际会被限制在 `1..=3`。
-- `upstreams`
-  - 必填，上游列表。
-  - 单上游时是单路转发，多上游时是竞争式转发。
-
-### 配置项详解
+### 配置项
 
 #### `concurrent`
 
@@ -319,7 +299,7 @@ sidebar_position: 3
 
 对响应做 TTL 感知缓存，支持负缓存与持久化。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: cache_main
@@ -336,34 +316,7 @@ sidebar_position: 3
     dump_interval: 600
 ```
 
-- `size`
-  - 最大缓存条目数。
-  - 默认 `1024`。
-- `lazy_cache_ttl`
-  - 可选，强制覆盖缓存写入 TTL。
-- `dump_file`
-  - 可选，缓存持久化文件路径。
-- `dump_interval`
-  - 可选，持久化周期，秒。
-  - 默认 `600`。
-- `short_circuit`
-  - 命中缓存后是否短路后续执行。
-- `cache_negative`
-  - 是否缓存 NXDOMAIN/NODATA。
-- `max_negative_ttl`
-  - 负缓存最大 TTL。
-  - 默认 `300`。
-- `negative_ttl_without_soa`
-  - 无 SOA 的负响应回退 TTL。
-  - 默认 `60`。
-  - 若设为 `0`，无 SOA 负响应不会缓存。
-- `max_positive_ttl`
-  - 正常响应 TTL 上限。
-- `ecs_in_key`
-  - 是否把 ECS scope 纳入缓存 key。
-  - 默认 `false`。
-
-### 配置项详解
+### 配置项
 
 #### `size`
 
@@ -454,7 +407,7 @@ sidebar_position: 3
 
 在主路径失败或过慢时，切换到备用路径。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: fallback_main
@@ -466,18 +419,7 @@ sidebar_position: 3
     always_standby: true
 ```
 
-- `primary`
-  - 必填，主执行器。
-- `secondary`
-  - 必填，备用执行器。
-- `threshold`
-  - 触发备用路径的阈值，毫秒。
-  - 默认 `0`。
-- `always_standby`
-  - 是否从一开始并发待命备用路径。
-  - 默认 `false`。
-
-### 配置项详解
+### 配置项
 
 #### `primary`
 
@@ -525,7 +467,7 @@ sidebar_position: 3
 
 按域名规则直接返回静态 `A` / `AAAA`。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: hosts_main
@@ -538,12 +480,7 @@ sidebar_position: 3
       - "/etc/forgedns/hosts.txt"
 ```
 
-- `entries`
-  - 内联 hosts 规则。
-- `files`
-  - 外部规则文件。
-
-### 配置项详解
+### 配置项
 
 #### `entries`
 
@@ -584,7 +521,7 @@ sidebar_position: 3
 
 加载任意静态 DNS 记录并在命中时直接构造应答。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: arbitrary_main
@@ -597,12 +534,7 @@ sidebar_position: 3
       - "/etc/forgedns/zone.txt"
 ```
 
-- `rules`
-  - 内联记录文本。
-- `files`
-  - 记录文件。
-
-### 配置项详解
+### 配置项
 
 #### `rules`
 
@@ -638,7 +570,7 @@ sidebar_position: 3
 
 把请求域名改写为另一个目标域名，并在返回阶段补回客户端可见的 CNAME。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: redirect_main
@@ -650,12 +582,7 @@ sidebar_position: 3
       - "/etc/forgedns/redirect.txt"
 ```
 
-- `rules`
-  - 内联重定向规则。
-- `files`
-  - 外部规则文件。
-
-### 配置项详解
+### 配置项
 
 #### `rules`
 
@@ -700,7 +627,7 @@ sidebar_position: 3
 
 缓存应答中的 IP -> 域名关系，并可选地处理 PTR 查询。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: reverse_lookup_main
@@ -711,17 +638,7 @@ sidebar_position: 3
     handle_ptr: true
 ```
 
-- `size`
-  - 最大缓存项数。
-  - 默认 `65535`。
-- `handle_ptr`
-  - 是否直接处理 PTR 请求。
-  - 默认 `false`。
-- `ttl`
-  - 反查缓存 TTL，秒。
-  - 默认 `7200`。
-
-### 配置项详解
+### 配置项
 
 #### `size`
 
@@ -767,7 +684,7 @@ sidebar_position: 3
 
 处理 EDNS Client Subnet。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: ecs_main
@@ -785,22 +702,7 @@ sidebar_position: 3
     mask4: 24
 ```
 
-- `forward`
-  - 是否保留客户端自带 ECS。
-  - 默认 `false`。
-- `send`
-  - 请求里没有 ECS 时，是否根据客户端 IP 自动补 ECS。
-  - 默认 `false`。
-- `preset`
-  - 固定 ECS 来源 IP。
-- `mask4`
-  - IPv4 ECS 前缀长度。
-  - 默认 `24`。
-- `mask6`
-  - IPv6 ECS 前缀长度。
-  - 默认 `48`。
-
-### 配置项详解
+### 配置项
 
 #### `forward`
 
@@ -861,7 +763,7 @@ sidebar_position: 3
 
 把指定 EDNS0 option code 从下游请求转发到最终响应中。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: edns_forward
@@ -870,10 +772,7 @@ sidebar_position: 3
     codes: [10, 12]
 ```
 
-- `codes`
-  - 允许转发的 option code 列表。
-
-### 配置项详解
+### 配置项
 
 #### `codes`
 
@@ -907,7 +806,7 @@ sidebar_position: 3
 
 改写响应 TTL。
 
-### 参数
+### 配置示例
 
 对象形式：
 
@@ -928,14 +827,8 @@ sidebar_position: 3
     max: 600
 ```
 
-- `fix`
-  - 强制所有 TTL 为固定值。
-- `min`
-  - TTL 下限。
-- `max`
-  - TTL 上限。
 
-### 配置项详解
+### 配置项
 
 #### `fix`
 
@@ -977,7 +870,7 @@ sidebar_position: 3
 
 双栈优选器。对偏好类型做学习，对非偏好类型做抑制。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: prefer_v4
@@ -987,14 +880,7 @@ sidebar_position: 3
     cache_ttl: 3600
 ```
 
-- `cache`
-  - 是否缓存 preferred 结果状态。
-  - 默认 `true`。
-- `cache_ttl`
-  - 状态缓存秒数。
-  - 默认 `3600`。
-
-### 配置项详解
+### 配置项
 
 #### `cache`
 
@@ -1035,7 +921,7 @@ sidebar_position: 3
 
 对命中的 `A` / `AAAA` 请求直接返回预设地址。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: sinkhole
@@ -1046,11 +932,7 @@ sidebar_position: 3
       - "::"
 ```
 
-- `ips`
-  - 预设返回 IP。
-  - IPv4 用于 A，IPv6 用于 AAAA。
-
-### 配置项详解
+### 配置项
 
 #### `ips`
 
@@ -1084,13 +966,16 @@ sidebar_position: 3
 
 清空当前上下文中的响应。
 
-### 参数
+### 配置示例
 
-无参数。
+```yaml
+- tag: clear_response
+  type: drop_resp
+```
 
-### 配置项详解
+### 配置项
 
-无配置项。
+无独立配置字段。
 
 ### quick setup
 
@@ -1116,7 +1001,7 @@ sidebar_position: 3
 
 异步延迟，用于测试和策略实验。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: sleep_100ms
@@ -1125,11 +1010,7 @@ sidebar_position: 3
     duration: 100
 ```
 
-- `duration`
-  - 毫秒。
-  - 默认 `0`。
-
-### 配置项详解
+### 配置项
 
 #### `duration`
 
@@ -1156,7 +1037,7 @@ sidebar_position: 3
 
 打印请求与响应对象，便于调试。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: debug_main
@@ -1169,7 +1050,7 @@ sidebar_position: 3
   - 可选日志标题。
   - 默认 `"debug print"`。
 
-### 配置项详解
+### 配置项
 
 #### `msg`
 
@@ -1195,7 +1076,7 @@ sidebar_position: 3
 
 在后续链路执行完后输出紧凑查询摘要。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: summary_main
@@ -1204,11 +1085,7 @@ sidebar_position: 3
     msg: "main pipeline"
 ```
 
-- `msg`
-  - 可选标题。
-  - 默认 `"query summary"`。
-
-### 配置项详解
+### 配置项
 
 #### `msg`
 
@@ -1244,7 +1121,7 @@ sidebar_position: 3
 
 收集轻量级请求计数与延时指标，并导出 Prometheus 格式。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: metrics_main
@@ -1253,11 +1130,7 @@ sidebar_position: 3
     name: "main"
 ```
 
-- `name`
-  - 指标标签名。
-  - 默认 `"default"`。
-
-### 配置项详解
+### 配置项
 
 #### `name`
 
@@ -1299,7 +1172,7 @@ sidebar_position: 3
 
 把响应中的 IP 写入 Linux `ipset`。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: ipset_main
@@ -1311,18 +1184,7 @@ sidebar_position: 3
     mask6: 64
 ```
 
-- `set_name4`
-  - A 记录写入的 IPv4 set 名。
-- `set_name6`
-  - AAAA 记录写入的 IPv6 set 名。
-- `mask4`
-  - IPv4 前缀长度。
-  - 默认 `24`。
-- `mask6`
-  - IPv6 前缀长度。
-  - 默认 `32`。
-
-### 配置项详解
+### 配置项
 
 #### `set_name4`
 
@@ -1382,7 +1244,7 @@ sidebar_position: 3
 
 把响应 IP 写入 Linux `nftables set`。
 
-### 参数
+### 配置示例
 
 结构化写法：
 
@@ -1402,17 +1264,7 @@ sidebar_position: 3
       mask: 64
 ```
 
-兼容写法：
-
-```yaml
-args:
-  table_family4: "ip"
-  table_name4: "mangle"
-  set_name4: "dns_v4"
-  mask4: 24
-```
-
-### 配置项详解
+### 配置项
 
 #### `ipv4`
 
@@ -1488,7 +1340,7 @@ args:
 
 把应答 IP 同步到 RouterOS address-list，支持动态项、常驻项、文件重载和关闭时清理。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: ros_address_list_main
@@ -1514,7 +1366,7 @@ args:
         - "/etc/forgedns/persistent_ips.txt"
 ```
 
-### 配置项详解
+### 配置项
 
 #### `address`
 

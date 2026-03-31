@@ -42,13 +42,16 @@ Negation:
 
 Always returns true.
 
-### Parameters
+### Example Configuration
 
-No parameters.
+```yaml
+- tag: always_true
+  type: _true
+```
 
 ### Configuration Details
 
-No configuration fields.
+No standalone configuration fields.
 
 ### Typical Uses
 
@@ -63,13 +66,16 @@ No configuration fields.
 
 Always returns false.
 
-### Parameters
+### Example Configuration
 
-No parameters.
+```yaml
+- tag: always_false
+  type: _false
+```
 
 ### Configuration Details
 
-No configuration fields.
+No standalone configuration fields.
 
 ### Typical Uses
 
@@ -83,18 +89,19 @@ No configuration fields.
 
 Matches the query name in the request.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: match_domain
   type: qname
   args:
+    # Domain expression
     - "domain:example.com"
+    # Reuse an existing domain_set
     - "$core_domains"
+    # Load rules from file
     - "&/etc/forgedns/domains.txt"
 ```
-
-Supports domain expressions, `domain_set` references, and file references.
 
 ### Configuration Details
 
@@ -129,7 +136,7 @@ Matches request questions using provider implementations of `contains_question`.
 The matcher scans every question in the current request. It returns `true` as
 soon as any question is matched by any referenced provider.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: match_ad
@@ -166,7 +173,7 @@ soon as any question is matched by any referenced provider.
 
 Matches request qtypes.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: only_a_aaaa
@@ -203,7 +210,7 @@ Matches request qtypes.
 
 Matches request qclasses.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: only_in
@@ -237,13 +244,15 @@ Matches request qclasses.
 
 Matches the client source IP.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: lan_clients
   type: client_ip
   args:
+    # Inline CIDR
     - "192.168.0.0/16"
+    # Reference an ip_set provider
     - "$lan_ip_set"
 ```
 
@@ -275,14 +284,14 @@ Matches the client source IP.
 
 Matches A and AAAA addresses in the response answers.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: target_resp
+- tag: matched_resp_ip
   type: resp_ip
   args:
-    - "10.0.0.0/8"
-    - "$target_ip_set"
+    - "100.64.0.0/10"
+    - "$special_targets"
 ```
 
 ### Configuration Details
@@ -298,7 +307,7 @@ Matches A and AAAA addresses in the response answers.
 ### quick setup
 
 ```yaml
-- matches: "resp_ip 1.1.1.1"
+- matches: "resp_ip 10.0.0.0/8"
 ```
 
 ### Typical Uses
@@ -313,14 +322,9 @@ Matches A and AAAA addresses in the response answers.
 
 Matches the IP encoded in a PTR query name.
 
-### Parameters
+### Example Configuration
 
-```yaml
-- tag: ptr_lan
-  type: ptr_ip
-  args:
-    - "192.168.0.0/16"
-```
+Similar to `client_ip` and `resp_ip`, it supports IP rules and `ip_set`.
 
 ### Configuration Details
 
@@ -350,7 +354,7 @@ Matches the IP encoded in a PTR query name.
 
 Matches CNAME targets in the response.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: cname_target
@@ -358,6 +362,7 @@ Matches CNAME targets in the response.
   args:
     - "domain:example.com"
     - "$core_domains"
+    - "&/etc/forgedns/cnames.txt"
 ```
 
 ### Configuration Details
@@ -373,7 +378,7 @@ Matches CNAME targets in the response.
 ### quick setup
 
 ```yaml
-- matches: "cname domain:example.com"
+- matches: "cname keyword:cdn"
 ```
 
 ### Typical Uses
@@ -388,14 +393,14 @@ Matches CNAME targets in the response.
 
 Matches marks already written into the DNS context.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: mark_internal
+- tag: marked_100
   type: mark
   args:
-    - 100
-    - 200
+    - "100"
+    - "200"
 ```
 
 ### Configuration Details
@@ -423,13 +428,21 @@ Matches marks already written into the DNS context.
 
 Matches environment variables.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: prod_only
+- tag: env_profile_prod
   type: env
   args:
-    - "ENV=prod"
+    - "PROFILE"
+    - "prod"
+```
+
+Or check only existence:
+
+```yaml
+args:
+  - "FEATURE_X"
 ```
 
 ### Configuration Details
@@ -445,7 +458,7 @@ Matches environment variables.
 ### quick setup
 
 ```yaml
-- matches: "env ENV=prod"
+- matches: "env PROFILE prod"
 ```
 
 ### Behavior
@@ -465,12 +478,13 @@ Matches environment variables.
 
 Matches probabilistically for rollout or sampling.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: sample_10
+- tag: rollout_10p
   type: random
-  args: 0.1
+  args:
+    - "0.1"
 ```
 
 ### Configuration Details
@@ -483,7 +497,7 @@ Matches probabilistically for rollout or sampling.
 ### quick setup
 
 ```yaml
-- matches: "random 0.2"
+- matches: "random 0.05"
 ```
 
 ### Typical Uses
@@ -499,16 +513,16 @@ Matches probabilistically for rollout or sampling.
 
 Matches based on per-source rate-limit state.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: rate_ok
+- tag: qps_guard
   type: rate_limiter
   args:
-    qps: 100
-    burst: 50
-    mask4: 24
-    mask6: 64
+    qps: 20
+    burst: 40
+    mask4: 32
+    mask6: 48
 ```
 
 ### Configuration Details
@@ -535,9 +549,7 @@ Matches based on per-source rate-limit state.
 
 ### quick setup
 
-```yaml
-- matches: "rate_limiter 100"
-```
+Prefer the full configuration so `qps`, `burst`, and `mask` stay explicit.
 
 ### Behavior
 
@@ -557,13 +569,13 @@ Matches based on per-source rate-limit state.
 
 Matches the current response code.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: is_nxdomain
+- tag: only_noerror
   type: rcode
   args:
-    - "NXDOMAIN"
+    - "0"
 ```
 
 ### Configuration Details
@@ -576,7 +588,7 @@ Matches the current response code.
 ### quick setup
 
 ```yaml
-- matches: "rcode NOERROR"
+- matches: "rcode 2"
 ```
 
 ### Typical Uses
@@ -591,13 +603,16 @@ Matches the current response code.
 
 Matches whether a response already exists in the context.
 
-### Parameters
+### Example Configuration
 
-No parameters.
+```yaml
+- tag: has_resp_flag
+  type: has_resp
+```
 
 ### Configuration Details
 
-No configuration fields.
+No standalone configuration fields.
 
 ### quick setup
 
@@ -617,13 +632,16 @@ No configuration fields.
 
 Matches whether the response already contains wanted answers.
 
-### Parameters
+### Example Configuration
 
-No parameters.
+```yaml
+- tag: has_wanted_answer
+  type: has_wanted_ans
+```
 
 ### Configuration Details
 
-No configuration fields.
+No standalone configuration fields.
 
 ### quick setup
 
@@ -643,35 +661,82 @@ No configuration fields.
 
 Matches using a string expression over request and response context.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: expr_match
+- tag: match_http_path
   type: string_exp
-  args: "has_resp && qname =~ 'example.com'"
+  args: "url_path prefix /dns-"
+```
+
+It also supports a string array:
+
+```yaml
+args:
+  - "client_ip"
+  - "prefix"
+  - "192.168."
 ```
 
 ### Configuration Details
 
-- Type: `string`; Required: yes; Default: none
-- Purpose: Defines an expression evaluated against the current DNS context.
+- `string_exp` `args` can be a string or a string array.
+
+- Type: `string` or `array`
+- Required: yes
+- Default: none
+- Purpose: Defines the complete string expression.
+- Expression parts:
+  - data source `source`
+  - matching operator `op`
+  - one or more arguments
+- Runtime impact:
+  - Reads values from the context according to the expression and performs string matching.
 
 ### Expression Format
 
-- The exact syntax follows ForgeDNS string-expression support.
-- Use it when built-in matchers are not enough or when a compact composite condition is more readable than several nested rules.
+```text
+<source> <op> <arg...>
+```
+
+Supported `source` values:
+
+- `qname`
+- `qtype`
+- `qclass`
+- `rcode`
+- `resp_ip`
+- `mark`
+- `client_ip`
+- `server_name`
+- `url_path`
+- `$ENV_KEY`
+
+Supported `op` values:
+
+- `eq`
+- `prefix`
+- `suffix`
+- `contains`
+- `regexp`
+- `zl`
+
+Notes:
+
+- `zl` means zero length and is used to determine whether a string is empty.
+- `regexp` supports one or more regex arguments.
 
 ### quick setup
 
 ```yaml
-- matches: "string_exp has_resp"
+- matches: "string_exp server_name suffix .example.net"
 ```
 
 ### Typical Uses
 
-- Compact composite predicates.
-- Advanced matching without creating several separate helper matchers.
+- Perform flexible matching on DoH paths, SNI, mark sets, and response IP strings.
 
 ### Notes
 
-- Prefer dedicated matchers when they are already sufficient. `string_exp` is more flexible but also harder to audit at a glance.
+- In scenarios where a dedicated matcher can be used, prefer the dedicated matcher.
+- `string_exp` provides greater flexibility, but the readability and maintainability of the expression are usually lower than those of dedicated plugins.

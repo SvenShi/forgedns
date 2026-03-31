@@ -18,7 +18,7 @@ This provider exposes two semantics:
 - `contains_question`: full request-question evaluation, including `dnstype`
 - `contains_name`: a name-only projection that ignores all `dnstype` rules
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: ad_rules
@@ -56,7 +56,7 @@ This provider exposes two semantics:
 
 Provides a high-performance domain rule set that can be referenced by plugins such as `qname` and `cname`.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: core_domains
@@ -71,13 +71,6 @@ Provides a high-performance domain rule set that can be referenced by plugins su
     sets:
       - "shared_domains"
 ```
-
-- `exps`
-  - Inline domain expressions.
-- `files`
-  - External rule files.
-- `sets`
-  - References to other `domain_set` providers.
 
 ### Configuration Details
 
@@ -149,7 +142,7 @@ Provides a high-performance domain rule set that can be referenced by plugins su
 
 Provides IP and CIDR rule sets that can be referenced by matchers such as `client_ip`, `resp_ip`, and `ptr_ip`.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: lan_ip_set
@@ -164,13 +157,6 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
     sets:
       - "shared_ip_set"
 ```
-
-- `ips`
-  - Inline IP or CIDR entries.
-- `files`
-  - External rule files.
-- `sets`
-  - References to other `ip_set` providers.
 
 ### Configuration Details
 

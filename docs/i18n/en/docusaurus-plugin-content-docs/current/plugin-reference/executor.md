@@ -18,7 +18,7 @@ When reading this chapter, keep two questions in mind:
 
 Orchestrates matchers and executors into a pipeline. This is the most common entry executor.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: seq_main
@@ -31,13 +31,6 @@ Orchestrates matchers and executors into a pipeline. This is the most common ent
     - matches: "!$has_resp"
       exec: "$forward_main"
 ```
-
-Each rule supports:
-
-- `matches`
-  - Optional matcher string or array of matcher strings.
-- `exec`
-  - Optional action, which can be a `$tag`, quick setup form, or built-in control flow.
 
 ### Configuration Details
 
@@ -92,7 +85,7 @@ Each rule supports:
 
 Sends DNS queries to upstreams.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: forward_main
@@ -248,7 +241,7 @@ Quick setup accepts only upstream addresses. Use the full plugin form for bootst
 
 Provides TTL-aware response caching with negative cache support and persistence.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: cache_main
@@ -257,6 +250,12 @@ Provides TTL-aware response caching with negative cache support and persistence.
     size: 8192
     short_circuit: true
     cache_negative: true
+    max_negative_ttl: 300
+    negative_ttl_without_soa: 60
+    max_positive_ttl: 600
+    ecs_in_key: false
+    dump_file: "./dns_cache.dump"
+    dump_interval: 600
 ```
 
 ### Configuration Details
@@ -341,7 +340,7 @@ Provides TTL-aware response caching with negative cache support and persistence.
 
 Runs a primary executor first and falls back to a secondary executor when the primary is too slow or fails.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: fallback_main
@@ -350,7 +349,7 @@ Runs a primary executor first and falls back to a secondary executor when the pr
     primary: "forward_fast"
     secondary: "forward_stable"
     threshold: 200
-    always_standby: false
+    always_standby: true
 ```
 
 ### Configuration Details
@@ -398,7 +397,7 @@ Runs a primary executor first and falls back to a secondary executor when the pr
 
 Returns local static answers using host-style entries.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: hosts_main
@@ -406,6 +405,7 @@ Returns local static answers using host-style entries.
   args:
     entries:
       - "full:router.local 192.168.1.1"
+      - "domain:svc.local 10.0.0.10 fd00::10"
     files:
       - "/etc/forgedns/hosts.txt"
 ```
@@ -414,18 +414,28 @@ Returns local static answers using host-style entries.
 
 #### `entries`
 
-- Type: `array`; Required: no
-- Purpose: Inline host rules.
+- Type: `array`; Required: no; Default: empty array
+- Purpose: Defines inline hosts rules.
+- Rule format:
+  - `<domain_rule> <ip1> <ip2> ...`
 
 #### `files`
 
-- Type: `array`; Required: no
-- Purpose: External host files.
+- Type: `array`; Required: no; Default: empty array
+- Purpose: Specifies the list of external hosts rule files.
+
+Rule format:
+
+```text
+<domain_rule> <ip1> <ip2> ...
+```
 
 ### Behavior
 
-- Produces local answers directly.
-- Commonly used before forwarding.
+- Handles only `IN` class `A` / `AAAA` requests.
+- Returns same-family addresses according to the query type.
+- Passes through to subsequent execution when there is no match.
+- The TTL is fixed at `300`.
 
 ### Typical Uses
 
@@ -440,14 +450,17 @@ Returns local static answers using host-style entries.
 
 Injects arbitrary DNS records from zone-style rule strings.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: arbitrary_main
   type: arbitrary
   args:
     rules:
-      - "status.local. 60 IN TXT \"ok\""
+      - "example.com. 60 IN TXT \"hello world\""
+      - "mail.example.com. 300 IN MX 10 mx1.example.com."
+    files:
+      - "/etc/forgedns/zone.txt"
 ```
 
 ### Configuration Details
@@ -484,41 +497,55 @@ Injects arbitrary DNS records from zone-style rule strings.
 
 Rewrites matching names toward different target names or answer destinations.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: redirect_main
   type: redirect
   args:
     rules:
-      - "domain:ads.example sinkhole.local"
+      - "full:old.example.com new.example.net"
+    files:
+      - "/etc/forgedns/redirect.txt"
 ```
 
 ### Configuration Details
 
 #### `rules`
 
-- Type: `array`; Required: no
-- Purpose: Inline redirect rules.
+- Type: `array`; Required: no; Default: empty array
+- Purpose: Defines inline redirect rules.
+- Rule format:
+  - `<domain_rule> <target_name>`
 
 #### `files`
 
-- Type: `array`; Required: no
-- Purpose: External redirect rule files.
+- Type: `array`; Required: no; Default: empty array
+- Purpose: Specifies the list of external redirect rule files.
+
+Rule format:
+
+```text
+<domain_rule> <target_name>
+```
 
 ### Behavior
 
-- Applies name-level redirection before or during answer generation depending on the rule form.
+- Forward phase:
+  - Rewrites the request QUESTION NAME.
+- Return phase:
+  - Restores the target name in the response question back to the original name.
+  - Appends a `CNAME original -> target` record in the answers.
 
 ### Typical Uses
 
-- Sinkholes
-- Internal rewrites
-- Controlled override of known domains
+- Point a unified entry domain to another set of records.
+- Perform alias redirection for specific domains without changing client configuration.
 
 ### Notes
 
-- Be explicit about rule scope to avoid broad accidental rewrites.
+- It is better suited for simple queries such as `A` / `AAAA` / `TXT`.
+- Full semantic transparency is not guaranteed for complex records and some extension scenarios.
 
 ---
 
@@ -528,15 +555,15 @@ Rewrites matching names toward different target names or answer destinations.
 
 Maintains a reverse IP-to-name cache and optionally handles PTR requests.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: reverse_lookup_main
   type: reverse_lookup
   args:
-    size: 8192
+    size: 65535
+    ttl: 7200
     handle_ptr: true
-    ttl: 600
 ```
 
 ### Configuration Details
@@ -582,16 +609,22 @@ Maintains a reverse IP-to-name cache and optionally handles PTR requests.
 
 Controls EDNS Client Subnet forwarding or injection.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: ecs_main
   type: ecs_handler
   args:
-    forward: true
+    forward: false
     send: true
     mask4: 24
-    mask6: 56
+    mask6: 48
+
+- tag: ecs_preset
+  type: ecs_handler
+  args:
+    preset: "203.0.113.10"
+    mask4: 24
 ```
 
 ### Configuration Details
@@ -624,7 +657,7 @@ Controls EDNS Client Subnet forwarding or injection.
 ### quick setup
 
 ```yaml
-- exec: "ecs_handler 24 56"
+- exec: "ecs_handler 203.0.113.10/24"
 ```
 
 ### Behavior
@@ -649,13 +682,13 @@ Controls EDNS Client Subnet forwarding or injection.
 
 Forwards selected EDNS0 options to upstreams.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: opt_forward
+- tag: edns_forward
   type: forward_edns0opt
   args:
-    codes: [8, 10]
+    codes: [10, 12]
 ```
 
 ### Configuration Details
@@ -668,7 +701,7 @@ Forwards selected EDNS0 options to upstreams.
 ### quick setup
 
 ```yaml
-- exec: "forward_edns0opt 8 10"
+- exec: "forward_edns0opt 10,12"
 ```
 
 ### Behavior
@@ -687,10 +720,21 @@ Forwards selected EDNS0 options to upstreams.
 
 Rewrites response TTL values.
 
-### Parameters
+### Example Configuration
+
+Object form:
 
 ```yaml
 - tag: ttl_main
+  type: ttl
+  args:
+    fix: 300
+```
+
+or:
+
+```yaml
+- tag: ttl_clamp
   type: ttl
   args:
     min: 60
@@ -718,6 +762,7 @@ Rewrites response TTL values.
 
 ```yaml
 - exec: "ttl 300"
+- exec: "ttl 60-600"
 ```
 
 ### Behavior
@@ -738,14 +783,14 @@ Rewrites response TTL values.
 
 Biases dual-stack results toward one address family.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: prefer_v4
   type: prefer_ipv4
   args:
     cache: true
-    cache_ttl: 1800
+    cache_ttl: 3600
 ```
 
 ### Configuration Details
@@ -781,7 +826,7 @@ Biases dual-stack results toward one address family.
 
 Returns sinkhole IPs directly.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: sinkhole
@@ -822,13 +867,16 @@ Returns sinkhole IPs directly.
 
 Drops the current response.
 
-### Parameters
+### Example Configuration
 
-No parameters.
+```yaml
+- tag: clear_response
+  type: drop_resp
+```
 
 ### Configuration Details
 
-No configuration fields.
+No standalone configuration fields.
 
 ### quick setup
 
@@ -853,13 +901,13 @@ No configuration fields.
 
 Sleeps for a bounded duration inside the chain.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: delay_main
+- tag: sleep_100ms
   type: sleep
   args:
-    duration: 100ms
+    duration: 100
 ```
 
 ### Configuration Details
@@ -872,7 +920,7 @@ Sleeps for a bounded duration inside the chain.
 ### quick setup
 
 ```yaml
-- exec: "sleep 100ms"
+- exec: "sleep 100"
 ```
 
 ### Typical Uses
@@ -888,10 +936,10 @@ Sleeps for a bounded duration inside the chain.
 
 Prints a debug message.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: dbg
+- tag: debug_main
   type: debug_print
   args:
     msg: "before forward"
@@ -907,7 +955,7 @@ Prints a debug message.
 ### quick setup
 
 ```yaml
-- exec: "debug_print before_forward"
+- exec: "debug_print cache branch"
 ```
 
 ### Typical Uses
@@ -923,13 +971,13 @@ Prints a debug message.
 
 Records concise query summaries.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: summary_main
   type: query_summary
   args:
-    msg: "main path"
+    msg: "main pipeline"
 ```
 
 ### Configuration Details
@@ -942,7 +990,7 @@ Records concise query summaries.
 ### quick setup
 
 ```yaml
-- exec: "query_summary main_path"
+- exec: "query_summary main"
 ```
 
 ### Behavior
@@ -962,7 +1010,7 @@ Records concise query summaries.
 
 Collects Prometheus metrics for query handling.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: metrics_main
@@ -1005,49 +1053,59 @@ Collects Prometheus metrics for query handling.
 
 Writes response IPs into Linux `ipset`.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: ipset_main
   type: ipset
   args:
-    set_name4: "policy_v4"
-    set_name6: "policy_v6"
-    mask4: 32
-    mask6: 128
+    set_name4: "forgedns_v4"
+    set_name6: "forgedns_v6"
+    mask4: 24
+    mask6: 64
 ```
 
 ### Configuration Details
 
 #### `set_name4`
 
-- Type: `string`; Required: no
-- Purpose: Target IPv4 ipset name.
+- Type: `string`; Required: no; Default: none
+- Purpose: Specifies the ipset name used to write IPv4 addresses.
 
 #### `set_name6`
 
-- Type: `string`; Required: no
-- Purpose: Target IPv6 ipset name.
+- Type: `string`; Required: no; Default: none
+- Purpose: Specifies the ipset name used to write IPv6 addresses.
 
 #### `mask4`
 
-- Type: `integer`; Required: no
-- Purpose: IPv4 network mask applied before insertion.
+- Type: `integer`; Required: no; Default: `24`
+- Purpose: Specifies the prefix length used when writing IPv4 addresses into ipset.
 
 #### `mask6`
 
-- Type: `integer`; Required: no
-- Purpose: IPv6 network mask applied before insertion.
+- Type: `integer`; Required: no; Default: `32`
+- Purpose: Specifies the prefix length used when writing IPv6 addresses into ipset.
 
 ### quick setup
 
 ```yaml
-- exec: "ipset policy_v4 policy_v6"
+- exec: "ipset forgedns_v4,4,24 forgedns_v6,6,64"
 ```
+
+Format:
+
+```text
+<set_name>,<family>,<mask>
+```
+
+Here, `family` is `4` or `6`.
 
 ### Behavior
 
-- Learns A and AAAA answers and writes them into system sets.
+- Extracts unique A/AAAA addresses from the answer section.
+- Writes them into the corresponding set according to the address family.
+- Delivers them to the background writer through a non-blocking queue.
 
 ### Typical Uses
 
@@ -1056,7 +1114,8 @@ Writes response IPs into Linux `ipset`.
 
 ### Notes
 
-- This is Linux-specific and should stay off the most latency-sensitive path unless required.
+- On non-Linux platforms it degrades to a no-op.
+- When the queue is full, the side effect is dropped and does not block the DNS hot path.
 
 ---
 
@@ -1066,58 +1125,85 @@ Writes response IPs into Linux `ipset`.
 
 Writes response IPs into nftables sets.
 
-### Parameters
+### Example Configuration
+
+Structured form:
 
 ```yaml
 - tag: nftset_main
   type: nftset
   args:
-    table_family4: "ip"
-    table_name4: "filter"
-    set_name4: "policy_v4"
+    ipv4:
+      table_family: "ip"
+      table_name: "mangle"
+      set_name: "dns_v4"
+      mask: 24
+    ipv6:
+      table_family: "ip6"
+      table_name: "mangle"
+      set_name: "dns_v6"
+      mask: 64
 ```
 
 ### Configuration Details
 
 #### `ipv4`
 
-- Type: `boolean`; Required: no
-- Purpose: Enable IPv4 writes.
+- Type: `object`; Required: no; Default: none
+- Purpose: Defines the target IPv4 nftables set.
+- Child fields:
+  - `table_family`
+  - `table_name`
+  - `set_name`
+  - `mask`
 
 #### `ipv6`
 
-- Type: `boolean`; Required: no
-- Purpose: Enable IPv6 writes.
+- Type: `object`; Required: no; Default: none
+- Purpose: Defines the target IPv6 nftables set.
+- Child fields:
+  - `table_family`
+  - `table_name`
+  - `set_name`
+  - `mask`
 
 #### `table_family4` / `table_family6`
 
-- Type: `string`; Required: no
-- Purpose: nft table family for IPv4 and IPv6.
+- Type: `string`; Required: no; Default: none
+- Purpose: In the compatibility form, defines the nftables table family for IPv4 / IPv6 respectively.
 
 #### `table_name4` / `table_name6`
 
-- Type: `string`; Required: no
-- Purpose: nft table name for IPv4 and IPv6.
+- Type: `string`; Required: no; Default: none
+- Purpose: In the compatibility form, defines the nftables table name for IPv4 / IPv6 respectively.
 
 #### `set_name4` / `set_name6`
 
-- Type: `string`; Required: no
-- Purpose: target nft set names.
+- Type: `string`; Required: no; Default: none
+- Purpose: In the compatibility form, defines the set name for IPv4 / IPv6 respectively.
 
 #### `mask4` / `mask6`
 
-- Type: `integer`; Required: no
-- Purpose: network mask applied before insertion.
+- Type: `integer`; Required: no; Default: implementation-defined
+- Purpose: In the compatibility form, defines the prefix length for IPv4 / IPv6 respectively.
 
 ### quick setup
 
 ```yaml
-- exec: "nftset filter policy_v4 policy_v6"
+- exec: "nftset ip,mangle,dns_v4,ipv4_addr,24 ip6,mangle,dns_v6,ipv6_addr,64"
+```
+
+Format:
+
+```text
+<family>,<table>,<set>,<type>,<mask>
 ```
 
 ### Behavior
 
-- Learns answer IPs and mirrors them into nftables sets.
+- Extracts A/AAAA addresses.
+- Writes nftables interval elements according to the prefix.
+- Also uses the background writer so that the hot path remains non-blocking.
 
 ### Typical Uses
 
@@ -1125,7 +1211,7 @@ Writes response IPs into nftables sets.
 
 ### Notes
 
-- Keep table family and set names consistent with system-side nft definitions.
+- On non-Linux platforms it degrades to a no-op.
 
 ---
 
@@ -1135,18 +1221,30 @@ Writes response IPs into nftables sets.
 
 Writes response IPs into MikroTik RouterOS address lists.
 
-### Parameters
+### Example Configuration
 
 ```yaml
-- tag: ros_main
+- tag: ros_address_list_main
   type: ros_address_list
   args:
-    address: "http://192.168.88.1"
-    username: "admin"
-    password: "password"
-    address_list4: "policy_v4"
-    address_list6: "policy_v6"
+    address: "172.16.1.1:8728"
+    username: "api-user"
+    password: "secret"
     async: true
+    address_list4: "forgedns_ipv4"
+    address_list6: "forgedns_ipv6"
+    comment_prefix: "forgedns"
+    min_ttl: 60
+    max_ttl: 3600
+    fixed_ttl: 300
+    cleanup_on_shutdown: true
+    persistent:
+      ips:
+        - "1.1.1.1"
+        - "100.64.1.0/24"
+        - "2001:db8::/64"
+      files:
+        - "/etc/forgedns/persistent_ips.txt"
 ```
 
 ### Configuration Details
@@ -1168,8 +1266,8 @@ Writes response IPs into MikroTik RouterOS address lists.
 
 #### `async`
 
-- Type: `boolean`; Required: no; Default: `false`
-- Purpose: Write updates asynchronously.
+- Type: `bool`; Required: no; Default: `true`
+- Purpose: Controls whether address writes use asynchronous mode. When enabled, the DNS response path only submits tasks, and a background manager completes the RouterOS interaction.
 
 #### `address_list4`
 
@@ -1188,44 +1286,53 @@ Writes response IPs into MikroTik RouterOS address lists.
 
 #### `persistent`
 
-- Type: `object`; Required: no
-- Purpose: Additional static or persistent entries merged with learned entries.
+- Type: `object`; Required: no; Default: none
+- Purpose: Defines the static address set that should be kept for the long term. This part does not depend on DNS responses to trigger. After plugin startup it can be synchronized to RouterOS directly and then kept consistent periodically.
 
 #### `persistent.ips`
 
-- Type: `array`; Required: no
-- Purpose: Inline persistent IPs.
+- Type: `array<string>`; Required: no; Default: empty
+- Purpose: Declares persistent IPs or CIDR ranges inline.
 
 #### `persistent.files`
 
-- Type: `array`; Required: no
-- Purpose: Files containing persistent IPs.
+- Type: `array<string>`; Required: no; Default: empty
+- Purpose: Loads the persistent address set from external files.
 
 #### `min_ttl`
 
-- Type: `duration`; Required: no
-- Purpose: Lower TTL bound used for RouterOS entry timeout.
+- Type: `u64`; Required: no; Default: `60`
+- Purpose: Defines the minimum TTL allowed for dynamic address entries.
 
 #### `max_ttl`
 
-- Type: `duration`; Required: no
-- Purpose: Upper TTL bound used for RouterOS entry timeout.
+- Type: `u64`; Required: no; Default: `3600`
+- Purpose: Defines the maximum TTL allowed for dynamic address entries.
 
 #### `fixed_ttl`
 
-- Type: `duration`; Required: no
-- Purpose: Force one fixed timeout value. Set it to `0` to create dynamic entries without a RouterOS `timeout`.
+- Type: `u64`; Required: no; Default: none
+- Purpose: Specifies one fixed TTL for all dynamically written entries. If it is set to `0`, dynamic entries will not set a RouterOS `timeout`.
 
 #### `cleanup_on_shutdown`
 
-- Type: `boolean`; Required: no; Default: `false`
-- Purpose: Remove learned entries during graceful shutdown.
+- Type: `bool`; Required: no; Default: `true`
+- Purpose: Controls whether entries managed by the plugin are removed when the plugin exits.
 
 ### Behavior
 
-- Learns A and AAAA answers and syncs them into RouterOS address lists.
-- Can operate synchronously or asynchronously.
-- Supports combining dynamic learned entries with persistent policy data.
+- The plugin itself does not modify DNS responses.
+- It only passes through during the forward phase.
+- During the return phase:
+  - Extracts A/AAAA records from `NOERROR` responses.
+  - Deduplicates them and keeps the largest TTL.
+  - Submits them to the background manager according to async or sync mode.
+- The manager is responsible for:
+  - Initial connectivity verification
+  - Dynamic entry refresh
+  - Persistent entry consistency maintenance
+  - Periodic file reload
+  - Cleanup on shutdown
 
 ### Typical Uses
 
@@ -1234,4 +1341,6 @@ Writes response IPs into MikroTik RouterOS address lists.
 
 ### Notes
 
-- This plugin is primarily for control-plane integration. Keep side effects and response-path latency tradeoffs visible in your design.
+- At least one of `address_list4` or `address_list6` is required.
+- `comment_prefix` and the plugin `tag` must not contain `;` or `=`.
+- Synchronous mode does not change the DNS response itself. Even if the RouterOS write fails, the DNS result is still preserved.

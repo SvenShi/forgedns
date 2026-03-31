@@ -42,13 +42,16 @@ quick setup：
 
 恒为真。
 
-### 参数
+### 配置示例
 
-无参数。
+```yaml
+- tag: always_true
+  type: _true
+```
 
-### 配置项详解
+### 配置项
 
-无配置项。
+无独立配置字段。
 
 ### 典型用途
 
@@ -63,13 +66,16 @@ quick setup：
 
 恒为假。
 
-### 参数
+### 配置示例
 
-无参数。
+```yaml
+- tag: always_false
+  type: _false
+```
 
-### 配置项详解
+### 配置项
 
-无配置项。
+无独立配置字段。
 
 ### 典型用途
 
@@ -83,24 +89,21 @@ quick setup：
 
 匹配请求中的查询域名。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: match_domain
   type: qname
   args:
+    # 域名表达式
     - "domain:example.com"
+    # 复用已有 domain_set
     - "$core_domains"
+    # 从文件加载规则
     - "&/etc/forgedns/domains.txt"
 ```
 
-支持：
-
-- 域名规则
-- `domain_set` 引用
-- 文件引用
-
-### 配置项详解
+### 配置项
 
 `qname` 的 `args` 采用规则列表形式，列表中的每个元素均独立生效。
 
@@ -133,7 +136,7 @@ quick setup：
 
 这个插件会遍历当前请求里的所有 question，只要任意 question 被任意一个 provider 命中，就返回 `true`。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: match_ad
@@ -143,7 +146,7 @@ quick setup：
     - "$shared_domains"
 ```
 
-### 配置项详解
+### 配置项
 
 - `args`
   - 类型：`array[string]`；必填：是；默认值：无
@@ -168,7 +171,7 @@ quick setup：
 
 匹配请求中的 qtype。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: only_a_aaaa
@@ -178,9 +181,7 @@ quick setup：
     - "AAAA"
 ```
 
-支持类型名称或对应值。
-
-### 配置项详解
+### 配置项
 
 `qtype` 的 `args` 为类型列表。
 
@@ -210,7 +211,7 @@ quick setup：
 
 匹配请求中的 qclass。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: only_in
@@ -219,7 +220,7 @@ quick setup：
     - "IN"
 ```
 
-### 配置项详解
+### 配置项
 
 `qclass` 的 `args` 为类别列表。
 
@@ -249,22 +250,19 @@ quick setup：
 
 匹配客户端来源 IP。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: lan_clients
   type: client_ip
   args:
+    # 直接写 CIDR
     - "192.168.0.0/16"
+    # 引用 ip_set
     - "$lan_ip_set"
 ```
 
-支持：
-
-- IP / CIDR
-- `ip_set` 引用
-
-### 配置项详解
+### 配置项
 
 `client_ip` 的 `args` 采用规则列表形式。
 
@@ -295,7 +293,7 @@ quick setup：
 
 匹配响应 answers 中的 A/AAAA IP。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: matched_resp_ip
@@ -305,7 +303,7 @@ quick setup：
     - "$special_targets"
 ```
 
-### 配置项详解
+### 配置项
 
 `resp_ip` 的 `args` 采用规则列表形式。
 
@@ -338,11 +336,11 @@ quick setup：
 
 从 PTR 请求名中解析 IP 并做匹配。
 
-### 参数
+### 配置示例
 
 与 `client_ip` / `resp_ip` 类似，支持 IP 规则和 `ip_set`。
 
-### 配置项详解
+### 配置项
 
 `ptr_ip` 的 `args` 采用规则列表形式。
 
@@ -374,15 +372,18 @@ quick setup：
 
 匹配响应中的 CNAME 目标域名。
 
-### 参数
+### 配置示例
 
-与 `qname` 类似，支持：
+```yaml
+- tag: cname_target
+  type: cname
+  args:
+    - "domain:example.com"
+    - "$core_domains"
+    - "&/etc/forgedns/cnames.txt"
+```
 
-- 域名规则
-- `domain_set`
-- 文件引用
-
-### 配置项详解
+### 配置项
 
 `cname` 的 `args` 采用规则列表形式。
 
@@ -414,7 +415,7 @@ quick setup：
 
 匹配上下文中的 mark 集合。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: marked_100
@@ -429,7 +430,7 @@ quick setup：
 - 参数会被解析为整数 mark。
 - 只要上下文 marks 与配置 marks 有交集就算命中。
 
-### 配置项详解
+### 配置项
 
 `mark` 的 `args` 为 mark 列表。
 
@@ -458,7 +459,7 @@ quick setup：
 
 匹配进程环境变量。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: env_profile_prod
@@ -475,7 +476,7 @@ args:
   - "FEATURE_X"
 ```
 
-### 配置项详解
+### 配置项
 
 `env` 的 `args` 为一到两个元素。
 
@@ -510,7 +511,7 @@ args:
 
 按概率命中。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: rollout_10p
@@ -519,9 +520,7 @@ args:
     - "0.1"
 ```
 
-- 参数必须是一个 `0.0..=1.0` 浮点数。
-
-### 配置项详解
+### 配置项
 
 `random` 的 `args` 只接受一个概率值。
 
@@ -551,7 +550,7 @@ args:
 
 基于客户端 IP 的令牌桶限流。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: qps_guard
@@ -563,20 +562,7 @@ args:
     mask6: 48
 ```
 
-- `qps`
-  - 每秒补充令牌数。
-  - 默认 `20`。
-- `burst`
-  - 桶容量。
-  - 默认 `40`。
-- `mask4`
-  - IPv4 聚合前缀。
-  - 默认 `32`。
-- `mask6`
-  - IPv6 聚合前缀。
-  - 默认 `48`。
-
-### 配置项详解
+### 配置项
 
 #### `qps`
 
@@ -627,7 +613,7 @@ args:
 
 匹配当前响应的 rcode。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: only_noerror
@@ -636,15 +622,7 @@ args:
     - "0"
 ```
 
-说明：
-
-- 当前接受十进制数字。
-- 例如：
-  - `0` = `NOERROR`
-  - `2` = `SERVFAIL`
-  - `3` = `NXDOMAIN`
-
-### 配置项详解
+### 配置项
 
 `rcode` 的 `args` 为 rcode 列表。
 
@@ -652,6 +630,10 @@ args:
 - 作用：定义可命中的响应码集合。
 - 取值要求：
   - 当前使用十进制整数表示。
+  - 例如：
+    - `0` = `NOERROR`
+    - `2` = `SERVFAIL`
+    - `3` = `NXDOMAIN`
 - 运行影响：
   - 仅当上下文中已有响应且 rcode 命中配置集合时返回 `true`。
 
@@ -673,13 +655,16 @@ args:
 
 只要上下文中已有响应就命中。
 
-### 参数
+### 配置示例
 
-无参数。
+```yaml
+- tag: has_resp_flag
+  type: has_resp
+```
 
-### 配置项详解
+### 配置项
 
-无配置项。
+无独立配置字段。
 
 ### quick setup
 
@@ -699,13 +684,16 @@ args:
 
 判断响应 answers 中是否包含与请求 qtype 对应的记录。
 
-### 参数
+### 配置示例
 
-无参数。
+```yaml
+- tag: has_wanted_answer
+  type: has_wanted_ans
+```
 
-### 配置项详解
+### 配置项
 
-无配置项。
+无独立配置字段。
 
 ### quick setup
 
@@ -725,7 +713,7 @@ args:
 
 通用字符串表达式匹配器，用于补足专用 matcher 不够灵活的场景。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: match_http_path
@@ -742,7 +730,7 @@ args:
   - "192.168."
 ```
 
-### 配置项详解
+### 配置项
 
 `string_exp` 的 `args` 可以为字符串或字符串数组。
 

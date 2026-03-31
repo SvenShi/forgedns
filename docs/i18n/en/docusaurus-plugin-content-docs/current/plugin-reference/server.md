@@ -32,7 +32,7 @@ Every server plugin depends on an `entry`. It must reference an existing executo
 
 Listens for DNS over UDP and forwards requests to `entry`.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: udp_in
@@ -41,11 +41,6 @@ Listens for DNS over UDP and forwards requests to `entry`.
     entry: "seq_main"
     listen: "0.0.0.0:53"
 ```
-
-- `entry`
-  - Required entry executor tag.
-- `listen`
-  - Listen address in `ip:port` or `:port` form.
 
 ### Configuration Details
 
@@ -100,7 +95,7 @@ Listens for DNS over UDP and forwards requests to `entry`.
 
 Listens for DNS over TCP. If `cert` and `key` are both configured, it can also serve as a DoT listener.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: tcp_in
@@ -119,18 +114,6 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
     key: "/etc/forgedns/server.key"
     idle_timeout: 30
 ```
-
-- `entry`
-  - Required entry executor.
-- `listen`
-  - Required TCP bind address.
-- `cert`
-  - Optional PEM certificate file.
-- `key`
-  - Optional PEM private key file.
-- `idle_timeout`
-  - Optional idle timeout in seconds.
-  - Default: `10`.
 
 ### Configuration Details
 
@@ -212,7 +195,7 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
 
 Provides DNS over QUIC.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: doq_in
@@ -224,17 +207,6 @@ Provides DNS over QUIC.
     key: "/etc/forgedns/server.key"
     idle_timeout: 30
 ```
-
-- `entry`
-  - Required entry executor.
-- `listen`
-  - Required bind address.
-- `cert`
-  - Required PEM certificate file.
-- `key`
-  - Required PEM private key file.
-- `idle_timeout`
-  - Optional QUIC transport idle timeout.
 
 ### Configuration Details
 
@@ -303,7 +275,7 @@ Provides DNS over QUIC.
 
 Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
 
-### Parameters
+### Example Configuration
 
 ```yaml
 - tag: doh_in
@@ -321,23 +293,6 @@ Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
       - path: "/dns-alt"
         exec: "seq_alt"
 ```
-
-- `entries`
-  - Required array of path-to-executor mappings.
-- `listen`
-  - Required listen address.
-- `src_ip_header`
-  - Optional header name used to recover the real client IP behind a reverse proxy.
-- `cert`
-  - Optional certificate for HTTPS.
-- `key`
-  - Optional private key for HTTPS.
-- `idle_timeout`
-  - Optional connection idle timeout.
-  - Default: `30`.
-- `enable_http3`
-  - Optional flag to also enable HTTP/3.
-  - Requires TLS.
 
 ### Configuration Details
 

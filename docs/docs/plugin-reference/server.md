@@ -32,7 +32,7 @@ sidebar_position: 2
 
 监听 UDP DNS 请求，并把请求转交给 `entry`。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: udp_in
@@ -42,14 +42,7 @@ sidebar_position: 2
     listen: "0.0.0.0:53"
 ```
 
-- `entry`
-  - 入口执行器 tag。
-  - 必填。
-- `listen`
-  - 监听地址，支持 `ip:port` 或 `:port`。
-  - 例如 `0.0.0.0:53`、`:5353`。
-
-### 配置项详解
+### 配置项
 
 #### `entry`
 
@@ -102,7 +95,7 @@ sidebar_position: 2
 
 监听 TCP DNS 请求；当同时配置 `cert` 和 `key` 时，也可作为 DoT 入口。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: tcp_in
@@ -122,19 +115,7 @@ sidebar_position: 2
     idle_timeout: 30
 ```
 
-- `entry`
-  - 必填，入口执行器。
-- `listen`
-  - 必填，TCP 监听地址。
-- `cert`
-  - 可选，PEM 证书文件。
-- `key`
-  - 可选，PEM 私钥文件。
-- `idle_timeout`
-  - 可选，空闲超时秒数。
-  - 默认 `10` 秒。
-
-### 配置项详解
+### 配置项
 
 #### `entry`
 
@@ -215,7 +196,7 @@ sidebar_position: 2
 
 提供 DNS over QUIC 服务。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: doq_in
@@ -228,18 +209,7 @@ sidebar_position: 2
     idle_timeout: 30
 ```
 
-- `entry`
-  - 必填，入口执行器。
-- `listen`
-  - 必填，监听地址。
-- `cert`
-  - 必填，PEM 证书文件。
-- `key`
-  - 必填，PEM 私钥文件。
-- `idle_timeout`
-  - 可选，QUIC transport idle timeout。
-
-### 配置项详解
+### 配置项
 
 #### `entry`
 
@@ -306,7 +276,7 @@ sidebar_position: 2
 
 提供 DNS over HTTPS 服务，可同时支持 HTTP/2 与可选 HTTP/3。
 
-### 参数
+### 配置示例
 
 ```yaml
 - tag: doh_in
@@ -325,29 +295,7 @@ sidebar_position: 2
         exec: "seq_alt"
 ```
 
-- `entries`
-  - 必填。
-  - 数组，每一项包含：
-    - `path`
-      - HTTP 路径，例如 `/dns-query`。
-    - `exec`
-      - 处理该路径的执行器 tag。
-- `listen`
-  - 必填，监听地址。
-- `src_ip_header`
-  - 可选，反向代理场景下从指定 Header 提取真实客户端 IP。
-- `cert`
-  - 可选，开启 HTTPS 时所需证书。
-- `key`
-  - 可选，开启 HTTPS 时所需私钥。
-- `idle_timeout`
-  - 可选，连接空闲超时。
-  - 默认 `30` 秒。
-- `enable_http3`
-  - 可选，是否同时启用 HTTP/3。
-  - 需要 TLS。
-
-### 配置项详解
+### 配置项
 
 #### `entries`
 
