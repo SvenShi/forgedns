@@ -434,7 +434,7 @@ fn parse_forward_config(plugin_config: &PluginConfig) -> Result<ForwardConfig> {
     let cfg = plugin_config.args.clone().ok_or_else(|| {
         DnsError::plugin("forward plugin requires 'concurrent' and 'upstreams' configuration")
     })?;
-    let cfg = serde_yml::from_value::<ForwardConfig>(cfg)
+    let cfg = serde_yaml_ng::from_value::<ForwardConfig>(cfg)
         .map_err(|e| DnsError::plugin(format!("failed to parse forward plugin config: {}", e)))?;
     validate_forward_config(&cfg)?;
     Ok(cfg)
@@ -693,7 +693,7 @@ mod tests {
         PluginConfig {
             tag: "forward-test".to_string(),
             plugin_type: "forward".to_string(),
-            args: Some(serde_yml::from_str(args).unwrap()),
+            args: Some(serde_yaml_ng::from_str(args).unwrap()),
         }
     }
 

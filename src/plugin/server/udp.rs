@@ -235,7 +235,7 @@ impl PluginFactory for UdpServerFactory {
     /// Get dependencies (the entry executor plugin)
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         if let Some(args) = &plugin_config.args
-            && let Ok(config) = serde_yml::from_value::<UdpServerConfig>(args.clone())
+            && let Ok(config) = serde_yaml_ng::from_value::<UdpServerConfig>(args.clone())
         {
             return vec![DependencySpec::executor("args.entry", config.entry)];
         }
@@ -247,7 +247,7 @@ impl PluginFactory for UdpServerFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<crate::plugin::UninitializedPlugin> {
-        let udp_config = serde_yml::from_value::<UdpServerConfig>(
+        let udp_config = serde_yaml_ng::from_value::<UdpServerConfig>(
             plugin_config
                 .args
                 .clone()

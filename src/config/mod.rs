@@ -30,7 +30,7 @@ pub mod types;
 pub fn init(file: &PathBuf) -> Result<Config> {
     // Using ? operator - errors are automatically converted via From trait
     let string = fs::read_to_string(file)?;
-    let config: Config = serde_yml::from_str(&string)?;
+    let config: Config = serde_yaml_ng::from_str(&string)?;
 
     // Validate configuration - ConfigError is auto-converted to DnsError
     config.validate()?;

@@ -230,7 +230,7 @@ impl PluginFactory for FallbackFactory {
         plugin_config
             .args
             .clone()
-            .and_then(|args| serde_yml::from_value::<FallbackConfig>(args).ok())
+            .and_then(|args| serde_yaml_ng::from_value::<FallbackConfig>(args).ok())
             .map(|cfg| {
                 vec![
                     DependencySpec::executor("args.primary", cfg.primary),
@@ -245,7 +245,7 @@ impl PluginFactory for FallbackFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        let cfg: FallbackConfig = serde_yml::from_value(
+        let cfg: FallbackConfig = serde_yaml_ng::from_value(
             plugin_config
                 .args
                 .clone()

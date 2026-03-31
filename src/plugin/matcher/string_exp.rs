@@ -24,7 +24,7 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use regex::Regex;
-use serde_yml::Value;
+use serde_yaml_ng::Value;
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::fmt::Write as _;

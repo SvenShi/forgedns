@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};
 use serde::{Deserialize, Serialize};
+use serde_yaml_ng::Value;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -579,9 +580,9 @@ impl Executor for Cache {
     }
 }
 
-fn parse_cache_config(args: Option<serde_yml::Value>) -> Result<CacheConfig> {
+fn parse_cache_config(args: Option<Value>) -> Result<CacheConfig> {
     if let Some(args) = args {
-        return serde_yml::from_value::<CacheConfig>(args)
+        return serde_yaml_ng::from_value::<CacheConfig>(args)
             .map_err(|e| DnsError::plugin(format!("failed to parse cache config: {}", e)));
     }
 

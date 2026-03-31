@@ -198,7 +198,7 @@ impl PluginFactory for SequenceFactory {
         let Some(args) = plugin_config.args.clone() else {
             return result;
         };
-        let Ok(rules) = serde_yml::from_value::<Vec<Rule>>(args) else {
+        let Ok(rules) = serde_yaml_ng::from_value::<Vec<Rule>>(args) else {
             return result;
         };
 
@@ -230,7 +230,7 @@ impl PluginFactory for SequenceFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> DnsResult<UninitializedPlugin> {
-        let rules = serde_yml::from_value::<Vec<Rule>>(
+        let rules = serde_yaml_ng::from_value::<Vec<Rule>>(
             plugin_config
                 .args
                 .clone()
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_rule_deserialize_supports_match_string_and_matches_sequence() {
-        let single = serde_yml::from_str::<Rule>(
+        let single = serde_yaml_ng::from_str::<Rule>(
             r#"
 matches: "$allow_all"
 exec: accept
@@ -318,7 +318,7 @@ exec: accept
             vec!["$allow_all".to_string()]
         );
 
-        let multi = serde_yml::from_str::<Rule>(
+        let multi = serde_yaml_ng::from_str::<Rule>(
             r#"
 matches:
   - "_true"

@@ -27,6 +27,7 @@ use crate::proto::{ClientSubnet, DNSClass, Edns, EdnsCode, EdnsOption};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -182,9 +183,9 @@ impl PluginFactory for EcsHandlerFactory {
     }
 }
 
-fn parse_handler_from_value(tag: &str, args: Option<serde_yml::Value>) -> Result<EcsHandler> {
+fn parse_handler_from_value(tag: &str, args: Option<Value>) -> Result<EcsHandler> {
     let cfg = match args {
-        Some(args) => serde_yml::from_value::<EcsHandlerConfig>(args)
+        Some(args) => serde_yaml_ng::from_value::<EcsHandlerConfig>(args)
             .map_err(|e| DnsError::plugin(format!("failed to parse ecs_handler config: {}", e)))?,
         None => EcsHandlerConfig::default(),
     };
@@ -263,7 +264,7 @@ mod tests {
     fn test_parse_handler_from_value_validation() {
         assert!(parse_handler_from_value("ecs", None).is_ok());
         assert!(
-            parse_handler_from_value("ecs", Some(serde_yml::from_str("mask4: 64").unwrap()),)
+            parse_handler_from_value("ecs", Some(serde_yaml_ng::from_str("mask4: 64").unwrap()),)
                 .is_err()
         );
     }

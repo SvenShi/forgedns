@@ -47,7 +47,7 @@ use crate::plugin::provider::Provider;
 use crate::plugin::server::Server;
 use async_trait::async_trait;
 pub use registry::PluginRegistry;
-use serde_yml::Value;
+use serde_yaml_ng::Value;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;

@@ -21,6 +21,7 @@ use crate::register_plugin_factory;
 use ahash::AHashMap;
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -222,12 +223,12 @@ impl PluginFactory for ArbitraryFactory {
     }
 }
 
-fn parse_config(args: Option<serde_yml::Value>) -> Result<ArbitraryConfig> {
+fn parse_config(args: Option<Value>) -> Result<ArbitraryConfig> {
     let Some(args) = args else {
         return Ok(ArbitraryConfig::default());
     };
 
-    serde_yml::from_value::<ArbitraryConfig>(args)
+    serde_yaml_ng::from_value::<ArbitraryConfig>(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse arbitrary config: {}", e)))
 }
 

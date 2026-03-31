@@ -11,6 +11,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::PluginRegistry;
 use crate::proto::Message;
+use serde_yaml_ng::Value;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
@@ -21,7 +22,7 @@ pub(crate) fn test_registry() -> Arc<PluginRegistry> {
 pub(crate) fn plugin_config(
     tag: impl Into<String>,
     plugin_type: impl Into<String>,
-    args: Option<serde_yml::Value>,
+    args: Option<Value>,
 ) -> PluginConfig {
     PluginConfig {
         tag: tag.into(),

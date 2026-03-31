@@ -230,7 +230,7 @@ impl PluginFactory for ReverseLookupFactory {
         let cfg = plugin_config
             .args
             .clone()
-            .map(serde_yml::from_value::<ReverseLookupConfig>)
+            .map(serde_yaml_ng::from_value::<ReverseLookupConfig>)
             .transpose()
             .map_err(|e| DnsError::plugin(format!("failed to parse reverse_lookup config: {}", e)))?
             .unwrap_or_default();

@@ -32,6 +32,7 @@ use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use async_trait::async_trait;
 use regex::{Regex, RegexSet, RegexSetBuilder};
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -153,12 +154,12 @@ impl PluginFactory for HostsFactory {
     }
 }
 
-fn parse_config(args: Option<serde_yml::Value>) -> Result<HostsConfig> {
+fn parse_config(args: Option<Value>) -> Result<HostsConfig> {
     let Some(args) = args else {
         return Ok(HostsConfig::default());
     };
 
-    serde_yml::from_value(args)
+    serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse hosts config: {}", e)))
 }
 

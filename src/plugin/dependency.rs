@@ -386,7 +386,7 @@ mod tests {
                 tag: "server".to_string(),
                 plugin_type: "udp_server".to_string(),
                 args: Some(
-                    serde_yml::to_value(
+                    serde_yaml_ng::to_value(
                         vec![("entry", "forward")]
                             .into_iter()
                             .collect::<std::collections::HashMap<_, _>>(),
@@ -425,7 +425,7 @@ mod tests {
             tag: "server".to_string(),
             plugin_type: "udp_server".to_string(),
             args: Some(
-                serde_yml::to_value(
+                serde_yaml_ng::to_value(
                     vec![("entry", "missing_exec")]
                         .into_iter()
                         .collect::<std::collections::HashMap<_, _>>(),
@@ -448,7 +448,7 @@ mod tests {
                 tag: "server".to_string(),
                 plugin_type: "udp_server".to_string(),
                 args: Some(
-                    serde_yml::to_value(
+                    serde_yaml_ng::to_value(
                         vec![("entry", "set1")]
                             .into_iter()
                             .collect::<std::collections::HashMap<_, _>>(),
@@ -486,7 +486,7 @@ mod tests {
                 tag: "a".to_string(),
                 plugin_type: "forward".to_string(),
                 args: Some(
-                    serde_yml::to_value(
+                    serde_yaml_ng::to_value(
                         vec![("dep", "b")]
                             .into_iter()
                             .collect::<std::collections::HashMap<_, _>>(),
@@ -498,7 +498,7 @@ mod tests {
                 tag: "b".to_string(),
                 plugin_type: "forward".to_string(),
                 args: Some(
-                    serde_yml::to_value(
+                    serde_yaml_ng::to_value(
                         vec![("dep", "a")]
                             .into_iter()
                             .collect::<std::collections::HashMap<_, _>>(),

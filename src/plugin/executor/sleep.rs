@@ -75,7 +75,7 @@ impl PluginFactory for SleepFactory {
         let cfg = plugin_config
             .args
             .clone()
-            .map(serde_yml::from_value::<SleepConfig>)
+            .map(serde_yaml_ng::from_value::<SleepConfig>)
             .transpose()
             .map_err(|e| DnsError::plugin(format!("failed to parse sleep config: {}", e)))?
             .unwrap_or_default();
@@ -110,6 +110,7 @@ mod tests {
     use super::*;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+    use serde_yaml_ng::Value;
 
     #[test]
     fn test_sleep_factory_quick_setup_validation() {
@@ -130,11 +131,7 @@ mod tests {
     #[test]
     fn test_sleep_factory_create_rejects_invalid_config_type() {
         let factory = SleepFactory;
-        let cfg = plugin_config(
-            "sleep",
-            "sleep",
-            Some(serde_yml::Value::String("bad".into())),
-        );
+        let cfg = plugin_config("sleep", "sleep", Some(Value::String("bad".into())));
         assert!(factory.create(&cfg, test_registry()).is_err());
     }
 

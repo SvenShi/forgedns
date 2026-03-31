@@ -23,6 +23,7 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::sync::Arc;
 use tracing::info;
 
@@ -148,7 +149,7 @@ impl PluginFactory for QuerySummaryFactory {
     }
 }
 
-fn parse_msg(args: Option<serde_yml::Value>) -> Option<String> {
+fn parse_msg(args: Option<Value>) -> Option<String> {
     let args = args?;
 
     if let Some(s) = args.as_str() {
@@ -160,7 +161,7 @@ fn parse_msg(args: Option<serde_yml::Value>) -> Option<String> {
         };
     }
 
-    serde_yml::from_value::<QuerySummaryConfig>(args)
+    serde_yaml_ng::from_value::<QuerySummaryConfig>(args)
         .ok()
         .and_then(|cfg| cfg.msg)
         .map(|v| v.trim().to_string())
@@ -183,13 +184,10 @@ mod tests {
     fn test_parse_msg_trims_and_filters_empty() {
         assert_eq!(parse_msg(None), None);
         assert_eq!(
-            parse_msg(Some(serde_yml::Value::String(" hi ".into()))),
+            parse_msg(Some(Value::String(" hi ".into()))),
             Some("hi".into())
         );
-        assert_eq!(
-            parse_msg(Some(serde_yml::Value::String("   ".into()))),
-            None
-        );
+        assert_eq!(parse_msg(Some(Value::String("   ".into()))), None);
     }
 
     #[tokio::test]

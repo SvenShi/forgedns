@@ -23,7 +23,7 @@ use tokio::time::sleep;
 use tokio::time::{Duration, timeout};
 
 fn parse_config(yaml: &str) -> Result<Config> {
-    let config: Config = serde_yml::from_str(yaml)?;
+    let config: Config = serde_yaml_ng::from_str(yaml)?;
     config.validate()?;
     Ok(config)
 }

@@ -8,7 +8,7 @@
 //! Defines the schema for ForgeDNS configuration files (YAML format).
 
 use serde::Deserialize;
-use serde_yml::Value;
+use serde_yaml_ng::Value;
 use std::collections::HashMap;
 use thiserror::Error;
 

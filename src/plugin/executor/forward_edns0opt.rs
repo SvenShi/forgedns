@@ -29,6 +29,7 @@ use crate::{continue_next, register_plugin_factory};
 use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -139,7 +140,7 @@ impl PluginFactory for ForwardEdns0OptFactory {
     }
 }
 
-fn parse_codes_from_value(args: Option<serde_yml::Value>) -> Result<AHashSet<u16>> {
+fn parse_codes_from_value(args: Option<Value>) -> Result<AHashSet<u16>> {
     let Some(args) = args else {
         return Ok(AHashSet::new());
     };
@@ -155,7 +156,7 @@ fn parse_codes_from_value(args: Option<serde_yml::Value>) -> Result<AHashSet<u16
         return Ok(out);
     }
 
-    let cfg: ForwardEdns0OptConfig = serde_yml::from_value(args)
+    let cfg: ForwardEdns0OptConfig = serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse forward_edns0opt config: {}", e)))?;
 
     Ok(cfg.codes.into_iter().collect())
@@ -219,9 +220,10 @@ mod tests {
 
     #[test]
     fn test_parse_codes_from_value_validation() {
-        assert!(parse_codes_from_value(Some(serde_yml::Value::String("x".into()))).is_err());
+        assert!(parse_codes_from_value(Some(Value::String("x".into()))).is_err());
         assert!(
-            parse_codes_from_value(Some(serde_yml::from_str("codes: [8, 15]").unwrap())).is_ok()
+            parse_codes_from_value(Some(serde_yaml_ng::from_str("codes: [8, 15]").unwrap()))
+                .is_ok()
         );
     }
 

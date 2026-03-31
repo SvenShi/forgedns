@@ -362,7 +362,7 @@ impl PluginFactory for QuicServerFactory {
     /// Get dependencies (the entry executor plugin)
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         if let Some(args) = &plugin_config.args
-            && let Ok(config) = serde_yml::from_value::<QuicServerConfig>(args.clone())
+            && let Ok(config) = serde_yaml_ng::from_value::<QuicServerConfig>(args.clone())
         {
             return vec![DependencySpec::executor("args.entry", config.entry)];
         }
@@ -374,7 +374,7 @@ impl PluginFactory for QuicServerFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<crate::plugin::UninitializedPlugin> {
-        let quic_config = serde_yml::from_value::<QuicServerConfig>(
+        let quic_config = serde_yaml_ng::from_value::<QuicServerConfig>(
             plugin_config
                 .args
                 .clone()

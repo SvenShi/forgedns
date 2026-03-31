@@ -28,6 +28,7 @@ use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::net::IpAddr;
 #[cfg(target_os = "linux")]
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -403,12 +404,12 @@ impl PluginFactory for NftSetFactory {
     }
 }
 
-fn parse_config(args: Option<serde_yml::Value>) -> Result<NftSetConfig> {
+fn parse_config(args: Option<Value>) -> Result<NftSetConfig> {
     let Some(args) = args else {
         return Ok(NftSetConfig::default());
     };
 
-    serde_yml::from_value(args)
+    serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse nftset config: {}", e)))
 }
 
@@ -566,7 +567,7 @@ mod tests {
 
     #[test]
     fn test_parse_config_rejects_empty_table_or_set_name() {
-        assert!(parse_config(Some(serde_yml::Value::String("bad".into()))).is_err());
+        assert!(parse_config(Some(Value::String("bad".into()))).is_err());
     }
 
     #[test]

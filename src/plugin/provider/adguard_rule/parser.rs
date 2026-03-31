@@ -7,18 +7,19 @@ use super::model::{AdGuardRuleConfig, DnsTypeConstraint, ParsedRule, PatternMatc
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::proto::RecordType;
 use regex::RegexBuilder;
+use serde_yaml_ng::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
 use std::str::FromStr;
 use tracing::warn;
 
-pub(super) fn parse_config(args: Option<serde_yml::Value>) -> DnsResult<AdGuardRuleConfig> {
+pub(super) fn parse_config(args: Option<Value>) -> DnsResult<AdGuardRuleConfig> {
     let Some(args) = args else {
         return Ok(AdGuardRuleConfig::default());
     };
 
-    serde_yml::from_value(args)
+    serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse adguard_rule config: {}", e)))
 }
 

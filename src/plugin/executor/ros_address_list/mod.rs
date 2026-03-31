@@ -39,6 +39,7 @@ use crate::{continue_next, register_plugin_factory};
 use ahash::{AHashMap, AHashSet};
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::fs;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
@@ -472,14 +473,11 @@ fn extract_observation(
     Some((domain, addrs))
 }
 
-fn parse_plugin_config(
-    args: Option<serde_yml::Value>,
-    emit_warnings: bool,
-) -> Result<MikrotikConfig> {
+fn parse_plugin_config(args: Option<Value>, emit_warnings: bool) -> Result<MikrotikConfig> {
     let Some(args) = args else {
         return Err(DnsError::plugin("ros_address_list plugin requires args"));
     };
-    let raw = serde_yml::from_value::<MikrotikConfigArgs>(args)
+    let raw = serde_yaml_ng::from_value::<MikrotikConfigArgs>(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse ros_address_list config: {e}")))?;
     raw.into_config(emit_warnings)
 }
@@ -1018,7 +1016,7 @@ mod tests {
 
     #[test]
     fn config_validation_requires_address_list() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
+        let cfg = serde_yaml_ng::from_str::<Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
@@ -1032,7 +1030,7 @@ password: "pass"
 
     #[test]
     fn config_validation_rejects_old_route_fields() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
+        let cfg = serde_yaml_ng::from_str::<Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
@@ -1048,7 +1046,7 @@ routing_table: "forgedns_dynamic"
 
     #[test]
     fn config_validation_rejects_old_persistent_route_key() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
+        let cfg = serde_yaml_ng::from_str::<Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
@@ -1066,7 +1064,7 @@ persistent_route:
 
     #[test]
     fn config_validation_defaults_comment_prefix() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
+        let cfg = serde_yaml_ng::from_str::<Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
@@ -1081,7 +1079,7 @@ address_list4: "forgedns_ipv4"
 
     #[test]
     fn config_validation_allows_zero_fixed_ttl() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
+        let cfg = serde_yaml_ng::from_str::<Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"
@@ -1097,7 +1095,7 @@ fixed_ttl: 0
 
     #[test]
     fn config_validation_ignores_persistent_item_without_family_list() {
-        let cfg = serde_yml::from_str::<serde_yml::Value>(
+        let cfg = serde_yaml_ng::from_str::<Value>(
             r#"
 address: "1.1.1.1:8728"
 username: "user"

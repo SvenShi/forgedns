@@ -290,7 +290,7 @@ impl PluginFactory for HttpServerFactory {
     /// Get dependencies (the entry executor plugins)
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         let http_config = match plugin_config.args.clone() {
-            Some(args) => match serde_yml::from_value::<HttpServerConfig>(args) {
+            Some(args) => match serde_yaml_ng::from_value::<HttpServerConfig>(args) {
                 Ok(config) => config,
                 Err(_) => return vec![],
             },
@@ -314,7 +314,7 @@ impl PluginFactory for HttpServerFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<crate::plugin::UninitializedPlugin> {
-        let http_config = serde_yml::from_value::<HttpServerConfig>(
+        let http_config = serde_yaml_ng::from_value::<HttpServerConfig>(
             plugin_config
                 .args
                 .clone()
@@ -448,7 +448,7 @@ mod tests {
     use super::*;
     use crate::plugin::test_utils::{plugin_config, test_registry};
     use http::HeaderMap;
-    use serde_yml::from_str;
+    use serde_yaml_ng::from_str;
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]

@@ -19,6 +19,7 @@ use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
+use serde_yaml_ng::Value;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -106,7 +107,7 @@ impl Matcher for QuestionMatcher {
     }
 }
 
-fn parse_provider_tags_from_value(args: Option<serde_yml::Value>) -> DnsResult<Vec<String>> {
+fn parse_provider_tags_from_value(args: Option<Value>) -> DnsResult<Vec<String>> {
     parse_provider_tags(parse_rules_from_value(args)?)
 }
 

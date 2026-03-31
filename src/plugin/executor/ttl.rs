@@ -27,6 +27,7 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -140,7 +141,7 @@ impl PluginFactory for TtlFactory {
     }
 }
 
-fn parse_policy_from_config(args: Option<serde_yml::Value>) -> Result<TtlPolicy> {
+fn parse_policy_from_config(args: Option<Value>) -> Result<TtlPolicy> {
     let Some(args) = args else {
         return Err(DnsError::plugin("ttl plugin requires args"));
     };
@@ -149,7 +150,7 @@ fn parse_policy_from_config(args: Option<serde_yml::Value>) -> Result<TtlPolicy>
         return parse_policy_from_expr(raw.trim());
     }
 
-    let cfg: TtlConfig = serde_yml::from_value(args)
+    let cfg: TtlConfig = serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse ttl config: {}", e)))?;
     if cfg.fix.is_some() {
         return Ok(TtlPolicy {

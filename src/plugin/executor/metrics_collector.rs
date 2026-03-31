@@ -30,6 +30,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -309,7 +310,7 @@ fn escape_label_value(value: &str) -> String {
     out
 }
 
-fn parse_name(args: Option<serde_yml::Value>) -> Option<String> {
+fn parse_name(args: Option<Value>) -> Option<String> {
     let args = args?;
 
     if let Some(s) = args.as_str() {
@@ -321,7 +322,7 @@ fn parse_name(args: Option<serde_yml::Value>) -> Option<String> {
         };
     }
 
-    serde_yml::from_value::<MetricsCollectorConfig>(args)
+    serde_yaml_ng::from_value::<MetricsCollectorConfig>(args)
         .ok()
         .and_then(|cfg| cfg.name)
         .map(|v| v.trim().to_string())
@@ -338,13 +339,10 @@ mod tests {
     fn test_parse_name_trims_and_filters_empty() {
         assert_eq!(parse_name(None), None);
         assert_eq!(
-            parse_name(Some(serde_yml::Value::String(" a ".into()))),
+            parse_name(Some(Value::String(" a ".into()))),
             Some("a".into())
         );
-        assert_eq!(
-            parse_name(Some(serde_yml::Value::String("   ".into()))),
-            None
-        );
+        assert_eq!(parse_name(Some(Value::String("   ".into()))), None);
     }
 
     fn make_collector() -> MetricsCollector {

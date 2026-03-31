@@ -177,7 +177,7 @@ impl PluginFactory for DomainSetFactory {
         plugin_config
             .args
             .clone()
-            .and_then(|args| serde_yml::from_value::<DomainSetArgs>(args).ok())
+            .and_then(|args| serde_yaml_ng::from_value::<DomainSetArgs>(args).ok())
             .map(|args| {
                 args.sets
                     .into_iter()
@@ -204,7 +204,7 @@ impl PluginFactory for DomainSetFactory {
         let args = plugin_config
             .args
             .clone()
-            .map(serde_yml::from_value::<DomainSetArgs>)
+            .map(serde_yaml_ng::from_value::<DomainSetArgs>)
             .transpose()
             .map_err(|e| DnsError::plugin(format!("failed to parse domain_set config: {}", e)))?
             .unwrap_or_default();

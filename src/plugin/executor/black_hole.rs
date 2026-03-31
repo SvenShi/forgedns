@@ -25,6 +25,7 @@ use crate::proto::{A, AAAA, RData, RecordType};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -119,7 +120,7 @@ impl PluginFactory for BlackHoleFactory {
     }
 }
 
-fn parse_ip_tokens_from_value(args: Option<serde_yml::Value>) -> Result<Vec<IpAddr>> {
+fn parse_ip_tokens_from_value(args: Option<Value>) -> Result<Vec<IpAddr>> {
     let Some(args) = args else {
         return Ok(Vec::new());
     };
@@ -131,7 +132,7 @@ fn parse_ip_tokens_from_value(args: Option<serde_yml::Value>) -> Result<Vec<IpAd
     if let Some(seq) = args.as_sequence() {
         let mut out = Vec::new();
         for item in seq {
-            let token = item
+            let token: &str = item
                 .as_str()
                 .ok_or_else(|| DnsError::plugin("black_hole args list must contain strings"))?;
             out.extend(parse_ip_tokens(
@@ -144,7 +145,7 @@ fn parse_ip_tokens_from_value(args: Option<serde_yml::Value>) -> Result<Vec<IpAd
         return Ok(out);
     }
 
-    let cfg: BlackHoleConfig = serde_yml::from_value(args)
+    let cfg: BlackHoleConfig = serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse black_hole config: {}", e)))?;
     parse_ip_tokens(cfg.ips)
 }

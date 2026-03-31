@@ -179,7 +179,7 @@ impl PluginFactory for IpSetFactory {
         plugin_config
             .args
             .clone()
-            .and_then(|args| serde_yml::from_value::<IpSetArgs>(args).ok())
+            .and_then(|args| serde_yaml_ng::from_value::<IpSetArgs>(args).ok())
             .map(|args| {
                 args.sets
                     .into_iter()
@@ -202,7 +202,7 @@ impl PluginFactory for IpSetFactory {
         let args = plugin_config
             .args
             .clone()
-            .map(serde_yml::from_value::<IpSetArgs>)
+            .map(serde_yaml_ng::from_value::<IpSetArgs>)
             .transpose()
             .map_err(|e| DnsError::plugin(format!("failed to parse ip_set config: {}", e)))?
             .unwrap_or_default();

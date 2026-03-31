@@ -370,7 +370,7 @@ impl PluginFactory for TcpServerFactory {
     /// Get dependencies (the entry executor plugin)
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         if let Some(args) = &plugin_config.args
-            && let Ok(config) = serde_yml::from_value::<TcpServerConfig>(args.clone())
+            && let Ok(config) = serde_yaml_ng::from_value::<TcpServerConfig>(args.clone())
         {
             return vec![DependencySpec::executor("args.entry", config.entry)];
         }
@@ -382,7 +382,7 @@ impl PluginFactory for TcpServerFactory {
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
     ) -> Result<crate::plugin::UninitializedPlugin> {
-        let tcp_config = serde_yml::from_value::<TcpServerConfig>(
+        let tcp_config = serde_yaml_ng::from_value::<TcpServerConfig>(
             plugin_config
                 .args
                 .clone()
@@ -440,7 +440,7 @@ mod tests {
     use crate::plugin::test_utils::{plugin_config, test_registry};
     use crate::proto::Rcode;
     use async_trait::async_trait;
-    use serde_yml::from_str;
+    use serde_yaml_ng::from_str;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::{Arc, Mutex};
     use tokio::time::Duration;

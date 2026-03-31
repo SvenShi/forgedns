@@ -25,6 +25,7 @@ use crate::proto::{Rcode, RecordType};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -298,9 +299,9 @@ impl DualSelectorFactory {
     }
 }
 
-fn parse_dual_selector_config(args: Option<serde_yml::Value>) -> Result<(bool, u64)> {
+fn parse_dual_selector_config(args: Option<Value>) -> Result<(bool, u64)> {
     let cfg = match args {
-        Some(args) => serde_yml::from_value::<DualSelectorConfig>(args).map_err(|e| {
+        Some(args) => serde_yaml_ng::from_value::<DualSelectorConfig>(args).map_err(|e| {
             DnsError::plugin(format!("failed to parse dual_selector config: {}", e))
         })?,
         None => DualSelectorConfig::default(),

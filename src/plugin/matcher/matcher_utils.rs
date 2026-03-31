@@ -11,7 +11,7 @@ use crate::plugin::PluginRegistry;
 use crate::plugin::provider::Provider;
 use crate::proto::{DNSClass, Rcode, RecordType};
 use ahash::AHashSet;
-use serde_yml::Value;
+use serde_yaml_ng::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::str::FromStr;

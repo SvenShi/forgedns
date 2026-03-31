@@ -24,7 +24,7 @@ pub enum DnsError {
 
     /// YAML parsing or serialization failed
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yml::Error),
+    Yaml(#[from] serde_yaml_ng::Error),
 
     /// Configuration validation error
     #[error("Configuration error: {0}")]

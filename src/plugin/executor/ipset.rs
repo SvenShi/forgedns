@@ -27,6 +27,7 @@ use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::net::IpAddr;
 #[cfg(target_os = "linux")]
 use std::process::Command;
@@ -312,12 +313,12 @@ impl PluginFactory for IpSetFactory {
     }
 }
 
-fn parse_config(args: Option<serde_yml::Value>) -> Result<IpSetConfig> {
+fn parse_config(args: Option<Value>) -> Result<IpSetConfig> {
     let Some(args) = args else {
         return Ok(IpSetConfig::default());
     };
 
-    serde_yml::from_value(args)
+    serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse ipset config: {}", e)))
 }
 

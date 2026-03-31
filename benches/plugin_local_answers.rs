@@ -3,7 +3,7 @@ use forgedns::config::types::{ApiConfig, Config, LogConfig, PluginConfig, Runtim
 use forgedns::core::context::DnsContext;
 use forgedns::plugin::{PluginRegistry, init as init_plugins};
 use forgedns::proto::{DNSClass, Message, Name, Question, RecordType};
-use serde_yml::Value;
+use serde_yaml_ng::Value;
 use std::hint::black_box;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -97,7 +97,7 @@ fn bench_black_hole(c: &mut Criterion) {
             ],
         ),
     ] {
-        let args: Value = serde_yml::from_str(&format!(
+        let args: Value = serde_yaml_ng::from_str(&format!(
             "ips:\n{}",
             ips.iter()
                 .map(|ip| format!("  - {ip}"))
@@ -148,7 +148,7 @@ fn bench_hosts(c: &mut Criterion) {
             "api42.bench.test.",
         ),
     ] {
-        let args: Value = serde_yml::from_str(&format!("entries:\n  - '{entry}'"))
+        let args: Value = serde_yaml_ng::from_str(&format!("entries:\n  - '{entry}'"))
             .expect("hosts args should parse");
         let (executor, registry) = load_executor(&rt, plugin_config("bench", "hosts", args));
 
@@ -223,7 +223,7 @@ fn bench_arbitrary(c: &mut Criterion) {
             RecordType::ANY,
         ),
     ] {
-        let args: Value = serde_yml::from_str(&format!(
+        let args: Value = serde_yaml_ng::from_str(&format!(
             "rules:\n{}",
             rules
                 .iter()

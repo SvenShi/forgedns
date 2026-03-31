@@ -351,7 +351,7 @@ fn validate_config_file(path: &Path) -> std::result::Result<ConfigCheckResponse,
 }
 
 fn validate_config_text(text: &str) -> std::result::Result<ConfigCheckResponse, String> {
-    let config: Config = serde_yml::from_str(text).map_err(|err| err.to_string())?;
+    let config: Config = serde_yaml_ng::from_str(text).map_err(|err| err.to_string())?;
     config.validate().map_err(|err| err.to_string())?;
     plugin::validate_configuration(&config).map_err(|err| err.to_string())?;
     Ok(ConfigCheckResponse {

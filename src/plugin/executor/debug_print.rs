@@ -16,6 +16,7 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::sync::Arc;
 use tracing::info;
 
@@ -100,7 +101,7 @@ impl PluginFactory for DebugPrintFactory {
     }
 }
 
-fn parse_msg_from_value(args: Option<serde_yml::Value>) -> Option<String> {
+fn parse_msg_from_value(args: Option<Value>) -> Option<String> {
     let args = args?;
 
     if let Some(s) = args.as_str() {
@@ -112,7 +113,7 @@ fn parse_msg_from_value(args: Option<serde_yml::Value>) -> Option<String> {
         };
     }
 
-    serde_yml::from_value::<DebugPrintConfig>(args)
+    serde_yaml_ng::from_value::<DebugPrintConfig>(args)
         .ok()
         .and_then(|cfg| cfg.msg)
         .map(|v| v.trim().to_string())
@@ -124,14 +125,14 @@ mod tests {
     use super::*;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_context;
-    use serde_yml::Value;
+    use Value;
 
     #[test]
     fn test_parse_msg_from_value_supports_string_and_struct() {
         let msg = parse_msg_from_value(Some(Value::String(" hello ".to_string())));
         assert_eq!(msg.as_deref(), Some("hello"));
 
-        let msg = parse_msg_from_value(Some(serde_yml::from_str("msg: custom").unwrap()));
+        let msg = parse_msg_from_value(Some(serde_yaml_ng::from_str("msg: custom").unwrap()));
         assert_eq!(msg.as_deref(), Some("custom"));
 
         let msg = parse_msg_from_value(Some(Value::String("   ".to_string())));

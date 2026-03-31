@@ -32,6 +32,7 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -210,12 +211,12 @@ impl Matcher for RateLimiter {
     }
 }
 
-fn parse_config(args: Option<serde_yml::Value>) -> DnsResult<RateLimiterConfig> {
+fn parse_config(args: Option<Value>) -> DnsResult<RateLimiterConfig> {
     let Some(args) = args else {
         return Ok(RateLimiterConfig::default());
     };
 
-    serde_yml::from_value(args)
+    serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse rate_limiter config: {}", e)))
 }
 
