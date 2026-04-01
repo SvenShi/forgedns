@@ -75,13 +75,57 @@ Windows 平台使用 `.zip`：
 - `forgedns-i686-pc-windows-msvc.zip`
 - `forgedns-aarch64-pc-windows-msvc.zip`
 
+### 不同系统如何选择 release 文件
+
+如果你不知道该点哪个 asset，可以直接按下面选择：
+
+| 系统 / 环境 | 推荐 release 文件 | 说明 |
+| --- | --- | --- |
+| Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` | 默认优先选这个，兼容性更稳 |
+| Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` | 默认优先选这个，兼容性更稳 |
+| Debian / Ubuntu x86_64 服务安装 | `*_amd64.deb` | 适合 systemd 服务部署 |
+| Debian / Ubuntu ARM64 服务安装 | `*_arm64.deb` | 适合 systemd 服务部署 |
+| Alpine Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` | Alpine 建议优先选 musl |
+| Alpine Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` | 静态链接更省心 |
+| 明确是 glibc Linux 且需要动态链接版本 | `forgedns-x86_64-unknown-linux-gnu.tar.gz` / `forgedns-aarch64-unknown-linux-gnu.tar.gz` | 仅在明确环境匹配时选择 |
+| 32 位 ARM Linux | `forgedns-arm-unknown-linux-musleabihf.tar.gz` | 适合部分树莓派和老 ARM 板子 |
+| macOS Intel | `forgedns-x86_64-apple-darwin.tar.gz` | Intel Mac |
+| macOS Apple Silicon | `forgedns-aarch64-apple-darwin.tar.gz` | M1 / M2 / M3 / M4 |
+| Windows x64 | `forgedns-x86_64-pc-windows-msvc.zip` | 常见 PC |
+| Windows 32-bit | `forgedns-i686-pc-windows-msvc.zip` | 仅在 32 位 Windows 上使用 |
+| Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` | ARM Windows 设备 |
+| FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` | FreeBSD 主机 |
+
+如果还不确定，可先查看本机信息：
+
+```bash
+uname -s
+uname -m
+```
+
+常见输出和目标的对应关系：
+
+- `Linux` + `x86_64`：默认选 `x86_64-unknown-linux-musl`，只有明确需要 glibc 动态链接版本时再选 `x86_64-unknown-linux-gnu`
+- `Linux` + `aarch64`：默认选 `aarch64-unknown-linux-musl`，只有明确需要 glibc 动态链接版本时再选 `aarch64-unknown-linux-gnu`
+- `Linux` + `armv7l`：选 `arm-unknown-linux-musleabihf`
+- `Darwin` + `x86_64`：选 `x86_64-apple-darwin`
+- `Darwin` + `arm64`：选 `aarch64-apple-darwin`
+
+Windows 可在 PowerShell 中执行：
+
+```powershell
+[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+```
+
+输出为 `X64`、`Arm64` 或 `X86` 时，分别对应下载 `x86_64`、`aarch64`、`i686` 的 Windows release。
+
 ### Linux / macOS 安装示例
 
-将下面的 `TAG` 替换为实际 release 标签，例如 `v0.1.0`。以 `x86_64-unknown-linux-gnu` 为例：
+将下面的 `TAG` 替换为实际 release 标签，例如 `v0.1.0`。Linux 默认以 `x86_64-unknown-linux-musl` 为例：
 
 ```bash
 curl -L -o forgedns.tar.gz \
-  https://github.com/SvenShi/forgedns/releases/download/TAG/forgedns-x86_64-unknown-linux-gnu.tar.gz
+  https://github.com/SvenShi/forgedns/releases/download/TAG/forgedns-x86_64-unknown-linux-musl.tar.gz
 
 mkdir -p forgedns
 tar -xzf forgedns.tar.gz -C forgedns
@@ -91,7 +135,7 @@ chmod +x forgedns
 ./forgedns start -c config.yaml
 ```
 
-如果你所在环境偏向静态链接部署，可优先选择 `*-linux-musl` 版本。
+如果你不能确认目标机的 glibc 版本，或运行在 Alpine Linux 上，应优先选择 `*-linux-musl` 版本，不要默认使用 `gnu` 版本。
 
 ### Windows 安装示例
 

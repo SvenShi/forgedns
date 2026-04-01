@@ -39,11 +39,29 @@ cargo run -- -c config.yaml -l debug
 cargo test
 ```
 
-示例配置见 [`config.yaml`](config.yaml)。
+如果你准备直接下载 GitHub Releases，可按系统选择：
+
+| 系统 / 环境 | 推荐 release 文件 |
+| --- | --- |
+| Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` |
+| Debian / Ubuntu x86_64 服务安装 | `*_amd64.deb` |
+| Debian / Ubuntu ARM64 服务安装 | `*_arm64.deb` |
+| Alpine Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` |
+| Alpine Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` |
+| 32 位 ARM Linux（如部分树莓派） | `forgedns-arm-unknown-linux-musleabihf.tar.gz` |
+| macOS Intel | `forgedns-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `forgedns-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `forgedns-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` |
+| FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` |
+
+Linux 下如果不确定兼容性，尽量优先选 `musl` 版本，不要默认选 `gnu`。不确定自己机器的系统和架构时，可先执行 `uname -s && uname -m`；Windows 可在 PowerShell 中执行 `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`。更完整的安装说明见文档中的快速开始页面。
 
 ## 文档导航
 
 - [配置总览](https://forgedns.cn/configuration)
+- [快速开始与 release 选择](https://forgedns.cn/quickstart)
 - [插件总览](https://forgedns.cn/plugin-reference/overview)
 - [管理 API](https://forgedns.cn/api)
 - [MikroTik 策略路由](https://forgedns.cn/mikrotik-policy-routing)

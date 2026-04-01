@@ -75,13 +75,57 @@ Windows targets use `.zip`:
 - `forgedns-i686-pc-windows-msvc.zip`
 - `forgedns-aarch64-pc-windows-msvc.zip`
 
+### How To Choose The Right Release Asset
+
+If you are not sure which asset to download, use this mapping:
+
+| System / Environment | Recommended release asset | Notes |
+| --- | --- | --- |
+| Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` | Safer default for broad compatibility |
+| Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` | Safer default for broad compatibility |
+| Debian / Ubuntu x86_64 service install | `*_amd64.deb` | Best fit for systemd-based deployment |
+| Debian / Ubuntu ARM64 service install | `*_arm64.deb` | Best fit for systemd-based deployment |
+| Alpine Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` | Prefer musl on Alpine |
+| Alpine Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` | Static-friendly build |
+| Confirmed glibc Linux requiring a dynamic build | `forgedns-x86_64-unknown-linux-gnu.tar.gz` / `forgedns-aarch64-unknown-linux-gnu.tar.gz` | Only choose this when the target environment is clearly compatible |
+| 32-bit ARM Linux | `forgedns-arm-unknown-linux-musleabihf.tar.gz` | Fits some Raspberry Pi and older ARM boards |
+| macOS Intel | `forgedns-x86_64-apple-darwin.tar.gz` | Intel Macs |
+| macOS Apple Silicon | `forgedns-aarch64-apple-darwin.tar.gz` | M1 / M2 / M3 / M4 Macs |
+| Windows x64 | `forgedns-x86_64-pc-windows-msvc.zip` | Most PCs |
+| Windows 32-bit | `forgedns-i686-pc-windows-msvc.zip` | Only for 32-bit Windows |
+| Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` | ARM-based Windows devices |
+| FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` | FreeBSD hosts |
+
+If you still need to verify your platform, check it first:
+
+```bash
+uname -s
+uname -m
+```
+
+Common output mapping:
+
+- `Linux` + `x86_64`: default to `x86_64-unknown-linux-musl`; use `x86_64-unknown-linux-gnu` only when you explicitly need a glibc dynamic build
+- `Linux` + `aarch64`: default to `aarch64-unknown-linux-musl`; use `aarch64-unknown-linux-gnu` only when you explicitly need a glibc dynamic build
+- `Linux` + `armv7l`: use `arm-unknown-linux-musleabihf`
+- `Darwin` + `x86_64`: use `x86_64-apple-darwin`
+- `Darwin` + `arm64`: use `aarch64-apple-darwin`
+
+On Windows PowerShell, run:
+
+```powershell
+[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+```
+
+Map `X64`, `Arm64`, and `X86` to the `x86_64`, `aarch64`, and `i686` Windows assets respectively.
+
 ### Linux / macOS Example
 
-Replace `TAG` below with the actual release tag, for example `v0.1.0`. Using `x86_64-unknown-linux-gnu` as an example:
+Replace `TAG` below with the actual release tag, for example `v0.1.0`. The Linux example below uses `x86_64-unknown-linux-musl` as the default choice:
 
 ```bash
 curl -L -o forgedns.tar.gz \
-  https://github.com/SvenShi/forgedns/releases/download/TAG/forgedns-x86_64-unknown-linux-gnu.tar.gz
+  https://github.com/SvenShi/forgedns/releases/download/TAG/forgedns-x86_64-unknown-linux-musl.tar.gz
 
 mkdir -p forgedns
 tar -xzf forgedns.tar.gz -C forgedns
@@ -91,7 +135,7 @@ chmod +x forgedns
 ./forgedns start -c config.yaml
 ```
 
-If you prefer a more self-contained static build on Linux, use a `*-linux-musl` archive.
+If you cannot guarantee the target machine's glibc compatibility, or you are running Alpine Linux, prefer a `*-linux-musl` archive instead of defaulting to `gnu`.
 
 ### Windows Example
 

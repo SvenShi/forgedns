@@ -39,11 +39,29 @@ cargo run -- -c config.yaml -l debug
 cargo test
 ```
 
-See the runnable example in [`config.yaml`](config.yaml).
+If you want to download a GitHub release directly, use this platform guide:
+
+| System / Environment | Recommended release asset |
+| --- | --- |
+| Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` |
+| Debian / Ubuntu x86_64 service install | `*_amd64.deb` |
+| Debian / Ubuntu ARM64 service install | `*_arm64.deb` |
+| Alpine Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` |
+| Alpine Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` |
+| 32-bit ARM Linux, including some Raspberry Pi installs | `forgedns-arm-unknown-linux-musleabihf.tar.gz` |
+| macOS Intel | `forgedns-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `forgedns-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `forgedns-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` |
+| FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` |
+
+On Linux, prefer `musl` by default if you are unsure about compatibility instead of assuming `gnu` will work. If you are unsure which platform you are on, run `uname -s && uname -m`. On Windows PowerShell, run `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`. The full install flow is documented in Quick Start.
 
 ## Documentation Map
 
 - [Configuration](https://forgedns.cn/en/configuration)
+- [Quick start and release selection](https://forgedns.cn/en/quickstart)
 - [Plugin overview](https://forgedns.cn/en/plugin-reference/overview)
 - [Management API](https://forgedns.cn/en/api)
 - [MikroTik policy routing](https://forgedns.cn/en/mikrotik-policy-routing)
