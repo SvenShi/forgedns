@@ -5,12 +5,15 @@
 
 //! Application logging bootstrap and formatter.
 
-use crate::config::types::LogConfig;
+use crate::config::types::{LogConfig, LogRotation};
 use crate::core::app_clock::AppClock;
-use std::fmt as stdfmt;
+use std::fmt as std_fmt;
+use std::fs;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{Event, Subscriber, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::fmt::{
     self as tracing_fmt, FmtContext, FormatEvent, FormatFields, FormattedFields, format,
 };
@@ -20,12 +23,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
 /// Initialize the logging system with console and optional file output.
-pub fn init_log(log: LogConfig) -> WorkerGuard {
+pub fn start_logging(log: LogConfig) -> WorkerGuard {
     let (file_writer, guard) = if let Some(ref file_path) = log.file {
-        let file_appender = tracing_appender::rolling::never(
-            std::path::Path::new(file_path).parent().unwrap(),
-            std::path::Path::new(file_path).file_name().unwrap(),
-        );
+        let file_appender = build_file_appender(file_path, &log.rotation)
+            .unwrap_or_else(|err| panic!("failed to initialize log file appender: {err}"));
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         (Some(non_blocking), Some(guard))
     } else {
@@ -37,6 +38,7 @@ pub fn init_log(log: LogConfig) -> WorkerGuard {
         .with_writer(std::io::stdout);
     let file_layer = file_writer.map(|writer| {
         tracing_fmt::layer()
+            .with_ansi(false)
             .event_format(ForgeDnsLogFormatter)
             .with_writer(writer)
     });
@@ -74,6 +76,55 @@ pub fn init_log(log: LogConfig) -> WorkerGuard {
     guard.unwrap_or_else(|| tracing_appender::non_blocking(std::io::sink()).1)
 }
 
+fn build_file_appender(path: &str, rotation: &LogRotation) -> std::io::Result<RollingFileAppender> {
+    let path = Path::new(path);
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    let filename = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "log file path must include a file name",
+        )
+    })?;
+    let filename = filename.to_string_lossy().into_owned();
+
+    fs::create_dir_all(directory)?;
+
+    let appender = match rotation {
+        LogRotation::Never => build_official_appender(Rotation::NEVER, directory, &filename, None)?,
+        LogRotation::Minutely { max_files } => {
+            build_official_appender(Rotation::MINUTELY, directory, &filename, *max_files)?
+        }
+        LogRotation::Hourly { max_files } => {
+            build_official_appender(Rotation::HOURLY, directory, &filename, *max_files)?
+        }
+        LogRotation::Daily { max_files } => {
+            build_official_appender(Rotation::DAILY, directory, &filename, *max_files)?
+        }
+        LogRotation::Weekly { max_files } => {
+            build_official_appender(Rotation::WEEKLY, directory, &filename, *max_files)?
+        }
+    };
+
+    Ok(appender)
+}
+
+fn build_official_appender(
+    rotation: Rotation,
+    directory: &Path,
+    filename: &str,
+    max_files: Option<usize>,
+) -> std::io::Result<RollingFileAppender> {
+    let mut builder = RollingFileAppender::builder()
+        .rotation(rotation)
+        .filename_prefix(filename);
+    if let Some(max_files) = max_files {
+        builder = builder.max_log_files(max_files);
+    }
+    builder
+        .build(directory)
+        .map_err(|err| std::io::Error::other(err.to_string()))
+}
+
 /// Custom log formatter for ForgeDNS.
 pub struct ForgeDnsLogFormatter;
 
@@ -99,7 +150,7 @@ fn write_utc_iso8601(
     writer: &mut format::Writer<'_>,
     unix_secs: u64,
     millis: u32,
-) -> stdfmt::Result {
+) -> std_fmt::Result {
     let days = (unix_secs / 86_400) as i64;
     let sod = (unix_secs % 86_400) as u32;
     let hour = sod / 3_600;
@@ -124,7 +175,7 @@ where
         ctx: &FmtContext<'_, S, N>,
         mut writer: format::Writer<'_>,
         event: &Event<'_>,
-    ) -> stdfmt::Result {
+    ) -> std_fmt::Result {
         let metadata = event.metadata();
         let wall = SystemTime::now()
             .duration_since(UNIX_EPOCH)

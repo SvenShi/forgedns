@@ -58,6 +58,9 @@ runtime:
 log:
   level: info
   file: ./forgedns.log
+  rotation:
+    type: daily
+    max_files: 7
 ```
 
 字段说明：
@@ -68,6 +71,25 @@ log:
 - `file`
   - 含义：可选日志文件路径。
   - 不配置时仅输出到标准输出。
+  - 配置后，ForgeDNS 会同时输出到标准输出和日志文件。
+  - 日志文件内容为 UTF-8 纯文本格式，不写入终端 ANSI 颜色控制码。
+- `rotation`
+  - 含义：日志文件轮转策略。
+  - 默认：`never`
+
+`rotation` 支持以下配置：
+
+- `type: never`
+  - 不轮转，始终写入同一个文件。
+- `type: minutely`
+  - 按分钟轮转。
+- `type: hourly`
+  - 按小时轮转。
+- `type: daily`
+  - 按天轮转。
+- `type: weekly`
+  - 按周轮转。
+  - 可选配置 `max_files`，表示最多保留多少个历史文件；`0` 表示不自动删除。
 
 ### `api`
 

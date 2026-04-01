@@ -236,6 +236,46 @@ pub struct LogConfig {
 
     /// Optional file path for log output (in addition to console)
     pub file: Option<String>,
+
+    #[serde(default)]
+    pub rotation: LogRotation,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LogRotation {
+    #[default]
+    Never,
+    Minutely {
+        max_files: Option<usize>,
+    },
+    Hourly {
+        max_files: Option<usize>,
+    },
+    Daily {
+        max_files: Option<usize>,
+    },
+    Weekly {
+        max_files: Option<usize>,
+    },
+}
+
+impl LogRotation {
+    #[inline]
+    pub fn max_files(&self) -> Option<usize> {
+        match self {
+            LogRotation::Never => None,
+            LogRotation::Minutely { max_files } => *max_files,
+            LogRotation::Hourly { max_files } => *max_files,
+            LogRotation::Daily { max_files } => *max_files,
+            LogRotation::Weekly { max_files } => *max_files,
+        }
+    }
+
+    #[inline]
+    pub fn is_never(&self) -> bool {
+        matches!(self, LogRotation::Never)
+    }
 }
 
 impl Default for LogConfig {
@@ -243,6 +283,7 @@ impl Default for LogConfig {
         LogConfig {
             level: default_level(),
             file: None,
+            rotation: LogRotation::Never,
         }
     }
 }
@@ -387,5 +428,49 @@ mod tests {
             .validate()
             .expect_err("should reject mtls config without client_ca");
         assert!(matches!(err, ConfigError::MissingApiTlsClientCa));
+    }
+
+    #[test]
+    fn test_log_rotation_deserializes_minutely() {
+        #[derive(Debug, Deserialize)]
+        struct Wrapper {
+            rotation: LogRotation,
+        }
+
+        let config: Wrapper = serde_yaml_ng::from_str(
+            r#"
+rotation:
+  type: minutely
+  max_files: 7
+"#,
+        )
+        .expect("parse minutely rotation");
+
+        match config.rotation {
+            LogRotation::Minutely { max_files } => assert_eq!(max_files, Some(7)),
+            other => panic!("unexpected rotation: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_log_rotation_deserializes_weekly() {
+        #[derive(Debug, Deserialize)]
+        struct Wrapper {
+            rotation: LogRotation,
+        }
+
+        let config: Wrapper = serde_yaml_ng::from_str(
+            r#"
+rotation:
+  type: weekly
+  max_files: 4
+"#,
+        )
+        .expect("parse weekly rotation");
+
+        match config.rotation {
+            LogRotation::Weekly { max_files } => assert_eq!(max_files, Some(4)),
+            other => panic!("unexpected rotation: {other:?}"),
+        }
     }
 }

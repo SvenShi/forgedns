@@ -5,6 +5,10 @@
 
 log:
   level: info
+  file: /Users/sven/Codes/Rust/forgedns/target/forgedns.log
+  rotation:
+    type: daily
+    max_files: 7
 
 plugins:
   # Forward to upstream DNS servers

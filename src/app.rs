@@ -191,7 +191,7 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
     }
 
     let effective_log_level = log_config.level.clone();
-    let _log_guard = logging::init_log(log_config);
+    let _log_guard = logging::start_logging(log_config);
     info!(
         config = %options.config.display(),
         plugins = config.plugins.len(),

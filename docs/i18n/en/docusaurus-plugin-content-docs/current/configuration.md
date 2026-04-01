@@ -58,6 +58,9 @@ Field notes:
 log:
   level: info
   file: ./forgedns.log
+  rotation:
+    type: daily
+    max_files: 7
 ```
 
 Field notes:
@@ -68,6 +71,24 @@ Field notes:
 - `file`
   - Meaning: Optional log file path.
   - If omitted, logs go only to stdout.
+  - When configured, ForgeDNS writes to both stdout and the log file.
+  - Log files are written as UTF-8 plain text without terminal ANSI color escape codes.
+- `rotation`
+  - Meaning: Log file rotation policy.
+  - Default: `never`
+
+`rotation` supports the following forms:
+
+- `type: never`
+- `type: minutely`
+  - Rotate every minute.
+- `type: hourly`
+  - Rotate every hour.
+- `type: daily`
+  - Rotate every day.
+- `type: weekly`
+  - Rotate every week.
+  - Optional `max_files` controls how many rotated files are retained; `0` disables automatic cleanup.
 
 ### `api`
 
