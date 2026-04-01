@@ -224,11 +224,12 @@ pub(super) fn load_cache_from_bytes(
 
         let expire_time = now.saturating_add(entry.remaining_ttl_ms);
         let cache_time = now.saturating_sub(entry.cache_age_ms);
+        let fresh_until_ms = cache_time.saturating_add(u64::from(entry.ttl) * 1000);
         let last_access_time = now.saturating_sub(entry.last_access_age_ms);
 
         cache_map.insert_or_update_with_meta(
             key,
-            Arc::new(CacheItem::new(resp, entry.ttl)),
+            Arc::new(CacheItem::new(resp, entry.ttl, fresh_until_ms)),
             cache_time,
             expire_time,
             last_access_time,

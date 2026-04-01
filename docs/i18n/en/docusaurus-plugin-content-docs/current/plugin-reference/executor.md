@@ -290,7 +290,7 @@ Provides TTL-aware response caching with negative cache support and persistence.
     size: 8192
     # Stop the chain immediately when cache returns a response
     short_circuit: true
-    # Override the TTL used when writing new cache entries
+    # Serve stale responses briefly after original TTL expiry and refresh lazily
     lazy_cache_ttl: 120
     # Cache NXDOMAIN / NODATA responses too
     cache_negative: true
@@ -318,7 +318,12 @@ Provides TTL-aware response caching with negative cache support and persistence.
 #### `lazy_cache_ttl`
 
 - Type: `duration`; Required: no
-- Purpose: Serve stale entries briefly while refreshing lazily.
+- Purpose: Enable lazy cache for successful positive responses.
+- Behavior:
+  - The original response TTL still defines the fresh-hit window.
+  - `lazy_cache_ttl` defines the stale reply TTL and keeps entries briefly available after freshness expires.
+  - Stale hits trigger an asynchronous background refresh.
+  - This setting does not shorten the original fresh TTL.
 
 #### `dump_file`
 
@@ -334,6 +339,9 @@ Provides TTL-aware response caching with negative cache support and persistence.
 
 - Type: `boolean`; Required: no; Default: `false`
 - Purpose: Stop the chain when the cache produces a response.
+- Notes:
+  - When set to `false`, later executors still run even if cache has already populated `response`.
+  - If you want to skip later `forward` stages on cache hits, handle it explicitly in `sequence`, for example with `has_resp` or `accept`.
 
 #### `cache_negative`
 

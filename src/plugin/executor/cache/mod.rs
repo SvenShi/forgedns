@@ -20,6 +20,7 @@ use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Message, Rcode};
 use crate::{continue_next, register_plugin_factory};
+use ahash::AHashSet;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};
@@ -63,6 +64,7 @@ const EXPIRED_SWEEP_BATCH: usize = 2048;
 const EXPIRED_SWEEP_ROUNDS: usize = 4;
 const EVICTION_SAMPLE_SIZE: usize = 4096;
 const EVICTION_MAX_BATCH: usize = 2048;
+const DEFAULT_LAZY_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
@@ -107,19 +109,37 @@ pub struct CacheConfig {
 type CacheMap = TtlCache<CacheKey, Arc<CacheItem>>;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct CacheItem {
     /// Cached DNS response message.
     resp: Message,
 
     /// TTL used for this cached entry (seconds).
     ttl: u32,
+
+    /// Deadline when the response transitions from fresh to stale.
+    fresh_until_ms: u64,
 }
 
 impl CacheItem {
-    fn new(resp: Message, ttl: u32) -> Self {
-        Self { resp, ttl }
+    fn new(resp: Message, ttl: u32, fresh_until_ms: u64) -> Self {
+        Self {
+            resp,
+            ttl,
+            fresh_until_ms,
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheHitKind {
+    Fresh,
+    Stale,
+}
+
+#[derive(Debug, Clone)]
+struct CacheLookup {
+    key: CacheKey,
+    hit_kind: Option<CacheHitKind>,
 }
 
 /// DNS response cache executor.
@@ -165,6 +185,9 @@ pub struct Cache {
 
     /// Management API route register, when global API is enabled.
     api_register: Option<ApiRegister>,
+
+    /// Deduplicates background refreshes for stale lazy cache hits.
+    lazy_refresh_inflight: Arc<Mutex<AHashSet<CacheKey>>>,
 }
 
 impl Cache {
@@ -303,33 +326,89 @@ impl Cache {
     }
 
     #[inline]
-    fn try_cache_hit(
-        &self,
-        context: &mut DnsContext,
-        cache_map: &CacheMap,
-    ) -> (Option<CacheKey>, bool) {
-        let Some(key) = Self::build_cache_key(context, self.ecs_in_key) else {
-            return (None, false);
-        };
+    fn stale_reply_ttl(&self, item: &CacheItem) -> u32 {
+        self.config
+            .lazy_cache_ttl
+            .map(|ttl| ttl.min(item.ttl))
+            .unwrap_or(item.ttl)
+    }
+
+    #[inline]
+    fn can_lazy_cache_response(&self, response: &Message) -> bool {
+        self.config.lazy_cache_ttl.is_some()
+            && response.rcode() == Rcode::NoError
+            && !response.answers().is_empty()
+            && self.compute_positive_ttl(response).is_some()
+    }
+
+    #[inline]
+    fn compute_fresh_until_ms(now: u64, ttl: u32) -> u64 {
+        now.saturating_add(u64::from(ttl) * 1000)
+    }
+
+    #[inline]
+    fn compute_expire_time(&self, now: u64, ttl: u32, enable_lazy: bool) -> u64 {
+        if enable_lazy && let Some(lazy_ttl) = self.config.lazy_cache_ttl {
+            return now.saturating_add(u64::from(ttl.max(lazy_ttl)) * 1000);
+        }
+        Self::compute_fresh_until_ms(now, ttl)
+    }
+
+    #[inline]
+    fn try_cache_hit(&self, context: &mut DnsContext, cache_map: &CacheMap) -> Option<CacheLookup> {
+        let key = Self::build_cache_key(context, self.ecs_in_key)?;
 
         let now = AppClock::elapsed_millis();
 
-        if let Some(item) = cache_map.get_fresh_cloned(&key, now, LAST_ACCESS_TOUCH_INTERVAL_MS) {
-            let remaining_ttl = item.expire_at_ms.saturating_sub(now).saturating_div(1000) as u32;
-            let resp =
-                Self::restore_cached_message(&item.value, context.request.id(), remaining_ttl);
-            context.set_response(resp);
+        if let Some(item) = cache_map.get_retained_cloned(&key, now, LAST_ACCESS_TOUCH_INTERVAL_MS)
+        {
+            if now < item.value.fresh_until_ms {
+                let remaining_ttl = item
+                    .value
+                    .fresh_until_ms
+                    .saturating_sub(now)
+                    .saturating_div(1000) as u32;
+                let resp =
+                    Self::restore_cached_message(&item.value, context.request.id(), remaining_ttl);
+                context.set_response(resp);
 
-            debug!(
-                "cache hit: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}",
-                key.domain,
-                key.record_type,
-                key.dns_class,
-                key.do_bit,
-                key.cd_bit,
-                key.ecs_scope.is_some()
-            );
-            return (None, true);
+                debug!(
+                    "cache hit: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}, kind=fresh",
+                    key.domain,
+                    key.record_type,
+                    key.dns_class,
+                    key.do_bit,
+                    key.cd_bit,
+                    key.ecs_scope.is_some()
+                );
+                return Some(CacheLookup {
+                    key,
+                    hit_kind: Some(CacheHitKind::Fresh),
+                });
+            }
+
+            if self.config.lazy_cache_ttl.is_some() && now < item.expire_at_ms {
+                let resp = Self::restore_cached_message(
+                    &item.value,
+                    context.request.id(),
+                    self.stale_reply_ttl(&item.value),
+                );
+                context.set_response(resp);
+
+                debug!(
+                    "cache hit: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}, kind=stale",
+                    key.domain,
+                    key.record_type,
+                    key.dns_class,
+                    key.do_bit,
+                    key.cd_bit,
+                    key.ecs_scope.is_some()
+                );
+                return Some(CacheLookup {
+                    key,
+                    hit_kind: Some(CacheHitKind::Stale),
+                });
+            }
         }
 
         if cache_map.remove_if_expired(&key, now) {
@@ -342,20 +421,22 @@ impl Cache {
                 key.cd_bit,
                 key.ecs_scope.is_some()
             );
-            return (Some(key), false);
+        } else {
+            debug!(
+                "cache miss: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}",
+                key.domain,
+                key.record_type,
+                key.dns_class,
+                key.do_bit,
+                key.cd_bit,
+                key.ecs_scope.is_some()
+            );
         }
 
-        debug!(
-            "cache miss: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}",
-            key.domain,
-            key.record_type,
-            key.dns_class,
-            key.do_bit,
-            key.cd_bit,
-            key.ecs_scope.is_some()
-        );
-
-        (Some(key), false)
+        Some(CacheLookup {
+            key,
+            hit_kind: None,
+        })
     }
 
     #[inline]
@@ -418,22 +499,103 @@ impl Cache {
             .or_else(|| self.compute_negative_ttl(response))
     }
 
-    fn compute_expire_time(&self, now: u64, ttl: u32) -> u64 {
-        let effective_ttl = self.config.lazy_cache_ttl.unwrap_or(ttl);
-        now.saturating_add(effective_ttl as u64 * 1000)
-    }
-
     #[inline]
     fn update_cache_entry(&self, cache_map: &CacheMap, key: CacheKey, response: Message, ttl: u32) {
         let now = AppClock::elapsed_millis();
-        let expire_time = self.compute_expire_time(now, ttl);
-        let item = CacheItem::new(response, ttl);
+        let fresh_until_ms = Self::compute_fresh_until_ms(now, ttl);
+        let expire_time =
+            self.compute_expire_time(now, ttl, self.can_lazy_cache_response(&response));
+        let item = CacheItem::new(response, ttl, fresh_until_ms);
         debug!(
             "cached: domain={}, type={:?}, class={:?}, ttl={}",
             key.domain, key.record_type, key.dns_class, ttl
         );
         cache_map.insert_or_update(key, Arc::new(item), now, expire_time);
         self.updated_keys.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn try_start_lazy_refresh(
+        &self,
+        key: &CacheKey,
+        cache_map: &CacheMap,
+        context: &DnsContext,
+        next: Option<&ExecutorNext>,
+    ) {
+        let Some(next) = next.cloned() else {
+            return;
+        };
+
+        {
+            let mut inflight = self
+                .lazy_refresh_inflight
+                .lock()
+                .expect("lazy_refresh_inflight poisoned");
+            if !inflight.insert(key.clone()) {
+                return;
+            }
+        }
+
+        let key = key.clone();
+        let cache_map = cache_map.clone();
+        let inflight = self.lazy_refresh_inflight.clone();
+        let mut sub_ctx = context.copy_for_subquery();
+        sub_ctx.clear_response();
+        let lazy_cache_ttl = self.config.lazy_cache_ttl;
+        let max_positive_ttl = self.config.max_positive_ttl;
+        let cache_negative = self.cache_negative;
+        let max_negative_ttl = self.max_negative_ttl;
+        let negative_ttl_without_soa = self.negative_ttl_without_soa;
+        let updated_keys = self.updated_keys.clone();
+
+        tokio::spawn(async move {
+            let refresh = tokio::time::timeout(DEFAULT_LAZY_REFRESH_TIMEOUT, async {
+                let _ = next.next(&mut sub_ctx).await?;
+                Ok::<Option<Message>, DnsError>(sub_ctx.response().cloned())
+            })
+            .await;
+
+            match refresh {
+                Ok(Ok(Some(response))) if !response.truncated() => {
+                    let ttl = compute_cache_ttl_with_policy(
+                        &response,
+                        max_positive_ttl,
+                        cache_negative,
+                        max_negative_ttl,
+                        negative_ttl_without_soa,
+                    );
+                    if let Some(ttl) = ttl {
+                        let now = AppClock::elapsed_millis();
+                        let fresh_until_ms = Cache::compute_fresh_until_ms(now, ttl);
+                        let enable_lazy = lazy_cache_ttl.is_some()
+                            && response.rcode() == Rcode::NoError
+                            && !response.answers().is_empty()
+                            && compute_positive_ttl_with_cap(&response, max_positive_ttl).is_some();
+                        let expire_at_ms = if enable_lazy {
+                            now.saturating_add(
+                                u64::from(ttl.max(lazy_cache_ttl.unwrap_or(ttl))) * 1000,
+                            )
+                        } else {
+                            fresh_until_ms
+                        };
+                        cache_map.insert_or_update(
+                            key.clone(),
+                            Arc::new(CacheItem::new(response, ttl, fresh_until_ms)),
+                            now,
+                            expire_at_ms,
+                        );
+                        updated_keys.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => warn!("lazy cache refresh failed for {}: {}", key.domain, err),
+                Err(_) => warn!("lazy cache refresh timed out for {}", key.domain),
+            }
+
+            inflight
+                .lock()
+                .expect("lazy_refresh_inflight poisoned")
+                .remove(&key);
+        });
     }
 
     fn register_api_routes(&self, cache_map: CacheMap) -> Result<()> {
@@ -549,7 +711,17 @@ impl Executor for Cache {
             return continue_next!(next, context);
         };
 
-        let (miss_key, cache_hit) = self.try_cache_hit(context, cache_map);
+        let cache_lookup = self.try_cache_hit(context, cache_map);
+        let cache_hit = cache_lookup
+            .as_ref()
+            .and_then(|lookup| lookup.hit_kind)
+            .is_some();
+
+        if let Some(lookup) = cache_lookup.as_ref()
+            && lookup.hit_kind == Some(CacheHitKind::Stale)
+        {
+            self.try_start_lazy_refresh(&lookup.key, cache_map, context, next.as_ref());
+        }
 
         if self.should_short_circuit(cache_hit) {
             return Ok(ExecStep::Stop);
@@ -563,7 +735,13 @@ impl Executor for Cache {
 
         let next_step = continue_next!(next, context)?;
 
-        if let Some(key) = miss_key {
+        if let Some(key) = cache_lookup.and_then(|lookup| {
+            if lookup.hit_kind.is_none() {
+                Some(lookup.key)
+            } else {
+                None
+            }
+        }) {
             let Some(response) = context.response() else {
                 return Ok(next_step);
             };
@@ -578,6 +756,58 @@ impl Executor for Cache {
         }
         Ok(next_step)
     }
+}
+
+fn compute_positive_ttl_with_cap(response: &Message, max_positive_ttl: Option<u32>) -> Option<u32> {
+    if response.rcode() != Rcode::NoError {
+        return None;
+    }
+
+    let ttl = response.min_answer_ttl()?;
+    let ttl = max_positive_ttl.map(|max| ttl.min(max)).unwrap_or(ttl);
+    if ttl == 0 { None } else { Some(ttl) }
+}
+
+fn compute_negative_ttl_with_policy(
+    response: &Message,
+    cache_negative: bool,
+    max_negative_ttl: u32,
+    negative_ttl_without_soa: u32,
+) -> Option<u32> {
+    if !cache_negative {
+        return None;
+    }
+
+    let rcode = response.rcode();
+    let is_nxdomain = rcode == Rcode::NXDomain;
+    let is_nodata = rcode == Rcode::NoError && response.min_answer_ttl().is_none();
+
+    if !is_nxdomain && !is_nodata {
+        return None;
+    }
+
+    let ttl = response
+        .negative_ttl_from_soa()
+        .unwrap_or(negative_ttl_without_soa)
+        .min(max_negative_ttl);
+    if ttl == 0 { None } else { Some(ttl) }
+}
+
+fn compute_cache_ttl_with_policy(
+    response: &Message,
+    max_positive_ttl: Option<u32>,
+    cache_negative: bool,
+    max_negative_ttl: u32,
+    negative_ttl_without_soa: u32,
+) -> Option<u32> {
+    compute_positive_ttl_with_cap(response, max_positive_ttl).or_else(|| {
+        compute_negative_ttl_with_policy(
+            response,
+            cache_negative,
+            max_negative_ttl,
+            negative_ttl_without_soa,
+        )
+    })
 }
 
 fn parse_cache_config(args: Option<Value>) -> Result<CacheConfig> {
@@ -676,6 +906,7 @@ impl PluginFactory for CacheFactory {
             dump_task_id: Mutex::new(None),
             cleanup_task_id: Mutex::new(None),
             api_register: registry.api_register(),
+            lazy_refresh_inflight: Arc::new(Mutex::new(AHashSet::new())),
         })))
     }
 }
@@ -783,10 +1014,14 @@ impl ApiHandler for CacheLoadDumpHandler {
 mod tests {
     use super::*;
     use crate::plugin::PluginRegistry;
+    use crate::plugin::executor::Executor;
+    use crate::plugin::executor::sequence::chain::ChainProgram;
     use crate::proto::rdata::SOA;
     use crate::proto::{DNSClass, Edns, EdnsOption, Question};
     use crate::proto::{Message, Name, RData, Record, RecordType};
+    use async_trait::async_trait;
     use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     fn test_cache(config: CacheConfig) -> Cache {
         let cache_negative = config.cache_negative.unwrap_or(true);
@@ -796,6 +1031,7 @@ mod tests {
             .unwrap_or(DEFAULT_NEGATIVE_TTL_WITHOUT_SOA);
         let cache_size = config.size.unwrap_or(DEFAULT_CACHE_SIZE);
         let ecs_in_key = config.ecs_in_key.unwrap_or(false);
+        let short_circuit = config.short_circuit.unwrap_or(false);
 
         Cache {
             cache_map: OnceCell::new(),
@@ -803,7 +1039,7 @@ mod tests {
             cache_negative,
             max_negative_ttl,
             negative_ttl_without_soa,
-            short_circuit: false,
+            short_circuit,
             ecs_in_key,
             config,
             updated_keys: Arc::new(AtomicU64::new(0)),
@@ -811,6 +1047,7 @@ mod tests {
             dump_task_id: Mutex::new(None),
             cleanup_task_id: Mutex::new(None),
             api_register: None,
+            lazy_refresh_inflight: Arc::new(Mutex::new(AHashSet::new())),
         }
     }
 
@@ -857,6 +1094,59 @@ mod tests {
         let mut edns = request.edns().clone().unwrap_or_default();
         edns.insert(EdnsOption::Subnet(subnet.parse().unwrap()));
         request.set_edns(edns);
+    }
+
+    #[derive(Debug)]
+    struct StubRefreshExecutor {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Plugin for StubRefreshExecutor {
+        fn tag(&self) -> &str {
+            "stub_refresh_executor"
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Executor for StubRefreshExecutor {
+        fn with_next(&self) -> bool {
+            true
+        }
+
+        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
+            Ok(ExecStep::Next)
+        }
+
+        async fn execute_with_next(
+            &self,
+            context: &mut DnsContext,
+            next: Option<ExecutorNext>,
+        ) -> Result<ExecStep> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            let mut response = Message::new();
+            response.set_rcode(Rcode::NoError);
+            response.add_question(Question::new(
+                Name::from_ascii("example.com.").unwrap(),
+                RecordType::A,
+                DNSClass::IN,
+            ));
+            response.add_answer(Record::from_rdata(
+                Name::from_ascii("example.com.").unwrap(),
+                55,
+                RData::A(crate::proto::rdata::A(Ipv4Addr::new(9, 9, 9, 9))),
+            ));
+            context.set_response(response);
+            continue_next!(next, context)
+        }
     }
 
     #[test]
@@ -1043,8 +1333,10 @@ mod tests {
 
         cache.update_cache_entry(cache.cache_map.get().unwrap(), key, response, 120);
 
-        let (_, hit) = cache.try_cache_hit(&mut context, cache.cache_map.get().unwrap());
-        assert!(hit);
+        let lookup = cache
+            .try_cache_hit(&mut context, cache.cache_map.get().unwrap())
+            .expect("cache lookup should exist");
+        assert_eq!(lookup.hit_kind, Some(CacheHitKind::Fresh));
         assert!(context.response().is_some_and(|response| {
             response.has_answer_ip(|ip| ip == std::net::IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))
         }));
@@ -1052,6 +1344,166 @@ mod tests {
         assert_eq!(response.id(), 7);
         assert_eq!(response.answers().len(), 1);
         assert_eq!(response.answers()[0].ttl(), 120);
+    }
+
+    #[tokio::test]
+    async fn lazy_cache_hit_returns_stale_response_with_lazy_ttl() {
+        let mut cfg = default_test_config();
+        cfg.lazy_cache_ttl = Some(30);
+        let mut cache = test_cache(cfg);
+        let _ = cache.init().await;
+
+        let mut request = make_request_with_query("example.com.", false, false);
+        request.set_id(9);
+        let mut context = make_context(request);
+        let key = Cache::build_cache_key(&mut context, false).unwrap();
+
+        let mut response = Message::new();
+        response.set_rcode(Rcode::NoError);
+        response.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            120,
+            RData::A(crate::proto::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+        ));
+
+        let now = AppClock::elapsed_millis();
+        cache.cache_map.get().unwrap().insert_or_update_with_meta(
+            key,
+            Arc::new(CacheItem::new(response, 120, now.saturating_sub(1_000))),
+            now.saturating_sub(121_000),
+            now.saturating_add(10_000),
+            now.saturating_sub(100),
+        );
+
+        let lookup = cache
+            .try_cache_hit(&mut context, cache.cache_map.get().unwrap())
+            .expect("cache lookup should exist");
+        assert_eq!(lookup.hit_kind, Some(CacheHitKind::Stale));
+        let response = context
+            .response()
+            .expect("stale cache hit should populate response");
+        assert_eq!(response.id(), 9);
+        assert_eq!(response.answers()[0].ttl(), 30);
+    }
+
+    #[tokio::test]
+    async fn lazy_cache_ttl_does_not_shorten_fresh_window() {
+        let mut cfg = default_test_config();
+        cfg.lazy_cache_ttl = Some(30);
+        let mut cache = test_cache(cfg);
+        let _ = cache.init().await;
+
+        let mut context = make_context(make_request_with_query("example.com.", false, false));
+
+        let mut response = Message::new();
+        response.set_rcode(Rcode::NoError);
+        response.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            120,
+            RData::A(crate::proto::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+        ));
+
+        let key = Cache::build_cache_key(&mut context, false).unwrap();
+        cache.update_cache_entry(cache.cache_map.get().unwrap(), key.clone(), response, 120);
+
+        let stored = cache
+            .cache_map
+            .get()
+            .unwrap()
+            .get_retained_cloned(&key, AppClock::elapsed_millis(), 0)
+            .expect("entry should be present");
+        assert_eq!(
+            stored
+                .expire_at_ms
+                .saturating_sub(stored.value.fresh_until_ms)
+                / 1000,
+            0
+        );
+        assert_eq!(
+            stored
+                .value
+                .fresh_until_ms
+                .saturating_sub(stored.cache_time_ms)
+                / 1000,
+            120
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_hit_triggers_only_one_background_refresh() {
+        let mut cfg = default_test_config();
+        cfg.lazy_cache_ttl = Some(30);
+        cfg.short_circuit = Some(true);
+        let mut cache = test_cache(cfg);
+        let _ = cache.init().await;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let program =
+            ChainProgram::single_with_next_executor_for_test(Arc::new(StubRefreshExecutor {
+                calls: calls.clone(),
+            }));
+        let next = ExecutorNext::from_program_for_test(program, 0);
+
+        let mut context_a = make_context(make_request_with_query("example.com.", false, false));
+        let mut context_b = make_context(make_request_with_query("example.com.", false, false));
+        let key = Cache::build_cache_key(&mut context_a, false).unwrap();
+
+        let mut response = Message::new();
+        response.set_rcode(Rcode::NoError);
+        response.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            120,
+            RData::A(crate::proto::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+        ));
+
+        let now = AppClock::elapsed_millis();
+        cache.cache_map.get().unwrap().insert_or_update_with_meta(
+            key.clone(),
+            Arc::new(CacheItem::new(response, 120, now.saturating_sub(1_000))),
+            now.saturating_sub(121_000),
+            now.saturating_add(10_000),
+            now.saturating_sub(100),
+        );
+
+        let _ = cache
+            .execute_with_next(&mut context_a, Some(next.clone()))
+            .await
+            .unwrap();
+        let _ = cache
+            .execute_with_next(&mut context_b, Some(next))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
+        let stored = cache
+            .cache_map
+            .get()
+            .unwrap()
+            .get_retained_cloned(&key, AppClock::elapsed_millis(), 0)
+            .expect("entry should exist");
+        assert!(
+            stored
+                .value
+                .resp
+                .has_answer_ip(|ip| ip == std::net::IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)))
+        );
     }
 
     #[test]

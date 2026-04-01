@@ -347,7 +347,7 @@ sidebar_position: 3
     size: 8192
     # 命中缓存后直接结束后续执行
     short_circuit: true
-    # 用固定 TTL 覆盖写入缓存时使用的 TTL
+    # 允许在原始 TTL 过期后短时间返回 stale 响应，并异步刷新缓存
     lazy_cache_ttl: 120
     # 开启 NXDOMAIN / NODATA 负缓存
     cache_negative: true
@@ -376,7 +376,12 @@ sidebar_position: 3
 
 - 类型：`integer`；必填：否；默认值：无
 - 单位：秒
-- 作用：覆盖写入缓存时使用的 TTL。
+- 作用：为正向成功响应启用 lazy cache。
+- 运行影响：
+  - 原始 TTL 决定 fresh 命中窗口。
+  - `lazy_cache_ttl` 决定 stale 回包 TTL，并允许在原始 TTL 过期后短时间返回 stale 响应。
+  - stale 命中会在后台异步刷新缓存。
+  - 该配置不会缩短原始 fresh TTL。
 
 #### `dump_file`
 
@@ -393,6 +398,9 @@ sidebar_position: 3
 
 - 类型：`boolean`；必填：否；默认值：实现默认行为
 - 作用：控制缓存命中后是否立即结束后续执行。
+- 说明：
+  - 设为 `false` 时，即使 cache 已经写入 response，后续执行链仍会继续。
+  - 如需避免后续 `forward` 再次发起查询，应在 `sequence` 中配合 `has_resp`、`accept` 等控制流使用。
 
 #### `cache_negative`
 

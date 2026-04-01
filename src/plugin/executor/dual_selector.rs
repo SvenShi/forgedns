@@ -280,7 +280,7 @@ impl DualSelector {
     fn cache_get_preferred_state(&self, domain: &String) -> Option<bool> {
         let now = AppClock::elapsed_millis();
         self.cache
-            .get_fresh_cloned(domain, now, 1000)
+            .get_retained_cloned(domain, now, 1000)
             .map(|entry| entry.value.preferred_exists)
     }
 }

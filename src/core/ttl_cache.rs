@@ -14,7 +14,7 @@
 //! and value types but shares the same cache behavior.
 
 use ahash::RandomState as AHashBuilder;
-use dashmap::DashMap;
+use dashmap::{DashMap, Entry};
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -91,7 +91,6 @@ where
     }
 
     /// Insert or update one entry with explicit metadata.
-    #[inline]
     pub fn insert_or_update_with_meta(
         &self,
         key: K,
@@ -100,32 +99,32 @@ where
         expire_at_ms: u64,
         last_access_ms: u64,
     ) {
-        match self.map.get_mut(&key) {
-            Some(mut existing) => {
+        match self.map.entry(key) {
+            Entry::Occupied(mut e) => {
+                let existing = e.get_mut();
                 existing.value = value;
                 existing.cache_time_ms = cache_time_ms;
                 existing.expire_at_ms = expire_at_ms;
                 existing.last_access_ms = last_access_ms;
             }
-            None => {
-                self.map.insert(
-                    key,
-                    TtlCacheEntry {
-                        value,
-                        cache_time_ms,
-                        expire_at_ms,
-                        last_access_ms,
-                    },
-                );
+            Entry::Vacant(e) => {
+                e.insert(TtlCacheEntry {
+                    value,
+                    cache_time_ms,
+                    expire_at_ms,
+                    last_access_ms,
+                });
             }
         }
     }
 
-    /// Get one non-expired entry and optionally refresh its access timestamp.
+    /// Get one retained, non-expired entry and optionally refresh its access timestamp.
     ///
-    /// Returns `None` when key is missing or already expired.
+    /// This method only enforces the shared cache-retention deadline
+    /// (`expire_at_ms`). Callers that need a fresh/stale split can apply their
+    /// own semantics using the returned metadata.
     #[inline]
-    pub fn get_fresh_cloned(
+    pub fn get_retained_cloned(
         &self,
         key: &K,
         now_ms: u64,
@@ -263,12 +262,12 @@ mod tests {
         cache.insert_or_update("k", 1u32, 100, 200);
 
         let hit = cache
-            .get_fresh_cloned(&"k", 150, 0)
+            .get_retained_cloned(&"k", 150, 0)
             .expect("entry should exist");
         assert_eq!(hit.value, 1);
 
         assert!(cache.remove_if_expired(&"k", 250));
-        assert!(cache.get_fresh_cloned(&"k", 260, 0).is_none());
+        assert!(cache.get_retained_cloned(&"k", 260, 0).is_none());
     }
 
     #[test]
@@ -288,14 +287,14 @@ mod tests {
     }
 
     #[test]
-    fn test_get_fresh_cloned_refreshes_last_access_after_touch_interval() {
+    fn test_get_retained_cloned_refreshes_last_access_after_touch_interval() {
         // Arrange
         let cache = TtlCache::with_capacity(4);
         cache.insert_or_update_with_meta("k", 1u32, 10, 100, 10);
 
         // Act
         let hit = cache
-            .get_fresh_cloned(&"k", 25, 10)
+            .get_retained_cloned(&"k", 25, 10)
             .expect("entry should exist");
         let (_, stored) = cache
             .iter_entries_cloned()
@@ -309,14 +308,14 @@ mod tests {
     }
 
     #[test]
-    fn test_get_fresh_cloned_does_not_refresh_last_access_before_touch_interval() {
+    fn test_get_retained_cloned_does_not_refresh_last_access_before_touch_interval() {
         // Arrange
         let cache = TtlCache::with_capacity(4);
         cache.insert_or_update_with_meta("k", 1u32, 10, 100, 10);
 
         // Act
         let _ = cache
-            .get_fresh_cloned(&"k", 15, 10)
+            .get_retained_cloned(&"k", 15, 10)
             .expect("entry should exist");
         let (_, stored) = cache
             .iter_entries_cloned()
@@ -329,13 +328,13 @@ mod tests {
     }
 
     #[test]
-    fn test_get_fresh_cloned_removes_expired_entry() {
+    fn test_get_retained_cloned_removes_expired_entry() {
         // Arrange
         let cache = TtlCache::with_capacity(4);
         cache.insert_or_update_with_meta("k", 1u32, 10, 20, 10);
 
         // Act
-        let hit = cache.get_fresh_cloned(&"k", 20, 10);
+        let hit = cache.get_retained_cloned(&"k", 20, 10);
 
         // Assert
         assert!(hit.is_none());

@@ -143,7 +143,7 @@ impl ChainProgram {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExecutorNext {
     program: Arc<ChainProgram>,
     pc: usize,
@@ -156,6 +156,25 @@ impl ExecutorNext {
 
     pub async fn next(&self, context: &mut DnsContext) -> Result<ExecStep> {
         self.program.run_from_inner(context, self.pc).await
+    }
+}
+
+#[cfg(test)]
+impl ExecutorNext {
+    pub(crate) fn from_program_for_test(program: Arc<ChainProgram>, pc: usize) -> Self {
+        Self { program, pc }
+    }
+}
+
+#[cfg(test)]
+impl ChainProgram {
+    pub(crate) fn single_with_next_executor_for_test(executor: Arc<dyn Executor>) -> Arc<Self> {
+        Arc::new(Self {
+            instructions: vec![Instruction {
+                matchers: Vec::new(),
+                op: InstructionOp::ExecutorWithNext(executor),
+            }],
+        })
     }
 }
 

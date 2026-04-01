@@ -204,7 +204,7 @@ impl ReverseLookup {
         let ip = parse_ptr_name(&qname)?;
         let ip = normalize_ip(ip);
         let now = AppClock::elapsed_millis();
-        let entry = self.cache.get_fresh_cloned(&ip, now, 1000)?;
+        let entry = self.cache.get_retained_cloned(&ip, now, 1000)?;
 
         let mut response = request.response(Rcode::NoError);
         response.answers_mut().push(Record::from_rdata(
@@ -275,7 +275,7 @@ impl ApiHandler for ReverseLookupQueryHandler {
 
         let ip = normalize_ip(ip);
         let now = AppClock::elapsed_millis();
-        let Some(entry) = self.cache.get_fresh_cloned(&ip, now, 1000) else {
+        let Some(entry) = self.cache.get_retained_cloned(&ip, now, 1000) else {
             return simple_response(StatusCode::OK, Bytes::new());
         };
 

@@ -177,7 +177,7 @@ impl Matcher for RateLimiter {
         let now = AppClock::elapsed_millis();
         let expire_at_ms = now.saturating_add(STALE_TIMEOUT_MS);
 
-        if let Some(entry) = self.buckets.get_fresh_cloned(&masked, now, 0) {
+        if let Some(entry) = self.buckets.get_retained_cloned(&masked, now, 0) {
             let mut bucket = entry.value;
             let elapsed = now.saturating_sub(bucket.last_ms) as f64 / 1000.0;
             if elapsed > 0.0 {
