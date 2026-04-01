@@ -21,11 +21,9 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
-use crate::plugin::provider::provider_utils::{for_each_nonempty_rule_line, push_unique_matcher};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
-use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::any::Any;
@@ -46,83 +44,13 @@ struct DomainSetArgs {
     files: Vec<String>,
 }
 
-#[derive(Debug, Default)]
-struct DomainMatcher {
-    rules: DomainRuleMatcher,
-}
-
-impl DomainMatcher {
-    #[inline]
-    fn has_domain_rules(&self) -> bool {
-        self.rules.has_trie_rules()
-    }
-
-    #[inline]
-    fn full_rule_count(&self) -> usize {
-        self.rules.full_rule_count()
-    }
-
-    #[inline]
-    fn domain_rule_count(&self) -> usize {
-        self.rules.trie_rule_count()
-    }
-
-    #[inline]
-    fn keyword_rule_count(&self) -> usize {
-        self.rules.keyword_rule_count()
-    }
-
-    #[inline]
-    fn regex_rule_count(&self) -> usize {
-        self.rules.regexp_rule_count()
-    }
-
-    /// Parse and load one expression.
-    fn add_exp(&mut self, exp: &str, source: &str) -> DnsResult<()> {
-        self.rules
-            .add_expression(exp, source)
-            .map_err(DnsError::plugin)
-    }
-
-    fn load_exps(&mut self, exps: &[String]) -> DnsResult<()> {
-        for (idx, exp) in exps.iter().enumerate() {
-            let source = format!("exps[{}]", idx);
-            self.add_exp(exp, &source)?;
-        }
-        Ok(())
-    }
-
-    /// Load expressions from file and attach precise line info to parsing errors.
-    fn load_file(&mut self, path: &str) -> DnsResult<()> {
-        for_each_nonempty_rule_line(path, "domain rules", |raw, line_no| {
-            let source = format!("file '{}', line {}", path, line_no);
-            self.add_exp(raw, &source)
-        })
-    }
-
-    fn load_files(&mut self, files: &[String]) -> DnsResult<()> {
-        for file in files {
-            self.load_file(file)?;
-        }
-        Ok(())
-    }
-
-    fn finalize(&mut self) -> DnsResult<()> {
-        self.rules.finalize().map_err(DnsError::plugin)
-    }
-
-    #[inline]
-    fn contains_name(&self, name: &Name) -> bool {
-        self.rules.is_match_name(name)
-    }
-}
-
 #[derive(Debug)]
 pub struct DomainSet {
     tag: String,
-    /// Flattened matcher list from self + referenced sets.
-    /// This avoids recursive provider calls on the hot path.
-    matchers: Vec<Arc<DomainMatcher>>,
+    /// Flattened original domain expressions from self + referenced sets.
+    rules: Vec<String>,
+    /// Fully merged matcher compiled once at initialization.
+    matcher: DomainRuleMatcher,
 }
 
 #[async_trait]
@@ -148,22 +76,16 @@ impl Provider for DomainSet {
 
     #[inline]
     fn contains_name(&self, name: &Name) -> bool {
-        if self.matchers.is_empty() {
-            return false;
-        }
-
-        if self.matchers.len() == 1 {
-            return self.matchers[0].contains_name(name);
-        }
-
-        self.matchers
-            .iter()
-            .any(|matcher| matcher.contains_name(name))
+        self.matcher.is_match_name(name)
     }
 
     #[inline]
     fn contains_question(&self, question: &Question) -> bool {
         self.contains_name(question.name())
+    }
+
+    fn domain_rules(&self) -> Option<&[String]> {
+        Some(&self.rules)
     }
 }
 
@@ -182,13 +104,7 @@ impl PluginFactory for DomainSetFactory {
                 args.sets
                     .into_iter()
                     .enumerate()
-                    .map(|(idx, tag)| {
-                        DependencySpec::provider_type(
-                            format!("args.sets[{}]", idx),
-                            tag,
-                            "domain_set",
-                        )
-                    })
+                    .map(|(idx, tag)| DependencySpec::provider(format!("args.sets[{}]", idx), tag))
                     .collect()
             })
             .unwrap_or_default()
@@ -217,14 +133,10 @@ impl PluginFactory for DomainSetFactory {
             "initializing domain_set"
         );
 
-        let mut local_matcher = DomainMatcher::default();
-        local_matcher.load_exps(&args.exps)?;
-        local_matcher.load_files(&args.files)?;
-        local_matcher.finalize()?;
-
-        let mut matchers = Vec::with_capacity(1 + args.sets.len());
-        let mut seen = AHashSet::with_capacity(1 + args.sets.len());
-        push_unique_matcher(&mut matchers, &mut seen, Arc::new(local_matcher));
+        let mut rules = args.exps.clone();
+        for file in &args.files {
+            append_rules_from_file(&mut rules, file)?;
+        }
 
         for (set_idx, set_tag) in args.sets.into_iter().enumerate() {
             let field = format!("args.sets[{}]", set_idx);
@@ -233,36 +145,30 @@ impl PluginFactory for DomainSetFactory {
                 referenced_set = %set_tag,
                 "resolving referenced domain_set"
             );
-            let provider = registry.get_provider_dependency_of_type(
-                &plugin_config.tag,
-                &field,
-                set_tag.as_str(),
-                "domain_set",
-            )?;
-            let domain_set = provider
-                .as_any()
-                .downcast_ref::<DomainSet>()
-                .ok_or_else(|| {
-                    DnsError::plugin(format!(
-                        "plugin '{}' field '{}' expects provider instance 'domain_set', but '{}' is not DomainSet",
-                        plugin_config.tag, field, set_tag
-                    ))
-                })?;
-
-            for matcher in &domain_set.matchers {
-                push_unique_matcher(&mut matchers, &mut seen, matcher.clone());
-            }
+            let provider =
+                registry.get_provider_dependency(&plugin_config.tag, &field, set_tag.as_str())?;
+            let provider_rules = provider.domain_rules().ok_or_else(|| {
+                DnsError::plugin(format!(
+                    "plugin '{}' field '{}' expects provider '{}' to support domain matching",
+                    plugin_config.tag, field, set_tag
+                ))
+            })?;
+            rules.extend(provider_rules.iter().cloned());
         }
 
-        let has_domain_rules = matchers.iter().any(|matcher| matcher.has_domain_rules());
-        let total_full_rules: usize = matchers.iter().map(|m| m.full_rule_count()).sum();
-        let total_domain_rules: usize = matchers.iter().map(|m| m.domain_rule_count()).sum();
-        let total_keyword_rules: usize = matchers.iter().map(|m| m.keyword_rule_count()).sum();
-        let total_regex_rules: usize = matchers.iter().map(|m| m.regex_rule_count()).sum();
+        let mut matcher = DomainRuleMatcher::default();
+        load_domain_rules(&mut matcher, &rules)?;
+        matcher.finalize().map_err(DnsError::plugin)?;
+
+        let has_domain_rules = matcher.has_rules();
+        let total_full_rules = matcher.full_rule_count();
+        let total_domain_rules = matcher.trie_rule_count();
+        let total_keyword_rules = matcher.keyword_rule_count();
+        let total_regex_rules = matcher.regexp_rule_count();
         let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
         info!(
             tag = %plugin_config.tag,
-            flat_matchers = matchers.len(),
+            merged_rules = rules.len(),
             referenced_sets = referenced_set_count,
             full_rules = total_full_rules,
             domain_rules = total_domain_rules,
@@ -275,9 +181,34 @@ impl PluginFactory for DomainSetFactory {
 
         Ok(UninitializedPlugin::Provider(Box::new(DomainSet {
             tag: plugin_config.tag.clone(),
-            matchers,
+            rules,
+            matcher,
         })))
     }
+}
+
+fn append_rules_from_file(rules: &mut Vec<String>, path: &str) -> DnsResult<()> {
+    crate::plugin::provider::provider_utils::for_each_nonempty_rule_line(
+        path,
+        "domain rules",
+        |raw, _| {
+            rules.push(raw.to_string());
+            Ok(())
+        },
+    )
+}
+
+fn load_domain_rules(matcher: &mut DomainRuleMatcher, rules: &[String]) -> DnsResult<()> {
+    for (idx, rule) in rules.iter().enumerate() {
+        add_domain_rule(matcher, rule, &format!("rules[{}]", idx))?;
+    }
+    Ok(())
+}
+
+fn add_domain_rule(matcher: &mut DomainRuleMatcher, exp: &str, source: &str) -> DnsResult<()> {
+    matcher
+        .add_expression(exp, source)
+        .map_err(DnsError::plugin)
 }
 
 #[cfg(test)]
@@ -288,47 +219,47 @@ mod tests {
     use std::net::IpAddr;
 
     fn load_rules_text(
-        matcher: &mut DomainMatcher,
+        matcher: &mut DomainRuleMatcher,
         source_name: &str,
         content: &str,
     ) -> DnsResult<()> {
         for_each_nonempty_rule_text(content, |raw, line_no| {
             let source = format!("file '{}', line {}", source_name, line_no);
-            matcher.add_exp(raw, &source)
+            add_domain_rule(matcher, raw, &source)
         })
     }
 
     #[test]
     fn test_domain_match_priority() {
-        let mut m = DomainMatcher::default();
-        m.add_exp("full:exact.com", "test").unwrap();
-        m.add_exp("domain:example.com", "test").unwrap();
-        m.add_exp("keyword:abc", "test").unwrap();
-        m.add_exp("regexp:^re.+\\.com$", "test").unwrap();
+        let mut m = DomainRuleMatcher::default();
+        add_domain_rule(&mut m, "full:exact.com", "test").unwrap();
+        add_domain_rule(&mut m, "domain:example.com", "test").unwrap();
+        add_domain_rule(&mut m, "keyword:abc", "test").unwrap();
+        add_domain_rule(&mut m, "regexp:^re.+\\.com$", "test").unwrap();
         m.finalize().unwrap();
 
-        assert!(m.contains_name(&Name::from_ascii("exact.com.").unwrap()));
-        assert!(m.contains_name(&Name::from_ascii("www.example.com").unwrap()));
-        assert!(m.contains_name(&Name::from_ascii("re123.com").unwrap()));
-        assert!(m.contains_name(&Name::from_ascii("xabcx.org").unwrap()));
-        assert!(!m.contains_name(&Name::from_ascii("none.org").unwrap()));
+        assert!(m.is_match_name(&Name::from_ascii("exact.com.").unwrap()));
+        assert!(m.is_match_name(&Name::from_ascii("www.example.com").unwrap()));
+        assert!(m.is_match_name(&Name::from_ascii("re123.com").unwrap()));
+        assert!(m.is_match_name(&Name::from_ascii("xabcx.org").unwrap()));
+        assert!(!m.is_match_name(&Name::from_ascii("none.org").unwrap()));
     }
 
     #[test]
     fn test_default_rule_is_domain() {
-        let mut m = DomainMatcher::default();
-        m.add_exp("google.com", "test").unwrap();
+        let mut m = DomainRuleMatcher::default();
+        add_domain_rule(&mut m, "google.com", "test").unwrap();
         m.finalize().unwrap();
 
-        assert!(m.contains_name(&Name::from_ascii("google.com").unwrap()));
-        assert!(m.contains_name(&Name::from_ascii("www.google.com").unwrap()));
-        assert!(!m.contains_name(&Name::from_ascii("google").unwrap()));
-        assert!(!m.contains_name(&Name::from_ascii("google.cn").unwrap()));
+        assert!(m.is_match_name(&Name::from_ascii("google.com").unwrap()));
+        assert!(m.is_match_name(&Name::from_ascii("www.google.com").unwrap()));
+        assert!(!m.is_match_name(&Name::from_ascii("google").unwrap()));
+        assert!(!m.is_match_name(&Name::from_ascii("google.cn").unwrap()));
     }
 
     #[test]
     fn test_file_line_error_has_line_number() {
-        let mut m = DomainMatcher::default();
+        let mut m = DomainRuleMatcher::default();
         let err =
             load_rules_text(&mut m, "inline-domain-test", "google.com\nregexp:[bad\n").unwrap_err();
         let msg = err.to_string();
@@ -340,11 +271,11 @@ mod tests {
 
     #[test]
     fn test_case_insensitive_and_trailing_dot() {
-        let mut m = DomainMatcher::default();
-        m.add_exp("full:Google.Com", "test").unwrap();
+        let mut m = DomainRuleMatcher::default();
+        add_domain_rule(&mut m, "full:Google.Com", "test").unwrap();
         m.finalize().unwrap();
-        assert!(m.contains_name(&Name::from_ascii("google.com.").unwrap()));
-        assert!(m.contains_name(&Name::from_ascii("GOOGLE.COM").unwrap()));
+        assert!(m.is_match_name(&Name::from_ascii("google.com.").unwrap()));
+        assert!(m.is_match_name(&Name::from_ascii("GOOGLE.COM").unwrap()));
     }
 
     #[derive(Debug)]
@@ -384,8 +315,8 @@ mod tests {
 
     #[test]
     fn test_contains_with_shared_set() {
-        let mut local = DomainMatcher::default();
-        local.add_exp("local.example", "test").unwrap();
+        let mut local = DomainRuleMatcher::default();
+        add_domain_rule(&mut local, "local.example", "test").unwrap();
         local.finalize().unwrap();
 
         let shared = Arc::new(StaticDomainProvider {
@@ -394,7 +325,8 @@ mod tests {
 
         let ds = DomainSet {
             tag: "test".to_string(),
-            matchers: vec![Arc::new(local)],
+            rules: vec!["local.example".to_string()],
+            matcher: local,
         };
         assert!(ds.contains_name(&Name::from_ascii("local.example").unwrap()));
         assert!(!ds.contains_name(&Name::from_ascii("none.example").unwrap()));

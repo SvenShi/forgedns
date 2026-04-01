@@ -109,7 +109,7 @@ sidebar_position: 4
 - 作用：定义域名匹配规则来源。
 - 支持元素：
   - 域名表达式
-  - `domain_set` 引用
+  - 具备域名匹配能力的 provider 引用，例如 `domain_set`、`geosite`
   - 文件引用
 - 运行影响：
   - 当前请求中的任意问题域名命中任一规则时，matcher 返回 `true`。
@@ -158,7 +158,7 @@ sidebar_position: 4
 
 ### 典型用途
 
-- 让 `adguard_rule`、`domain_set` 这类 provider 直接参与请求 question 匹配。
+- 让 `adguard_rule`、`domain_set`、`geosite` 这类 provider 直接参与请求 question 匹配。
 - 在 `sequence` 中先做 question 级匹配，再交给 `black_hole`、`reject` 或其它动作执行。
 
 ---

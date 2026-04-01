@@ -16,10 +16,8 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
-use crate::plugin::provider::provider_utils::{for_each_nonempty_rule_line, push_unique_matcher};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::any::Any;
@@ -41,86 +39,13 @@ struct IpSetArgs {
     files: Vec<String>,
 }
 
-#[derive(Debug, Default)]
-struct IpMatcher {
-    matcher: IpPrefixMatcher,
-}
-
-impl IpMatcher {
-    #[inline]
-    fn has_v4_rules(&self) -> bool {
-        self.matcher.has_v4_rules()
-    }
-
-    #[inline]
-    fn has_v6_rules(&self) -> bool {
-        self.matcher.has_v6_rules()
-    }
-
-    #[inline]
-    fn v4_rule_count(&self) -> usize {
-        self.matcher.v4_rule_count()
-    }
-
-    #[inline]
-    fn v6_rule_count(&self) -> usize {
-        self.matcher.v6_rule_count()
-    }
-
-    fn add_ip_rule(&mut self, rule: &str, source: &str) -> DnsResult<()> {
-        let rule = rule.trim();
-        if rule.is_empty() {
-            return Ok(());
-        }
-
-        self.matcher.add_rule(rule).map_err(|e| {
-            DnsError::plugin(format!("invalid ip/cidr '{}' in {}: {}", rule, source, e))
-        })?;
-        Ok(())
-    }
-
-    fn load_ips(&mut self, ips: &[String]) -> DnsResult<()> {
-        for (idx, ip) in ips.iter().enumerate() {
-            let source = format!("ips[{}]", idx);
-            self.add_ip_rule(ip, &source)?;
-        }
-        Ok(())
-    }
-
-    fn load_file(&mut self, path: &str) -> DnsResult<()> {
-        for_each_nonempty_rule_line(path, "ip rules", |raw, line_no| {
-            let rule = normalize_rule_line(raw);
-            if rule.is_empty() {
-                return Ok(());
-            }
-            let source = format!("file '{}', line {}", path, line_no);
-            self.add_ip_rule(rule, &source)
-        })
-    }
-
-    fn load_files(&mut self, files: &[String]) -> DnsResult<()> {
-        for file in files {
-            self.load_file(file)?;
-        }
-        Ok(())
-    }
-
-    fn finalize(&mut self) {
-        self.matcher.finalize();
-    }
-
-    #[inline]
-    fn contains_ip(&self, ip: IpAddr) -> bool {
-        self.matcher.contains_ip(ip)
-    }
-}
-
 #[derive(Debug)]
 pub struct IpSet {
     tag: String,
-    /// Flattened matcher list from self + referenced sets.
-    /// Runtime lookup does not recurse through provider references.
-    matchers: Vec<Arc<IpMatcher>>,
+    /// Flattened original IP rules from self + referenced sets.
+    rules: Vec<String>,
+    /// Fully merged matcher compiled once at initialization.
+    matcher: IpPrefixMatcher,
     /// Family-level fast guards to avoid useless scans.
     has_v4_rules: bool,
     has_v6_rules: bool,
@@ -147,12 +72,12 @@ impl Provider for IpSet {
         self
     }
 
+    fn ip_rules(&self) -> Option<&[String]> {
+        Some(&self.rules)
+    }
+
     #[inline]
     fn contains_ip(&self, ip: IpAddr) -> bool {
-        if self.matchers.is_empty() {
-            return false;
-        }
-
         let has_family_rules = match ip {
             IpAddr::V4(_) => self.has_v4_rules,
             IpAddr::V6(_) => self.has_v6_rules,
@@ -161,11 +86,7 @@ impl Provider for IpSet {
             return false;
         }
 
-        if self.matchers.len() == 1 {
-            return self.matchers[0].contains_ip(ip);
-        }
-
-        self.matchers.iter().any(|matcher| matcher.contains_ip(ip))
+        self.matcher.contains_ip(ip)
     }
 }
 
@@ -184,9 +105,7 @@ impl PluginFactory for IpSetFactory {
                 args.sets
                     .into_iter()
                     .enumerate()
-                    .map(|(idx, tag)| {
-                        DependencySpec::provider_type(format!("args.sets[{}]", idx), tag, "ip_set")
-                    })
+                    .map(|(idx, tag)| DependencySpec::provider(format!("args.sets[{}]", idx), tag))
                     .collect()
             })
             .unwrap_or_default()
@@ -215,15 +134,10 @@ impl PluginFactory for IpSetFactory {
             "initializing ip_set"
         );
 
-        let mut local_matcher = IpMatcher::default();
-        local_matcher.load_ips(&args.ips)?;
-        local_matcher.load_files(&args.files)?;
-        local_matcher.finalize();
-
-        // Build a flattened matcher list (local + referenced sets), with dedup.
-        let mut matchers = Vec::with_capacity(1 + args.sets.len());
-        let mut seen = AHashSet::with_capacity(1 + args.sets.len());
-        push_unique_matcher(&mut matchers, &mut seen, Arc::new(local_matcher));
+        let mut rules = args.ips.clone();
+        for file in &args.files {
+            append_rules_from_file(&mut rules, file)?;
+        }
 
         for (set_idx, set_tag) in args.sets.into_iter().enumerate() {
             let field = format!("args.sets[{}]", set_idx);
@@ -232,32 +146,29 @@ impl PluginFactory for IpSetFactory {
                 referenced_set = %set_tag,
                 "resolving referenced ip_set"
             );
-            let provider = registry.get_provider_dependency_of_type(
-                &plugin_config.tag,
-                &field,
-                set_tag.as_str(),
-                "ip_set",
-            )?;
-            let ip_set = provider.as_any().downcast_ref::<IpSet>().ok_or_else(|| {
+            let provider =
+                registry.get_provider_dependency(&plugin_config.tag, &field, set_tag.as_str())?;
+            let provider_rules = provider.ip_rules().ok_or_else(|| {
                 DnsError::plugin(format!(
-                    "plugin '{}' field '{}' expects provider instance 'ip_set', but '{}' is not IpSet",
+                    "plugin '{}' field '{}' expects provider '{}' to support IP matching",
                     plugin_config.tag, field, set_tag
                 ))
             })?;
-
-            for matcher in &ip_set.matchers {
-                push_unique_matcher(&mut matchers, &mut seen, matcher.clone());
-            }
+            rules.extend(provider_rules.iter().cloned());
         }
 
-        let has_v4_rules = matchers.iter().any(|matcher| matcher.has_v4_rules());
-        let has_v6_rules = matchers.iter().any(|matcher| matcher.has_v6_rules());
-        let total_v4_rules: usize = matchers.iter().map(|m| m.v4_rule_count()).sum();
-        let total_v6_rules: usize = matchers.iter().map(|m| m.v6_rule_count()).sum();
+        let mut matcher = IpPrefixMatcher::default();
+        load_ip_rules(&mut matcher, &rules)?;
+        matcher.finalize();
+
+        let has_v4_rules = matcher.has_v4_rules();
+        let has_v6_rules = matcher.has_v6_rules();
+        let total_v4_rules = matcher.v4_rule_count();
+        let total_v6_rules = matcher.v6_rule_count();
         let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
         info!(
             tag = %plugin_config.tag,
-            flat_matchers = matchers.len(),
+            merged_rules = rules.len(),
             referenced_sets = referenced_set_count,
             v4_rules = total_v4_rules,
             v6_rules = total_v6_rules,
@@ -269,15 +180,47 @@ impl PluginFactory for IpSetFactory {
 
         Ok(UninitializedPlugin::Provider(Box::new(IpSet {
             tag: plugin_config.tag.clone(),
-            matchers,
+            rules,
+            matcher,
             has_v4_rules,
             has_v6_rules,
         })))
     }
 }
 
-#[inline]
-fn normalize_rule_line(line: &str) -> &str {
+fn append_rules_from_file(rules: &mut Vec<String>, path: &str) -> DnsResult<()> {
+    crate::plugin::provider::provider_utils::for_each_nonempty_rule_line(
+        path,
+        "ip rules",
+        |raw, _| {
+            let rule = normalize_ip_rule_line(raw);
+            if !rule.is_empty() {
+                rules.push(rule.to_string());
+            }
+            Ok(())
+        },
+    )
+}
+
+fn load_ip_rules(matcher: &mut IpPrefixMatcher, rules: &[String]) -> DnsResult<()> {
+    for (idx, rule) in rules.iter().enumerate() {
+        add_ip_rule(matcher, rule, &format!("rules[{}]", idx))?;
+    }
+    Ok(())
+}
+
+fn add_ip_rule(matcher: &mut IpPrefixMatcher, rule: &str, source: &str) -> DnsResult<()> {
+    let rule = rule.trim();
+    if rule.is_empty() {
+        return Ok(());
+    }
+    matcher.add_rule(rule).map_err(|e| {
+        DnsError::plugin(format!("invalid ip/cidr '{}' in {}: {}", rule, source, e))
+    })?;
+    Ok(())
+}
+
+fn normalize_ip_rule_line(line: &str) -> &str {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
         return "";
@@ -293,22 +236,27 @@ mod tests {
     use super::*;
     use crate::plugin::provider::provider_utils::for_each_nonempty_rule_text;
 
-    fn load_rules_text(matcher: &mut IpMatcher, source_name: &str, content: &str) -> DnsResult<()> {
+    fn load_rules_text(
+        matcher: &mut IpPrefixMatcher,
+        source_name: &str,
+        content: &str,
+    ) -> DnsResult<()> {
         for_each_nonempty_rule_text(content, |raw, line_no| {
-            let rule = normalize_rule_line(raw);
+            let rule = normalize_ip_rule_line(raw);
             if rule.is_empty() {
                 return Ok(());
             }
             let source = format!("file '{}', line {}", source_name, line_no);
-            matcher.add_ip_rule(rule, &source)
+            add_ip_rule(matcher, rule, &source)
         })
     }
 
     #[test]
     fn test_ipv4_and_ipv6_match() {
-        let mut m = IpMatcher::default();
-        m.add_ip_rule("192.168.1.0/24", "test").unwrap();
-        m.add_ip_rule("2001:db8::/32", "test").unwrap();
+        let mut m = IpPrefixMatcher::default();
+        add_ip_rule(&mut m, "192.168.1.0/24", "test").unwrap();
+        add_ip_rule(&mut m, "2001:db8::/32", "test").unwrap();
+        m.finalize();
 
         assert!(m.contains_ip("192.168.1.7".parse().unwrap()));
         assert!(!m.contains_ip("192.168.2.1".parse().unwrap()));
@@ -318,9 +266,10 @@ mod tests {
 
     #[test]
     fn test_single_ip_default_prefix() {
-        let mut m = IpMatcher::default();
-        m.add_ip_rule("1.1.1.1", "test").unwrap();
-        m.add_ip_rule("2001:db8::1", "test").unwrap();
+        let mut m = IpPrefixMatcher::default();
+        add_ip_rule(&mut m, "1.1.1.1", "test").unwrap();
+        add_ip_rule(&mut m, "2001:db8::1", "test").unwrap();
+        m.finalize();
 
         assert!(m.contains_ip("1.1.1.1".parse().unwrap()));
         assert!(!m.contains_ip("1.1.1.2".parse().unwrap()));
@@ -330,15 +279,16 @@ mod tests {
 
     #[test]
     fn test_cidr_host_bits_are_masked() {
-        let mut m = IpMatcher::default();
-        m.add_ip_rule("10.10.10.7/24", "test").unwrap();
+        let mut m = IpPrefixMatcher::default();
+        add_ip_rule(&mut m, "10.10.10.7/24", "test").unwrap();
+        m.finalize();
         assert!(m.contains_ip("10.10.10.200".parse().unwrap()));
         assert!(!m.contains_ip("10.10.11.1".parse().unwrap()));
     }
 
     #[test]
     fn test_file_line_error_has_line_number() {
-        let mut m = IpMatcher::default();
+        let mut m = IpPrefixMatcher::default();
         let err = load_rules_text(&mut m, "inline-ip-test", "1.1.1.1\n2001::1/200\n").unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -349,20 +299,21 @@ mod tests {
 
     #[test]
     fn test_parse_error_includes_input() {
-        let mut m = IpMatcher::default();
-        let err = m.add_ip_rule("1.1.1.1/abc", "test").unwrap_err();
+        let mut m = IpPrefixMatcher::default();
+        let err = add_ip_rule(&mut m, "1.1.1.1/abc", "test").unwrap_err();
         assert!(err.to_string().contains("1.1.1.1/abc"));
     }
 
     #[test]
     fn test_inline_comment_in_file() {
-        let mut m = IpMatcher::default();
+        let mut m = IpPrefixMatcher::default();
         load_rules_text(
             &mut m,
             "inline-ip-comment-test",
             "1.1.1.1 # test\n# ignore\n\n",
         )
         .unwrap();
+        m.finalize();
         assert!(m.contains_ip("1.1.1.1".parse().unwrap()));
     }
 }

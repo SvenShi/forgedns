@@ -17,8 +17,8 @@ use crate::plugin::matcher::Matcher;
 #[cfg(test)]
 use crate::plugin::matcher::matcher_utils::parse_ip_prefix_matcher;
 use crate::plugin::matcher::matcher_utils::{
-    parse_ip_rules_and_set_tags, parse_quick_setup_rules, parse_rules_from_value,
-    resolve_provider_tags, validate_non_empty_ip_rules_or_set_tags,
+    ensure_ip_capable_providers, parse_ip_rules_and_set_tags, parse_quick_setup_rules,
+    parse_rules_from_value, resolve_provider_tags, validate_non_empty_ip_rules_or_set_tags,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -42,9 +42,7 @@ impl PluginFactory for RespIpFactory {
         ip_set_tags
             .into_iter()
             .enumerate()
-            .map(|(idx, tag)| {
-                DependencySpec::provider_type(format!("args.ip_set_tags[{}]", idx), tag, "ip_set")
-            })
+            .map(|(idx, tag)| DependencySpec::provider(format!("args.ip_set_tags[{}]", idx), tag))
             .collect()
     }
 
@@ -103,6 +101,7 @@ impl Plugin for RespIpMatcher {
     async fn init(&mut self) -> DnsResult<()> {
         self.ip_sets =
             resolve_provider_tags(&self.registry, &self.ip_set_tags, "resp_ip", &self.tag)?;
+        ensure_ip_capable_providers(&self.ip_sets, "resp_ip", &self.tag, &self.ip_set_tags)?;
         Ok(())
     }
 

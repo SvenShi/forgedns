@@ -5,6 +5,8 @@ sidebar_position: 5
 
 Providers turn rule sets from one-off literals into reusable data assets. In larger configurations they reduce duplication, centralize shared datasets, and keep policies maintainable.
 
+Providers with domain or IP match capability can be referenced directly by matchers through `"$tag"` and can also be aggregated by `domain_set` or `ip_set`.
+
 ---
 
 ## `adguard_rule`
@@ -119,10 +121,10 @@ Provides a high-performance domain rule set that can be referenced by plugins su
 #### `sets`
 
 - Type: `array`; Required: no; Default: empty array
-- Purpose: References other `domain_set` instances.
+- Purpose: References other providers with domain match capability.
 - Example: `- "shared_domain_set"`
 - Constraints:
-  - Only `domain_set` providers can be referenced.
+  - `domain_set`, `geosite`, and other domain-capable providers are allowed.
 - Runtime impact:
   - Referenced sets are flattened during initialization and merged into the current provider.
 
@@ -146,7 +148,47 @@ Provides a high-performance domain rule set that can be referenced by plugins su
 
 ### Notes
 
-- `sets` may only reference other `domain_set` providers.
+- `sets` may reference any provider with domain match capability.
+
+---
+
+## `geosite`
+
+### Purpose
+
+Loads reusable domain rules from v2ray-rules-dat `geosite.dat`.
+
+### Example Configuration
+
+```yaml
+- tag: geosite_cn
+  type: geosite
+  args:
+    file: "/etc/forgedns/geosite.dat"
+    selectors:
+      - "cn"
+      - "geolocation-!cn"
+```
+
+### Configuration Details
+
+- `file`
+  - Type: `string`; Required: yes
+  - Path to `geosite.dat`.
+- `selectors`
+  - Type: `array`; Required: no; Default: empty array
+  - Case-insensitive exact code filter. Also supports `code@attribute` selectors.
+  - Multiple selectors are merged as a union.
+  - Omit it or pass `[]` to load the full union of every entry in the dat file.
+  - Example: `category-games@cn` keeps only rules under `category-games` that carry the `cn` attribute.
+
+### Behavior
+
+- `Plain` becomes `keyword:`.
+- `Regex` becomes `regexp:`.
+- `RootDomain` becomes `domain:`.
+- `Full` becomes `full:`.
+- Can be referenced directly by `qname`, `cname`, and `question`, or aggregated by `domain_set`.
 
 ---
 
@@ -212,10 +254,10 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
 #### `sets`
 
 - Type: `array`; Required: no; Default: empty array
-- Purpose: References other `ip_set` instances.
+- Purpose: References other providers with IP match capability.
 - Example: `- "shared_ip_set"`
 - Constraints:
-  - Only `ip_set` providers can be referenced.
+  - `ip_set`, `geoip`, and other IP-capable providers are allowed.
 - Runtime impact:
   - Referenced sets are flattened during initialization and merged into the current provider by address family.
 
@@ -238,4 +280,39 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
 
 ### Notes
 
-- `sets` may only reference other `ip_set` providers.
+- `sets` may reference any provider with IP match capability.
+
+---
+
+## `geoip`
+
+### Purpose
+
+Loads reusable IP and CIDR rules from v2ray-rules-dat `geoip.dat`.
+
+### Example Configuration
+
+```yaml
+- tag: geoip_cn
+  type: geoip
+  args:
+    file: "/etc/forgedns/geoip.dat"
+    selectors:
+      - "cn"
+```
+
+### Configuration Details
+
+- `file`
+  - Type: `string`; Required: yes
+  - Path to `geoip.dat`.
+- `selectors`
+  - Type: `array`; Required: no; Default: empty array
+  - Case-insensitive exact code filter.
+  - Multiple selectors are merged as a union.
+  - Omit it or pass `[]` to load the full union of every entry in the dat file.
+
+### Behavior
+
+- Exposes IP-only membership checks.
+- Can be referenced directly by `client_ip`, `resp_ip`, and `ptr_ip`, or aggregated by `ip_set`.

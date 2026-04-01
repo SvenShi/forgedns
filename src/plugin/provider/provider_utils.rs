@@ -6,10 +6,8 @@
 //! Shared helpers for provider plugins.
 
 use crate::core::error::{DnsError, Result as DnsResult};
-use ahash::AHashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::sync::Arc;
 
 fn for_each_nonempty_rule_line_reader<R, F, G>(
     mut reader: R,
@@ -91,17 +89,4 @@ where
             line_no, e
         ))
     })
-}
-
-/// Push matcher into `matchers` if its Arc pointer has not been seen.
-#[inline]
-pub(crate) fn push_unique_matcher<T>(
-    matchers: &mut Vec<Arc<T>>,
-    seen: &mut AHashSet<usize>,
-    matcher: Arc<T>,
-) {
-    let ptr = Arc::as_ptr(&matcher) as usize;
-    if seen.insert(ptr) {
-        matchers.push(matcher);
-    }
 }

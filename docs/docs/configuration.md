@@ -214,6 +214,8 @@ api:
 
 - `domain_set`
 - `ip_set`
+- `geoip`
+- `geosite`
 - `adguard_rule`
 
 ## sequence 编排模型
@@ -361,7 +363,9 @@ api:
 支持在 matcher 或 provider 参数中引用 provider：
 
 - `$tag`
-  - 引用已定义 `domain_set` 或 `ip_set`。
+  - 引用已定义且具备对应匹配能力的 provider。
+  - 例如域名场景可引用 `domain_set`、`geosite`。
+  - 例如 IP 场景可引用 `ip_set`、`geoip`。
 - `&/path/to/file`
   - 直接从文件加载规则。
 

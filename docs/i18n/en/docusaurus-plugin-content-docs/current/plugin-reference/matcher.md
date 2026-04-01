@@ -95,7 +95,7 @@ Matches the query name in the request.
   args:
     # Domain expression
     - "domain:example.com"
-    # Reuse an existing domain_set
+    # Reuse an existing domain-capable provider
     - "$core_domains"
     # Load rules from file
     - "&/etc/forgedns/domains.txt"
@@ -108,7 +108,7 @@ Matches the query name in the request.
 - Type: `array`; Required: yes; Default: none
 - Supported items:
   - domain expressions
-  - `domain_set` references
+  - provider references with domain match capability, such as `domain_set` or `geosite`
   - file references
 - Runtime impact:
   - Returns `true` when any question name matches any configured rule.
@@ -158,7 +158,7 @@ soon as any question is matched by any referenced provider.
 
 ### Typical Uses
 
-- Let providers such as `adguard_rule` or `domain_set` participate directly in
+- Let providers such as `adguard_rule`, `domain_set`, or `geosite` participate directly in
   question-level matching.
 - Branch in `sequence`, then hand off to `black_hole`, `reject`, or another
   executor.
@@ -250,7 +250,7 @@ Matches the client source IP.
   args:
     # Inline CIDR
     - "192.168.0.0/16"
-    # Reference an ip_set provider
+    # Reference an IP-capable provider
     - "$lan_ip_set"
 ```
 
@@ -260,7 +260,7 @@ Matches the client source IP.
 - Supported items:
   - single IPs
   - CIDRs
-  - `ip_set` references
+  - provider references with IP match capability, such as `ip_set` or `geoip`
 - Runtime impact:
   - Returns `true` when the client source address matches any rule.
 
@@ -298,7 +298,7 @@ Matches A and AAAA addresses in the response answers.
 - Supported items:
   - single IPs
   - CIDRs
-  - `ip_set` references
+  - provider references with IP match capability, such as `ip_set` or `geoip`
 - Runtime impact:
   - Returns `true` when any A or AAAA answer IP matches any rule.
 
@@ -322,7 +322,7 @@ Matches the IP encoded in a PTR query name.
 
 ### Example Configuration
 
-Similar to `client_ip` and `resp_ip`, it supports IP rules and `ip_set`.
+Similar to `client_ip` and `resp_ip`, it supports IP rules and IP-capable providers such as `ip_set` and `geoip`.
 
 ### Configuration Details
 
@@ -330,7 +330,7 @@ Similar to `client_ip` and `resp_ip`, it supports IP rules and `ip_set`.
 - Supported items:
   - single IPs
   - CIDRs
-  - `ip_set` references
+  - provider references with IP match capability, such as `ip_set` or `geoip`
 - Runtime impact:
   - Extracts the reverse-mapped IP from the PTR name and matches it against the configured rules.
 
@@ -368,7 +368,7 @@ Matches CNAME targets in the response.
 - Type: `array`; Required: yes; Default: none
 - Supported items:
   - domain expressions
-  - `domain_set` references
+  - provider references with domain match capability, such as `domain_set` or `geosite`
   - file references
 - Runtime impact:
   - Returns `true` when any CNAME target in the response matches.

@@ -15,8 +15,8 @@ use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    parse_domain_rules_and_set_tags, parse_quick_setup_rules, parse_rules_from_value,
-    resolve_provider_tags, validate_non_empty_domain_rules_or_set_tags,
+    ensure_domain_capable_providers, parse_domain_rules_and_set_tags, parse_quick_setup_rules,
+    parse_rules_from_value, resolve_provider_tags, validate_non_empty_domain_rules_or_set_tags,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -41,11 +41,7 @@ impl PluginFactory for CnameFactory {
             .into_iter()
             .enumerate()
             .map(|(idx, tag)| {
-                DependencySpec::provider_type(
-                    format!("args.domain_set_tags[{}]", idx),
-                    tag,
-                    "domain_set",
-                )
+                DependencySpec::provider(format!("args.domain_set_tags[{}]", idx), tag)
             })
             .collect()
     }
@@ -110,6 +106,12 @@ impl Plugin for CnameMatcher {
     async fn init(&mut self) -> DnsResult<()> {
         self.domain_sets =
             resolve_provider_tags(&self.registry, &self.domain_set_tags, "cname", &self.tag)?;
+        ensure_domain_capable_providers(
+            &self.domain_sets,
+            "cname",
+            &self.tag,
+            &self.domain_set_tags,
+        )?;
         Ok(())
     }
 

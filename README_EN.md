@@ -27,7 +27,7 @@ The project is under active development.
 | Policy | `sequence`, `matcher`, `executor`, `provider` |
 | Executors | `forward`, `cache`, `fallback`, `hosts`, `arbitrary`, `redirect`, `ecs_handler`, `ttl` |
 | Matchers | `qname`, `question`, `qtype`, `qclass`, `client_ip`, `resp_ip`, `rcode`, `rate_limiter`, and more |
-| Data Sets | `domain_set`, `ip_set`, `adguard_rule` |
+| Data Sets | `domain_set`, `ip_set`, `geoip`, `geosite`, `adguard_rule` |
 | Integrations | `ipset`, `nftset`, `ros_address_list`, `reverse_lookup` |
 
 ## Quick Start

@@ -213,6 +213,8 @@ Current main provider types:
 
 - `domain_set`
 - `ip_set`
+- `geoip`
+- `geosite`
 - `adguard_rule`
 
 ## The `sequence` Orchestration Model
@@ -360,7 +362,9 @@ These forms appear in `client_ip`, `resp_ip`, `ptr_ip`, `ip_set`, and related pl
 Matchers and providers can reference providers through:
 
 - `$tag`
-  - References a defined `domain_set` or `ip_set`.
+  - References a defined provider with the required match capability.
+  - Domain-oriented references can target `domain_set` or `geosite`.
+  - IP-oriented references can target `ip_set` or `geoip`.
 - `&/path/to/file`
   - Loads rules directly from a file.
 

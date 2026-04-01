@@ -773,6 +773,356 @@ plugins:
 }
 
 #[tokio::test]
+async fn test_geoip_provider_loads_cn_rules_and_is_case_insensitive() -> Result<()> {
+    let geoip_dat = test_rule_path("geoip.dat");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geoip_cn
+    type: geoip
+    args:
+      file: "{geoip_dat}"
+      selectors:
+        - "CN"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let provider = registry
+        .get_plugin("geoip_cn")
+        .expect("geoip provider should exist")
+        .to_provider();
+
+    assert!(provider.contains_ip("1.0.1.1".parse().unwrap()));
+    assert!(!provider.contains_ip("8.8.8.8".parse().unwrap()));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_geoip_provider_without_selectors_loads_full_union() -> Result<()> {
+    let geoip_dat = test_rule_path("geoip.dat");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geoip_all
+    type: geoip
+    args:
+      file: "{geoip_dat}"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let provider = registry
+        .get_plugin("geoip_all")
+        .expect("geoip provider should exist")
+        .to_provider();
+
+    assert!(provider.contains_ip("1.0.1.1".parse().unwrap()));
+    assert!(provider.contains_ip("8.8.8.8".parse().unwrap()));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_geosite_provider_loads_requested_selectors_and_supports_question() -> Result<()> {
+    let geosite_dat = test_rule_path("geosite.dat");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geosite_target
+    type: geosite
+    args:
+      file: "{geosite_dat}"
+      selectors:
+        - "cn"
+        - "geolocation-!cn"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let provider = registry
+        .get_plugin("geosite_target")
+        .expect("geosite provider should exist")
+        .to_provider();
+
+    assert!(provider.contains_name(&Name::from_ascii("265.com").unwrap()));
+    assert!(provider.contains_name(&Name::from_ascii("a.ppy.sh").unwrap()));
+    assert!(provider.contains_question(&Question::new(
+        Name::from_ascii("a.ppy.sh").unwrap(),
+        RecordType::A,
+        DNSClass::IN,
+    )));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_geosite_provider_without_selectors_loads_full_union() -> Result<()> {
+    let geosite_dat = test_rule_path("geosite.dat");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geosite_all
+    type: geosite
+    args:
+      file: "{geosite_dat}"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let provider = registry
+        .get_plugin("geosite_all")
+        .expect("geosite provider should exist")
+        .to_provider();
+
+    assert!(provider.contains_name(&Name::from_ascii("265.com").unwrap()));
+    assert!(provider.contains_name(&Name::from_ascii("a.ppy.sh").unwrap()));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_geosite_provider_supports_code_attribute_selector() -> Result<()> {
+    let geosite_dat = test_rule_path("geosite.dat");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geosite_mastercard_cn
+    type: geosite
+    args:
+      file: "{geosite_dat}"
+      selectors:
+        - "mastercard@cn"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let provider = registry
+        .get_plugin("geosite_mastercard_cn")
+        .expect("geosite provider should exist")
+        .to_provider();
+
+    assert!(provider.contains_name(&Name::from_ascii("mastercard.cn").unwrap()));
+    assert!(!provider.contains_name(&Name::from_ascii("a.ppy.sh").unwrap()));
+    assert!(!provider.contains_name(&Name::from_ascii("mastercard.com").unwrap()));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_matchers_can_reference_geo_providers_directly() -> Result<()> {
+    let geoip_dat = test_rule_path("geoip.dat");
+    let geosite_dat = test_rule_path("geosite.dat");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geoip_cn
+    type: geoip
+    args:
+      file: "{geoip_dat}"
+      selectors: ["cn"]
+  - tag: geosite_cn
+    type: geosite
+    args:
+      file: "{geosite_dat}"
+      selectors: ["cn"]
+  - tag: geosite_foreign
+    type: geosite
+    args:
+      file: "{geosite_dat}"
+      selectors: ["geolocation-!cn"]
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$geoip_cn"
+  - tag: match_qname
+    type: qname
+    args:
+      - "$geosite_cn"
+  - tag: match_question
+    type: question
+    args:
+      - "$geosite_foreign"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+
+    let client_matcher = registry
+        .get_plugin("match_client")
+        .expect("client matcher should exist")
+        .to_matcher();
+    let qname_matcher = registry
+        .get_plugin("match_qname")
+        .expect("qname matcher should exist")
+        .to_matcher();
+    let question_matcher = registry
+        .get_plugin("match_question")
+        .expect("question matcher should exist")
+        .to_matcher();
+
+    let mut cn_ctx = make_context(registry.clone(), "265.com.");
+    cn_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(1, 0, 1, 1), 5300)));
+    assert!(client_matcher.is_match(&mut cn_ctx));
+    assert!(qname_matcher.is_match(&mut cn_ctx));
+
+    let mut foreign_ctx = make_context(registry.clone(), "a.ppy.sh.");
+    assert!(question_matcher.is_match(&mut foreign_ctx));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_set_providers_can_compose_geo_providers() -> Result<()> {
+    let geoip_dat = test_rule_path("geoip.dat");
+    let geosite_dat = test_rule_path("geosite.dat");
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geoip_cn
+    type: geoip
+    args:
+      file: "{geoip_dat}"
+      selectors: ["cn"]
+  - tag: geosite_cn
+    type: geosite
+    args:
+      file: "{geosite_dat}"
+      selectors: ["cn"]
+  - tag: mixed_ip
+    type: ip_set
+    args:
+      ips:
+        - "198.51.100.0/24"
+      sets:
+        - "geoip_cn"
+  - tag: mixed_domain
+    type: domain_set
+    args:
+      exps:
+        - "full:custom.example"
+      sets:
+        - "geosite_cn"
+"#
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+
+    let ip_provider = registry
+        .get_plugin("mixed_ip")
+        .expect("mixed ip provider should exist")
+        .to_provider();
+    let domain_provider = registry
+        .get_plugin("mixed_domain")
+        .expect("mixed domain provider should exist")
+        .to_provider();
+
+    assert!(ip_provider.contains_ip("1.0.1.1".parse().unwrap()));
+    assert!(ip_provider.contains_ip("198.51.100.7".parse().unwrap()));
+    assert!(domain_provider.contains_name(&Name::from_ascii("265.com").unwrap()));
+    assert!(domain_provider.contains_name(&Name::from_ascii("custom.example").unwrap()));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_geo_provider_failure_paths_are_reported() -> Result<()> {
+    let geoip_dat = test_rule_path("geoip.dat");
+    let geosite_dat = test_rule_path("geosite.dat");
+
+    let missing_code_yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geoip_missing
+    type: geoip
+    args:
+      file: "{geoip_dat}"
+      selectors: ["not-found-code"]
+"#
+    );
+    let err = plugin::init(parse_config(&missing_code_yaml)?, None)
+        .await
+        .expect_err("missing geoip code should fail");
+    assert!(err.to_string().contains("found no geoip entries"));
+
+    let wrong_set_yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geosite_cn
+    type: geosite
+    args:
+      file: "{geosite_dat}"
+      selectors: ["cn"]
+  - tag: invalid_ip_set
+    type: ip_set
+    args:
+      sets:
+        - "geosite_cn"
+"#
+    );
+    let err = plugin::init(parse_config(&wrong_set_yaml)?, None)
+        .await
+        .expect_err("ip_set should reject non-ip provider");
+    assert!(err.to_string().contains("support IP matching"));
+
+    let wrong_matcher_yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: geoip_cn
+    type: geoip
+    args:
+      file: "{geoip_dat}"
+      selectors: ["cn"]
+  - tag: invalid_qname
+    type: qname
+    args:
+      - "$geoip_cn"
+"#
+    );
+    let err = plugin::init(parse_config(&wrong_matcher_yaml)?, None)
+        .await
+        .expect_err("qname should reject non-domain provider");
+    assert!(err.to_string().contains("support domain matching"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_plugin_system_init_reports_dependency_kind_mismatch() -> Result<()> {
     let yaml = r#"
 log:

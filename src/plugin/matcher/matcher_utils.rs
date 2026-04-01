@@ -257,6 +257,44 @@ pub(crate) fn resolve_provider_tags(
     Ok(providers)
 }
 
+pub(crate) fn ensure_ip_capable_providers(
+    providers: &[Arc<dyn Provider>],
+    matcher_name: &str,
+    matcher_tag: &str,
+    tags: &[String],
+) -> DnsResult<()> {
+    for (idx, provider) in providers.iter().enumerate() {
+        if provider.supports_ip_matching() {
+            continue;
+        }
+        let tag = tags.get(idx).map(String::as_str).unwrap_or("<unknown>");
+        return Err(DnsError::plugin(format!(
+            "{} matcher '{}' requires provider '{}' to support IP matching",
+            matcher_name, matcher_tag, tag
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_domain_capable_providers(
+    providers: &[Arc<dyn Provider>],
+    matcher_name: &str,
+    matcher_tag: &str,
+    tags: &[String],
+) -> DnsResult<()> {
+    for (idx, provider) in providers.iter().enumerate() {
+        if provider.supports_domain_matching() {
+            continue;
+        }
+        let tag = tags.get(idx).map(String::as_str).unwrap_or("<unknown>");
+        return Err(DnsError::plugin(format!(
+            "{} matcher '{}' requires provider '{}' to support domain matching",
+            matcher_name, matcher_tag, tag
+        )));
+    }
+    Ok(())
+}
+
 fn parse_rule_list_value(value: Value) -> DnsResult<Vec<String>> {
     match value {
         Value::String(s) => Ok(split_rule_tokens(&s)),

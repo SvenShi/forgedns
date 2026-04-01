@@ -27,8 +27,11 @@ use crate::proto::{Name, Question};
 
 pub mod adguard_rule;
 pub mod domain_set;
+pub mod geoip;
+pub mod geosite;
 pub mod ip_set;
 pub(crate) mod provider_utils;
+pub(crate) mod v2ray_dat;
 
 #[async_trait]
 #[allow(dead_code)]
@@ -51,5 +54,29 @@ pub trait Provider: Plugin {
     /// Fast-path IP membership check for hot matcher paths.
     fn contains_ip(&self, _ip: IpAddr) -> bool {
         false
+    }
+
+    /// Original IP rules exposed by IP-capable providers so set-like providers
+    /// can merge them into a single compiled matcher during initialization.
+    #[inline]
+    fn ip_rules(&self) -> Option<&[String]> {
+        None
+    }
+
+    /// Original domain expressions exposed by domain-capable providers so
+    /// set-like providers can merge them into a single compiled matcher.
+    #[inline]
+    fn domain_rules(&self) -> Option<&[String]> {
+        None
+    }
+
+    #[inline]
+    fn supports_ip_matching(&self) -> bool {
+        self.ip_rules().is_some()
+    }
+
+    #[inline]
+    fn supports_domain_matching(&self) -> bool {
+        self.domain_rules().is_some()
     }
 }

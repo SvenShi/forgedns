@@ -54,6 +54,7 @@ ahash = "0.8.12"
 smallvec = "1.15.1"
 mikrotik-rs = "0.6.1"
 service-manager = "0.11.0"
+prost = "0.14"
 
 
 [dev-dependencies]
