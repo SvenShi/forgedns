@@ -13,14 +13,18 @@ Every server plugin depends on an `entry`. It must reference an existing executo
 - tag: seq_main
   type: sequence
   args:
+    # Try cache first
     - exec: "$cache_main"
-    - matches: "!$has_resp"
+    # Only forward when no response exists yet
+    - matches: "!has_resp"
       exec: "$forward_main"
 
 - tag: udp_in
   type: udp_server
   args:
+    # Must reference an existing executor, usually a sequence
     entry: "seq_main"
+    # Standard UDP DNS bind address
     listen: "0.0.0.0:53"
 ```
 
@@ -38,7 +42,9 @@ Listens for DNS over UDP and forwards requests to `entry`.
 - tag: udp_in
   type: udp_server
   args:
+    # Entry executor for this listener
     entry: "seq_main"
+    # Can be written as ip:port or :port
     listen: "0.0.0.0:53"
 ```
 
@@ -101,17 +107,25 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
 - tag: tcp_in
   type: tcp_server
   args:
+    # TCP requests enter the main policy chain
     entry: "seq_main"
+    # Listen on the standard TCP DNS port
     listen: ":53"
+    # Idle connection lifetime in seconds
     idle_timeout: 10
 
 - tag: dot_in
   type: tcp_server
   args:
+    # Reuse the same policy chain for DoT
     entry: "seq_main"
+    # Typical DoT port
     listen: ":853"
+    # PEM certificate chain
     cert: "/etc/forgedns/server.crt"
+    # PEM private key
     key: "/etc/forgedns/server.key"
+    # Keep DoT connections alive a bit longer for reuse
     idle_timeout: 30
 ```
 
@@ -201,10 +215,15 @@ Provides DNS over QUIC.
 - tag: doq_in
   type: quic_server
   args:
+    # Policy chain used by DoQ requests
     entry: "seq_main"
+    # Common DoQ port
     listen: ":853"
+    # TLS certificate is mandatory for DoQ
     cert: "/etc/forgedns/server.crt"
+    # TLS private key is mandatory for DoQ
     key: "/etc/forgedns/server.key"
+    # QUIC transport idle timeout in seconds
     idle_timeout: 30
 ```
 
@@ -281,15 +300,23 @@ Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
 - tag: doh_in
   type: http_server
   args:
+    # HTTPS / DoH bind address
     listen: ":443"
+    # Certificate required for HTTPS and HTTP/3
     cert: "/etc/forgedns/server.crt"
+    # Private key required for HTTPS and HTTP/3
     key: "/etc/forgedns/server.key"
+    # Also enable DoH over HTTP/3 when TLS is present
     enable_http3: true
+    # Restore the real client IP from a reverse-proxy header
     src_ip_header: "X-Forwarded-For"
+    # Idle timeout for HTTP/2 and HTTP/3 connections
     idle_timeout: 30
     entries:
+      # Standard RFC 8484 endpoint
       - path: "/dns-query"
         exec: "seq_main"
+      # Alternate path for a different policy chain
       - path: "/dns-alt"
         exec: "seq_alt"
 ```

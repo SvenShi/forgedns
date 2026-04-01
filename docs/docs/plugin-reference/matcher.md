@@ -7,30 +7,28 @@ sidebar_position: 4
 
 ## 匹配表达式规则
 
-在 `sequence` 中使用 matcher 时，常见写法有两种：
-
-引用已有 matcher：
+在 `sequence` 中使用 matcher 时，推荐优先使用 quick setup 形式，配置会更直观：
 
 ```yaml
 - matches:
-    - "$is_lan"
-    - "$only_a"
+    - "client_ip $lan_ip_set"
+    - "qtype A"
   exec: "$forward_main"
 ```
 
-quick setup：
+也可以继续组合其它 quick setup matcher：
 
 ```yaml
 - matches:
     - "qname domain:example.com"
-    - "qtype A"
+    - "qclass IN"
   exec: "$forward_main"
 ```
 
 取反：
 
 ```yaml
-- matches: "!$has_resp"
+- matches: "!has_resp"
   exec: "$forward_main"
 ```
 

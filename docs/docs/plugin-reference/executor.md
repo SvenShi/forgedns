@@ -24,12 +24,25 @@ sidebar_position: 3
 - tag: seq_main
   type: sequence
   args:
-    - matches: "$cache_hit"
+    # 先尝试读取缓存
+    - exec: "$cache_main"
+    # 命中缓存后直接结束
+    - matches: "has_resp"
       exec: "accept"
-    - matches: "qname $local_domains"
+    # 多个 matches 写成数组时是逻辑与
+    # 示例里尽量直接写 quick setup 表达式
+    - matches:
+        - "client_ip $lan_ip_set"
+        - "qname $local_domains"
       exec: "$hosts_main"
-    - matches: "!$has_resp"
+    # 没有前置条件时也可以直接执行观测类插件
+    - exec: "$metrics_main"
+    # 还没有响应时再继续转发
+    - matches: "!has_resp"
       exec: "$forward_main"
+    # 响应回来后统一收敛 TTL
+    - matches: "has_resp"
+      exec: "$ttl_main"
 ```
 
 ### 配置项
@@ -99,13 +112,38 @@ sidebar_position: 3
 - tag: forward_main
   type: forward
   args:
-    concurrent: 2
+    # 多上游模式下实际并发扇出
+    concurrent: 3
     upstreams:
-      - addr: "udp://1.1.1.1:53"
-      - addr: "https://resolver.example/dns-query"
+      # 最简单的 UDP 上游
+      - tag: "cf_udp"
+        addr: "udp://1.1.1.1:53"
+        timeout: 3s
+
+      # 域名型 DoH 上游，演示 bootstrap / 连接池 / HTTP/3 / Linux socket 参数
+      - tag: "doh_main"
+        addr: "https://resolver.example/dns-query"
         bootstrap: "8.8.8.8:53"
+        bootstrap_version: 4
+        port: 443
+        idle_timeout: 30
+        max_conns: 256
         timeout: 5s
+        enable_pipeline: false
         enable_http3: true
+        so_mark: 100
+        bind_to_device: "eth0"
+
+      # DoT 上游，演示 dial_addr / SOCKS5 / TLS 校验开关 / pipeline
+      - tag: "dot_backup"
+        addr: "tls://dns.example:853"
+        dial_addr: "203.0.113.53"
+        socks5: "user:pass@127.0.0.1:1080"
+        idle_timeout: 60
+        max_conns: 128
+        insecure_skip_verify: false
+        timeout: 4s
+        enable_pipeline: true
 ```
 
 ### 配置项
@@ -305,14 +343,25 @@ sidebar_position: 3
 - tag: cache_main
   type: cache
   args:
+    # 最大缓存条目数
     size: 8192
+    # 命中缓存后直接结束后续执行
     short_circuit: true
+    # 用固定 TTL 覆盖写入缓存时使用的 TTL
+    lazy_cache_ttl: 120
+    # 开启 NXDOMAIN / NODATA 负缓存
     cache_negative: true
+    # 负缓存 TTL 上限
     max_negative_ttl: 300
+    # 负响应没有 SOA 时使用的回退 TTL
     negative_ttl_without_soa: 60
+    # 正响应 TTL 上限
     max_positive_ttl: 600
+    # ECS 不参与缓存键，提升命中率
     ecs_in_key: false
+    # 启用缓存持久化
     dump_file: "./dns_cache.dump"
+    # 定期落盘周期，单位秒
     dump_interval: 600
 ```
 
@@ -413,9 +462,13 @@ sidebar_position: 3
 - tag: fallback_main
   type: fallback
   args:
+    # 首选路径
     primary: "forward_fast"
+    # 兜底路径
     secondary: "forward_stable"
+    # 主路径超过 200ms 后允许备用路径接管
     threshold: 200
+    # 让备用路径始终并行待命，换取更低尾延迟
     always_standby: true
 ```
 
@@ -474,9 +527,16 @@ sidebar_position: 3
   type: hosts
   args:
     entries:
+      # 精确匹配单个主机名
       - "full:router.local 192.168.1.1"
+      # 后缀匹配，可同时返回 IPv4 / IPv6
       - "domain:svc.local 10.0.0.10 fd00::10"
+      # 关键字匹配
+      - "keyword:nas 192.168.1.20"
+      # 正则匹配
+      - "regexp:^api[0-9]+\\.corp\\.local$ 10.10.0.5"
     files:
+      # 从文件合并更多 hosts 规则
       - "/etc/forgedns/hosts.txt"
 ```
 
@@ -528,9 +588,17 @@ sidebar_position: 3
   type: arbitrary
   args:
     rules:
+      # TXT 记录
       - "example.com. 60 IN TXT \"hello world\""
+      # MX 记录
       - "mail.example.com. 300 IN MX 10 mx1.example.com."
+      # A / AAAA / CNAME / PTR 也都可以直接写
+      - "www.example.com. 120 IN A 192.0.2.10"
+      - "www.example.com. 120 IN AAAA 2001:db8::10"
+      - "alias.example.com. 120 IN CNAME www.example.com."
+      - "10.2.0.192.in-addr.arpa. 300 IN PTR host.example.com."
     files:
+      # 从文件加载更多静态记录
       - "/etc/forgedns/zone.txt"
 ```
 
@@ -577,8 +645,14 @@ sidebar_position: 3
   type: redirect
   args:
     rules:
+      # 精确重定向
       - "full:old.example.com new.example.net"
+      # 后缀重定向
+      - "domain:legacy.example.com modern.example.net"
+      # 关键字重定向
+      - "keyword:staging staging-gateway.example.net"
     files:
+      # 从文件合并更多重定向规则
       - "/etc/forgedns/redirect.txt"
 ```
 
@@ -633,8 +707,11 @@ sidebar_position: 3
 - tag: reverse_lookup_main
   type: reverse_lookup
   args:
+    # 反查缓存容量
     size: 65535
+    # IP -> 域名映射保留时间
     ttl: 7200
+    # 命中缓存时直接回答 PTR
     handle_ptr: true
 ```
 
@@ -690,16 +767,25 @@ sidebar_position: 3
 - tag: ecs_main
   type: ecs_handler
   args:
+    # 客户端自带 ECS 时先移除
     forward: false
+    # 请求没有 ECS 时自动补发
     send: true
+    # IPv4 ECS 前缀长度
     mask4: 24
+    # IPv6 ECS 前缀长度
     mask6: 48
 
 - tag: ecs_preset
   type: ecs_handler
   args:
+    # 预设 ECS 地址
     preset: "203.0.113.10"
+    # 固定来源模式下也建议显式写出策略开关
+    forward: false
+    send: true
     mask4: 24
+    mask6: 48
 ```
 
 ### 配置项
@@ -769,6 +855,7 @@ sidebar_position: 3
 - tag: edns_forward
   type: forward_edns0opt
   args:
+    # 只透传指定的 EDNS0 option code
     codes: [10, 12]
 ```
 
@@ -808,22 +895,17 @@ sidebar_position: 3
 
 ### 配置示例
 
-对象形式：
+完整对象形式：
 
 ```yaml
 - tag: ttl_main
   type: ttl
   args:
+    # 先把 TTL 固定为 300
     fix: 300
-```
-
-或：
-
-```yaml
-- tag: ttl_clamp
-  type: ttl
-  args:
+    # 再做下限兜底
     min: 60
+    # 再做上限约束
     max: 600
 ```
 
@@ -876,7 +958,9 @@ sidebar_position: 3
 - tag: prefer_v4
   type: prefer_ipv4
   args:
+    # 记录 preferred 类型是否存在
     cache: true
+    # preferred 状态缓存时长
     cache_ttl: 3600
 ```
 
@@ -928,7 +1012,9 @@ sidebar_position: 3
   type: black_hole
   args:
     ips:
+      # A 查询时返回
       - "0.0.0.0"
+      # AAAA 查询时返回
       - "::"
 ```
 
@@ -971,6 +1057,7 @@ sidebar_position: 3
 ```yaml
 - tag: clear_response
   type: drop_resp
+  # 无独立 args；执行时会直接清掉当前 response
 ```
 
 ### 配置项
@@ -1007,6 +1094,7 @@ sidebar_position: 3
 - tag: sleep_100ms
   type: sleep
   args:
+    # 额外异步延迟 100ms
     duration: 100
 ```
 
@@ -1043,6 +1131,7 @@ sidebar_position: 3
 - tag: debug_main
   type: debug_print
   args:
+    # 日志标题；未配置时默认是 "debug print"
     msg: "before forward"
 ```
 
@@ -1082,6 +1171,7 @@ sidebar_position: 3
 - tag: summary_main
   type: query_summary
   args:
+    # 日志标题；便于区分不同链路
     msg: "main pipeline"
 ```
 
@@ -1127,6 +1217,7 @@ sidebar_position: 3
 - tag: metrics_main
   type: metrics_collector
   args:
+    # 指标名称标签；导出到 /metrics 时会带上它
     name: "main"
 ```
 
@@ -1178,9 +1269,13 @@ sidebar_position: 3
 - tag: ipset_main
   type: ipset
   args:
+    # A 记录写入的 ipset
     set_name4: "forgedns_v4"
+    # AAAA 记录写入的 ipset
     set_name6: "forgedns_v6"
+    # IPv4 写入前先聚合成 /24
     mask4: 24
+    # IPv6 写入前先聚合成 /64
     mask6: 64
 ```
 
@@ -1253,15 +1348,34 @@ sidebar_position: 3
   type: nftset
   args:
     ipv4:
+      # IPv4 使用 ip family
       table_family: "ip"
       table_name: "mangle"
       set_name: "dns_v4"
       mask: 24
     ipv6:
+      # IPv6 使用 ip6 family
       table_family: "ip6"
       table_name: "mangle"
       set_name: "dns_v6"
       mask: 64
+```
+
+兼容写法：
+
+```yaml
+- tag: nftset_legacy
+  type: nftset
+  args:
+    # 兼容字段，适合从旧配置迁移
+    table_family4: "ip"
+    table_name4: "mangle"
+    set_name4: "dns_v4"
+    mask4: 24
+    table_family6: "ip6"
+    table_name6: "mangle"
+    set_name6: "dns_v6"
+    mask6: 64
 ```
 
 ### 配置项
@@ -1346,23 +1460,38 @@ sidebar_position: 3
 - tag: ros_address_list_main
   type: ros_address_list
   args:
+    # RouterOS API 地址
     address: "172.16.1.1:8728"
+    # API 用户名
     username: "api-user"
+    # API 密码
     password: "secret"
+    # 异步提交，避免阻塞 DNS 主路径
     async: true
+    # A 记录写入的 address-list
     address_list4: "forgedns_ipv4"
+    # AAAA 记录写入的 address-list
     address_list6: "forgedns_ipv6"
+    # 用于标记 ForgeDNS 管理条目的注释前缀
     comment_prefix: "forgedns"
+    # 动态项 TTL 下限
     min_ttl: 60
+    # 动态项 TTL 上限
     max_ttl: 3600
+    # 强制把动态项 TTL 固定为 300 秒；填 0 表示不设置 timeout
     fixed_ttl: 300
+    # 插件关闭时清理自己维护的条目
     cleanup_on_shutdown: true
     persistent:
       ips:
+        # 常驻单 IP
         - "1.1.1.1"
+        # 常驻 IPv4 网段
         - "100.64.1.0/24"
+        # 常驻 IPv6 网段
         - "2001:db8::/64"
       files:
+        # 从文件加载更多常驻项
         - "/etc/forgedns/persistent_ips.txt"
 ```
 

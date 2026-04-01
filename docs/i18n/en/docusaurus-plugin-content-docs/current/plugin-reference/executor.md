@@ -24,12 +24,25 @@ Orchestrates matchers and executors into a pipeline. This is the most common ent
 - tag: seq_main
   type: sequence
   args:
-    - matches: "$cache_hit"
+    # Try cache first
+    - exec: "$cache_main"
+    # Stop immediately on cache hit
+    - matches: "has_resp"
       exec: "accept"
-    - matches: "qname $local_domains"
+    # Arrays of matches are AND-ed together
+    # Examples prefer quick-setup matcher expressions directly
+    - matches:
+        - "client_ip $lan_ip_set"
+        - "qname $local_domains"
       exec: "$hosts_main"
-    - matches: "!$has_resp"
+    # Rules may also execute unconditionally
+    - exec: "$metrics_main"
+    # Only forward when no response exists yet
+    - matches: "!has_resp"
       exec: "$forward_main"
+    # Normalize TTL after a response is available
+    - matches: "has_resp"
+      exec: "$ttl_main"
 ```
 
 ### Configuration Details
@@ -91,13 +104,39 @@ Sends DNS queries to upstreams.
 - tag: forward_main
   type: forward
   args:
-    concurrent: 2
+    # Effective fan-out in multi-upstream mode
+    concurrent: 3
     upstreams:
-      - addr: "udp://1.1.1.1:53"
-      - addr: "https://resolver.example/dns-query"
+      # Simplest UDP upstream
+      - tag: "cf_udp"
+        addr: "udp://1.1.1.1:53"
+        timeout: 3s
+
+      # Domain-based DoH upstream showing bootstrap, pooling, HTTP/3,
+      # and Linux socket options
+      - tag: "doh_main"
+        addr: "https://resolver.example/dns-query"
         bootstrap: "8.8.8.8:53"
+        bootstrap_version: 4
+        port: 443
+        idle_timeout: 30
+        max_conns: 256
         timeout: 5s
+        enable_pipeline: false
         enable_http3: true
+        so_mark: 100
+        bind_to_device: "eth0"
+
+      # DoT upstream showing dial_addr, SOCKS5, TLS verification, and pipelining
+      - tag: "dot_backup"
+        addr: "tls://dns.example:853"
+        dial_addr: "203.0.113.53"
+        socks5: "user:pass@127.0.0.1:1080"
+        idle_timeout: 60
+        max_conns: 128
+        insecure_skip_verify: false
+        timeout: 4s
+        enable_pipeline: true
 ```
 
 ### Configuration Details
@@ -247,14 +286,25 @@ Provides TTL-aware response caching with negative cache support and persistence.
 - tag: cache_main
   type: cache
   args:
+    # Maximum number of cached entries
     size: 8192
+    # Stop the chain immediately when cache returns a response
     short_circuit: true
+    # Override the TTL used when writing new cache entries
+    lazy_cache_ttl: 120
+    # Cache NXDOMAIN / NODATA responses too
     cache_negative: true
+    # Upper bound for negative-cache TTL
     max_negative_ttl: 300
+    # Fallback TTL when a negative response has no SOA
     negative_ttl_without_soa: 60
+    # Upper bound for positive TTL
     max_positive_ttl: 600
+    # Exclude ECS from the cache key for a better hit ratio
     ecs_in_key: false
+    # Persist cache contents to disk
     dump_file: "./dns_cache.dump"
+    # Periodic dump interval in seconds
     dump_interval: 600
 ```
 
@@ -346,9 +396,13 @@ Runs a primary executor first and falls back to a secondary executor when the pr
 - tag: fallback_main
   type: fallback
   args:
+    # Preferred path
     primary: "forward_fast"
+    # Backup path
     secondary: "forward_stable"
+    # Let the backup take over after 200 ms
     threshold: 200
+    # Keep the backup running in parallel for lower tail latency
     always_standby: true
 ```
 
@@ -404,9 +458,16 @@ Returns local static answers using host-style entries.
   type: hosts
   args:
     entries:
+      # Exact-name rule
       - "full:router.local 192.168.1.1"
+      # Suffix rule returning both IPv4 and IPv6
       - "domain:svc.local 10.0.0.10 fd00::10"
+      # Keyword rule
+      - "keyword:nas 192.168.1.20"
+      # Regex rule
+      - "regexp:^api[0-9]+\\.corp\\.local$ 10.10.0.5"
     files:
+      # Merge more hosts rules from files
       - "/etc/forgedns/hosts.txt"
 ```
 
@@ -457,9 +518,17 @@ Injects arbitrary DNS records from zone-style rule strings.
   type: arbitrary
   args:
     rules:
+      # TXT record
       - "example.com. 60 IN TXT \"hello world\""
+      # MX record
       - "mail.example.com. 300 IN MX 10 mx1.example.com."
+      # A / AAAA / CNAME / PTR records are also supported
+      - "www.example.com. 120 IN A 192.0.2.10"
+      - "www.example.com. 120 IN AAAA 2001:db8::10"
+      - "alias.example.com. 120 IN CNAME www.example.com."
+      - "10.2.0.192.in-addr.arpa. 300 IN PTR host.example.com."
     files:
+      # Load more static records from files
       - "/etc/forgedns/zone.txt"
 ```
 
@@ -504,8 +573,14 @@ Rewrites matching names toward different target names or answer destinations.
   type: redirect
   args:
     rules:
+      # Exact-name redirect
       - "full:old.example.com new.example.net"
+      # Suffix redirect
+      - "domain:legacy.example.com modern.example.net"
+      # Keyword redirect
+      - "keyword:staging staging-gateway.example.net"
     files:
+      # Merge more redirect rules from files
       - "/etc/forgedns/redirect.txt"
 ```
 
@@ -561,8 +636,11 @@ Maintains a reverse IP-to-name cache and optionally handles PTR requests.
 - tag: reverse_lookup_main
   type: reverse_lookup
   args:
+    # Reverse-cache capacity
     size: 65535
+    # Retention time for IP -> name mappings
     ttl: 7200
+    # Answer PTR directly from the learned cache
     handle_ptr: true
 ```
 
@@ -615,16 +693,25 @@ Controls EDNS Client Subnet forwarding or injection.
 - tag: ecs_main
   type: ecs_handler
   args:
+    # Strip client-supplied ECS first
     forward: false
+    # Add ECS when the request has none
     send: true
+    # IPv4 ECS prefix length
     mask4: 24
+    # IPv6 ECS prefix length
     mask6: 48
 
 - tag: ecs_preset
   type: ecs_handler
   args:
+    # Preset ECS source
     preset: "203.0.113.10"
+    # Fixed-source mode usually keeps these switches explicit
+    forward: false
+    send: true
     mask4: 24
+    mask6: 48
 ```
 
 ### Configuration Details
@@ -688,6 +775,7 @@ Forwards selected EDNS0 options to upstreams.
 - tag: edns_forward
   type: forward_edns0opt
   args:
+    # Preserve only the selected EDNS0 option codes
     codes: [10, 12]
 ```
 
@@ -722,22 +810,17 @@ Rewrites response TTL values.
 
 ### Example Configuration
 
-Object form:
+Full object form:
 
 ```yaml
 - tag: ttl_main
   type: ttl
   args:
+    # First force TTL to 300
     fix: 300
-```
-
-or:
-
-```yaml
-- tag: ttl_clamp
-  type: ttl
-  args:
+    # Then keep a lower bound
     min: 60
+    # And cap the upper bound
     max: 600
 ```
 
@@ -789,7 +872,9 @@ Biases dual-stack results toward one address family.
 - tag: prefer_v4
   type: prefer_ipv4
   args:
+    # Cache whether the preferred family exists
     cache: true
+    # Keep the preference cache for one hour
     cache_ttl: 3600
 ```
 
@@ -833,7 +918,9 @@ Returns sinkhole IPs directly.
   type: black_hole
   args:
     ips:
+      # Returned for A queries
       - "0.0.0.0"
+      # Returned for AAAA queries
       - "::"
 ```
 
@@ -872,6 +959,7 @@ Drops the current response.
 ```yaml
 - tag: clear_response
   type: drop_resp
+  # No standalone args; execution simply clears the current response
 ```
 
 ### Configuration Details
@@ -907,6 +995,7 @@ Sleeps for a bounded duration inside the chain.
 - tag: sleep_100ms
   type: sleep
   args:
+    # Add 100 ms of async delay
     duration: 100
 ```
 
@@ -942,6 +1031,7 @@ Prints a debug message.
 - tag: debug_main
   type: debug_print
   args:
+    # Log title; defaults to "debug print" when omitted
     msg: "before forward"
 ```
 
@@ -977,6 +1067,7 @@ Records concise query summaries.
 - tag: summary_main
   type: query_summary
   args:
+    # Extra title so multiple summary points are easy to distinguish
     msg: "main pipeline"
 ```
 
@@ -1016,6 +1107,7 @@ Collects Prometheus metrics for query handling.
 - tag: metrics_main
   type: metrics_collector
   args:
+    # Collector label exported through /metrics
     name: "main"
 ```
 
@@ -1059,9 +1151,13 @@ Writes response IPs into Linux `ipset`.
 - tag: ipset_main
   type: ipset
   args:
+    # ipset used for A answers
     set_name4: "forgedns_v4"
+    # ipset used for AAAA answers
     set_name6: "forgedns_v6"
+    # Aggregate IPv4 writes to /24 prefixes
     mask4: 24
+    # Aggregate IPv6 writes to /64 prefixes
     mask6: 64
 ```
 
@@ -1134,15 +1230,34 @@ Structured form:
   type: nftset
   args:
     ipv4:
+      # IPv4 target uses the ip family
       table_family: "ip"
       table_name: "mangle"
       set_name: "dns_v4"
       mask: 24
     ipv6:
+      # IPv6 target uses the ip6 family
       table_family: "ip6"
       table_name: "mangle"
       set_name: "dns_v6"
       mask: 64
+```
+
+Compatibility form:
+
+```yaml
+- tag: nftset_legacy
+  type: nftset
+  args:
+    # Compatibility fields, useful when migrating old configs
+    table_family4: "ip"
+    table_name4: "mangle"
+    set_name4: "dns_v4"
+    mask4: 24
+    table_family6: "ip6"
+    table_name6: "mangle"
+    set_name6: "dns_v6"
+    mask6: 64
 ```
 
 ### Configuration Details
@@ -1227,23 +1342,38 @@ Writes response IPs into MikroTik RouterOS address lists.
 - tag: ros_address_list_main
   type: ros_address_list
   args:
+    # RouterOS API endpoint
     address: "172.16.1.1:8728"
+    # API username
     username: "api-user"
+    # API password
     password: "secret"
+    # Use asynchronous writes to avoid blocking the DNS hot path
     async: true
+    # Address list used for A records
     address_list4: "forgedns_ipv4"
+    # Address list used for AAAA records
     address_list6: "forgedns_ipv6"
+    # Prefix for comments on ForgeDNS-managed entries
     comment_prefix: "forgedns"
+    # Lower bound for dynamic-entry TTL
     min_ttl: 60
+    # Upper bound for dynamic-entry TTL
     max_ttl: 3600
+    # Force dynamic entries to 300 seconds; use 0 to omit RouterOS timeout
     fixed_ttl: 300
+    # Remove owned entries when the plugin shuts down
     cleanup_on_shutdown: true
     persistent:
       ips:
+        # Persistent single IP
         - "1.1.1.1"
+        # Persistent IPv4 CIDR
         - "100.64.1.0/24"
+        # Persistent IPv6 CIDR
         - "2001:db8::/64"
       files:
+        # Load more persistent items from files
         - "/etc/forgedns/persistent_ips.txt"
 ```
 

@@ -25,9 +25,14 @@ This provider exposes two semantics:
   type: adguard_rule
   args:
     rules:
+      # Basic blocking rule
       - "||ads.example.com^"
+      # Exception rule
       - "@@||safe.ads.example.com^"
+      # Complex inline rule with dnstype / important / denyallow
+      - "||cdn.example.com^$dnstype=A|AAAA,important,denyallow=cdn-safe.example.com"
     files:
+      # External AdGuard-format rule files
       - "/etc/forgedns/adguard.txt"
 ```
 
@@ -63,12 +68,21 @@ Provides a high-performance domain rule set that can be referenced by plugins su
   type: domain_set
   args:
     exps:
+      # Exact-name match
+      - "full:login.example.com"
+      # Suffix-domain match
       - "domain:example.com"
+      # Keyword match
       - "keyword:cdn"
+      # Regex match
       - "regexp:^api[0-9]+\\.example\\.net$"
+      # Bare domain syntax is also allowed
+      - "static.example.org"
     files:
+      # Merge additional rules from files
       - "/etc/forgedns/domains.txt"
     sets:
+      # Reuse another domain_set provider
       - "shared_domains"
 ```
 
@@ -149,12 +163,20 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
   type: ip_set
   args:
     ips:
+      # Single IPv4
+      - "192.168.1.1"
+      # IPv4 CIDR
       - "192.168.0.0/16"
       - "10.0.0.0/8"
+      # Single IPv6
+      - "2001:db8::1"
+      # IPv6 CIDR
       - "fd00::/8"
     files:
+      # Merge more IP / CIDR entries from files
       - "/etc/forgedns/ips.txt"
     sets:
+      # Reuse another ip_set provider
       - "shared_ip_set"
 ```
 

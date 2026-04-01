@@ -7,30 +7,28 @@ Matcher plugins return `true` or `false`. They are mainly used by `sequence.matc
 
 ## Matcher Expression Rules
 
-There are two common ways to use matchers inside `sequence`.
-
-Reference an existing matcher:
+Inside `sequence`, quick-setup matcher expressions are usually the clearest form to start with:
 
 ```yaml
 - matches:
-    - "$is_lan"
-    - "$only_a"
+    - "client_ip $lan_ip_set"
+    - "qtype A"
   exec: "$forward_main"
 ```
 
-Quick setup:
+You can combine other quick-setup matchers in the same way:
 
 ```yaml
 - matches:
     - "qname domain:example.com"
-    - "qtype A"
+    - "qclass IN"
   exec: "$forward_main"
 ```
 
 Negation:
 
 ```yaml
-- matches: "!$has_resp"
+- matches: "!has_resp"
   exec: "$forward_main"
 ```
 

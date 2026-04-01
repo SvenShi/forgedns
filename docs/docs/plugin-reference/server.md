@@ -13,14 +13,18 @@ sidebar_position: 2
 - tag: seq_main
   type: sequence
   args:
+    # 先尝试从缓存直接返回
     - exec: "$cache_main"
-    - matches: "!$has_resp"
+    # 没有响应时再继续走上游
+    - matches: "!has_resp"
       exec: "$forward_main"
 
 - tag: udp_in
   type: udp_server
   args:
+    # 必须引用一个已存在的执行器，通常是 sequence
     entry: "seq_main"
+    # 标准 UDP DNS 监听地址
     listen: "0.0.0.0:53"
 ```
 
@@ -38,7 +42,9 @@ sidebar_position: 2
 - tag: udp_in
   type: udp_server
   args:
+    # 当前监听器的入口执行器
     entry: "seq_main"
+    # 可写成 ip:port 或 :port
     listen: "0.0.0.0:53"
 ```
 
@@ -101,17 +107,25 @@ sidebar_position: 2
 - tag: tcp_in
   type: tcp_server
   args:
+    # TCP 请求统一进入主策略链
     entry: "seq_main"
+    # 监听 53 端口
     listen: ":53"
+    # 空闲连接保活/回收时间，单位秒
     idle_timeout: 10
 
 - tag: dot_in
   type: tcp_server
   args:
+    # DoT 也复用同一条策略链
     entry: "seq_main"
+    # 典型 DoT 端口
     listen: ":853"
+    # PEM 证书链
     cert: "/etc/forgedns/server.crt"
+    # PEM 私钥
     key: "/etc/forgedns/server.key"
+    # DoT 通常适当放大空闲时间以复用连接
     idle_timeout: 30
 ```
 
@@ -202,10 +216,15 @@ sidebar_position: 2
 - tag: doq_in
   type: quic_server
   args:
+    # DoQ 请求进入的策略链
     entry: "seq_main"
+    # DoQ 常见监听端口
     listen: ":853"
+    # DoQ 必须配置 TLS 证书
     cert: "/etc/forgedns/server.crt"
+    # DoQ 必须配置 TLS 私钥
     key: "/etc/forgedns/server.key"
+    # QUIC transport 空闲超时，单位秒
     idle_timeout: 30
 ```
 
@@ -282,15 +301,23 @@ sidebar_position: 2
 - tag: doh_in
   type: http_server
   args:
+    # HTTPS / DoH 监听地址
     listen: ":443"
+    # 启用 HTTPS / HTTP3 所需证书
     cert: "/etc/forgedns/server.crt"
+    # 启用 HTTPS / HTTP3 所需私钥
     key: "/etc/forgedns/server.key"
+    # 在 TLS 已启用时同时开启 DoH over HTTP/3
     enable_http3: true
+    # 反代场景下从指定头部恢复真实客户端 IP
     src_ip_header: "X-Forwarded-For"
+    # HTTP/2 / HTTP/3 连接空闲超时
     idle_timeout: 30
     entries:
+      # 标准 RFC 8484 路径
       - path: "/dns-query"
         exec: "seq_main"
+      # 为另一条策略链保留的备用路径
       - path: "/dns-alt"
         exec: "seq_alt"
 ```
