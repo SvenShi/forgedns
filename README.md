@@ -56,12 +56,18 @@ cargo test
 | Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` |
 | FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` |
 
-Linux 下如果不确定兼容性，尽量优先选 `musl` 版本，不要默认选 `gnu`。不确定自己机器的系统和架构时，可先执行 `uname -s && uname -m`；Windows 可在 PowerShell 中执行 `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`。更完整的安装说明见文档中的快速开始页面。
+Linux 下如果不确定兼容性，尽量优先选 `musl` 版本，不要默认选 `gnu`。
+
+不确定自己机器的系统和架构时，可先执行 `uname -s && uname -m`。
+
+Windows 可在 PowerShell 中执行 `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`。
+
+更完整的安装说明见文档中的快速开始页面。
 
 ## 文档导航
 
 - [配置总览](https://forgedns.cn/configuration)
-- [快速开始与 release 选择](https://forgedns.cn/quickstart)
+- [快速开始](https://forgedns.cn/quickstart)
 - [插件总览](https://forgedns.cn/plugin-reference/overview)
 - [管理 API](https://forgedns.cn/api)
 - [MikroTik 策略路由](https://forgedns.cn/mikrotik-policy-routing)

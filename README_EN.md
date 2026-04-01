@@ -56,12 +56,18 @@ If you want to download a GitHub release directly, use this platform guide:
 | Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` |
 | FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` |
 
-On Linux, prefer `musl` by default if you are unsure about compatibility instead of assuming `gnu` will work. If you are unsure which platform you are on, run `uname -s && uname -m`. On Windows PowerShell, run `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`. The full install flow is documented in Quick Start.
+On Linux, prefer `musl` by default if you are unsure about compatibility instead of assuming `gnu` will work.
+
+If you are unsure which platform you are on, run `uname -s && uname -m`.
+
+On Windows PowerShell, run `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`.
+
+The full install flow is documented in Quick Start.
 
 ## Documentation Map
 
 - [Configuration](https://forgedns.cn/en/configuration)
-- [Quick start and release selection](https://forgedns.cn/en/quickstart)
+- [Quick start](https://forgedns.cn/en/quickstart)
 - [Plugin overview](https://forgedns.cn/en/plugin-reference/overview)
 - [Management API](https://forgedns.cn/en/api)
 - [MikroTik policy routing](https://forgedns.cn/en/mikrotik-policy-routing)
