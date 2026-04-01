@@ -3,111 +3,57 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-//! High-performance application clock
+//! Application monotonic clock.
 //!
-//! Provides efficient timestamp access without syscall overhead.
-//! A background task updates the time periodically (default: 1ms), allowing
-//! hot-path code to read time with just an atomic load operation.
-//!
-//! This is crucial for performance-sensitive paths like connection
-//! timeout tracking and cache expiration checks.
+//! ForgeDNS mainly needs elapsed-time reads relative to process start for
+//! metrics, cache expiry, and connection lifetime tracking. The previous
+//! version maintained a dedicated updater task and cached elapsed time in an
+//! atomic, but the measured gain did not justify an always-running runtime
+//! task. The current design keeps only a lazily initialized monotonic base
+//! instant and computes elapsed time directly from it.
 
-use std::ops::Add;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Once, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::time::{Instant, MissedTickBehavior};
-
-const CLOCK_TICK_ENV: &str = "FORGEDNS_CLOCK_TICK_MS";
-const DEFAULT_CLOCK_TICK_MS: u64 = 10;
-const MIN_CLOCK_TICK_MS: u64 = 1;
+use tokio::time::Instant;
 
 /// Application start time (set once during initialization)
 static START_INSTANT: OnceLock<Instant> = OnceLock::new();
 
-/// Cached milliseconds since start (updated by background task)
-static GLOBAL_NOW: AtomicU64 = AtomicU64::new(0);
-
-/// Ensures clock is initialized only once
-static CLOCK_INIT: Once = Once::new();
-
-/// High-performance clock implementation
-///
-/// Uses a background task to update time every millisecond.
-/// All reads are lock-free atomic operations.
+/// Process-wide monotonic clock helper.
 pub struct AppClock {}
 
 #[allow(unused)]
 impl AppClock {
     #[inline]
-    fn read_tick_ms() -> u64 {
-        std::env::var(CLOCK_TICK_ENV)
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .filter(|v| *v >= MIN_CLOCK_TICK_MS)
-            .unwrap_or(DEFAULT_CLOCK_TICK_MS)
+    fn base() -> &'static Instant {
+        START_INSTANT.get_or_init(Instant::now)
     }
 
-    /// Start the background clock updater task
+    /// Initialize the process clock eagerly.
     ///
-    /// Safe to call multiple times (only runs once via `Once`)
+    /// Startup code can call this to make the zero point explicit, but all read
+    /// APIs also initialize the clock lazily on first use.
     #[cold]
     pub fn start() {
-        CLOCK_INIT.call_once(|| {
-            START_INSTANT
-                .set(Instant::now())
-                .expect("Clock initialization should never fail");
-
-            // Ensure readers do not observe stale default value after startup.
-            GLOBAL_NOW.store(0, Ordering::Relaxed);
-
-            // Spawn background task to update time periodically.
-            // Uses interval + Skip to avoid accumulating drift under scheduler delay.
-            let tick_ms = Self::read_tick_ms();
-            tokio::spawn(async move {
-                let base = START_INSTANT
-                    .get()
-                    .expect("Clock base instant must be initialized");
-                let mut ticker = tokio::time::interval(Duration::from_millis(tick_ms));
-                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-                loop {
-                    GLOBAL_NOW.store(base.elapsed().as_millis() as u64, Ordering::Relaxed);
-                    ticker.tick().await;
-                }
-            });
-        })
+        let _ = Self::base();
     }
 
-    /// Get current high-precision time.
-    ///
-    /// This can be slower than `now()` and should be used outside hot paths.
-    #[inline]
-    pub fn now_precise() -> Instant {
+    /// Get the current monotonic time.
+    #[inline(always)]
+    pub fn now() -> Instant {
         Instant::now()
     }
 
-    /// Get current time as `Instant` based on cached elapsed milliseconds.
-    #[inline(always)]
-    pub fn now() -> Instant {
-        let base = START_INSTANT
-            .get()
-            .expect("AppClock::start() must be called before now()");
-        base.add(Self::elapsed())
-    }
-
     /// Get milliseconds elapsed since application start.
-    ///
-    /// Uses relaxed atomic load for maximum performance.
     #[inline(always)]
     pub fn elapsed_millis() -> u64 {
-        GLOBAL_NOW.load(Ordering::Relaxed)
+        Self::base().elapsed().as_millis() as u64
     }
 
     /// Get duration since application start
     #[inline(always)]
     pub fn elapsed() -> Duration {
-        Duration::from_millis(Self::elapsed_millis())
+        Self::base().elapsed()
     }
 }
 
@@ -123,7 +69,7 @@ async fn test_elapsed_millis_advances_with_runtime_time() {
     tokio::task::yield_now().await;
 
     let advanced = AppClock::elapsed_millis();
-    assert!(advanced >= initial.saturating_add(DEFAULT_CLOCK_TICK_MS * 2));
+    assert!(advanced >= initial.saturating_add(35));
     assert!(AppClock::elapsed() >= Duration::from_millis(advanced));
     assert!(AppClock::now() >= initial_now);
 }

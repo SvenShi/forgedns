@@ -26,6 +26,7 @@ use crate::app::cli::StartOptions;
 use crate::config;
 use crate::config::types::Config;
 use crate::core;
+use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use tokio::runtime;
 use tokio::sync::{mpsc, oneshot};
@@ -33,6 +34,7 @@ use tracing::{error, info};
 
 /// Start ForgeDNS in the foreground using the provided CLI options.
 pub fn run(start: StartOptions) -> Result<()> {
+    AppClock::start();
     prepare_start_options(&start)?;
     let config = load_config(&start)?;
     init_runtime(start, config)
@@ -180,7 +182,6 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
     let (app_controller, mut control_rx) = AppController::new(options.config.clone());
 
     let worker_threads = config.runtime.effective_worker_threads();
-    core::app_clock::AppClock::start();
     let options = options.clone();
 
     let mut log_config = config.log.clone();

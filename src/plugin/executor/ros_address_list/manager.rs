@@ -991,8 +991,6 @@ fn dynamic_refresh_lead_ms(timeout_ms: u64) -> u64 {
 }
 
 fn now_millis() -> u64 {
-    // The app clock avoids repeated syscalls on hot paths and is already used
-    // elsewhere in ForgeDNS for lightweight time reads.
     AppClock::elapsed_millis()
 }
 
