@@ -9,9 +9,9 @@ use super::key::{CacheKey, EcsScopeDigest, normalize_domain_key};
 use super::{CacheItem, CacheMap};
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
+use crate::core::system_utils::file_len_if_exists;
 use crate::core::ttl_cache::TtlCacheEntry;
 use crate::proto::{DNSClass, Message, RecordType};
-use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::fs::File;
@@ -171,7 +171,10 @@ pub(super) async fn load_cache_from_file(
     dump_path: &str,
     ecs_in_key: bool,
 ) -> Result<()> {
-    if !Path::new(dump_path).exists() {
+    let Some(file_len) = file_len_if_exists(dump_path).await? else {
+        return Ok(());
+    };
+    if file_len == 0 {
         return Ok(());
     }
 

@@ -7,10 +7,10 @@
 
 use crate::config::types::{LogConfig, LogRotation};
 use crate::core::app_clock::AppClock;
+use crate::core::system_utils::unix_time;
 use std::fmt as std_fmt;
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{Event, Subscriber, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -177,9 +177,7 @@ where
         event: &Event<'_>,
     ) -> std_fmt::Result {
         let metadata = event.metadata();
-        let wall = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
+        let wall = unix_time();
         let wall_secs = wall.as_secs();
         let wall_millis = wall.subsec_millis();
         let elapsed_ms = AppClock::elapsed_millis();

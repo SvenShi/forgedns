@@ -39,6 +39,7 @@ pub enum ExecStep {
 pub mod arbitrary;
 pub mod black_hole;
 pub mod cache;
+pub mod cron;
 pub mod debug_print;
 pub mod drop_resp;
 pub mod dual_selector;

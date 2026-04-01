@@ -12,6 +12,113 @@ When reading this chapter, keep two questions in mind:
 
 ---
 
+## `cron`
+
+### Purpose
+
+Schedules a list of executors in the background. It does not participate in the live DNS request path and starts running only after plugin initialization.
+
+### Example Configuration
+
+```yaml
+- tag: cron_jobs
+  type: cron
+  args:
+    timezone: "Asia/Shanghai"
+    jobs:
+      - name: refresh_sets
+        interval: 5m
+        executors:
+          - "$seq_refresh"
+          - "debug_print cron refresh"
+
+      - name: nightly_cleanup
+        schedule: "15 3 * * *"
+        executors:
+          - "sleep 2s"
+          - "$seq_cleanup"
+```
+
+### Configuration Details
+
+#### `args.jobs`
+
+- Type: `array`; Required: yes
+- Purpose: Defines one or more background jobs.
+- Runtime impact:
+  - The array cannot be empty.
+  - Each job maintains its own trigger state and overlap protection.
+
+#### `args.timezone`
+
+- Type: `string`; Required: no
+- Default: system local time zone
+- Purpose: Overrides the time zone used by all `schedule` jobs in this `cron` plugin.
+- Notes:
+  - Only affects `schedule`.
+  - When omitted, ForgeDNS uses the system local time zone and falls back to `UTC` if unavailable.
+  - Use IANA names such as `Asia/Shanghai`, `UTC`, or `America/Los_Angeles`.
+
+#### `args.jobs[].name`
+
+- Type: `string`; Required: yes
+- Purpose: Job name used in logs and runtime metadata.
+- Runtime impact:
+  - Must be unique within the same `cron` plugin.
+
+#### `args.jobs[].schedule`
+
+- Type: `string`; Required: exactly one of `schedule` or `interval`
+- Purpose: Schedule a job with a standard 5-field cron expression.
+- Notes:
+  - Only `minute hour day month day-of-week` is supported.
+  - Second-level cron expressions are not supported.
+  - Next runs are computed in `args.timezone` or the system local time zone.
+
+#### `args.jobs[].interval`
+
+- Type: `string`; Required: exactly one of `schedule` or `interval`
+- Purpose: Schedule a job with a fixed interval.
+- Supports:
+  - `5m`
+  - `1h`
+  - `1d`
+- Runtime impact:
+  - Minimum interval is `1m`.
+  - The first run happens after one full interval elapses.
+
+#### `args.jobs[].executors`
+
+- Type: `array`; Required: yes
+- Purpose: Ordered list of executors to run for the job.
+- Supports:
+  - `$tag` explicit executor references
+  - bare `tag` references
+  - quick-setup expressions such as `debug_print cron refresh`
+- Runtime impact:
+  - The array cannot be empty.
+  - Later executors still run even if an earlier executor returns `Stop`, produces a response, or fails.
+
+### Behavior
+
+- `schedule` and `interval` are mutually exclusive.
+- If a job is still running when the next trigger arrives, that trigger is skipped and not replayed later.
+- Jobs run with an empty `DnsContext`, so this plugin is best suited for side-effect executors or dedicated background `sequence` chains.
+- `cron` itself cannot be executed inside a normal request `sequence`.
+
+### Typical Uses
+
+- Periodic side-effect tasks.
+- Scheduling a dedicated background `sequence`.
+- Providing a common trigger surface for future executors such as `reload`.
+
+### Notes
+
+- A `cron` job cannot reference another `cron` executor.
+- Executors that require a real DNS request usually do not make sense in an empty background context.
+
+---
+
 ## `sequence`
 
 ### Purpose

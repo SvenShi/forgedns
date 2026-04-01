@@ -1520,6 +1520,176 @@ plugins:
     Ok(())
 }
 
+#[tokio::test]
+async fn test_cron_plugin_init_accepts_interval_and_quick_setup_executor() -> Result<()> {
+    let yaml = r#"
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: accept
+  - tag: cron_main
+    type: cron
+    args:
+      jobs:
+        - name: refresh
+          interval: 1m
+          executors:
+            - "$child"
+            - "debug_print cron interval"
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+    assert_eq!(
+        registry
+            .get_plugin("cron_main")
+            .expect("cron plugin should exist")
+            .plugin_name,
+        "cron"
+    );
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cron_plugin_init_accepts_schedule_job() -> Result<()> {
+    let yaml = r#"
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: accept
+  - tag: cron_main
+    type: cron
+    args:
+      timezone: "UTC"
+      jobs:
+        - name: cleanup
+          schedule: "0 */6 * * *"
+          executors:
+            - "$child"
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+    assert_eq!(
+        registry
+            .get_plugin("cron_main")
+            .expect("cron plugin should exist")
+            .plugin_name,
+        "cron"
+    );
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cron_plugin_init_rejects_invalid_timezone() -> Result<()> {
+    let yaml = r#"
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: accept
+  - tag: cron_main
+    type: cron
+    args:
+      timezone: "Mars/Base"
+      jobs:
+        - name: cleanup
+          schedule: "0 */6 * * *"
+          executors:
+            - "$child"
+"#;
+
+    let err = plugin::init(parse_config(yaml)?, None)
+        .await
+        .expect_err("invalid timezone should be rejected");
+    assert!(err.to_string().contains("failed to parse cron schedule"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cron_plugin_init_rejects_second_level_schedule() -> Result<()> {
+    let yaml = r#"
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: accept
+  - tag: cron_main
+    type: cron
+    args:
+      jobs:
+        - name: bad
+          schedule: "0 0 * * * *"
+          executors:
+            - "$child"
+"#;
+
+    let err = plugin::init(parse_config(yaml)?, None)
+        .await
+        .expect_err("6-field cron should be rejected");
+    assert!(err.to_string().contains("second-level cron"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cron_plugin_init_rejects_second_level_interval() -> Result<()> {
+    let yaml = r#"
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: accept
+  - tag: cron_main
+    type: cron
+    args:
+      jobs:
+        - name: bad
+          interval: 30s
+          executors:
+            - "$child"
+"#;
+
+    let err = plugin::init(parse_config(yaml)?, None)
+        .await
+        .expect_err("sub-minute interval should be rejected");
+    assert!(err.to_string().contains("at least 1 minute"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cron_plugin_init_rejects_cron_dependency() -> Result<()> {
+    let yaml = r#"
+plugins:
+  - tag: child_cron
+    type: cron
+    args:
+      jobs:
+        - name: child
+          interval: 1m
+          executors:
+            - "debug_print child"
+  - tag: parent_cron
+    type: cron
+    args:
+      jobs:
+        - name: parent
+          interval: 1m
+          executors:
+            - "$child_cron"
+"#;
+
+    let err = plugin::init(parse_config(yaml)?, None)
+        .await
+        .expect_err("cron should not reference another cron");
+    let msg = err.to_string();
+    assert!(msg.contains("cannot reference cron executor"));
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_linux_ipset_executor_writes_masked_prefix_to_kernel_set() -> Result<()> {

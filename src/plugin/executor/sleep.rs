@@ -15,6 +15,7 @@
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -92,17 +93,34 @@ impl PluginFactory for SleepFactory {
         param: Option<String>,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        let raw =
-            param.ok_or_else(|| DnsError::plugin("sleep quick setup requires milliseconds"))?;
-        let millis = raw.trim().parse::<u64>().map_err(|e| {
-            DnsError::plugin(format!("invalid sleep milliseconds '{}': {}", raw, e))
+        let raw = param.ok_or_else(|| {
+            DnsError::plugin("sleep quick setup requires a duration such as '10', '250ms', or '2s'")
         })?;
+        let duration = parse_sleep_quick_duration(&raw)?;
 
         Ok(UninitializedPlugin::Executor(Box::new(SleepExecutor {
             tag: tag.to_string(),
-            duration: Duration::from_millis(millis),
+            duration,
         })))
     }
+}
+
+fn parse_sleep_quick_duration(raw: &str) -> Result<Duration> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(DnsError::plugin(
+            "sleep quick setup requires a non-empty duration",
+        ));
+    }
+
+    if raw.chars().all(|c| c.is_ascii_digit()) {
+        let millis = raw.parse::<u64>().map_err(|e| {
+            DnsError::plugin(format!("invalid sleep milliseconds '{}': {}", raw, e))
+        })?;
+        return Ok(Duration::from_millis(millis));
+    }
+    parse_simple_duration(raw)
+        .map_err(|err| DnsError::plugin(format!("invalid sleep duration '{}': {}", raw, err)))
 }
 
 #[cfg(test)]
@@ -124,6 +142,11 @@ mod tests {
         assert!(
             factory
                 .quick_setup("sleep", Some("10".to_string()), test_registry())
+                .is_ok()
+        );
+        assert!(
+            factory
+                .quick_setup("sleep", Some("2s".to_string()), test_registry())
                 .is_ok()
         );
     }

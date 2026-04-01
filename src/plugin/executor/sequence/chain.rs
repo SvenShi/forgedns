@@ -348,7 +348,6 @@ impl ChainBuilder {
                     .get_executor_dependency(&self.sequence_tag, &field, &tag)
             }
             SequenceRef::QuickSetup { plugin_type, param } => {
-                // Generate deterministic synthetic runtime tag for quick-setup executor.
                 let quick_tag = format!("@qs:exec:{}:{}", self.sequence_tag, node_index);
                 let uninitialized = self.registry.quick_setup(
                     &plugin_type,

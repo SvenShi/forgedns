@@ -12,6 +12,112 @@ sidebar_position: 3
 
 ---
 
+## `cron`
+
+### 作用
+
+后台调度一组 executor。它不会参与实时 DNS 请求链，而是在插件初始化后按 cron 或固定间隔触发任务。
+
+### 配置示例
+
+```yaml
+- tag: cron_jobs
+  type: cron
+  args:
+    timezone: "Asia/Shanghai"
+    jobs:
+      - name: refresh_sets
+        interval: 5m
+        executors:
+          - "$seq_refresh"
+          - "debug_print cron refresh"
+
+      - name: nightly_cleanup
+        schedule: "15 3 * * *"
+        executors:
+          - "sleep 2s"
+          - "$seq_cleanup"
+```
+
+### 配置项
+
+#### `args.jobs`
+
+- 类型：`array`；必填：是；默认值：无
+- 作用：定义一个或多个后台任务。
+- 运行影响：
+  - 数组不能为空。
+  - 每个任务独立维护自己的调度状态和重叠保护。
+
+#### `args.timezone`
+
+- 类型：`string`；必填：否；默认值：系统本地时区
+- 作用：为当前 `cron` 插件下的所有 `schedule` 任务指定时区。
+- 运行影响：
+  - 仅对 `schedule` 生效。
+  - 未配置时会使用系统本地时区；无法获取时退回 `UTC`。
+  - 应填写 IANA 时区名称，例如 `Asia/Shanghai`、`UTC`、`America/Los_Angeles`。
+
+#### `args.jobs[].name`
+
+- 类型：`string`；必填：是；默认值：无
+- 作用：任务名称，用于日志与运行时标识。
+- 运行影响：
+  - 在同一个 `cron` 插件内必须唯一。
+
+#### `args.jobs[].schedule`
+
+- 类型：`string`；必填：与 `interval` 二选一；默认值：无
+- 作用：使用标准 5 字段 cron 表达式调度任务。
+- 规则说明：
+  - 仅支持 `minute hour day month day-of-week`。
+  - 不支持秒级 cron。
+  - 按 `args.timezone` 或系统本地时区计算下一次触发时间。
+
+#### `args.jobs[].interval`
+
+- 类型：`string`；必填：与 `schedule` 二选一；默认值：无
+- 作用：用简单固定间隔调度任务。
+- 支持格式：
+  - `5m`
+  - `1h`
+  - `1d`
+- 运行影响：
+  - 最小粒度为 `1m`。
+  - 启动后会等待一个完整间隔再首次触发。
+
+#### `args.jobs[].executors`
+
+- 类型：`array`；必填：是；默认值：无
+- 作用：定义任务触发时顺序执行的 executor 列表。
+- 支持形式：
+  - `$tag`：显式引用已存在 executor
+  - `tag`：裸 tag 引用
+  - quick setup 表达式，例如 `debug_print cron refresh`
+- 运行影响：
+  - 数组不能为空。
+  - 即使某个 executor 返回 `Stop`、设置了响应、或执行报错，后续 executor 仍会继续执行。
+
+### 行为说明
+
+- `schedule` 和 `interval` 必须二选一。
+- 同一个 job 若上一轮仍在运行，本轮会被跳过，不补跑。
+- 任务使用空的 `DnsContext`，适合副作用类 executor 或后台编排的 `sequence`。
+- `cron` 本身不能放进普通请求 `sequence` 里执行。
+
+### 典型用途
+
+- 定时触发后台副作用逻辑。
+- 定时执行一个专门的 `sequence` 编排。
+- 为未来的 `reload` 之类后台动作提供统一调度入口。
+
+### 注意事项
+
+- 不允许引用另一个 `cron` executor。
+- 依赖真实 DNS 请求内容的 executor 在空上下文任务中通常没有意义。
+
+---
+
 ## `sequence`
 
 ### 作用

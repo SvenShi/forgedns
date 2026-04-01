@@ -235,6 +235,13 @@ fn dependency_kind_from_module_path(module_path: &str) -> dependency::Dependency
     dependency::DependencyKind::Unknown
 }
 
+pub(crate) fn registered_plugin_kind(plugin_type: &str) -> Option<dependency::DependencyKind> {
+    inventory::iter::<FactoryRegistration>
+        .into_iter()
+        .find(|registration| registration.plugin_type == plugin_type)
+        .map(|registration| dependency_kind_from_module_path(registration.module_path))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginType {
     Server,
