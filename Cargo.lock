@@ -698,6 +698,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
+ "tower-service",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

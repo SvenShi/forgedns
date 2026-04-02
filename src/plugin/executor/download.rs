@@ -19,41 +19,47 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
 use crate::network::tls_config::{insecure_client_config, secure_client_config};
+use crate::network::upstream::{Socks5Opt, connect_tcp_stream, parse_socks5_opt};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::future::BoxFuture;
 use http::Uri;
 use http_body_util::{BodyExt, Empty};
 use hyper::body::Incoming;
 use hyper::{Request, StatusCode};
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 use std::collections::HashSet;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio::time::timeout;
+use tower_service::Service;
 use tracing::{info, warn};
 use url::Url;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-type DownloadClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Empty<Bytes>>;
+type DownloadClient = Client<hyper_rustls::HttpsConnector<DownloadHttpConnector>, Empty<Bytes>>;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct DownloadConfig {
     timeout: Option<String>,
     insecure_skip_verify: Option<bool>,
+    socks5: Option<String>,
     downloads: Vec<DownloadItemConfig>,
 }
 
@@ -80,6 +86,7 @@ struct DownloadExecutor {
     timeout: Duration,
     downloads: Vec<DownloadTarget>,
     insecure_skip_verify: bool,
+    socks5: Option<String>,
 }
 
 #[async_trait]
@@ -113,6 +120,7 @@ impl Executor for DownloadExecutor {
                         target = %item.path.display(),
                         timeout_ms = self.timeout.as_millis(),
                         insecure_skip_verify = self.insecure_skip_verify,
+                        socks5 = self.socks5.as_deref().unwrap_or(""),
                         "download completed"
                     );
                 }
@@ -182,6 +190,46 @@ impl DownloadExecutor {
 #[derive(Debug, Clone)]
 pub struct DownloadFactory;
 
+#[derive(Clone, Debug)]
+struct DownloadHttpConnector {
+    socks5: Option<Socks5Opt>,
+}
+
+impl Service<Uri> for DownloadHttpConnector {
+    type Response = TokioIo<TcpStream>;
+    type Error = DnsError;
+    type Future = BoxFuture<'static, std::result::Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, dst: Uri) -> Self::Future {
+        let socks5 = self.socks5.clone();
+        Box::pin(async move {
+            let host = dst.host().ok_or_else(|| {
+                DnsError::plugin(format!("download request uri '{}' is missing host", dst))
+            })?;
+            let port = dst
+                .port_u16()
+                .or_else(|| match dst.scheme_str() {
+                    Some("http") => Some(80),
+                    Some("https") => Some(443),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    DnsError::plugin(format!(
+                        "download request uri '{}' uses unsupported or missing scheme",
+                        dst
+                    ))
+                })?;
+            let remote_ip = host.parse::<IpAddr>().ok();
+            let stream = connect_tcp_stream(remote_ip, host.to_string(), port, socks5).await?;
+            Ok(TokioIo::new(stream))
+        })
+    }
+}
+
 register_plugin_factory!("download", DownloadFactory {});
 
 impl PluginFactory for DownloadFactory {
@@ -197,14 +245,17 @@ impl PluginFactory for DownloadFactory {
             .and_then(parse_download_config)?;
 
         let timeout = parse_timeout(cfg.timeout.as_deref())?;
+        let socks5 = parse_socks5(cfg.socks5.as_deref())?;
         let downloads = resolve_download_targets(&plugin_config.tag, cfg.downloads)?;
+        let insecure_skip_verify = cfg.insecure_skip_verify.unwrap_or(false);
 
         Ok(UninitializedPlugin::Executor(Box::new(DownloadExecutor {
             tag: plugin_config.tag.clone(),
-            client: build_client(cfg.insecure_skip_verify.unwrap_or(false)),
+            client: build_client(insecure_skip_verify, socks5.clone()),
             timeout,
             downloads,
-            insecure_skip_verify: cfg.insecure_skip_verify.unwrap_or(false),
+            insecure_skip_verify,
+            socks5: cfg.socks5,
         })))
     }
 
@@ -229,10 +280,11 @@ impl PluginFactory for DownloadFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(DownloadExecutor {
             tag: tag.to_string(),
-            client: build_client(false),
+            client: build_client(false, None),
             timeout: DEFAULT_TIMEOUT,
             downloads,
             insecure_skip_verify: false,
+            socks5: None,
         })))
     }
 }
@@ -348,10 +400,7 @@ fn filename_from_url(url: &Url) -> Option<String> {
         .map(str::to_string)
 }
 
-fn build_client(insecure_skip_verify: bool) -> DownloadClient {
-    let mut http = HttpConnector::new();
-    http.enforce_http(false);
-
+fn build_client(insecure_skip_verify: bool, socks5: Option<Socks5Opt>) -> DownloadClient {
     let tls_config = if insecure_skip_verify {
         insecure_client_config()
     } else {
@@ -363,9 +412,18 @@ fn build_client(insecure_skip_verify: bool) -> DownloadClient {
         .https_or_http()
         .enable_http1()
         .enable_http2()
-        .wrap_connector(http);
+        .wrap_connector(DownloadHttpConnector { socks5 });
 
     Client::builder(TokioExecutor::new()).build(connector)
+}
+
+fn parse_socks5(raw: Option<&str>) -> Result<Option<Socks5Opt>> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    parse_socks5_opt(raw)
+        .map(Some)
+        .ok_or_else(|| DnsError::plugin(format!("invalid download socks5 proxy '{}'", raw)))
 }
 
 async fn write_target_file(path: &Path, mut body: Incoming) -> Result<()> {
@@ -551,11 +609,20 @@ mod tests {
         assert!(factory.create(&cfg, test_registry()).is_err());
     }
 
+    #[test]
+    fn test_parse_socks5_accepts_and_rejects_values() {
+        let parsed = parse_socks5(Some("127.0.0.1:1080")).expect("valid socks5 should parse");
+        assert!(parsed.is_some());
+
+        let err = parse_socks5(Some("bad")).expect_err("invalid socks5 should fail");
+        assert!(err.to_string().contains("invalid download socks5 proxy"));
+    }
+
     #[tokio::test]
     async fn test_download_executor_returns_next_for_empty_runtime_errors() {
         let plugin = DownloadExecutor {
             tag: "download".to_string(),
-            client: build_client(false),
+            client: build_client(false, None),
             timeout: Duration::from_millis(10),
             downloads: vec![DownloadTarget {
                 url: "http://127.0.0.1:9/missing.txt".to_string(),
@@ -564,6 +631,7 @@ mod tests {
                 path: PathBuf::from("/tmp/missing.txt"),
             }],
             insecure_skip_verify: false,
+            socks5: None,
         };
         let mut ctx = test_context();
         let step = plugin

@@ -132,6 +132,7 @@ Downloads one or more `http/https` files into a local directory and overwrites t
   type: download
   args:
     timeout: 30s
+    socks5: "127.0.0.1:1080"
     downloads:
       - url: "https://example.com/geosite.dat"
         dir: "/etc/forgedns"
@@ -152,10 +153,12 @@ Downloads one or more `http/https` files into a local directory and overwrites t
 - A failed item only emits a warning log and does not stop later items.
 - Missing target directories are created automatically.
 - Files are written to a temporary path first and then moved into place.
+- When `socks5` is set, all download connections are routed through that SOCKS5 proxy using the same format as `upstream[].socks5`.
 
 ### Notes
 
 - Only `http` and `https` are supported.
+- `socks5` accepts `host:port` and `username:password@host:port`; bracket IPv6 addresses such as `"[::1]:1080"` are supported too.
 - When used inside a normal `sequence`, the download time is paid directly by that request.
 - Overwriting a local file does not trigger config reload automatically. If the new file should take effect immediately, chain an explicit `reload` executor.
 

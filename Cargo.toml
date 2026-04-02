@@ -59,6 +59,7 @@ http-body-util = "0.1.3"
 hyper = { version = "1.8.1", features = ["server", "client", "http1", "http2"] }
 hyper-rustls = { version = "0.27.5", features = ["http1", "http2", "ring", "webpki-tokio"] }
 hyper-util = { version = "0.1.20", features = ["server", "client", "client-legacy", "http1", "http2", "tokio"] }
+tower-service = "0.3"
 
 # Matcher and provider plugin dependencies
 aho-corasick = "1.1.4"

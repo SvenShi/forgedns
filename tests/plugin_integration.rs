@@ -18,14 +18,16 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket};
 use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
 #[cfg(target_os = "linux")]
 use tokio::time::sleep;
@@ -224,6 +226,79 @@ async fn start_test_http_server(
     });
 
     Ok(addr)
+}
+
+async fn start_test_socks5_proxy() -> Result<SocketAddr> {
+    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+    let addr = listener.local_addr()?;
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let _ = handle_test_socks5_client(stream).await;
+            });
+        }
+    });
+
+    Ok(addr)
+}
+
+async fn handle_test_socks5_client(mut client: TcpStream) -> Result<()> {
+    let mut greeting = [0u8; 2];
+    client.read_exact(&mut greeting).await?;
+    if greeting[0] != 0x05 {
+        return Err(DnsError::runtime("invalid SOCKS5 version in greeting"));
+    }
+    let mut methods = vec![0u8; greeting[1] as usize];
+    client.read_exact(&mut methods).await?;
+    client.write_all(&[0x05, 0x00]).await?;
+
+    let mut header = [0u8; 4];
+    client.read_exact(&mut header).await?;
+    if header[0] != 0x05 || header[1] != 0x01 {
+        return Err(DnsError::runtime("unsupported SOCKS5 command"));
+    }
+
+    let target_host = match header[3] {
+        0x01 => {
+            let mut octets = [0u8; 4];
+            client.read_exact(&mut octets).await?;
+            Ipv4Addr::from(octets).to_string()
+        }
+        0x03 => {
+            let mut len = [0u8; 1];
+            client.read_exact(&mut len).await?;
+            let mut domain = vec![0u8; len[0] as usize];
+            client.read_exact(&mut domain).await?;
+            String::from_utf8(domain)
+                .map_err(|e| DnsError::runtime(format!("invalid SOCKS5 domain: {e}")))?
+        }
+        0x04 => {
+            let mut octets = [0u8; 16];
+            client.read_exact(&mut octets).await?;
+            Ipv6Addr::from(octets).to_string()
+        }
+        atyp => {
+            return Err(DnsError::runtime(format!(
+                "unsupported SOCKS5 address type: {atyp}"
+            )));
+        }
+    };
+
+    let mut port_bytes = [0u8; 2];
+    client.read_exact(&mut port_bytes).await?;
+    let target_port = u16::from_be_bytes(port_bytes);
+    let mut upstream = TcpStream::connect((target_host.as_str(), target_port)).await?;
+
+    client
+        .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+        .await?;
+
+    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -1869,6 +1944,51 @@ plugins:
     assert_eq!(
         tokio::fs::read_to_string(output_dir.join("ok.txt")).await?,
         "download-ok"
+    );
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_download_executor_supports_socks5_proxy() -> Result<()> {
+    let server_addr =
+        start_test_http_server(vec![("/proxied.txt", StatusCode::OK, "proxied-download")]).await?;
+    let socks5_addr = start_test_socks5_proxy().await?;
+    let tmp_dir = TempDir::new().expect("temp dir should be created");
+    let output_dir = tmp_dir.path().join("proxied");
+    let output_dir_yaml = yaml_path(&output_dir);
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: dl
+    type: download
+    args:
+      socks5: "{socks5_addr}"
+      downloads:
+        - url: "http://{server_addr}/proxied.txt"
+          dir: "{output_dir_yaml}"
+          filename: "proxied.txt"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("dl")
+        .expect("download plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    assert_eq!(
+        tokio::fs::read_to_string(output_dir.join("proxied.txt")).await?,
+        "proxied-download"
     );
 
     registry.destory().await;

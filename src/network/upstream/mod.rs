@@ -53,6 +53,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -1250,8 +1251,17 @@ where
     })
 }
 
-fn parse_socks5_opt(socks5_str: &str) -> Option<Socks5Opt> {
+pub(crate) fn parse_socks5_opt(socks5_str: &str) -> Option<Socks5Opt> {
     parse_socks5_opt_with_resolver(socks5_str, try_lookup_server_name)
+}
+
+pub(crate) async fn connect_tcp_stream(
+    remote_ip: Option<IpAddr>,
+    server_name: String,
+    port: u16,
+    socks5_opt: Option<Socks5Opt>,
+) -> Result<TcpStream> {
+    utils::connect_stream(remote_ip, server_name, port, None, None, socks5_opt).await
 }
 
 #[cfg(test)]
