@@ -14,6 +14,7 @@ use forgedns::plugin::{PluginRegistry, PluginType};
 use forgedns::proto::{DNSClass, Message, Question, Rcode};
 use forgedns::proto::{Name, RecordType};
 use http_body_util::Full;
+use hyper::header::LOCATION;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -185,6 +186,35 @@ async fn exchange_udp_query(server_addr: SocketAddr, qname: &str) -> Result<Mess
 async fn start_test_http_server(
     routes: Vec<(&'static str, StatusCode, &'static str)>,
 ) -> Result<SocketAddr> {
+    let routes = routes
+        .into_iter()
+        .map(|(path, status, body)| {
+            TestHttpRoute::new(path.to_string(), status, body.as_bytes().to_vec())
+        })
+        .collect();
+    start_test_http_server_routes(routes).await
+}
+
+#[derive(Clone)]
+struct TestHttpRoute {
+    path: String,
+    status: StatusCode,
+    body: Vec<u8>,
+    location: Option<String>,
+}
+
+impl TestHttpRoute {
+    fn new(path: String, status: StatusCode, body: Vec<u8>) -> Self {
+        Self {
+            path,
+            status,
+            body,
+            location: None,
+        }
+    }
+}
+
+async fn start_test_http_server_routes(routes: Vec<TestHttpRoute>) -> Result<SocketAddr> {
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
     let addr = listener.local_addr()?;
     let routes = Arc::new(routes);
@@ -202,11 +232,14 @@ async fn start_test_http_server(
                         let path = request.uri().path();
                         let response = routes
                             .iter()
-                            .find(|(route, _, _)| *route == path)
-                            .map(|(_, status, body)| {
-                                Response::builder()
-                                    .status(*status)
-                                    .body(Full::new(Bytes::from_static(body.as_bytes())))
+                            .find(|route| route.path == path)
+                            .map(|route| {
+                                let mut builder = Response::builder().status(route.status);
+                                if let Some(location) = route.location.as_deref() {
+                                    builder = builder.header(LOCATION, location);
+                                }
+                                builder
+                                    .body(Full::new(Bytes::from(route.body.clone())))
                                     .expect("response should build")
                             })
                             .unwrap_or_else(|| {
@@ -1990,6 +2023,66 @@ plugins:
         tokio::fs::read_to_string(output_dir.join("proxied.txt")).await?,
         "proxied-download"
     );
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_download_executor_startup_if_missing_bootstraps_files_before_provider_init()
+-> Result<()> {
+    let geosite_dat = tokio::fs::read(test_rule_path("geosite.dat")).await?;
+    let server_addr = start_test_http_server_routes(vec![
+        TestHttpRoute {
+            path: "/geosite.dat".to_string(),
+            status: StatusCode::FOUND,
+            body: Vec::new(),
+            location: Some("/assets/geosite.dat".to_string()),
+        },
+        TestHttpRoute::new(
+            "/assets/geosite.dat".to_string(),
+            StatusCode::OK,
+            geosite_dat,
+        ),
+    ])
+    .await?;
+    let tmp_dir = TempDir::new().expect("temp dir should be created");
+    let dat_dir = tmp_dir.path().join("rules");
+    let dat_dir_yaml = yaml_path(&dat_dir);
+    let dat_file = dat_dir.join("geosite.dat");
+    let dat_file_yaml = yaml_path(&dat_file);
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: bootstrap_download
+    type: download
+    args:
+      startup_if_missing: true
+      downloads:
+        - url: "http://{server_addr}/geosite.dat"
+          dir: "{dat_dir_yaml}"
+          filename: "geosite.dat"
+  - tag: geosite_cn
+    type: geosite
+    args:
+      file: "{dat_file_yaml}"
+      selectors:
+        - "cn"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let provider = registry
+        .get_plugin("geosite_cn")
+        .expect("geosite provider should exist")
+        .to_provider();
+
+    assert!(dat_file.exists());
+    assert!(provider.contains_name(&Name::from_ascii("265.com").unwrap()));
 
     registry.destory().await;
     Ok(())

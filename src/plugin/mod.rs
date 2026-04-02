@@ -46,6 +46,7 @@ use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::Provider;
 use crate::plugin::server::Server;
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 pub use registry::PluginRegistry;
 use serde_yaml_ng::Value;
 use std::collections::HashSet;
@@ -324,6 +325,18 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
         _plugin_config: &PluginConfig,
     ) -> Vec<dependency::DependencySpec> {
         vec![]
+    }
+
+    /// Optional startup-only preparation hook.
+    ///
+    /// Factories can use this to perform startup prerequisites before
+    /// dependency sorting and normal plugin construction begin.
+    fn prepare_startup<'a>(
+        &'a self,
+        _plugin_config: &'a PluginConfig,
+        _registry: Arc<PluginRegistry>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
     }
 
     /// # Step 2

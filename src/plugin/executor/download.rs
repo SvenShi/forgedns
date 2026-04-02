@@ -27,6 +27,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use http::Uri;
+use http::header::LOCATION;
 use http_body_util::{BodyExt, Empty};
 use hyper::body::Incoming;
 use hyper::{Request, StatusCode};
@@ -51,6 +52,7 @@ use tracing::{info, warn};
 use url::Url;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_REDIRECTS: usize = 5;
 
 type DownloadClient = Client<hyper_rustls::HttpsConnector<DownloadHttpConnector>, Empty<Bytes>>;
 
@@ -60,6 +62,7 @@ struct DownloadConfig {
     timeout: Option<String>,
     insecure_skip_verify: Option<bool>,
     socks5: Option<String>,
+    startup_if_missing: Option<bool>,
     downloads: Vec<DownloadItemConfig>,
 }
 
@@ -161,29 +164,66 @@ impl Executor for DownloadExecutor {
 
 impl DownloadExecutor {
     async fn download_one(&self, item: &DownloadTarget) -> Result<()> {
-        let uri = item
-            .url
-            .parse::<Uri>()
-            .map_err(|e| DnsError::plugin(format!("invalid download url '{}': {}", item.url, e)))?;
+        let mut current_url = item.url.clone();
 
-        let request = Request::get(uri)
-            .body(Empty::<Bytes>::new())
-            .map_err(|e| DnsError::plugin(format!("failed to build request: {}", e)))?;
-
-        let response =
-            self.client.request(request).await.map_err(|e| {
-                DnsError::plugin(format!("request failed for '{}': {}", item.url, e))
+        for redirect_count in 0..=MAX_REDIRECTS {
+            let uri = current_url.parse::<Uri>().map_err(|e| {
+                DnsError::plugin(format!("invalid download url '{}': {}", current_url, e))
             })?;
-        let status = response.status();
-        if !status.is_success() {
+
+            let request = Request::get(uri)
+                .body(Empty::<Bytes>::new())
+                .map_err(|e| DnsError::plugin(format!("failed to build request: {}", e)))?;
+
+            let response = self.client.request(request).await.map_err(|e| {
+                DnsError::plugin(format!("request failed for '{}': {}", current_url, e))
+            })?;
+            let status = response.status();
+            if status.is_success() {
+                return write_target_file(item.path.as_path(), response.into_body()).await;
+            }
+
+            if status.is_redirection() {
+                if redirect_count == MAX_REDIRECTS {
+                    return Err(DnsError::plugin(format!(
+                        "request failed for '{}': too many redirects",
+                        item.url
+                    )));
+                }
+
+                let location = response
+                    .headers()
+                    .get(LOCATION)
+                    .ok_or_else(|| {
+                        DnsError::plugin(format!(
+                            "request failed for '{}': redirect {} missing Location header",
+                            current_url,
+                            format_status(status)
+                        ))
+                    })?
+                    .to_str()
+                    .map_err(|e| {
+                        DnsError::plugin(format!(
+                            "request failed for '{}': invalid redirect Location header: {}",
+                            current_url, e
+                        ))
+                    })?;
+
+                current_url = resolve_redirect_url(current_url.as_str(), location)?;
+                continue;
+            }
+
             return Err(DnsError::plugin(format!(
                 "request failed for '{}': unexpected status {}",
-                item.url,
+                current_url,
                 format_status(status)
             )));
         }
 
-        write_target_file(item.path.as_path(), response.into_body()).await
+        Err(DnsError::plugin(format!(
+            "request failed for '{}': too many redirects",
+            item.url
+        )))
     }
 }
 
@@ -233,29 +273,96 @@ impl Service<Uri> for DownloadHttpConnector {
 register_plugin_factory!("download", DownloadFactory {});
 
 impl PluginFactory for DownloadFactory {
+    fn prepare_startup<'a>(
+        &'a self,
+        plugin_config: &'a PluginConfig,
+        _registry: Arc<PluginRegistry>,
+    ) -> BoxFuture<'a, Result<()>> {
+        let plugin_tag = plugin_config.tag.clone();
+        Box::pin(async move {
+            let runtime = build_download_runtime_config(plugin_config)?;
+            if !runtime.startup_if_missing {
+                return Ok(());
+            }
+
+            let missing_targets = runtime
+                .downloads
+                .iter()
+                .filter(|item| !item.path.exists())
+                .collect::<Vec<_>>();
+
+            if missing_targets.is_empty() {
+                info!(
+                    plugin = %plugin_tag,
+                    total = runtime.downloads.len(),
+                    "startup download skipped; all target files already exist"
+                );
+                return Ok(());
+            }
+
+            let executor = DownloadExecutor {
+                tag: plugin_tag.clone(),
+                client: build_client(runtime.insecure_skip_verify, runtime.parsed_socks5),
+                timeout: runtime.timeout,
+                downloads: runtime.downloads.clone(),
+                insecure_skip_verify: runtime.insecure_skip_verify,
+                socks5: runtime.raw_socks5,
+            };
+
+            info!(
+                plugin = %plugin_tag,
+                missing = missing_targets.len(),
+                total = runtime.downloads.len(),
+                timeout_ms = runtime.timeout.as_millis(),
+                "startup download began for missing target files"
+            );
+
+            for item in missing_targets {
+                match timeout(executor.timeout, executor.download_one(item)).await {
+                    Ok(Ok(())) => {
+                        info!(
+                            plugin = %executor.tag,
+                            url = %item.url,
+                            target = %item.path.display(),
+                            "startup download completed for missing target"
+                        );
+                    }
+                    Ok(Err(err)) => {
+                        return Err(DnsError::plugin(format!(
+                            "startup download failed for '{}' -> '{}': {}",
+                            item.url,
+                            item.path.display(),
+                            err
+                        )));
+                    }
+                    Err(_) => {
+                        return Err(DnsError::plugin(format!(
+                            "startup download timed out for '{}' -> '{}'",
+                            item.url,
+                            item.path.display()
+                        )));
+                    }
+                }
+            }
+
+            Ok(())
+        })
+    }
+
     fn create(
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        let cfg = plugin_config
-            .args
-            .clone()
-            .ok_or_else(|| DnsError::plugin("download requires configuration arguments"))
-            .and_then(parse_download_config)?;
-
-        let timeout = parse_timeout(cfg.timeout.as_deref())?;
-        let socks5 = parse_socks5(cfg.socks5.as_deref())?;
-        let downloads = resolve_download_targets(&plugin_config.tag, cfg.downloads)?;
-        let insecure_skip_verify = cfg.insecure_skip_verify.unwrap_or(false);
+        let runtime = build_download_runtime_config(plugin_config)?;
 
         Ok(UninitializedPlugin::Executor(Box::new(DownloadExecutor {
             tag: plugin_config.tag.clone(),
-            client: build_client(insecure_skip_verify, socks5.clone()),
-            timeout,
-            downloads,
-            insecure_skip_verify,
-            socks5: cfg.socks5,
+            client: build_client(runtime.insecure_skip_verify, runtime.parsed_socks5),
+            timeout: runtime.timeout,
+            downloads: runtime.downloads,
+            insecure_skip_verify: runtime.insecure_skip_verify,
+            socks5: runtime.raw_socks5,
         })))
     }
 
@@ -287,6 +394,32 @@ impl PluginFactory for DownloadFactory {
             socks5: None,
         })))
     }
+}
+
+struct DownloadRuntimeConfig {
+    timeout: Duration,
+    downloads: Vec<DownloadTarget>,
+    insecure_skip_verify: bool,
+    startup_if_missing: bool,
+    raw_socks5: Option<String>,
+    parsed_socks5: Option<Socks5Opt>,
+}
+
+fn build_download_runtime_config(plugin_config: &PluginConfig) -> Result<DownloadRuntimeConfig> {
+    let cfg = plugin_config
+        .args
+        .clone()
+        .ok_or_else(|| DnsError::plugin("download requires configuration arguments"))
+        .and_then(parse_download_config)?;
+
+    Ok(DownloadRuntimeConfig {
+        timeout: parse_timeout(cfg.timeout.as_deref())?,
+        parsed_socks5: parse_socks5(cfg.socks5.as_deref())?,
+        downloads: resolve_download_targets(&plugin_config.tag, cfg.downloads)?,
+        insecure_skip_verify: cfg.insecure_skip_verify.unwrap_or(false),
+        startup_if_missing: cfg.startup_if_missing.unwrap_or(false),
+        raw_socks5: cfg.socks5,
+    })
 }
 
 fn parse_download_config(args: Value) -> Result<DownloadConfig> {
@@ -415,6 +548,21 @@ fn build_client(insecure_skip_verify: bool, socks5: Option<Socks5Opt>) -> Downlo
         .wrap_connector(DownloadHttpConnector { socks5 });
 
     Client::builder(TokioExecutor::new()).build(connector)
+}
+
+fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String> {
+    let base = Url::parse(current_url).map_err(|e| {
+        DnsError::plugin(format!(
+            "failed to parse redirect base url '{}': {}",
+            current_url, e
+        ))
+    })?;
+    base.join(location).map(|url| url.to_string()).map_err(|e| {
+        DnsError::plugin(format!(
+            "failed to resolve redirect location '{}' against '{}': {}",
+            location, current_url, e
+        ))
+    })
 }
 
 fn parse_socks5(raw: Option<&str>) -> Result<Option<Socks5Opt>> {
@@ -616,6 +764,16 @@ mod tests {
 
         let err = parse_socks5(Some("bad")).expect_err("invalid socks5 should fail");
         assert!(err.to_string().contains("invalid download socks5 proxy"));
+    }
+
+    #[test]
+    fn test_resolve_redirect_url_supports_relative_location() {
+        let resolved = resolve_redirect_url(
+            "https://example.com/releases/latest/download/file.dat",
+            "/assets/file.dat",
+        )
+        .expect("relative redirect should resolve");
+        assert_eq!(resolved, "https://example.com/assets/file.dat");
     }
 
     #[tokio::test]

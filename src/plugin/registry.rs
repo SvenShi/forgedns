@@ -131,6 +131,20 @@ impl PluginRegistry {
             }
         }
 
+        // Step 0: Run startup-only preparation hooks before dependency sorting.
+        //
+        // This is used by plugins such as `download` that may need to create
+        // prerequisite files before providers or servers are initialized.
+        for plugin_config in &configs {
+            let Some(factory) = self.factories.get(&plugin_config.plugin_type) else {
+                return Err(DnsError::plugin(format!(
+                    "Unknown plugin type: {}",
+                    plugin_config.plugin_type
+                )));
+            };
+            factory.prepare_startup(plugin_config, self.clone()).await?;
+        }
+
         // Step 1: Resolve dependencies from structured factory descriptors.
         //
         // Dependency collection should stay lightweight. Full schema parsing
