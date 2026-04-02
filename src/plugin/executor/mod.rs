@@ -41,6 +41,7 @@ pub mod black_hole;
 pub mod cache;
 pub mod cron;
 pub mod debug_print;
+pub mod download;
 pub mod drop_resp;
 pub mod dual_selector;
 pub mod ecs_handler;

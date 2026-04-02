@@ -118,6 +118,48 @@ sidebar_position: 3
 
 ---
 
+## `download`
+
+### 作用
+
+下载一个或多个 `http/https` 文件到本地目录，并在新内容完整写入后覆盖目标文件。
+
+### 配置示例
+
+```yaml
+- tag: rules_download
+  type: download
+  args:
+    timeout: 30s
+    downloads:
+      - url: "https://example.com/geosite.dat"
+        dir: "/etc/forgedns"
+      - url: "https://example.com/geoip.dat"
+        dir: "/etc/forgedns"
+        filename: "geoip.dat"
+```
+
+### Quick Setup
+
+```yaml
+- exec: "download https://example.com/rules.txt /etc/forgedns"
+```
+
+### 行为说明
+
+- `downloads` 按声明顺序串行执行。
+- 单个下载失败只会写 warning 日志，不会阻止后续项继续下载。
+- 目标目录不存在时会自动创建。
+- 文件会先写入临时文件，再覆盖目标文件，避免半写入状态。
+
+### 注意事项
+
+- 只支持 `http` / `https`。
+- 放进普通 `sequence` 时会直接占用该次请求的执行时间。
+- 覆盖本地文件后不会自动触发配置 reload。
+
+---
+
 ## `sequence`
 
 ### 作用

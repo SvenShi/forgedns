@@ -119,6 +119,48 @@ Schedules a list of executors in the background. It does not participate in the 
 
 ---
 
+## `download`
+
+### Purpose
+
+Downloads one or more `http/https` files into a local directory and overwrites the target files only after the new content is fully written.
+
+### Example Configuration
+
+```yaml
+- tag: rules_download
+  type: download
+  args:
+    timeout: 30s
+    downloads:
+      - url: "https://example.com/geosite.dat"
+        dir: "/etc/forgedns"
+      - url: "https://example.com/geoip.dat"
+        dir: "/etc/forgedns"
+        filename: "geoip.dat"
+```
+
+### Quick Setup
+
+```yaml
+- exec: "download https://example.com/rules.txt /etc/forgedns"
+```
+
+### Behavior
+
+- `downloads` run sequentially in declaration order.
+- A failed item only emits a warning log and does not stop later items.
+- Missing target directories are created automatically.
+- Files are written to a temporary path first and then moved into place.
+
+### Notes
+
+- Only `http` and `https` are supported.
+- When used inside a normal `sequence`, the download time is paid directly by that request.
+- Overwriting a local file does not trigger config reload automatically.
+
+---
+
 ## `sequence`
 
 ### Purpose

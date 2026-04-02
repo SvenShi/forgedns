@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+use bytes::Bytes;
 use forgedns::config::types::Config;
 use forgedns::core::context::{DnsContext, ExecFlowState};
 use forgedns::core::error::{DnsError, Result};
@@ -12,11 +13,18 @@ use forgedns::plugin::executor::ExecStep;
 use forgedns::plugin::{PluginRegistry, PluginType};
 use forgedns::proto::{DNSClass, Message, Question, Rcode};
 use forgedns::proto::{Name, RecordType};
+use http_body_util::Full;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
 use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 use std::sync::Arc;
+use tempfile::TempDir;
+use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
 #[cfg(target_os = "linux")]
 use tokio::time::sleep;
@@ -89,6 +97,52 @@ async fn exchange_udp_query(server_addr: SocketAddr, qname: &str) -> Result<Mess
     timeout(Duration::from_secs(1), transport.read_message(&mut buf))
         .await
         .map_err(|_| DnsError::runtime("timed out waiting for UDP server response"))?
+}
+
+async fn start_test_http_server(
+    routes: Vec<(&'static str, StatusCode, &'static str)>,
+) -> Result<SocketAddr> {
+    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+    let addr = listener.local_addr()?;
+    let routes = Arc::new(routes);
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            let routes = routes.clone();
+            tokio::spawn(async move {
+                let service = service_fn(move |request: Request<hyper::body::Incoming>| {
+                    let routes = routes.clone();
+                    async move {
+                        let path = request.uri().path();
+                        let response = routes
+                            .iter()
+                            .find(|(route, _, _)| *route == path)
+                            .map(|(_, status, body)| {
+                                Response::builder()
+                                    .status(*status)
+                                    .body(Full::new(Bytes::from_static(body.as_bytes())))
+                                    .expect("response should build")
+                            })
+                            .unwrap_or_else(|| {
+                                Response::builder()
+                                    .status(StatusCode::NOT_FOUND)
+                                    .body(Full::new(Bytes::from_static(b"not found")))
+                                    .expect("response should build")
+                            });
+                        Ok::<_, std::convert::Infallible>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+
+    Ok(addr)
 }
 
 #[cfg(target_os = "linux")]
@@ -1687,6 +1741,97 @@ plugins:
         .expect_err("cron should not reference another cron");
     let msg = err.to_string();
     assert!(msg.contains("cannot reference cron executor"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_download_executor_continues_after_item_failure() -> Result<()> {
+    let server_addr = start_test_http_server(vec![
+        ("/ok.txt", StatusCode::OK, "download-ok"),
+        ("/missing.txt", StatusCode::NOT_FOUND, "missing"),
+    ])
+    .await?;
+    let tmp_dir = TempDir::new().expect("temp dir should be created");
+    let output_dir = tmp_dir.path().join("rules");
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: dl
+    type: download
+    args:
+      downloads:
+        - url: "http://{server_addr}/missing.txt"
+          dir: "{}"
+          filename: "missing.txt"
+        - url: "http://{server_addr}/ok.txt"
+          dir: "{}"
+          filename: "ok.txt"
+"#,
+        output_dir.display(),
+        output_dir.display(),
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("dl")
+        .expect("download plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    assert!(!output_dir.join("missing.txt").exists());
+    assert_eq!(
+        tokio::fs::read_to_string(output_dir.join("ok.txt")).await?,
+        "download-ok"
+    );
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sequence_download_quick_setup_executes_and_overwrites_target() -> Result<()> {
+    let server_addr =
+        start_test_http_server(vec![("/quick.txt", StatusCode::OK, "quick-setup")]).await?;
+    let tmp_dir = TempDir::new().expect("temp dir should be created");
+    let output_dir = tmp_dir.path().join("download");
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: seq
+    type: sequence
+    args:
+      - exec: "download http://{server_addr}/quick.txt {}"
+"#,
+        output_dir.display(),
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let sequence = registry
+        .get_plugin("seq")
+        .expect("sequence plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    assert_eq!(
+        tokio::fs::read_to_string(output_dir.join("quick.txt")).await?,
+        "quick-setup"
+    );
+
+    registry.destory().await;
     Ok(())
 }
 
