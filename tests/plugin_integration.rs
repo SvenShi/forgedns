@@ -1605,6 +1605,48 @@ plugins:
 }
 
 #[tokio::test]
+async fn test_adguard_rule_provider_drives_qname_matcher_branch() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: agh_rules
+    type: adguard_rule
+    args:
+      rules:
+        - "||ads.example.com^"
+        - "@@||safe.ads.example.com^"
+        - "||type-only.example.com^$dnstype=AAAA"
+  - tag: agh_match
+    type: qname
+    args:
+      - "$agh_rules"
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let matcher = registry
+        .get_plugin("agh_match")
+        .expect("qname matcher should exist")
+        .to_matcher();
+
+    let mut blocked_ctx = make_context(registry.clone(), "ads.example.com.");
+    assert!(matcher.is_match(&mut blocked_ctx));
+
+    let mut allow_ctx = make_context(registry.clone(), "safe.ads.example.com.");
+    assert!(!matcher.is_match(&mut allow_ctx));
+
+    let mut dnstype_only_ctx = make_context(registry.clone(), "type-only.example.com.");
+    assert!(
+        !matcher.is_match(&mut dnstype_only_ctx),
+        "qname should use name-only projection and ignore dnstype-only rules"
+    );
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_adguard_rule_provider_loads_rules_from_file() -> Result<()> {
     let adguard_rules = test_rule_path("adguard_rule_1.txt");
     let yaml = format!(

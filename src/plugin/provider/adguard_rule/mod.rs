@@ -102,6 +102,14 @@ impl Provider for AdGuardRule {
         self
     }
 
+    fn supports_domain_matching(&self) -> bool {
+        // This provider can participate in name-based matchers through
+        // `contains_name`, but it cannot expose a flat reusable rule list
+        // because exception precedence and request-scoped modifiers are
+        // evaluated dynamically.
+        true
+    }
+
     fn contains_name(&self, name: &Name) -> bool {
         self.contains_name_only(name)
     }

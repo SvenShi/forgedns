@@ -5,7 +5,7 @@ sidebar_position: 5
 
 Providers turn rule sets from one-off literals into reusable data assets. In larger configurations they reduce duplication, centralize shared datasets, and keep policies maintainable.
 
-Providers with domain or IP match capability can be referenced directly by matchers through `"$tag"` and can also be aggregated by `domain_set` or `ip_set`.
+Providers with domain or IP match capability can be referenced directly by matchers through `"$tag"` and can also be aggregated by `domain_set` or `ip_set`. A small number of providers only support direct matcher use and cannot be flattened into `domain_set` or `ip_set`.
 
 ---
 
@@ -52,8 +52,14 @@ This provider exposes two semantics:
 
 ### Typical Uses
 
+- Use AdGuard rules through the `qname` matcher with name-only projection semantics.
 - Reuse AdGuard rule files through the `question` matcher.
 - Centralize complex AdGuard-style blocking semantics at the provider layer.
+
+### Notes
+
+- Name-only matchers such as `qname` and `cname` use `contains_name`, so `dnstype`-only rules are ignored there.
+- `adguard_rule` cannot be flattened through `domain_set.sets` because exception precedence and request-scoped modifiers such as `dnstype` must still be evaluated at runtime.
 
 ---
 
