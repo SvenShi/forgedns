@@ -946,16 +946,6 @@ Injects arbitrary DNS records from zone-style rule strings.
 - Type: `bool`; Required: no; Default: `false`
 - Purpose: Stops the remaining executor chain after a local answer is generated.
 
-### quick setup
-
-```yaml
-- exec: "hosts full:example.com 1.1.1.1"
-- exec: "hosts full:example.com 1.1.1.1 short_circuit=true"
-```
-
-- Quick setup is for a single hosts rule.
-- It supports the trailing flag forms `short_circuit`, `short_circuit=true`, and `short_circuit=false`.
-
 ### Behavior
 
 - Produces fully synthetic answers.

@@ -950,24 +950,6 @@ plugins:
 - 类型：`bool`；必填：否；默认值：`false`
 - 作用：命中并生成本地应答后，是否立即停止后续 executor 链。
 
-### quick setup
-
-```yaml
-- exec: "hosts full:example.com 1.1.1.1"
-- exec: "hosts full:example.com 1.1.1.1 short_circuit=true"
-```
-
-说明：
-
-- quick setup 用于单条 hosts 规则。
-- 尾部支持 `short_circuit`、`short_circuit=true`、`short_circuit=false`。
-
-规则格式：
-
-```text
-<域名规则> <ip1> <ip2> ...
-```
-
 ### 行为说明
 
 - 仅处理 `IN` 类的 `A` / `AAAA` 请求。

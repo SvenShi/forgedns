@@ -925,49 +925,22 @@ plugins:
 }
 
 #[tokio::test]
-async fn test_hosts_quick_setup_short_circuit_stops_sequence_after_local_answer() -> Result<()> {
-    let yaml = r#"
-log:
-  level: info
-plugins:
-  - tag: seq
-    type: sequence
-    args:
-      - exec: "hosts full:example.test 192.0.2.10 short_circuit=true"
-      - exec: "reject 2"
-"#;
-
-    let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
-    let seq = registry
-        .get_plugin("seq")
-        .expect("sequence should exist")
-        .to_executor();
-
-    let mut ctx = make_context(registry.clone(), "example.test.");
-    let step = seq.execute(&mut ctx).await?;
-    assert!(matches!(step, ExecStep::Next));
-    assert_eq!(ctx.flow(), ExecFlowState::ReachedTail);
-    assert_eq!(
-        ctx.response().expect("response should exist").rcode(),
-        Rcode::NoError
-    );
-
-    registry.destory().await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_cache_quick_setup_short_circuit_stops_sequence_after_cache_hit() -> Result<()> {
     let yaml = r#"
 log:
   level: info
 plugins:
+  - tag: hosts
+    type: hosts
+    args:
+      entries:
+        - "full:example.test 192.0.2.10"
+      short_circuit: true
   - tag: seq
     type: sequence
     args:
       - exec: "cache short_circuit=true"
-      - exec: "hosts full:example.test 192.0.2.10 short_circuit=true"
+      - exec: $hosts
       - exec: "reject 2"
 "#;
 
