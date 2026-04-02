@@ -45,6 +45,7 @@ slug: /
         </h3>
       </div>
       <ul className="doc-plugin-card__list">
+        <li><a href="plugin-reference/executor#cron">cron</a></li>
         <li><a href="plugin-reference/executor#sequence">sequence</a></li>
         <li><a href="plugin-reference/executor#forward">forward</a></li>
         <li><a href="plugin-reference/executor#cache">cache</a></li>
@@ -85,6 +86,7 @@ slug: /
         <li><a href="plugin-reference/matcher#true">_true</a></li>
         <li><a href="plugin-reference/matcher#false">_false</a></li>
         <li><a href="plugin-reference/matcher#qname">qname</a></li>
+        <li><a href="plugin-reference/matcher#question">question</a></li>
         <li><a href="plugin-reference/matcher#qtype">qtype</a></li>
         <li><a href="plugin-reference/matcher#qclass">qclass</a></li>
         <li><a href="plugin-reference/matcher#client_ip">client_ip</a></li>
@@ -110,7 +112,10 @@ slug: /
         </h3>
       </div>
       <ul className="doc-plugin-card__list">
+        <li><a href="plugin-reference/provider#adguard_rule">adguard_rule</a></li>
         <li><a href="plugin-reference/provider#domain_set">domain_set</a></li>
+        <li><a href="plugin-reference/provider#geosite">geosite</a></li>
+        <li><a href="plugin-reference/provider#geoip">geoip</a></li>
         <li><a href="plugin-reference/provider#ip_set">ip_set</a></li>
       </ul>
     </section>
