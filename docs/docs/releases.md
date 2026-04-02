@@ -13,32 +13,38 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
   <ReleaseCard version="v0.2.0" badge="Feature Release" date="2026-04-02" defaultOpen>
       **Highlights**
 
-      - 新增 `script` executor，可将外部脚本执行纳入序列编排。
-      - 新增 `download` executor，并支持通过 SOCKS5 代理下载远程文件。
-      - `download` executor 进一步支持启动时自动补齐缺失文件，并跟随 HTTP 重定向。
-      - 新增 `reload` executor，可在运行时触发特定数据或持久化内容刷新。
-      - 新增 `cron` 调度能力和持续时间解析辅助能力，方便周期性任务编排。
-      - 新增 `geoip`、`geosite`、`adguard_rule` 等 provider，并新增 `question` matcher。
+      - 新增 `download` executor，支持将远程 `http/https` 文件下载到本地目录。
+      - `download` 支持 `SOCKS5` 代理、HTTP 重定向跟随、启动时自动补齐缺失文件。
+      - `startup_if_missing` 默认启用，更适合首次部署和规则文件自举场景。
+      - 新增 `cron` executor，可按固定间隔或标准 5 字段 cron 表达式执行后台任务。
+      - 新增 `reload` executor，可触发一次完整的应用级 reload。
+      - 新增 `script` executor，可执行外部命令并注入稳定上下文字段。
+      - 新增 `geoip`、`geosite`、`adguard_rule` provider。
+      - 新增 `question` matcher。
+      - `qname` 域名匹配新增对 `adguard_rule` 规则集的支持。
 
       **Core Changes**
 
-      - cache 新增 stale lazy refresh 行为，提升热点数据过期后的可用性。
-      - rule matcher 做了结构拆分与热路径优化，并补充独立 benchmark。
-      - 移除了 `app_clock` 的后台任务依赖，保留更直接的运行时时钟模型。
-      - 日志新增可配置文件轮转能力，方便长期部署。
-      - `ros_address_list` 增加 `fixed_ttl=0` 代表无超时的行为支持。
+      - cache 新增 `stale lazy refresh` 行为，提升热点缓存过期后的可用性。
+      - rule matcher 完成结构拆分与热路径优化，并补充 domain / ip benchmark。
+      - 新增可配置日志文件轮转能力，方便长期运行部署。
+      - 移除 `app_clock` 的后台任务依赖，简化运行时钟模型。
+      - `ros_address_list` 支持 `fixed_ttl=0`，表示无超时。
+      - `hosts`、`black_hole`、`cache` 的 quick setup 新增 `short_circuit` 支持。
 
       **Fixes And Compatibility**
 
       - 修复 IP matcher 规则在 finalize 和增量更新后丢失的问题。
-      - 修复 Windows 下部分集成测试与规则文件路径问题。
-      - 依赖层从 `serde_yml` 迁移到 `serde_yaml_ng`，并同步处理部分 Dependabot 安全更新。
+      - 修复 Windows 下集成测试和规则文件路径相关问题。
+      - 从 `serde_yml` 迁移到 `serde_yaml_ng`。
+      - 同步更新部分依赖和 CI 工具链。
+      - 移除 `hosts` quick setup，收敛早期不够稳定的快速配置入口。
 
       **Docs And Tooling**
 
-      - 文档站新增 docs-site CI。
-      - 扩展了 `executor`、`matcher`、`provider`、`server`、`quickstart`、`scenarios` 等文档内容。
-      - 补充了 sequence quick setup、默认配置和模块文档说明。
+      - 新增 docs-site CI。
+      - 系统更新 `executor`、`matcher`、`provider`、`server`、`quickstart`、`scenarios` 等文档。
+      - 补充订阅更新示例、sequence quick setup、默认配置说明和版本更新页。
   </ReleaseCard>
 </div>
 

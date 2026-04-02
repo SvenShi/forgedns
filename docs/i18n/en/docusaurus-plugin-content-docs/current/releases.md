@@ -13,32 +13,38 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
   <ReleaseCard version="v0.2.0" badge="Feature Release" date="2026-04-02" defaultOpen>
       **Highlights**
 
-      - Added the `script` executor so external scripts can participate in sequence orchestration.
-      - Added the `download` executor, including SOCKS5 proxy support for remote file downloads.
-      - Extended the `download` executor to bootstrap missing files on startup and follow HTTP redirects.
-      - Added the `reload` executor to refresh selected datasets or persistent state at runtime.
-      - Added `cron` scheduling support and duration parsing helpers for periodic workflows.
-      - Added `geoip`, `geosite`, and `adguard_rule` providers, plus the new `question` matcher.
+      - Added the `download` executor for downloading remote `http/https` files to local storage.
+      - `download` now supports SOCKS5 proxying, HTTP redirect following, and startup bootstrap for missing files.
+      - `startup_if_missing` is enabled by default for smoother first-deployment behavior.
+      - Added the `cron` executor for background jobs with interval or standard 5-field cron triggers.
+      - Added the `reload` executor for full application reloads.
+      - Added the `script` executor for running external commands with injected context fields.
+      - Added `geoip`, `geosite`, and `adguard_rule` providers.
+      - Added the `question` matcher.
+      - Extended `qname` matching to support `adguard_rule` rule sets directly.
 
-      **Core Changes**
+      **Core Improvements**
 
-      - Cache now supports stale lazy refresh to keep hot data available after expiration.
-      - Rule matcher internals were split and optimized, with dedicated benchmarks added.
-      - Removed the background-task dependency from `app_clock` and simplified the runtime clock model.
+      - Cache now supports stale lazy refresh.
+      - Rule matcher internals were split and optimized, with dedicated domain / ip benchmarks added.
       - Added configurable log file rotation for long-running deployments.
-      - `ros_address_list` now supports `fixed_ttl=0` to mean no timeout.
+      - Removed the background-task dependency from `app_clock`.
+      - `ros_address_list` now supports `fixed_ttl=0` for no-timeout behavior.
+      - Added `short_circuit` support to quick setup for `hosts`, `black_hole`, and `cache`.
 
       **Fixes And Compatibility**
 
       - Fixed IP matcher rules being lost after finalize and incremental updates.
-      - Fixed Windows integration-test and rule-fixture path issues.
-      - Migrated from `serde_yml` to `serde_yaml_ng` and pulled in dependency security updates.
+      - Fixed Windows integration-test and fixture path issues.
+      - Migrated from `serde_yml` to `serde_yaml_ng`.
+      - Updated several dependencies and CI-related tooling.
+      - Removed the `hosts` quick setup to tighten early quick-setup behavior.
 
       **Docs And Tooling**
 
-      - Added docs-site CI for the documentation site.
+      - Added docs-site CI.
       - Expanded documentation for `executor`, `matcher`, `provider`, `server`, `quickstart`, and `scenarios`.
-      - Improved sequence quick setup, default config, and module-level documentation.
+      - Added subscription refresh examples, improved sequence quick setup docs, and introduced this release history page.
   </ReleaseCard>
 </div>
 
