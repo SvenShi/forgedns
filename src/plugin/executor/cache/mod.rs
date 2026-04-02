@@ -887,10 +887,31 @@ impl PluginFactory for CacheFactory {
     ) -> Result<UninitializedPlugin> {
         let cache_config = parse_cache_config(plugin_config.args.clone())?;
         validate_cache_config(&cache_config)?;
+        self.build_cache(plugin_config.tag.clone(), cache_config, registry)
+    }
 
+    fn quick_setup(
+        &self,
+        tag: &str,
+        param: Option<String>,
+        registry: Arc<PluginRegistry>,
+    ) -> Result<UninitializedPlugin> {
+        let cache_config = parse_cache_quick_setup(param.as_deref().unwrap_or_default())?;
+        validate_cache_config(&cache_config)?;
+        self.build_cache(tag.to_string(), cache_config, registry)
+    }
+}
+
+impl CacheFactory {
+    fn build_cache(
+        &self,
+        tag: String,
+        cache_config: CacheConfig,
+        registry: Arc<PluginRegistry>,
+    ) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(Cache {
             cache_map: OnceCell::new(),
-            tag: plugin_config.tag.clone(),
+            tag,
             cache_negative: cache_config.cache_negative.unwrap_or(true),
             max_negative_ttl: cache_config
                 .max_negative_ttl
@@ -909,6 +930,48 @@ impl PluginFactory for CacheFactory {
             lazy_refresh_inflight: Arc::new(Mutex::new(AHashSet::new())),
         })))
     }
+}
+
+fn parse_cache_quick_setup(raw: &str) -> Result<CacheConfig> {
+    let mut config = CacheConfig {
+        size: None,
+        lazy_cache_ttl: None,
+        dump_file: None,
+        dump_interval: None,
+        short_circuit: None,
+        cache_negative: None,
+        max_negative_ttl: None,
+        negative_ttl_without_soa: None,
+        max_positive_ttl: None,
+        ecs_in_key: None,
+    };
+
+    for token in raw.split_whitespace() {
+        if token == "short_circuit" {
+            config.short_circuit = Some(true);
+            continue;
+        }
+
+        let Some(value) = token.strip_prefix("short_circuit=") else {
+            return Err(DnsError::plugin(format!(
+                "unsupported cache quick setup token '{}'",
+                token
+            )));
+        };
+
+        config.short_circuit = Some(match value {
+            "true" => true,
+            "false" => false,
+            _ => {
+                return Err(DnsError::plugin(format!(
+                    "invalid short_circuit value '{}', expected true or false",
+                    value
+                )));
+            }
+        });
+    }
+
+    Ok(config)
 }
 
 #[derive(Debug)]
@@ -1064,6 +1127,12 @@ mod tests {
             max_positive_ttl: None,
             ecs_in_key: None,
         }
+    }
+
+    #[test]
+    fn parse_cache_quick_setup_supports_short_circuit() {
+        let cfg = parse_cache_quick_setup("short_circuit=true").expect("quick setup should parse");
+        assert_eq!(cfg.short_circuit, Some(true));
     }
 
     fn make_context(request: Message) -> DnsContext {

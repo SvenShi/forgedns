@@ -118,6 +118,7 @@ impl PluginFactory for BlackHoleFactory {
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
         let raw = param.unwrap_or_default();
+        let (raw, short_circuit) = strip_short_circuit_suffix(&raw)?;
         let ips = parse_ip_tokens(split_tokens(&raw).into_iter().map(str::to_string).collect())?;
         let (ipv4, ipv6) = split_ips(ips);
 
@@ -125,7 +126,7 @@ impl PluginFactory for BlackHoleFactory {
             tag: tag.to_string(),
             ipv4,
             ipv6,
-            short_circuit: false,
+            short_circuit,
         })))
     }
 }
@@ -186,6 +187,40 @@ fn split_tokens(raw: &str) -> Vec<&str> {
         .collect()
 }
 
+fn strip_short_circuit_suffix(raw: &str) -> Result<(String, bool)> {
+    let mut tokens: Vec<&str> = raw.split_whitespace().collect();
+    let mut short_circuit = false;
+
+    while let Some(last) = tokens.last().copied() {
+        let Some(value) = parse_short_circuit_token(last)? else {
+            break;
+        };
+        short_circuit = value;
+        tokens.pop();
+    }
+
+    Ok((tokens.join(" "), short_circuit))
+}
+
+fn parse_short_circuit_token(token: &str) -> Result<Option<bool>> {
+    if token == "short_circuit" {
+        return Ok(Some(true));
+    }
+
+    let Some(value) = token.strip_prefix("short_circuit=") else {
+        return Ok(None);
+    };
+
+    match value {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        _ => Err(DnsError::plugin(format!(
+            "invalid short_circuit value '{}', expected true or false",
+            value
+        ))),
+    }
+}
+
 fn split_ips(ips: Vec<IpAddr>) -> (Vec<Arc<RData>>, Vec<Arc<RData>>) {
     let mut ipv4 = Vec::new();
     let mut ipv6 = Vec::new();
@@ -203,6 +238,7 @@ fn split_ips(ips: Vec<IpAddr>) -> (Vec<Arc<RData>>, Vec<Arc<RData>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::UninitializedPlugin;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Name};
@@ -229,6 +265,25 @@ mod tests {
         assert!(parse_ip_tokens(vec![]).is_ok());
         assert!(parse_ip_tokens(vec!["invalid".to_string()]).is_err());
         assert!(parse_ip_tokens(vec!["1.1.1.1".to_string()]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_black_hole_quick_setup_supports_short_circuit() {
+        let plugin = BlackHoleFactory
+            .quick_setup(
+                "bh_quick",
+                Some("0.0.0.0 short_circuit=true".to_string()),
+                test_registry(),
+            )
+            .expect("quick setup should succeed");
+
+        let UninitializedPlugin::Executor(plugin) = plugin else {
+            panic!("expected executor plugin");
+        };
+        let mut ctx = make_context(RecordType::A);
+        let step = plugin.execute(&mut ctx).await.expect("execute should work");
+        assert!(matches!(step, ExecStep::Stop));
+        assert!(ctx.response().is_some());
     }
 
     #[tokio::test]

@@ -738,6 +738,17 @@ Provides TTL-aware response caching with negative cache support and persistence.
 - Type: `boolean`; Required: no
 - Purpose: Include ECS information in the cache key.
 
+### quick setup
+
+```yaml
+- exec: "cache"
+- exec: "cache short_circuit=true"
+```
+
+- With no arguments, quick setup uses the default cache configuration.
+- It currently supports the trailing flag forms `short_circuit`, `short_circuit=true`, and `short_circuit=false`.
+- Use the full plugin form for other advanced settings.
+
 ### Behavior
 
 - Reads from cache on the forward path and writes responses on the return path.
@@ -934,6 +945,16 @@ Injects arbitrary DNS records from zone-style rule strings.
 
 - Type: `bool`; Required: no; Default: `false`
 - Purpose: Stops the remaining executor chain after a local answer is generated.
+
+### quick setup
+
+```yaml
+- exec: "hosts full:example.com 1.1.1.1"
+- exec: "hosts full:example.com 1.1.1.1 short_circuit=true"
+```
+
+- Quick setup is for a single hosts rule.
+- It supports the trailing flag forms `short_circuit`, `short_circuit=true`, and `short_circuit=false`.
 
 ### Behavior
 
@@ -1333,6 +1354,7 @@ Returns sinkhole IPs directly.
 
 ```yaml
 - exec: "black_hole 0.0.0.0 ::"
+- exec: "black_hole 0.0.0.0 :: short_circuit=true"
 ```
 
 ### Behavior

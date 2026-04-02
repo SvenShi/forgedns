@@ -799,6 +799,19 @@ plugins:
 - 类型：`boolean`；必填：否；默认值：`false`
 - 作用：控制 ECS scope 是否参与缓存键计算。
 
+### quick setup
+
+```yaml
+- exec: "cache"
+- exec: "cache short_circuit=true"
+```
+
+说明：
+
+- 不带参数时使用默认缓存配置。
+- 目前 quick setup 支持尾部开关 `short_circuit`、`short_circuit=true`、`short_circuit=false`。
+- 其它高级参数仍建议使用完整插件形式。
+
 ### 行为说明
 
 - 既会读缓存，也会在后续拿到响应后写缓存。
@@ -936,6 +949,18 @@ plugins:
 
 - 类型：`bool`；必填：否；默认值：`false`
 - 作用：命中并生成本地应答后，是否立即停止后续 executor 链。
+
+### quick setup
+
+```yaml
+- exec: "hosts full:example.com 1.1.1.1"
+- exec: "hosts full:example.com 1.1.1.1 short_circuit=true"
+```
+
+说明：
+
+- quick setup 用于单条 hosts 规则。
+- 尾部支持 `short_circuit`、`short_circuit=true`、`short_circuit=false`。
 
 规则格式：
 
@@ -1428,7 +1453,20 @@ plugins:
 ### quick setup
 
 ```yaml
+- exec: "arbitrary example.com. 60 IN A 192.0.2.10"
+- exec: "arbitrary example.com. 60 IN A 192.0.2.10 short_circuit=true"
+```
+
+说明：
+
+- quick setup 用于单条静态记录。
+- 尾部支持 `short_circuit`、`short_circuit=true`、`short_circuit=false`。
+
+### quick setup
+
+```yaml
 - exec: "black_hole 0.0.0.0 ::"
+- exec: "black_hole 0.0.0.0 :: short_circuit=true"
 ```
 
 ### 行为说明

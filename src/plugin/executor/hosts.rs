@@ -161,6 +161,27 @@ impl PluginFactory for HostsFactory {
             short_circuit: cfg.short_circuit,
         })))
     }
+
+    fn quick_setup(
+        &self,
+        tag: &str,
+        param: Option<String>,
+        _registry: Arc<PluginRegistry>,
+    ) -> Result<UninitializedPlugin> {
+        let raw = param.unwrap_or_default();
+        let (entry, short_circuit) = strip_short_circuit_suffix(&raw)?;
+        let rule = parse_hosts_line(&entry)
+            .map_err(|e| DnsError::plugin(format!("invalid hosts quick setup '{}': {}", raw, e)))?;
+        let rules = vec![rule];
+        let index = build_rule_index(&rules)?;
+
+        Ok(UninitializedPlugin::Executor(Box::new(HostsExecutor {
+            tag: tag.to_string(),
+            rules,
+            index,
+            short_circuit,
+        })))
+    }
 }
 
 fn parse_config(args: Option<Value>) -> Result<HostsConfig> {
@@ -381,10 +402,45 @@ fn normalize_name(raw: &str) -> String {
     raw.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
+fn strip_short_circuit_suffix(raw: &str) -> Result<(String, bool)> {
+    let mut tokens: Vec<&str> = raw.split_whitespace().collect();
+    let mut short_circuit = false;
+
+    while let Some(last) = tokens.last().copied() {
+        let Some(value) = parse_short_circuit_token(last)? else {
+            break;
+        };
+        short_circuit = value;
+        tokens.pop();
+    }
+
+    Ok((tokens.join(" "), short_circuit))
+}
+
+fn parse_short_circuit_token(token: &str) -> Result<Option<bool>> {
+    if token == "short_circuit" {
+        return Ok(Some(true));
+    }
+
+    let Some(value) = token.strip_prefix("short_circuit=") else {
+        return Ok(None);
+    };
+
+    match value {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        _ => Err(DnsError::plugin(format!(
+            "invalid short_circuit value '{}', expected true or false",
+            value
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::context::DnsContext;
+    use crate::plugin::UninitializedPlugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Name, RecordType};
@@ -396,6 +452,25 @@ mod tests {
         assert!(parse_hosts_line("").is_err());
         assert!(parse_hosts_line("full:example.com").is_err());
         assert!(parse_hosts_line("full:example.com 1.1.1.1").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_hosts_quick_setup_supports_short_circuit() {
+        let plugin = HostsFactory
+            .quick_setup(
+                "hosts_quick",
+                Some("full:example.com 1.1.1.1 short_circuit=true".to_string()),
+                test_registry(),
+            )
+            .expect("quick setup should succeed");
+
+        let UninitializedPlugin::Executor(plugin) = plugin else {
+            panic!("expected executor plugin");
+        };
+        let mut ctx = make_context("example.com.", RecordType::A);
+        let step = plugin.execute(&mut ctx).await.expect("execute should work");
+        assert!(matches!(step, ExecStep::Stop));
+        assert!(ctx.response().is_some());
     }
 
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
