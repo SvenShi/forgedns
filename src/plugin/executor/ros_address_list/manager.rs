@@ -33,8 +33,6 @@ const HOST_PREFIX_V6: u8 = 128;
 const MANAGER_QUEUE_SIZE: usize = 1024;
 /// Periodic interval for persistent desired-set reconciliation.
 const RECONCILE_INTERVAL_SECS: u64 = 180;
-/// Periodic interval for reloading persistent item files.
-const PERSISTENT_RELOAD_INTERVAL_SECS: u64 = 60;
 /// Periodic interval for local dynamic-cache pruning.
 const DYNAMIC_CACHE_PRUNE_INTERVAL_SECS: u64 = 60;
 /// Maximum time allowed for graceful manager shutdown coordination.
@@ -244,29 +242,12 @@ pub(super) enum ManagerCommand {
         addrs: Vec<ObservedAddr>,
         wait: Option<oneshot::Sender<Result<()>>>,
     },
-    UpdatePersistentItems {
-        items: AHashSet<AddressListKey>,
-    },
     Reconcile,
     PruneDynamicCache,
     Shutdown {
         cleanup: bool,
         done: oneshot::Sender<()>,
     },
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PersistentReloadConfig {
-    /// Inline-only persistent set that never changes after startup.
-    pub(super) inline_items: AHashSet<AddressListKey>,
-    /// File sources periodically reloaded in the background.
-    pub(super) files: Vec<String>,
-    /// IPv4 target list needed to bind reloaded file items.
-    pub(super) address_list4: Option<String>,
-    /// IPv6 target list needed to bind reloaded file items.
-    pub(super) address_list6: Option<String>,
-    /// Initial merged desired set used to suppress redundant reload updates.
-    pub(super) initial_items: AHashSet<AddressListKey>,
 }
 
 #[derive(Debug)]
@@ -279,19 +260,14 @@ pub(super) struct AddressListManagerRuntime {
     prune_task_id: Option<u64>,
     /// Periodic persistent reconcile loop.
     reconcile_task_id: Option<u64>,
-    /// Periodic persistent file reload loop.
-    persistent_reload_task_id: Option<u64>,
 }
 
 impl AddressListManagerRuntime {
-    pub(super) fn start(
-        tag: String,
-        manager: AddressListManager,
-        persistent_reload: Option<PersistentReloadConfig>,
-    ) -> Self {
+    pub(super) fn start(tag: String, manager: AddressListManager) -> Self {
         // All mutable state lives behind one worker to avoid cross-map locking
         // or request-path synchronization in the DNS hot path.
         let (tx, rx) = mpsc::channel::<ManagerCommand>(MANAGER_QUEUE_SIZE);
+        let reconcile_enabled = !manager.cfg.persistent_items.is_empty();
 
         let worker_tag = tag.clone();
         let worker_handle = Some(tokio::spawn(async move {
@@ -313,9 +289,6 @@ impl AddressListManagerRuntime {
         ));
 
         // Reconcile is only useful when persistent behavior is configured.
-        let reconcile_enabled = persistent_reload
-            .as_ref()
-            .is_some_and(|cfg| !cfg.initial_items.is_empty() || !cfg.files.is_empty());
         let reconcile_task_id = reconcile_enabled.then(|| {
             let reconcile_tx = tx.clone();
             task_center::spawn_fixed(
@@ -330,80 +303,11 @@ impl AddressListManagerRuntime {
             )
         });
 
-        let persistent_reload_task_id = persistent_reload.and_then(|reload_cfg| {
-            if reload_cfg.files.is_empty() {
-                return None;
-            }
-
-            // File reload re-parses source files in the background and only
-            // sends a manager update when the merged desired set actually changes.
-            let maintain_tx = tx.clone();
-            let maintain_tag = tag.clone();
-            let last_loaded_items =
-                Arc::new(tokio::sync::Mutex::new(reload_cfg.initial_items.clone()));
-            Some(task_center::spawn_fixed(
-                format!("ros_address_list:{maintain_tag}:persistent_reload"),
-                Duration::from_secs(PERSISTENT_RELOAD_INTERVAL_SECS),
-                move || {
-                    let maintain_tx = maintain_tx.clone();
-                    let maintain_tag = maintain_tag.clone();
-                    let last_loaded_items = last_loaded_items.clone();
-                    let reload_cfg = reload_cfg.clone();
-                    async move {
-                        match super::load_persistent_items_from_files_async(
-                            reload_cfg.files.as_slice(),
-                            reload_cfg.address_list4.as_deref(),
-                            reload_cfg.address_list6.as_deref(),
-                        )
-                        .await
-                        {
-                            Ok((file_items, ignored_by_family)) => {
-                                if ignored_by_family > 0 {
-                                    debug!(
-                                        plugin = %maintain_tag,
-                                        ignored = ignored_by_family,
-                                        "ros_address_list persistent file reload ignored entries without corresponding address list family"
-                                    );
-                                }
-
-                                let mut desired_items = reload_cfg.inline_items.clone();
-                                desired_items.extend(file_items);
-
-                                let mut last_loaded_guard = last_loaded_items.lock().await;
-                                if desired_items != *last_loaded_guard {
-                                    *last_loaded_guard = desired_items.clone();
-                                    if maintain_tx
-                                        .send(ManagerCommand::UpdatePersistentItems {
-                                            items: desired_items,
-                                        })
-                                        .await
-                                        .is_err()
-                                    {
-                                        return;
-                                    }
-                                }
-
-                                let _ = maintain_tx.send(ManagerCommand::Reconcile).await;
-                            }
-                            Err(e) => {
-                                warn!(
-                                    plugin = %maintain_tag,
-                                    err = %e,
-                                    "ros_address_list persistent file reload failed"
-                                );
-                            }
-                        }
-                    }
-                },
-            ))
-        });
-
         Self {
             tx,
             worker_handle,
             prune_task_id,
             reconcile_task_id,
-            persistent_reload_task_id,
         }
     }
 
@@ -442,9 +346,6 @@ impl AddressListManagerRuntime {
             task_center::stop_task(task_id).await;
         }
         if let Some(task_id) = self.reconcile_task_id.take() {
-            task_center::stop_task(task_id).await;
-        }
-        if let Some(task_id) = self.persistent_reload_task_id.take() {
             task_center::stop_task(task_id).await;
         }
         if let Some(handle) = self.worker_handle.take() {
@@ -758,6 +659,7 @@ impl AddressListManager {
         self.observe_domain_inner(domain, addrs, now_millis()).await
     }
 
+    #[cfg(test)]
     pub(super) async fn update_persistent_items(
         &mut self,
         items: AHashSet<AddressListKey>,
@@ -940,15 +842,6 @@ async fn run_manager_worker(
                             "ros_address_list observe failed in async mode"
                         );
                     }
-                }
-            }
-            ManagerCommand::UpdatePersistentItems { items } => {
-                if let Err(e) = manager.update_persistent_items(items).await {
-                    warn!(
-                        plugin = %tag,
-                        err = %e,
-                        "ros_address_list persistent address-list maintenance failed"
-                    );
                 }
             }
             ManagerCommand::Reconcile => {

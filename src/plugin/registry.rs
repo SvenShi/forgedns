@@ -9,6 +9,7 @@
 //! enabling better testability and support for multiple server instances.
 
 use crate::api::ApiRegister;
+use crate::api::control::{AppController, ControlRequestError};
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::dependency::DependencyKind;
@@ -18,7 +19,7 @@ use crate::plugin::provider::Provider;
 use crate::plugin::{PluginFactory, PluginInfo, PluginType};
 use dashmap::DashMap;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{debug, error, info};
 
 /// Plugin registry that manages plugin factories and instances
@@ -30,6 +31,10 @@ use tracing::{debug, error, info};
 #[derive(Debug)]
 pub struct PluginRegistry {
     api_register: Option<ApiRegister>,
+
+    /// Optional application controller used by plugins that need to trigger
+    /// process-level control actions such as a full configuration reload.
+    controller: OnceLock<Arc<AppController>>,
 
     /// Map of plugin type names to their factory implementations
     factories: HashMap<String, Box<dyn PluginFactory>>,
@@ -53,6 +58,7 @@ impl PluginRegistry {
     pub fn new() -> Self {
         Self {
             api_register: None,
+            controller: OnceLock::new(),
             factories: HashMap::new(),
             factory_kinds: HashMap::new(),
             plugins: DashMap::new(),
@@ -231,6 +237,31 @@ impl PluginRegistry {
 
     pub fn api_register(&self) -> Option<ApiRegister> {
         self.api_register.clone()
+    }
+
+    /// Attach the application controller after the registry has been assembled.
+    pub fn set_controller(&self, controller: Arc<AppController>) {
+        let _ = self.controller.set(controller);
+    }
+
+    /// Get the application controller if the registry was assembled with one.
+    pub fn controller(&self) -> Option<Arc<AppController>> {
+        self.controller.get().cloned()
+    }
+
+    /// Request the same full reload flow used by the management control API.
+    pub fn request_app_reload(&self) -> Result<()> {
+        let controller = self.controller().ok_or_else(|| {
+            DnsError::plugin("reload executor requires application control context")
+        })?;
+        controller.request_reload().map_err(|err| match err {
+            ControlRequestError::ReloadBusy => {
+                DnsError::plugin("reload is already pending or in progress")
+            }
+            ControlRequestError::CommandChannelClosed => {
+                DnsError::plugin("application reload command channel is closed")
+            }
+        })
     }
 
     fn plugin_kind_name(plugin_type: PluginType) -> &'static str {

@@ -26,8 +26,8 @@
 //! - preserve DNS hot-path latency (`async=true` uses non-blocking queue).
 //! - provide blocking write-before-return mode (`async=false`) without
 //!   affecting DNS response result.
-//! - keep persistent file-backed entries self-healed via background reload and
-//!   reconcile loops.
+//! - load persistent file-backed entries at startup and keep them fixed until
+//!   the plugin is reloaded.
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -44,7 +44,6 @@ use std::fs;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::fs as tokio_fs;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
@@ -67,7 +66,7 @@ mod manager;
 use self::api::{MikrotikApi, MikrotikRsClient};
 use self::manager::{
     AddressListFamily, AddressListKey, AddressListManager, AddressListManagerConfig,
-    AddressListManagerRuntime, ManagerCommand, ObservedAddr, PersistentReloadConfig,
+    AddressListManagerRuntime, ManagerCommand, ObservedAddr,
 };
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -127,10 +126,6 @@ struct MikrotikConfig {
     address_list6: Option<String>,
     /// Full persistent desired set after merging inline and file sources.
     persistent_items: AHashSet<AddressListKey>,
-    /// Inline-only persistent items kept separately so file reload can rebuild the merged set.
-    persistent_inline_items: AHashSet<AddressListKey>,
-    /// Source files periodically reloaded for persistent items.
-    persistent_files: Vec<String>,
     /// Prefix used in RouterOS comments to mark plugin ownership.
     comment_prefix: String,
     /// Minimum TTL clamp for dynamic entries.
@@ -195,8 +190,6 @@ impl MikrotikConfigArgs {
             address_list4,
             address_list6,
             persistent_items: parsed_persistent.all_items,
-            persistent_inline_items: parsed_persistent.inline_items,
-            persistent_files: parsed_persistent.files,
             comment_prefix,
             min_ttl,
             max_ttl,
@@ -243,17 +236,7 @@ impl Plugin for MikrotikExecutor {
             return Ok(());
         };
 
-        let persistent_reload = Some(PersistentReloadConfig {
-            // Runtime keeps inline and file sources separate so a file reload
-            // can rebuild the merged desired set without reparsing YAML.
-            inline_items: self.config.persistent_inline_items.clone(),
-            files: self.config.persistent_files.clone(),
-            address_list4: self.config.address_list4.clone(),
-            address_list6: self.config.address_list6.clone(),
-            initial_items: self.config.persistent_items.clone(),
-        });
-        let runtime =
-            AddressListManagerRuntime::start(self.tag.clone(), manager, persistent_reload);
+        let runtime = AddressListManagerRuntime::start(self.tag.clone(), manager);
         self.command_tx = Some(runtime.sender());
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
@@ -521,10 +504,6 @@ fn validate_comment_token(field: &str, value: &str) -> Result<()> {
 struct ParsedPersistentItems {
     /// Final desired set after merging inline and file sources.
     all_items: AHashSet<AddressListKey>,
-    /// Inline-only subset used by periodic file reload.
-    inline_items: AHashSet<AddressListKey>,
-    /// File list preserved for runtime reload.
-    files: Vec<String>,
     /// Count of items skipped because that family is not configured.
     ignored_by_family: usize,
 }
@@ -555,7 +534,6 @@ fn parse_persistent_items(
             )?;
             match key {
                 Some(key) => {
-                    parsed.inline_items.insert(key.clone());
                     parsed.all_items.insert(key);
                 }
                 None => {
@@ -565,9 +543,9 @@ fn parse_persistent_items(
         }
     }
 
-    parsed.files = parse_persistent_files(persistent.files)?;
+    let files = parse_persistent_files(persistent.files)?;
     let (file_items, ignored_by_family) =
-        load_persistent_items_from_files(parsed.files.as_slice(), address_list4, address_list6)?;
+        load_persistent_items_from_files(files.as_slice(), address_list4, address_list6)?;
     parsed.ignored_by_family = parsed.ignored_by_family.saturating_add(ignored_by_family);
     parsed.all_items.extend(file_items);
     Ok(parsed)
@@ -634,34 +612,6 @@ fn load_persistent_items_from_files(
 
     for (index, file) in files.iter().enumerate() {
         let content = fs::read_to_string(file).map_err(|e| {
-            DnsError::plugin(format!(
-                "ros_address_list failed to read persistent file '{file}': {e}"
-            ))
-        })?;
-        let source_prefix = format!("persistent.files[{index}]");
-        let (loaded, ignored_delta) = load_persistent_items_from_content(
-            source_prefix.as_str(),
-            &content,
-            address_list4,
-            address_list6,
-        )?;
-        out.extend(loaded);
-        ignored_by_family = ignored_by_family.saturating_add(ignored_delta);
-    }
-
-    Ok((out, ignored_by_family))
-}
-
-async fn load_persistent_items_from_files_async(
-    files: &[String],
-    address_list4: Option<&str>,
-    address_list6: Option<&str>,
-) -> Result<(AHashSet<AddressListKey>, usize)> {
-    let mut out = AHashSet::new();
-    let mut ignored_by_family = 0usize;
-
-    for (index, file) in files.iter().enumerate() {
-        let content = tokio_fs::read_to_string(file).await.map_err(|e| {
             DnsError::plugin(format!(
                 "ros_address_list failed to read persistent file '{file}': {e}"
             ))
@@ -977,8 +927,6 @@ mod tests {
             address_list4: address_list4.map(|v| v.to_string()),
             address_list6: address_list6.map(|v| v.to_string()),
             persistent_items: AHashSet::new(),
-            persistent_inline_items: AHashSet::new(),
-            persistent_files: Vec::new(),
             comment_prefix: "forgedns".to_string(),
             min_ttl: DEFAULT_MIN_TTL,
             max_ttl: DEFAULT_MAX_TTL,

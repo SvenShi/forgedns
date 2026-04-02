@@ -157,7 +157,66 @@ Downloads one or more `http/https` files into a local directory and overwrites t
 
 - Only `http` and `https` are supported.
 - When used inside a normal `sequence`, the download time is paid directly by that request.
-- Overwriting a local file does not trigger config reload automatically.
+- Overwriting a local file does not trigger config reload automatically. If the new file should take effect immediately, chain an explicit `reload` executor.
+
+### Recommended Pairing
+
+```yaml
+- tag: rules_refresh
+  type: sequence
+  args:
+    - exec: "$rules_download"
+    - exec: "$reload_all"
+
+- tag: rules_download
+  type: download
+  args:
+    downloads:
+      - url: "https://example.com/geosite.dat"
+        dir: "/etc/forgedns"
+
+- tag: reload_all
+  type: reload
+```
+
+---
+
+## `reload`
+
+### Purpose
+
+Triggers the same application-level full reload as the management API `POST /reload`, reloading the active configuration and rebuilding all plugins.
+
+### Example Configuration
+
+```yaml
+- tag: reload_all
+  type: reload
+```
+
+### Quick Setup
+
+```yaml
+- exec: "reload"
+```
+
+### Behavior
+
+- Execution submits a reload request to the application control layer.
+- The semantics are the same as the management API `POST /reload`.
+- Once the reload request is accepted, the executor returns `Next`.
+- This is a full application reload. Reloading selected plugin tags is not supported.
+
+### Typical Uses
+
+- Pairing with `download` in a `cron` job so refreshed rule files take effect immediately.
+- Triggering a full configuration reload from a dedicated background `sequence`.
+
+### Notes
+
+- It must run inside a normal ForgeDNS process with application control context attached.
+- Execution fails when another reload is already `pending` or `in_progress`.
+- Using it in a live request `sequence` triggers a full application reload and is usually not appropriate for latency-sensitive request paths.
 
 ---
 
@@ -1491,7 +1550,7 @@ Format:
 
 ### Purpose
 
-Writes response IPs into MikroTik RouterOS address lists.
+Writes response IPs into MikroTik RouterOS address lists, with dynamic entries, persistent entries, startup-time file loading, and shutdown cleanup.
 
 ### Example Configuration
 
@@ -1574,7 +1633,7 @@ Writes response IPs into MikroTik RouterOS address lists.
 #### `persistent`
 
 - Type: `object`; Required: no; Default: none
-- Purpose: Defines the static address set that should be kept for the long term. This part does not depend on DNS responses to trigger. After plugin startup it can be synchronized to RouterOS directly and then kept consistent periodically.
+- Purpose: Defines the static address set that should be kept for the long term. This part does not depend on DNS responses to trigger. After plugin startup it can be synchronized to RouterOS directly and then kept consistent by the reconcile loop.
 
 #### `persistent.ips`
 
@@ -1584,7 +1643,8 @@ Writes response IPs into MikroTik RouterOS address lists.
 #### `persistent.files`
 
 - Type: `array<string>`; Required: no; Default: empty
-- Purpose: Loads the persistent address set from external files.
+- Purpose: Loads the persistent address set from external files at plugin startup.
+- Notes: These files are read once during initialization. To apply later file changes, reload the plugin or the application.
 
 #### `min_ttl`
 
@@ -1618,7 +1678,6 @@ Writes response IPs into MikroTik RouterOS address lists.
   - Initial connectivity verification
   - Dynamic entry refresh
   - Persistent entry consistency maintenance
-  - Periodic file reload
   - Cleanup on shutdown
 
 ### Typical Uses

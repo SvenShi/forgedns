@@ -29,6 +29,9 @@ pub async fn assemble(
 
     let api_register = api_hub.as_ref().map(|hub| ApiRegister::new(hub.clone()));
     let registry = plugin::init(config.clone(), api_register).await?;
+    if let Some(controller) = controller {
+        registry.set_controller(controller);
+    }
 
     if let Some(api_hub) = &api_hub {
         api_hub.mark_plugins_initialized(registry.plugin_count(), registry.server_plugin_count());

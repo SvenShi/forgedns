@@ -156,7 +156,66 @@ sidebar_position: 3
 
 - 只支持 `http` / `https`。
 - 放进普通 `sequence` 时会直接占用该次请求的执行时间。
-- 覆盖本地文件后不会自动触发配置 reload。
+- 覆盖本地文件后不会自动触发配置 reload；如需让新文件立即生效，请显式串联一个 `reload` executor。
+
+### 推荐搭配
+
+```yaml
+- tag: rules_refresh
+  type: sequence
+  args:
+    - exec: "$rules_download"
+    - exec: "$reload_all"
+
+- tag: rules_download
+  type: download
+  args:
+    downloads:
+      - url: "https://example.com/geosite.dat"
+        dir: "/etc/forgedns"
+
+- tag: reload_all
+  type: reload
+```
+
+---
+
+## `reload`
+
+### 作用
+
+触发一次与管理 API `POST /reload` 相同的应用级全量 reload，重新加载当前配置并重建所有插件。
+
+### 配置示例
+
+```yaml
+- tag: reload_all
+  type: reload
+```
+
+### Quick Setup
+
+```yaml
+- exec: "reload"
+```
+
+### 行为说明
+
+- 执行时会向应用控制层提交一次 reload 请求。
+- 语义等同于调用管理 API 的 `POST /reload`。
+- reload 请求被接受后当前 executor 返回 `Next`。
+- 这是全量应用 reload，不支持按指定 tag 只重载部分插件。
+
+### 典型用途
+
+- 在 `cron` 任务中配合 `download`，周期性刷新本地规则文件后立即让新配置生效。
+- 在后台维护 `sequence` 中统一触发一次全量配置重载。
+
+### 注意事项
+
+- 需要运行在带有应用控制上下文的正常 ForgeDNS 进程中。
+- 如果已有 reload 处于 `pending` 或 `in_progress`，本次执行会返回错误。
+- 放进普通请求 `sequence` 时会触发全量应用 reload，通常不建议在实时请求路径上使用。
 
 ---
 
@@ -1608,7 +1667,7 @@ sidebar_position: 3
 
 ### 作用
 
-把应答 IP 同步到 RouterOS address-list，支持动态项、常驻项、文件重载和关闭时清理。
+把应答 IP 同步到 RouterOS address-list，支持动态项、常驻项、启动时文件加载和关闭时清理。
 
 ### 配置示例
 
@@ -1698,7 +1757,7 @@ sidebar_position: 3
 #### `persistent`
 
 - 类型：`object`；必填：否；默认值：无
-- 作用：定义需要长期保留的静态地址集合。该部分不依赖 DNS 应答触发，可在插件启动后直接同步到 RouterOS，并按周期维持一致性。
+- 作用：定义需要长期保留的静态地址集合。该部分不依赖 DNS 应答触发，可在插件启动后直接同步到 RouterOS，并由后台 reconcile 保持一致性。
 - 子字段：
   - `ips`
   - `files`
@@ -1713,7 +1772,7 @@ sidebar_position: 3
 
 - 类型：`array<string>`；必填：否；默认值：空
 - 作用：从外部文件加载常驻地址集合。适用于需要由其他系统生成、集中维护或批量管理的地址列表。
-- 行为说明：插件会定期重载这些文件，并将最新内容与 RouterOS 当前状态对齐。
+- 行为说明：这些文件只在插件初始化时读取一次。文件变更后如需生效，需要 reload 插件或应用。
 
 #### `min_ttl`
 
@@ -1751,7 +1810,6 @@ sidebar_position: 3
   - 初始连通性验证
   - 动态项刷新
   - 持久项一致性维护
-  - 文件周期重载
   - 关闭清理
 
 ### 典型用途

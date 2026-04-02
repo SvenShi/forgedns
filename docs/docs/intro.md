@@ -63,6 +63,7 @@ slug: /
         <li><a href="plugin-reference/executor#sleep">sleep</a></li>
         <li><a href="plugin-reference/executor#debug_print">debug_print</a></li>
         <li><a href="plugin-reference/executor#download">download</a></li>
+        <li><a href="plugin-reference/executor#reload">reload</a></li>
         <li><a href="plugin-reference/executor#query_summary">query_summary</a></li>
         <li><a href="plugin-reference/executor#metrics_collector">metrics_collector</a></li>
         <li><a href="plugin-reference/executor#ipset">ipset</a></li>

@@ -54,6 +54,7 @@ pub mod metrics_collector;
 pub mod nftset;
 pub mod query_summary;
 pub mod redirect;
+pub mod reload;
 pub mod reverse_lookup;
 pub mod ros_address_list;
 pub mod sequence;
