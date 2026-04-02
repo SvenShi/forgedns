@@ -847,6 +847,7 @@ Returns local static answers using host-style entries.
     files:
       # Merge more hosts rules from files
       - "/etc/forgedns/hosts.txt"
+    short_circuit: true
 ```
 
 ### Configuration Details
@@ -863,6 +864,11 @@ Returns local static answers using host-style entries.
 - Type: `array`; Required: no; Default: empty array
 - Purpose: Specifies the list of external hosts rule files.
 
+#### `short_circuit`
+
+- Type: `bool`; Required: no; Default: `false`
+- Purpose: Stops the remaining executor chain after a local answer is generated.
+
 Rule format:
 
 ```text
@@ -874,6 +880,7 @@ Rule format:
 - Handles only `IN` class `A` / `AAAA` requests.
 - Returns same-family addresses according to the query type.
 - Passes through to subsequent execution when there is no match.
+- By default it keeps running the remaining chain after a match; enable `short_circuit` to stop immediately.
 - The TTL is fixed at `300`.
 
 ### Typical Uses
@@ -908,6 +915,7 @@ Injects arbitrary DNS records from zone-style rule strings.
     files:
       # Load more static records from files
       - "/etc/forgedns/zone.txt"
+    short_circuit: true
 ```
 
 ### Configuration Details
@@ -922,9 +930,15 @@ Injects arbitrary DNS records from zone-style rule strings.
 - Type: `array`; Required: no
 - Purpose: External rule files.
 
+#### `short_circuit`
+
+- Type: `bool`; Required: no; Default: `false`
+- Purpose: Stops the remaining executor chain after a local answer is generated.
+
 ### Behavior
 
 - Produces fully synthetic answers.
+- By default it keeps running the remaining chain after a match; enable `short_circuit` to stop immediately.
 - Useful when `hosts` is too limited.
 
 ### Typical Uses
@@ -1300,6 +1314,7 @@ Returns sinkhole IPs directly.
       - "0.0.0.0"
       # Returned for AAAA queries
       - "::"
+    short_circuit: true
 ```
 
 ### Configuration Details
@@ -1308,6 +1323,11 @@ Returns sinkhole IPs directly.
 
 - Type: `array`; Required: yes
 - Purpose: Sinkhole addresses to return.
+
+#### `short_circuit`
+
+- Type: `bool`; Required: no; Default: `false`
+- Purpose: Stops the remaining executor chain after a local answer is generated.
 
 ### quick setup
 
@@ -1318,6 +1338,7 @@ Returns sinkhole IPs directly.
 ### Behavior
 
 - Generates immediate answers that point to sinkhole addresses.
+- By default it keeps running the remaining chain after a match; enable `short_circuit` to stop immediately.
 
 ### Typical Uses
 

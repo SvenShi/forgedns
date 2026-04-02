@@ -36,6 +36,9 @@ struct BlackHoleConfig {
     /// IPv4 values are used for A queries, IPv6 values for AAAA queries.
     #[serde(default)]
     ips: Vec<String>,
+    /// Whether to stop the executor chain after producing a local answer.
+    #[serde(default)]
+    short_circuit: bool,
 }
 
 #[derive(Debug)]
@@ -43,6 +46,7 @@ struct BlackHole {
     tag: String,
     ipv4: Vec<Arc<RData>>,
     ipv6: Vec<Arc<RData>>,
+    short_circuit: bool,
 }
 
 #[async_trait]
@@ -77,7 +81,11 @@ impl Executor for BlackHole {
         };
         context.set_response(response);
 
-        Ok(ExecStep::Next)
+        if self.short_circuit {
+            Ok(ExecStep::Stop)
+        } else {
+            Ok(ExecStep::Next)
+        }
     }
 }
 
@@ -92,13 +100,14 @@ impl PluginFactory for BlackHoleFactory {
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        let ips = parse_ip_tokens_from_value(plugin_config.args.clone())?;
+        let (ips, short_circuit) = parse_ip_tokens_from_value(plugin_config.args.clone())?;
         let (ipv4, ipv6) = split_ips(ips);
 
         Ok(UninitializedPlugin::Executor(Box::new(BlackHole {
             tag: plugin_config.tag.clone(),
             ipv4,
             ipv6,
+            short_circuit,
         })))
     }
 
@@ -116,17 +125,21 @@ impl PluginFactory for BlackHoleFactory {
             tag: tag.to_string(),
             ipv4,
             ipv6,
+            short_circuit: false,
         })))
     }
 }
 
-fn parse_ip_tokens_from_value(args: Option<Value>) -> Result<Vec<IpAddr>> {
+fn parse_ip_tokens_from_value(args: Option<Value>) -> Result<(Vec<IpAddr>, bool)> {
     let Some(args) = args else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     };
 
     if let Some(raw) = args.as_str() {
-        return parse_ip_tokens(split_tokens(raw).into_iter().map(str::to_string).collect());
+        return Ok((
+            parse_ip_tokens(split_tokens(raw).into_iter().map(str::to_string).collect())?,
+            false,
+        ));
     }
 
     if let Some(seq) = args.as_sequence() {
@@ -142,12 +155,13 @@ fn parse_ip_tokens_from_value(args: Option<Value>) -> Result<Vec<IpAddr>> {
                     .collect(),
             )?);
         }
-        return Ok(out);
+        return Ok((out, false));
     }
 
     let cfg: BlackHoleConfig = serde_yaml_ng::from_value(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse black_hole config: {}", e)))?;
-    parse_ip_tokens(cfg.ips)
+    let ips = parse_ip_tokens(cfg.ips)?;
+    Ok((ips, cfg.short_circuit))
 }
 
 fn parse_ip_tokens(raw_tokens: Vec<String>) -> Result<Vec<IpAddr>> {
@@ -223,6 +237,7 @@ mod tests {
             tag: "bh".to_string(),
             ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
+            short_circuit: false,
         };
         let mut ctx = make_context(RecordType::A);
         let step = plugin
@@ -241,6 +256,7 @@ mod tests {
             tag: "bh".to_string(),
             ipv4: vec![],
             ipv6: vec![Arc::new(RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)))],
+            short_circuit: false,
         };
         let mut ctx = make_context(RecordType::AAAA);
         let step = plugin
@@ -259,6 +275,7 @@ mod tests {
             tag: "bh".to_string(),
             ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
+            short_circuit: false,
         };
         let mut ctx = make_context(RecordType::A);
 
@@ -278,6 +295,7 @@ mod tests {
             tag: "bh".to_string(),
             ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
+            short_circuit: false,
         };
         let mut ctx = make_context(RecordType::A);
         ctx.request.questions_mut().push(Question::new(
@@ -294,5 +312,22 @@ mod tests {
         let resp = ctx.response().expect("response should exist");
         assert_eq!(resp.answers().len(), 1);
         assert_eq!(resp.answers()[0].rr_type(), RecordType::A);
+    }
+
+    #[tokio::test]
+    async fn test_black_hole_execute_stops_when_short_circuit_enabled() {
+        let plugin = BlackHole {
+            tag: "bh".to_string(),
+            ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
+            ipv6: vec![],
+            short_circuit: true,
+        };
+        let mut ctx = make_context(RecordType::A);
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Stop));
+        assert!(ctx.response().is_some());
     }
 }

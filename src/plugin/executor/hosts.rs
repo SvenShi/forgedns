@@ -46,6 +46,9 @@ struct HostsConfig {
     /// Paths to hosts rule files.
     #[serde(default)]
     files: Vec<String>,
+    /// Whether to stop the executor chain after producing a local answer.
+    #[serde(default)]
+    short_circuit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +71,7 @@ struct HostsExecutor {
     tag: String,
     rules: Vec<HostsRule>,
     index: RuleIndex,
+    short_circuit: bool,
 }
 
 #[derive(Debug, Default)]
@@ -128,7 +132,11 @@ impl Executor for HostsExecutor {
 
         context.set_response(response);
 
-        Ok(ExecStep::Next)
+        if self.short_circuit {
+            Ok(ExecStep::Stop)
+        } else {
+            Ok(ExecStep::Next)
+        }
     }
 }
 
@@ -150,6 +158,7 @@ impl PluginFactory for HostsFactory {
             tag: plugin_config.tag.clone(),
             rules,
             index,
+            short_circuit: cfg.short_circuit,
         })))
     }
 }
@@ -408,12 +417,14 @@ mod tests {
         let cfg = HostsConfig {
             entries: vec!["full:example.com 1.1.1.1 ::1".to_string()],
             files: vec![],
+            short_circuit: false,
         };
         let (rules, index) = build_rules(&cfg).expect("rules should parse");
         let plugin = HostsExecutor {
             tag: "hosts".to_string(),
             rules,
             index,
+            short_circuit: false,
         };
 
         let mut a_ctx = make_context("example.com.", RecordType::A);
@@ -441,12 +452,14 @@ mod tests {
         let cfg = HostsConfig {
             entries: vec!["full:example.com 1.1.1.1".to_string()],
             files: vec![],
+            short_circuit: false,
         };
         let (rules, index) = build_rules(&cfg).expect("rules should parse");
         let plugin = HostsExecutor {
             tag: "hosts".to_string(),
             rules,
             index,
+            short_circuit: false,
         };
 
         let mut ctx = make_context("example.com.", RecordType::A);
@@ -462,16 +475,39 @@ mod tests {
         let cfg = HostsConfig {
             entries: vec!["full:example.com 1.1.1.1".to_string()],
             files: vec![],
+            short_circuit: false,
         };
         let (rules, index) = build_rules(&cfg).expect("rules should parse");
         let plugin = HostsExecutor {
             tag: "hosts".to_string(),
             rules,
             index,
+            short_circuit: false,
         };
 
         let mut ctx = make_context("other.com.", RecordType::A);
         plugin.execute(&mut ctx).await.expect("execute should work");
         assert!(ctx.response().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_hosts_execute_stops_when_short_circuit_enabled() {
+        let cfg = HostsConfig {
+            entries: vec!["full:example.com 1.1.1.1".to_string()],
+            files: vec![],
+            short_circuit: true,
+        };
+        let (rules, index) = build_rules(&cfg).expect("rules should parse");
+        let plugin = HostsExecutor {
+            tag: "hosts".to_string(),
+            rules,
+            index,
+            short_circuit: true,
+        };
+
+        let mut ctx = make_context("example.com.", RecordType::A);
+        let step = plugin.execute(&mut ctx).await.expect("execute should work");
+        assert!(matches!(step, ExecStep::Stop));
+        assert!(ctx.response().is_some());
     }
 }

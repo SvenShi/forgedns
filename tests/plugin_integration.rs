@@ -870,6 +870,61 @@ plugins:
 }
 
 #[tokio::test]
+async fn test_hosts_short_circuit_stops_sequence_after_local_answer() -> Result<()> {
+    let mut registry_and_addr = None;
+    for _ in 0..16 {
+        let listen = reserve_local_udp_addr()?;
+        let yaml = format!(
+            r#"
+log:
+  level: info
+plugins:
+  - tag: hosts
+    type: hosts
+    args:
+      entries:
+        - "full:example.test 192.0.2.10"
+      short_circuit: true
+  - tag: seq
+    type: sequence
+    args:
+      - exec: $hosts
+      - exec: "reject 2"
+  - tag: udp
+    type: udp_server
+    args:
+      entry: seq
+      listen: "{listen}"
+"#
+        );
+
+        let config = parse_config(&yaml)?;
+        match plugin::init(config, None).await {
+            Ok(registry) => {
+                registry_and_addr = Some((registry, listen));
+                break;
+            }
+            Err(err) if err.to_string().contains("Failed to bind UDP socket") => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    let (registry, listen) =
+        registry_and_addr.expect("UDP server should bind to a local port within retry budget");
+    let response_result = exchange_udp_query(listen, "example.test.").await;
+    registry.destory().await;
+    let response = response_result?;
+
+    assert_eq!(response.rcode(), Rcode::NoError);
+    assert_eq!(response.answers().len(), 1);
+    assert_eq!(
+        response.answers()[0].data().ip_addr(),
+        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_domain_set_provider_flattens_referenced_sets() -> Result<()> {
     let yaml = r#"
 log:
@@ -1952,6 +2007,7 @@ plugins:
   - tag: dl
     type: download
     args:
+      startup_if_missing: false
       downloads:
         - url: "http://{server_addr}/missing.txt"
           dir: "{output_dir_yaml}"

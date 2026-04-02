@@ -915,6 +915,7 @@ plugins:
     files:
       # 从文件合并更多 hosts 规则
       - "/etc/forgedns/hosts.txt"
+    short_circuit: true
 ```
 
 ### 配置项
@@ -931,6 +932,11 @@ plugins:
 - 类型：`array`；必填：否；默认值：空数组
 - 作用：指定外部 hosts 规则文件列表。
 
+#### `short_circuit`
+
+- 类型：`bool`；必填：否；默认值：`false`
+- 作用：命中并生成本地应答后，是否立即停止后续 executor 链。
+
 规则格式：
 
 ```text
@@ -942,6 +948,7 @@ plugins:
 - 仅处理 `IN` 类的 `A` / `AAAA` 请求。
 - 根据查询类型返回同族地址。
 - 未命中时透传后续执行。
+- 命中后默认继续后续执行；开启 `short_circuit` 时会立即返回。
 - TTL 固定为 `300`。
 
 ### 典型用途
@@ -977,6 +984,7 @@ plugins:
     files:
       # 从文件加载更多静态记录
       - "/etc/forgedns/zone.txt"
+    short_circuit: true
 ```
 
 ### 配置项
@@ -991,11 +999,17 @@ plugins:
 - 类型：`array`；必填：否；默认值：空数组
 - 作用：指定静态记录文件列表。
 
+#### `short_circuit`
+
+- 类型：`bool`；必填：否；默认值：`false`
+- 作用：命中并生成本地应答后，是否立即停止后续 executor 链。
+
 ### 行为说明
 
 - 查询名与类型匹配时，直接生成本地应答。
 - `ANY` 查询会返回该名称下全部已加载记录。
 - 常见 `A` / `AAAA` 走了快路径优化。
+- 命中后默认继续后续执行；开启 `short_circuit` 时会立即返回。
 
 ### 典型用途
 
@@ -1393,6 +1407,7 @@ plugins:
       - "0.0.0.0"
       # AAAA 查询时返回
       - "::"
+    short_circuit: true
 ```
 
 ### 配置项
@@ -1405,6 +1420,11 @@ plugins:
   - IPv4 地址仅用于 A 应答。
   - IPv6 地址仅用于 AAAA 应答。
 
+#### `short_circuit`
+
+- 类型：`bool`；必填：否；默认值：`false`
+- 作用：命中并生成本地应答后，是否立即停止后续 executor 链。
+
 ### quick setup
 
 ```yaml
@@ -1416,6 +1436,7 @@ plugins:
 - A 查询返回配置中的 IPv4 地址。
 - AAAA 查询返回配置中的 IPv6 地址。
 - 其它类型透传。
+- 命中后默认继续后续执行；开启 `short_circuit` 时会立即返回。
 
 ### 典型用途
 

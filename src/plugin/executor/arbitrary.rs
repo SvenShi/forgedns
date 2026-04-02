@@ -38,12 +38,16 @@ struct ArbitraryConfig {
     /// Paths to rule files containing arbitrary DNS records.
     #[serde(default)]
     files: Vec<String>,
+    /// Whether to stop the executor chain after producing a local answer.
+    #[serde(default)]
+    short_circuit: bool,
 }
 
 #[derive(Debug)]
 struct Arbitrary {
     tag: String,
     records: AHashMap<String, NameRecords>,
+    short_circuit: bool,
 }
 
 #[derive(Debug, Default)]
@@ -157,7 +161,7 @@ impl Executor for Arbitrary {
             let mut response = context.request().response(Rcode::NoError);
             name_records.any.extend_answers_into(response.answers_mut());
             context.set_response(response);
-            return Ok(ExecStep::Next);
+            return Ok(response_step(self.short_circuit));
         }
 
         let Some(answers) = answers else {
@@ -176,7 +180,7 @@ impl Executor for Arbitrary {
                         &answer.addresses,
                     )?;
                     context.set_response(response);
-                    return Ok(ExecStep::Next);
+                    return Ok(response_step(self.short_circuit));
                 }
                 PreparedAnswer::FastV6(answer) => {
                     let response = context.request.address_response_rdata(
@@ -185,7 +189,7 @@ impl Executor for Arbitrary {
                         &answer.addresses,
                     )?;
                     context.set_response(response);
-                    return Ok(ExecStep::Next);
+                    return Ok(response_step(self.short_circuit));
                 }
                 PreparedAnswer::Shared(_) => {}
             }
@@ -198,7 +202,7 @@ impl Executor for Arbitrary {
         records.extend_answers_into(response.answers_mut());
         context.set_response(response);
 
-        Ok(ExecStep::Next)
+        Ok(response_step(self.short_circuit))
     }
 }
 
@@ -219,7 +223,17 @@ impl PluginFactory for ArbitraryFactory {
         Ok(UninitializedPlugin::Executor(Box::new(Arbitrary {
             tag: plugin_config.tag.clone(),
             records,
+            short_circuit: cfg.short_circuit,
         })))
+    }
+}
+
+#[inline]
+fn response_step(short_circuit: bool) -> ExecStep {
+    if short_circuit {
+        ExecStep::Stop
+    } else {
+        ExecStep::Next
     }
 }
 
@@ -523,10 +537,12 @@ mod tests {
                 "example.com. 60 IN AAAA ::1".to_string(),
             ],
             files: vec![],
+            short_circuit: false,
         };
         let plugin = Arbitrary {
             tag: "arbitrary".to_string(),
             records: build_records(&cfg).expect("records should parse"),
+            short_circuit: false,
         };
 
         let mut ctx = make_context("example.com.", RecordType::A);
@@ -548,10 +564,12 @@ mod tests {
                 "example.com. 60 IN AAAA ::1".to_string(),
             ],
             files: vec![],
+            short_circuit: false,
         };
         let plugin = Arbitrary {
             tag: "arbitrary".to_string(),
             records: build_records(&cfg).expect("records should parse"),
+            short_circuit: false,
         };
 
         let mut ctx = make_context("example.com.", RecordType::ANY);
@@ -568,10 +586,12 @@ mod tests {
         let cfg = ArbitraryConfig {
             rules: vec!["example.com. 60 IN A 1.1.1.1".to_string()],
             files: vec![],
+            short_circuit: false,
         };
         let plugin = Arbitrary {
             tag: "arbitrary".to_string(),
             records: build_records(&cfg).expect("records should parse"),
+            short_circuit: false,
         };
 
         let mut ctx = make_context("example.com.", RecordType::A);
@@ -584,5 +604,27 @@ mod tests {
         assert!(ctx.response().is_some_and(|response| {
             response.has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))
         }));
+    }
+
+    #[tokio::test]
+    async fn test_arbitrary_execute_stops_when_short_circuit_enabled() {
+        let cfg = ArbitraryConfig {
+            rules: vec!["example.com. 60 IN A 1.1.1.1".to_string()],
+            files: vec![],
+            short_circuit: true,
+        };
+        let plugin = Arbitrary {
+            tag: "arbitrary".to_string(),
+            records: build_records(&cfg).expect("records should parse"),
+            short_circuit: true,
+        };
+
+        let mut ctx = make_context("example.com.", RecordType::A);
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+        assert!(matches!(step, ExecStep::Stop));
+        assert!(ctx.response().is_some());
     }
 }
