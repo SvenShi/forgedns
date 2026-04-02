@@ -185,6 +185,68 @@ Downloads one or more `http/https` files into a local directory and overwrites t
   type: reload
 ```
 
+### Subscription Refresh Example
+
+This example fits the common flow of “remote subscription -> scheduled download -> automatic reload”:
+
+```yaml
+plugins:
+  # 1. Run the subscription refresh flow periodically
+  - tag: subscription_cron
+    type: cron
+    args:
+      timezone: "Asia/Shanghai"
+      jobs:
+        - name: refresh_rule_subscriptions
+          interval: 6h
+          executors:
+            - "$subscription_refresh"
+
+  # 2. Chain download and full reload with a sequence
+  - tag: subscription_refresh
+    type: sequence
+    args:
+      - exec: "$subscription_download"
+      - exec: "$reload_all"
+
+  # 3. Download remote subscription files
+  - tag: subscription_download
+    type: download
+    args:
+      timeout: 60s
+      startup_if_missing: true
+      downloads:
+        - url: "https://example.com/geosite.dat"
+          dir: "/etc/forgedns/rules"
+          filename: "geosite.dat"
+        - url: "https://example.com/geoip.dat"
+          dir: "/etc/forgedns/rules"
+          filename: "geoip.dat"
+
+  # 4. Trigger a full reload after download completes
+  - tag: reload_all
+    type: reload
+
+  # 5. These providers re-read the local files after reload
+  - tag: provider_geosite
+    type: geosite
+    args:
+      file: "/etc/forgedns/rules/geosite.dat"
+
+  - tag: provider_geoip
+    type: geoip
+    args:
+      file: "/etc/forgedns/rules/geoip.dat"
+```
+
+Notes:
+
+- `download` writes the subscription content to local files.
+- `reload` makes providers, matchers, and executors that depend on those files reinitialize.
+- `startup_if_missing: true` is useful for first-time deployment when files may not exist yet.
+- If the subscription source requires a proxy, set a SOCKS5 proxy on `subscription_download.args.socks5`.
+- If you do not want startup to overwrite existing files, keep the default behavior and only bootstrap missing files.
+
 ---
 
 ## `reload`

@@ -3,6 +3,7 @@ const sidebars = {
     'intro',
     'quickstart',
     'configuration',
+    'releases',
     {
       type: 'category',
       label: '插件参考',

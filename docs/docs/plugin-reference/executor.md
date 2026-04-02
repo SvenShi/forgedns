@@ -184,6 +184,68 @@ sidebar_position: 3
   type: reload
 ```
 
+### 订阅更新示例
+
+下面这个例子适合“远程规则订阅 -> 定时拉取 -> 自动 reload 生效”的场景：
+
+```yaml
+plugins:
+  # 1. 周期性执行订阅更新流程
+  - tag: subscription_cron
+    type: cron
+    args:
+      timezone: "Asia/Shanghai"
+      jobs:
+        - name: refresh_rule_subscriptions
+          interval: 6h
+          executors:
+            - "$subscription_refresh"
+
+  # 2. 用 sequence 串联下载和全量 reload
+  - tag: subscription_refresh
+    type: sequence
+    args:
+      - exec: "$subscription_download"
+      - exec: "$reload_all"
+
+  # 3. 拉取远程订阅文件
+  - tag: subscription_download
+    type: download
+    args:
+      timeout: 60s
+      startup_if_missing: true
+      downloads:
+        - url: "https://example.com/geosite.dat"
+          dir: "/etc/forgedns/rules"
+          filename: "geosite.dat"
+        - url: "https://example.com/geoip.dat"
+          dir: "/etc/forgedns/rules"
+          filename: "geoip.dat"
+
+  # 4. 下载完成后触发全量 reload
+  - tag: reload_all
+    type: reload
+
+  # 5. 这些 provider 会在 reload 后重新读取本地文件
+  - tag: provider_geosite
+    type: geosite
+    args:
+      file: "/etc/forgedns/rules/geosite.dat"
+
+  - tag: provider_geoip
+    type: geoip
+    args:
+      file: "/etc/forgedns/rules/geoip.dat"
+```
+
+说明：
+
+- `download` 负责把订阅内容落到本地。
+- `reload` 负责让依赖这些文件的 provider / matcher / executor 重新初始化。
+- `startup_if_missing: true` 适合首次部署时自动补齐缺失文件。
+- 如果订阅源需要代理，可直接在 `subscription_download.args.socks5` 中配置 SOCKS5 代理。
+- 如果你不希望定时任务在启动后立刻覆盖已有文件，可以保留默认行为，仅在文件缺失时做启动补齐。
+
 ---
 
 ## `reload`
