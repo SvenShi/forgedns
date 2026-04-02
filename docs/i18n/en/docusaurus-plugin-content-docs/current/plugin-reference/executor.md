@@ -220,6 +220,100 @@ Triggers the same application-level full reload as the management API `POST /rel
 
 ---
 
+## `script`
+
+### Purpose
+
+Runs an explicitly configured external command and injects a stable subset of the current `DnsContext` into command arguments or environment variables.
+
+### Example
+
+```yaml
+- tag: script_notify
+  type: script
+  args:
+    command: "bash"
+    args:
+      - "/opt/forgedns/notify.sh"
+      - "${qname}"
+      - "${client_ip}"
+    env:
+      FDNS_QNAME: "${qname}"
+      FDNS_CLIENT_IP: "${client_ip}"
+      FDNS_MARKS: "${marks}"
+    timeout: "5s"
+    error_mode: continue
+    max_output_bytes: 4096
+```
+
+### Config Fields
+
+#### `args.command`
+
+- Type: `string`; Required: yes
+- Purpose: Command path or program name to execute.
+- Notes: This field is never templated.
+
+#### `args.args`
+
+- Type: `array<string>`; Required: no; Default: empty
+- Purpose: Positional command arguments.
+- Notes: Each item supports `${key}` interpolation.
+
+#### `args.env`
+
+- Type: `map<string,string>`; Required: no; Default: empty
+- Purpose: Extra child-process environment variables.
+- Notes: Values support `${key}` interpolation and overlay the inherited process environment.
+
+#### `args.cwd`
+
+- Type: `string`; Required: no; Default: none
+- Purpose: Working directory for the child process.
+
+#### `args.timeout`
+
+- Type: `string`; Required: no; Default: `5s`
+- Purpose: Maximum execution time for one script run.
+- Supported units: `ms`, `s`, `m`, `h`, `d`
+
+#### `args.error_mode`
+
+- Type: `string`; Required: no; Default: `continue`
+- Allowed values:
+  - `continue`: log failure or timeout, then return `Next`
+  - `stop`: log failure or timeout, then return `Stop`
+  - `fail`: return an executor error immediately
+
+#### `args.max_output_bytes`
+
+- Type: `usize`; Required: no; Default: `4096`
+- Purpose: Maximum captured stdout/stderr length before truncation.
+
+### Available Placeholders
+
+- Request fields: `qname`, `qtype`, `qtype_name`, `qclass`, `qclass_name`
+- Source fields: `client_ip`, `client_port`, `server_name`, `url_path`
+- Runtime fields: `marks`, `has_resp`, `flow`
+- Response fields: `rcode`, `rcode_name`, `resp_ip`
+- Cron metadata: `cron_plugin_tag`, `cron_job_name`, `cron_trigger_kind`, `cron_scheduled_at_unix_ms`
+
+### Behavior
+
+- The plugin does not mutate DNS requests or responses.
+- It runs only the explicit configured command and does not wrap it with `sh -c`, `cmd /c`, or similar shell shortcuts.
+- Arguments and environment variables are rendered from the current `DnsContext` on each execution.
+- On timeout the child process is terminated, then `error_mode` decides how the sequence continues.
+
+### Notes
+
+- v1 does not support quick setup syntax.
+- `command` must not be empty.
+- Only the documented built-in placeholders are accepted; unknown placeholders fail plugin initialization.
+- This is a side-effect executor. It does not support writing attrs, marks, or DNS responses back through stdout.
+
+---
+
 ## `sequence`
 
 ### Purpose

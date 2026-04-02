@@ -57,6 +57,7 @@ pub mod redirect;
 pub mod reload;
 pub mod reverse_lookup;
 pub mod ros_address_list;
+pub mod script;
 pub mod sequence;
 pub mod sleep;
 pub mod ttl;

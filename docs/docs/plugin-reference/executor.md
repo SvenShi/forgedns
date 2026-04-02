@@ -219,6 +219,100 @@ sidebar_position: 3
 
 ---
 
+## `script`
+
+### 作用
+
+执行一个显式声明的外部命令，并把当前 `DnsContext` 中的一部分稳定字段注入为参数或环境变量。
+
+### 配置示例
+
+```yaml
+- tag: script_notify
+  type: script
+  args:
+    command: "bash"
+    args:
+      - "/opt/forgedns/notify.sh"
+      - "${qname}"
+      - "${client_ip}"
+    env:
+      FDNS_QNAME: "${qname}"
+      FDNS_CLIENT_IP: "${client_ip}"
+      FDNS_MARKS: "${marks}"
+    timeout: "5s"
+    error_mode: continue
+    max_output_bytes: 4096
+```
+
+### 配置项
+
+#### `args.command`
+
+- 类型：`string`；必填：是
+- 作用：要执行的命令路径或命令名。
+- 说明：该字段不支持模板替换，避免命令本身在运行期漂移。
+
+#### `args.args`
+
+- 类型：`array<string>`；必填：否；默认值：空
+- 作用：传给命令的参数数组。
+- 说明：每一项支持 `${key}` 占位符插值。
+
+#### `args.env`
+
+- 类型：`map<string,string>`；必填：否；默认值：空
+- 作用：追加到子进程环境变量中的键值对。
+- 说明：value 支持 `${key}` 占位符插值；不会清空父进程已有环境变量。
+
+#### `args.cwd`
+
+- 类型：`string`；必填：否；默认值：无
+- 作用：指定脚本运行时的工作目录。
+
+#### `args.timeout`
+
+- 类型：`string`；必填：否；默认值：`5s`
+- 作用：限制单次脚本执行时长。
+- 支持单位：`ms`、`s`、`m`、`h`、`d`
+
+#### `args.error_mode`
+
+- 类型：`string`；必填：否；默认值：`continue`
+- 可选值：
+  - `continue`：失败或超时仅记录日志，然后返回 `Next`
+  - `stop`：失败或超时后返回 `Stop`
+  - `fail`：失败或超时直接返回错误
+
+#### `args.max_output_bytes`
+
+- 类型：`usize`；必填：否；默认值：`4096`
+- 作用：限制 stdout / stderr 的捕获长度，超过部分只做截断标记。
+
+### 可注入占位符
+
+- 请求相关：`qname`、`qtype`、`qtype_name`、`qclass`、`qclass_name`
+- 来源相关：`client_ip`、`client_port`、`server_name`、`url_path`
+- 运行态相关：`marks`、`has_resp`、`flow`
+- 响应相关：`rcode`、`rcode_name`、`resp_ip`
+- cron 元数据：`cron_plugin_tag`、`cron_job_name`、`cron_trigger_kind`、`cron_scheduled_at_unix_ms`
+
+### 行为说明
+
+- 插件本身不改 DNS 请求和响应。
+- 只执行显式配置的命令，不隐式包裹 `sh -c`、`cmd /c` 这类 shell。
+- 参数和环境变量在每次执行时基于当前 `DnsContext` 渲染。
+- 超时后会终止子进程，并按 `error_mode` 决定后续控制流。
+
+### 注意事项
+
+- v1 不支持 quick setup 语法。
+- `command` 不能为空。
+- `${key}` 中只允许使用文档列出的稳定内建字段；未知占位符会在初始化时报错。
+- 这是副作用执行器，不支持通过 stdout 回写 `attrs`、`marks` 或直接生成 DNS 响应。
+
+---
+
 ## `sequence`
 
 ### 作用

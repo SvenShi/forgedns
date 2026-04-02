@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 use forgedns::config::types::Config;
-use forgedns::core::context::{DnsContext, ExecFlowState};
+use forgedns::core::context::{DnsContext, ExecFlowState, RequestMeta};
 use forgedns::core::error::{DnsError, Result};
 use forgedns::network::transport::udp_transport::UdpTransport;
 use forgedns::plugin;
@@ -22,6 +22,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
 use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Command;
+use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -71,6 +72,82 @@ fn test_rule_path(relative_name: &str) -> String {
 
 fn yaml_path(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(unix)]
+fn platform_script_command(script_path: &std::path::Path) -> (String, Vec<String>) {
+    ("sh".to_string(), vec![yaml_path(script_path)])
+}
+
+#[cfg(windows)]
+fn platform_script_command(script_path: &std::path::Path) -> (String, Vec<String>) {
+    (
+        "cmd.exe".to_string(),
+        vec!["/C".to_string(), yaml_path(script_path)],
+    )
+}
+
+#[cfg(unix)]
+fn write_capture_script(
+    script_path: &std::path::Path,
+    output_path: &std::path::Path,
+) -> Result<()> {
+    std::fs::write(
+        script_path,
+        format!(
+            "#!/bin/sh\nprintf 'ARGS=%s\\n' \"$*\" > \"{}\"\nprintf 'QNAME=%s\\n' \"$FDNS_QNAME\" >> \"{}\"\nprintf 'CLIENT=%s\\n' \"$FDNS_CLIENT_IP\" >> \"{}\"\nprintf 'SERVER=%s\\n' \"$FDNS_SERVER_NAME\" >> \"{}\"\nprintf 'URL=%s\\n' \"$FDNS_URL_PATH\" >> \"{}\"\nprintf 'MARKS=%s\\n' \"$FDNS_MARKS\" >> \"{}\"\nprintf 'HAS_RESP=%s\\n' \"$FDNS_HAS_RESP\" >> \"{}\"\nprintf 'RCODE=%s\\n' \"$FDNS_RCODE\" >> \"{}\"\nprintf 'RESP_IP=%s\\n' \"$FDNS_RESP_IP\" >> \"{}\"\nprintf 'CRON_JOB=%s\\n' \"$FDNS_CRON_JOB\" >> \"{}\"\n",
+            yaml_path(output_path),
+            yaml_path(output_path),
+            yaml_path(output_path),
+            yaml_path(output_path),
+            yaml_path(output_path),
+            yaml_path(output_path),
+            yaml_path(output_path),
+            yaml_path(output_path),
+            yaml_path(output_path),
+            yaml_path(output_path),
+        ),
+    )?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn write_capture_script(
+    script_path: &std::path::Path,
+    output_path: &std::path::Path,
+) -> Result<()> {
+    std::fs::write(
+        script_path,
+        format!(
+            "@echo off\r\n> \"{0}\" echo ARGS=%*\r\n>> \"{0}\" echo QNAME=%FDNS_QNAME%\r\n>> \"{0}\" echo CLIENT=%FDNS_CLIENT_IP%\r\n>> \"{0}\" echo SERVER=%FDNS_SERVER_NAME%\r\n>> \"{0}\" echo URL=%FDNS_URL_PATH%\r\n>> \"{0}\" echo MARKS=%FDNS_MARKS%\r\n>> \"{0}\" echo HAS_RESP=%FDNS_HAS_RESP%\r\n>> \"{0}\" echo RCODE=%FDNS_RCODE%\r\n>> \"{0}\" echo RESP_IP=%FDNS_RESP_IP%\r\n>> \"{0}\" echo CRON_JOB=%FDNS_CRON_JOB%\r\n",
+            yaml_path(output_path),
+        ),
+    )?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_timeout_script(script_path: &std::path::Path) -> Result<()> {
+    std::fs::write(script_path, "#!/bin/sh\nsleep 3\n")?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn write_timeout_script(script_path: &std::path::Path) -> Result<()> {
+    std::fs::write(script_path, "@echo off\r\nping 127.0.0.1 -n 4 >nul\r\n")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_failure_script(script_path: &std::path::Path, code: i32) -> Result<()> {
+    std::fs::write(script_path, format!("#!/bin/sh\nexit {}\n", code))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn write_failure_script(script_path: &std::path::Path, code: i32) -> Result<()> {
+    std::fs::write(script_path, format!("@echo off\r\nexit /b {}\r\n", code))?;
+    Ok(())
 }
 
 fn reserve_local_udp_addr() -> Result<SocketAddr> {
@@ -1834,6 +1911,220 @@ plugins:
         "quick-setup"
     );
 
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_script_executor_injects_context_into_args_and_env() -> Result<()> {
+    let tmp_dir = TempDir::new().expect("temp dir should be created");
+    #[cfg(unix)]
+    let script_path = tmp_dir.path().join("capture.sh");
+    #[cfg(windows)]
+    let script_path = tmp_dir.path().join("capture.cmd");
+    let output_path = tmp_dir.path().join("script_output.txt");
+    write_capture_script(&script_path, &output_path)?;
+    let (command, command_args) = platform_script_command(&script_path);
+    let command_args_yaml = command_args
+        .iter()
+        .map(|arg| format!("        - \"{}\"\n", arg))
+        .collect::<String>();
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: script_main
+    type: script
+    args:
+      command: "{command}"
+      args:
+{command_args_yaml}        - "qname=${{qname}}"
+        - "client=${{client_ip}}"
+      env:
+        FDNS_QNAME: "${{qname}}"
+        FDNS_CLIENT_IP: "${{client_ip}}"
+        FDNS_SERVER_NAME: "${{server_name}}"
+        FDNS_URL_PATH: "${{url_path}}"
+        FDNS_MARKS: "${{marks}}"
+        FDNS_HAS_RESP: "${{has_resp}}"
+        FDNS_RCODE: "${{rcode_name}}"
+        FDNS_RESP_IP: "${{resp_ip}}"
+        FDNS_CRON_JOB: "${{cron_job_name}}"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("script_main")
+        .expect("script plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+    context.set_request_meta(RequestMeta {
+        server_name: Some(StdArc::from("dns.example.com")),
+        url_path: Some(StdArc::from("/dns-query")),
+    });
+    context.marks_mut().insert("beta".to_string());
+    context.marks_mut().insert("alpha".to_string());
+    context.set_attr("cron.job_name", "nightly".to_string());
+    let mut response = context.request().response(Rcode::NoError);
+    response.add_answer(forgedns::proto::Record::from_rdata(
+        Name::from_ascii("example.com.").unwrap(),
+        60,
+        forgedns::proto::RData::A(forgedns::proto::rdata::A(Ipv4Addr::new(192, 0, 2, 1))),
+    ));
+    context.set_response(response);
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    let output = tokio::fs::read_to_string(&output_path).await?;
+    assert!(output.contains("ARGS=qname=example.com client=127.0.0.1"));
+    assert!(output.contains("QNAME=example.com"));
+    assert!(output.contains("CLIENT=127.0.0.1"));
+    assert!(output.contains("SERVER=dns.example.com"));
+    assert!(output.contains("URL=/dns-query"));
+    assert!(output.contains("MARKS=alpha,beta"));
+    assert!(output.contains("HAS_RESP=true"));
+    assert!(output.contains("RCODE=NoError"));
+    assert!(output.contains("RESP_IP=192.0.2.1"));
+    assert!(output.contains("CRON_JOB=nightly"));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_script_executor_timeout_continue_returns_next() -> Result<()> {
+    let tmp_dir = TempDir::new().expect("temp dir should be created");
+    #[cfg(unix)]
+    let script_path = tmp_dir.path().join("timeout.sh");
+    #[cfg(windows)]
+    let script_path = tmp_dir.path().join("timeout.cmd");
+    write_timeout_script(&script_path)?;
+    let (command, command_args) = platform_script_command(&script_path);
+    let command_args_yaml = command_args
+        .iter()
+        .map(|arg| format!("        - \"{}\"\n", arg))
+        .collect::<String>();
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: script_main
+    type: script
+    args:
+      command: "{command}"
+      args:
+{command_args_yaml}      timeout: "100ms"
+      error_mode: continue
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("script_main")
+        .expect("script plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_script_executor_failure_stop_returns_stop() -> Result<()> {
+    let tmp_dir = TempDir::new().expect("temp dir should be created");
+    #[cfg(unix)]
+    let script_path = tmp_dir.path().join("fail_stop.sh");
+    #[cfg(windows)]
+    let script_path = tmp_dir.path().join("fail_stop.cmd");
+    write_failure_script(&script_path, 7)?;
+    let (command, command_args) = platform_script_command(&script_path);
+    let command_args_yaml = command_args
+        .iter()
+        .map(|arg| format!("        - \"{}\"\n", arg))
+        .collect::<String>();
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: script_main
+    type: script
+    args:
+      command: "{command}"
+      args:
+{command_args_yaml}      error_mode: stop
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("script_main")
+        .expect("script plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Stop));
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_script_executor_failure_fail_returns_error() -> Result<()> {
+    let tmp_dir = TempDir::new().expect("temp dir should be created");
+    #[cfg(unix)]
+    let script_path = tmp_dir.path().join("fail_err.sh");
+    #[cfg(windows)]
+    let script_path = tmp_dir.path().join("fail_err.cmd");
+    write_failure_script(&script_path, 9)?;
+    let (command, command_args) = platform_script_command(&script_path);
+    let command_args_yaml = command_args
+        .iter()
+        .map(|arg| format!("        - \"{}\"\n", arg))
+        .collect::<String>();
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: script_main
+    type: script
+    args:
+      command: "{command}"
+      args:
+{command_args_yaml}      error_mode: fail
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("script_main")
+        .expect("script plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let err = executor
+        .execute(&mut context)
+        .await
+        .expect_err("fail mode should return error");
+
+    assert!(err.to_string().contains("script plugin"));
     registry.destory().await;
     Ok(())
 }
