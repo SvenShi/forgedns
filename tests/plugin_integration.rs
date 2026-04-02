@@ -69,6 +69,10 @@ fn test_rule_path(relative_name: &str) -> String {
         .replace('\\', "/")
 }
 
+fn yaml_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn reserve_local_udp_addr() -> Result<SocketAddr> {
     let socket = StdUdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
     let addr = socket.local_addr()?;
@@ -1753,6 +1757,7 @@ async fn test_download_executor_continues_after_item_failure() -> Result<()> {
     .await?;
     let tmp_dir = TempDir::new().expect("temp dir should be created");
     let output_dir = tmp_dir.path().join("rules");
+    let output_dir_yaml = yaml_path(&output_dir);
 
     let yaml = format!(
         r#"
@@ -1764,14 +1769,12 @@ plugins:
     args:
       downloads:
         - url: "http://{server_addr}/missing.txt"
-          dir: "{}"
+          dir: "{output_dir_yaml}"
           filename: "missing.txt"
         - url: "http://{server_addr}/ok.txt"
-          dir: "{}"
+          dir: "{output_dir_yaml}"
           filename: "ok.txt"
 "#,
-        output_dir.display(),
-        output_dir.display(),
     );
 
     let config = parse_config(&yaml)?;
@@ -1801,6 +1804,7 @@ async fn test_sequence_download_quick_setup_executes_and_overwrites_target() -> 
         start_test_http_server(vec![("/quick.txt", StatusCode::OK, "quick-setup")]).await?;
     let tmp_dir = TempDir::new().expect("temp dir should be created");
     let output_dir = tmp_dir.path().join("download");
+    let output_dir_yaml = yaml_path(&output_dir);
 
     let yaml = format!(
         r#"
@@ -1810,9 +1814,8 @@ plugins:
   - tag: seq
     type: sequence
     args:
-      - exec: "download http://{server_addr}/quick.txt {}"
+      - exec: "download http://{server_addr}/quick.txt {output_dir_yaml}"
 "#,
-        output_dir.display(),
     );
 
     let config = parse_config(&yaml)?;
