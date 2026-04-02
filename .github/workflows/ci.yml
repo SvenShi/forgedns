@@ -61,8 +61,12 @@ jobs:
       - name: Run clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-      - name: Detect unused dependencies
-        uses: bnjbvr/cargo-machete@main
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-shear
+
+      - name: cargo shear
+        run: cargo shear
 
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
