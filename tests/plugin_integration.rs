@@ -2060,7 +2060,6 @@ plugins:
   - tag: bootstrap_download
     type: download
     args:
-      startup_if_missing: true
       downloads:
         - url: "http://{server_addr}/geosite.dat"
           dir: "{dat_dir_yaml}"

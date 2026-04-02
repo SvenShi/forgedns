@@ -417,7 +417,7 @@ fn build_download_runtime_config(plugin_config: &PluginConfig) -> Result<Downloa
         parsed_socks5: parse_socks5(cfg.socks5.as_deref())?,
         downloads: resolve_download_targets(&plugin_config.tag, cfg.downloads)?,
         insecure_skip_verify: cfg.insecure_skip_verify.unwrap_or(false),
-        startup_if_missing: cfg.startup_if_missing.unwrap_or(false),
+        startup_if_missing: cfg.startup_if_missing.unwrap_or(true),
         raw_socks5: cfg.socks5,
     })
 }

@@ -132,7 +132,6 @@ sidebar_position: 3
   args:
     timeout: 30s
     socks5: "127.0.0.1:1080"
-    startup_if_missing: true
     downloads:
       - url: "https://example.com/geosite.dat"
         dir: "/etc/forgedns"
@@ -154,7 +153,8 @@ sidebar_position: 3
 - 目标目录不存在时会自动创建。
 - 文件会先写入临时文件，再覆盖目标文件，避免半写入状态。
 - 配置 `socks5` 后，所有下载连接都会通过该 SOCKS5 代理发起，格式与 `upstream[].socks5` 一致。
-- 配置 `startup_if_missing: true` 后，ForgeDNS 启动时会先检查目标文件；缺失项会在其它插件初始化前自动下载，失败会直接中止启动。
+- 默认会在启动时检查目标文件；缺失项会在其它插件初始化前自动下载，失败会直接中止启动。
+- 如需关闭该行为，可显式配置 `startup_if_missing: false`。
 
 ### 注意事项
 

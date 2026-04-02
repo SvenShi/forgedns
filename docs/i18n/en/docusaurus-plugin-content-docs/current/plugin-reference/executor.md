@@ -133,7 +133,6 @@ Downloads one or more `http/https` files into a local directory and overwrites t
   args:
     timeout: 30s
     socks5: "127.0.0.1:1080"
-    startup_if_missing: true
     downloads:
       - url: "https://example.com/geosite.dat"
         dir: "/etc/forgedns"
@@ -155,7 +154,8 @@ Downloads one or more `http/https` files into a local directory and overwrites t
 - Missing target directories are created automatically.
 - Files are written to a temporary path first and then moved into place.
 - When `socks5` is set, all download connections are routed through that SOCKS5 proxy using the same format as `upstream[].socks5`.
-- When `startup_if_missing: true` is set, ForgeDNS checks target files during startup and downloads any missing ones before other plugins initialize. A bootstrap failure aborts startup.
+- By default, ForgeDNS checks target files during startup and downloads any missing ones before other plugins initialize. A bootstrap failure aborts startup.
+- Set `startup_if_missing: false` to disable that bootstrap behavior.
 
 ### Notes
 
