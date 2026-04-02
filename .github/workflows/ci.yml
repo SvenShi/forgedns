@@ -136,13 +136,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-node20-npm-docs-${{ hashFiles('docs/package-lock.json') }}
+          key: ${{ runner.os }}-node20-npm-docs-${{ hashFiles('docs/package.json') }}
           restore-keys: |
             ${{ runner.os }}-node20-npm-docs-
 
       - name: Install docs dependencies
         working-directory: docs
-        run: npm ci
+        run: npm install
 
       - name: Build docs site
         working-directory: docs
