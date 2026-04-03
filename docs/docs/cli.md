@@ -70,6 +70,7 @@ forgedns start -c /etc/forgedns/config.yaml -d /etc/forgedns
 forgedns check -c config.yaml
 forgedns check -c /etc/forgedns/config.yaml
 forgedns check -c config.yaml -d /etc/forgedns
+forgedns check -c config.yaml --graph
 ```
 
 参数说明：
@@ -80,6 +81,8 @@ forgedns check -c config.yaml -d /etc/forgedns
 - `-d, --working-dir <PATH>`
   - 校验前切换到指定工作目录。
   - 适合配置里使用相对路径时配合使用。
+- `--graph`
+  - 校验成功后打印插件依赖图。
 
 行为说明：
 
@@ -89,6 +92,7 @@ forgedns check -c config.yaml -d /etc/forgedns
   - 插件类型和依赖关系校验
 - 不会初始化插件，不会绑定监听端口，也不会启动运行时。
 - 校验成功时返回退出码 `0`，并输出简短成功信息。
+- 传入 `--graph` 时，会额外按插件初始化顺序输出纯文本依赖图。
 - 校验失败时返回非零退出码，并输出具体错误原因。
 
 ## `export-dat`

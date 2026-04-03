@@ -30,6 +30,8 @@ use crate::config::types::Config;
 use crate::core;
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::plugin::dependency::DependencyKind;
+use std::collections::{HashMap, HashSet};
 use tokio::runtime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
@@ -50,6 +52,9 @@ pub fn check(options: CheckOptions) -> Result<()> {
         options.config.display(),
         summary.plugin_count
     );
+    if options.graph {
+        print_dependency_graph(&summary);
+    }
     Ok(())
 }
 
@@ -75,6 +80,160 @@ fn run_check(options: &CheckOptions) -> Result<ConfigValidationSummary> {
             err
         ))
     })
+}
+
+fn print_dependency_graph(summary: &ConfigValidationSummary) {
+    println!("{}", render_dependency_graph(summary));
+}
+
+fn render_dependency_graph(summary: &ConfigValidationSummary) -> String {
+    let mut lines = vec!["Plugin dependency graph:".to_string()];
+    let node_map = summary
+        .dependency_graph
+        .nodes
+        .iter()
+        .map(|node| (node.tag.as_str(), node))
+        .collect::<HashMap<_, _>>();
+    let init_index = summary
+        .dependency_graph
+        .init_order
+        .iter()
+        .enumerate()
+        .map(|(idx, tag)| (tag.as_str(), idx))
+        .collect::<HashMap<_, _>>();
+    let mut dependency_map: HashMap<&str, Vec<_>> = HashMap::new();
+    let mut referenced = HashSet::new();
+
+    for edge in &summary.dependency_graph.edges {
+        dependency_map
+            .entry(edge.source_tag.as_str())
+            .or_default()
+            .push(edge);
+        referenced.insert(edge.target_tag.as_str());
+    }
+
+    for deps in dependency_map.values_mut() {
+        deps.sort_by(|a, b| {
+            a.field
+                .cmp(&b.field)
+                .then_with(|| {
+                    init_index
+                        .get(a.target_tag.as_str())
+                        .cmp(&init_index.get(b.target_tag.as_str()))
+                })
+                .then_with(|| a.target_tag.cmp(&b.target_tag))
+        });
+    }
+
+    let mut roots = summary
+        .dependency_graph
+        .init_order
+        .iter()
+        .filter(|tag| !referenced.contains(tag.as_str()))
+        .collect::<Vec<_>>();
+    roots.sort_by(|a, b| {
+        init_index
+            .get(a.as_str())
+            .cmp(&init_index.get(b.as_str()))
+            .then_with(|| a.cmp(b))
+    });
+
+    for (idx, root) in roots.iter().enumerate() {
+        if idx > 0 {
+            lines.push(String::new());
+        }
+        render_dependency_tree(root, "", true, &node_map, &dependency_map, &mut lines);
+    }
+    lines.join("\n")
+}
+
+fn render_dependency_tree<'a>(
+    tag: &'a str,
+    prefix: &str,
+    is_last: bool,
+    node_map: &HashMap<&'a str, &'a crate::plugin::dependency::DependencyGraphNode>,
+    dependency_map: &HashMap<&'a str, Vec<&'a crate::plugin::dependency::DependencyGraphEdge>>,
+    lines: &mut Vec<String>,
+) {
+    let Some(node) = node_map.get(tag) else {
+        return;
+    };
+
+    let branch = if prefix.is_empty() {
+        ""
+    } else if is_last {
+        "└─ "
+    } else {
+        "├─ "
+    };
+    lines.push(format!(
+        "{}{}{} [{}:{}]",
+        prefix,
+        branch,
+        node.tag,
+        kind_label(node.kind),
+        node.plugin_type
+    ));
+
+    let Some(deps) = dependency_map.get(tag) else {
+        return;
+    };
+
+    let child_prefix = if prefix.is_empty() {
+        String::new()
+    } else if is_last {
+        format!("{prefix}   ")
+    } else {
+        format!("{prefix}│  ")
+    };
+
+    for (idx, dep) in deps.iter().enumerate() {
+        let last_dep = idx + 1 == deps.len();
+        let edge_branch = if last_dep { "└─ " } else { "├─ " };
+        let edge_label = match dep.expected_plugin_type.as_deref() {
+            Some(expected_type) => format!(
+                "{}{}{} [{}:{}]",
+                child_prefix,
+                edge_branch,
+                dep.field,
+                kind_label(dep.expected_kind),
+                expected_type
+            ),
+            None => format!(
+                "{}{}{} [{}]",
+                child_prefix,
+                edge_branch,
+                dep.field,
+                kind_label(dep.expected_kind)
+            ),
+        };
+        lines.push(edge_label);
+
+        let next_prefix = if last_dep {
+            format!("{child_prefix}   ")
+        } else {
+            format!("{child_prefix}│  ")
+        };
+        render_dependency_tree(
+            dep.target_tag.as_str(),
+            &next_prefix,
+            true,
+            node_map,
+            dependency_map,
+            lines,
+        );
+    }
+}
+
+fn kind_label(kind: DependencyKind) -> &'static str {
+    match kind {
+        DependencyKind::Any => "any",
+        DependencyKind::Server => "server",
+        DependencyKind::Executor => "executor",
+        DependencyKind::Matcher => "matcher",
+        DependencyKind::Provider => "provider",
+        DependencyKind::Unknown => "unknown",
+    }
 }
 
 fn init_runtime(options: StartOptions, config: Config) -> Result<()> {
@@ -127,10 +286,39 @@ plugins:
         let summary = run_check(&CheckOptions {
             config: config_path,
             working_dir: None,
+            graph: false,
         })
         .expect("valid config should pass");
 
         assert_eq!(summary.plugin_count, 1);
+    }
+
+    #[test]
+    fn print_dependency_graph_renders_tree_from_top_level_plugins() {
+        let summary = config::validate_text(
+            r#"
+plugins:
+  - tag: forward
+    type: forward
+  - tag: seq
+    type: sequence
+    args:
+      - exec: $forward
+      - exec: accept
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: seq
+"#,
+        )
+        .expect("config should validate");
+
+        let graph = render_dependency_graph(&summary);
+        assert!(graph.contains("udp_server [server:udp_server]"));
+        assert!(graph.contains("\n\ntcp_server [server:tcp_server]"));
+        assert!(graph.contains("└─ args[0].exec [executor]"));
+        assert!(graph.contains("forward [executor:forward]"));
+        assert!(!graph.contains("no dependencies"));
     }
 
     #[test]
@@ -150,6 +338,7 @@ plugins:
         let result = run_check(&CheckOptions {
             config: std::path::PathBuf::from("config.yaml"),
             working_dir: Some(temp.path().to_path_buf()),
+            graph: false,
         });
         std::env::set_current_dir(&original_dir).expect("restore current dir");
 

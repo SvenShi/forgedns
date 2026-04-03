@@ -45,6 +45,7 @@ use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::Provider;
 use crate::plugin::server::Server;
 use async_trait::async_trait;
+pub use dependency::DependencyGraphReport;
 use futures::future::BoxFuture;
 pub use registry::PluginRegistry;
 use serde_yaml_ng::Value;
@@ -125,6 +126,10 @@ pub async fn init(
 }
 
 pub fn validate_configuration(config: &Config) -> Result<()> {
+    analyze_configuration(config).map(|_| ())
+}
+
+pub fn analyze_configuration(config: &Config) -> Result<DependencyGraphReport> {
     use crate::plugin::dependency;
     use std::collections::{HashMap, HashSet};
 
@@ -171,8 +176,7 @@ pub fn validate_configuration(config: &Config) -> Result<()> {
             .unwrap_or(dependency::DependencyKind::Unknown)
     };
 
-    dependency::resolve_dependencies(config.plugins.clone(), &get_deps, &get_kind)?;
-    Ok(())
+    dependency::analyze_dependencies(&config.plugins, &get_deps, &get_kind)
 }
 
 pub struct FactoryRegistration {

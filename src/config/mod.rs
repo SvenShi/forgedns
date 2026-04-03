@@ -18,6 +18,7 @@
 
 use crate::config::types::Config;
 use crate::core::error::Result;
+use crate::plugin::DependencyGraphReport;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -26,6 +27,7 @@ pub mod types;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigValidationSummary {
     pub plugin_count: usize,
+    pub dependency_graph: DependencyGraphReport,
 }
 
 /// Load and parse configuration from YAML file
@@ -45,9 +47,10 @@ pub fn init(file: &PathBuf) -> Result<Config> {
 /// Validate configuration from an on-disk YAML file.
 pub fn validate_file(path: &Path) -> Result<ConfigValidationSummary> {
     let config = init(&path.to_path_buf())?;
-    crate::plugin::validate_configuration(&config)?;
+    let dependency_graph = crate::plugin::analyze_configuration(&config)?;
     Ok(ConfigValidationSummary {
         plugin_count: config.plugins.len(),
+        dependency_graph,
     })
 }
 
@@ -55,9 +58,10 @@ pub fn validate_file(path: &Path) -> Result<ConfigValidationSummary> {
 pub fn validate_text(text: &str) -> Result<ConfigValidationSummary> {
     let config: Config = serde_yaml_ng::from_str(text)?;
     config.validate()?;
-    crate::plugin::validate_configuration(&config)?;
+    let dependency_graph = crate::plugin::analyze_configuration(&config)?;
     Ok(ConfigValidationSummary {
         plugin_count: config.plugins.len(),
+        dependency_graph,
     })
 }
 
@@ -81,6 +85,10 @@ plugins:
 
         let summary = validate_file(temp.path()).expect("valid config should pass");
         assert_eq!(summary.plugin_count, 1);
+        assert_eq!(
+            summary.dependency_graph.init_order,
+            vec!["debug_main".to_string()]
+        );
     }
 
     #[test]

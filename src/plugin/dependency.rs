@@ -36,6 +36,29 @@ impl Display for DependencyKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyGraphNode {
+    pub tag: String,
+    pub plugin_type: String,
+    pub kind: DependencyKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyGraphEdge {
+    pub source_tag: String,
+    pub field: String,
+    pub target_tag: String,
+    pub expected_kind: DependencyKind,
+    pub expected_plugin_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyGraphReport {
+    pub nodes: Vec<DependencyGraphNode>,
+    pub edges: Vec<DependencyGraphEdge>,
+    pub init_order: Vec<String>,
+}
+
 /// One dependency edge from a source plugin to a target plugin tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencySpec {
@@ -120,15 +143,33 @@ pub fn resolve_dependencies(
     get_deps: &dyn Fn(&PluginConfig) -> Vec<DependencySpec>,
     get_kind: &dyn Fn(&PluginConfig) -> DependencyKind,
 ) -> Result<Vec<PluginConfig>> {
+    let report = analyze_dependencies(&configs, get_deps, get_kind)?;
+    let mut owned_configs: HashMap<_, _> =
+        configs.into_iter().map(|c| (c.tag.clone(), c)).collect();
+    let mut sorted = Vec::with_capacity(report.init_order.len());
+    for tag in report.init_order {
+        if let Some(config) = owned_configs.remove(&tag) {
+            sorted.push(config);
+        }
+    }
+    Ok(sorted)
+}
+
+pub fn analyze_dependencies(
+    configs: &[PluginConfig],
+    get_deps: &dyn Fn(&PluginConfig) -> Vec<DependencySpec>,
+    get_kind: &dyn Fn(&PluginConfig) -> DependencyKind,
+) -> Result<DependencyGraphReport> {
     // Build dependency graph (tag -> list of tags that depend on it)
     let mut reverse_graph: HashMap<String, Vec<String>> = HashMap::new();
     let mut forward_graph: HashMap<String, Vec<String>> = HashMap::new();
     let mut in_degree: HashMap<String, usize> = HashMap::new();
     let mut config_map: HashMap<String, &PluginConfig> = HashMap::new();
+    let mut edges = Vec::new();
     let mut errors = Vec::new();
 
     // Initialize all plugin tags
-    for config in &configs {
+    for config in configs {
         if config_map.insert(config.tag.clone(), config).is_some() {
             return Err(DnsError::dependency(format!(
                 "Duplicate plugin tag '{}' in dependency graph",
@@ -141,9 +182,10 @@ pub fn resolve_dependencies(
     }
 
     // Build the reverse dependency graph and calculate in-degrees.
-    for config in &configs {
+    for config in configs {
         let deps = get_deps(config);
         let mut unique_deps = HashSet::new();
+        let mut unique_edges = Vec::new();
 
         for dep in deps {
             let dep_tag = dep.target_tag.trim();
@@ -199,6 +241,13 @@ pub fn resolve_dependencies(
             }
 
             unique_deps.insert(dep_tag.to_string());
+            unique_edges.push(DependencyGraphEdge {
+                source_tag: config.tag.clone(),
+                field: field.to_string(),
+                target_tag: dep_tag.to_string(),
+                expected_kind: dep.expected_kind,
+                expected_plugin_type: dep.expected_plugin_type.clone(),
+            });
         }
 
         // Set in-degree to number of dependencies.
@@ -206,6 +255,17 @@ pub fn resolve_dependencies(
         if let Some(forward) = forward_graph.get_mut(&config.tag) {
             forward.extend(unique_deps.iter().cloned());
         }
+        unique_edges.sort_by(|a, b| {
+            a.field
+                .cmp(&b.field)
+                .then_with(|| a.target_tag.cmp(&b.target_tag))
+                .then_with(|| {
+                    a.expected_kind
+                        .to_string()
+                        .cmp(&b.expected_kind.to_string())
+                })
+        });
+        edges.extend(unique_edges);
 
         // Add reverse edges: dependency -> who depends on it.
         for dep in unique_deps {
@@ -236,8 +296,6 @@ pub fn resolve_dependencies(
     let mut queue: VecDeque<String> = queue_sorted.into();
 
     let mut sorted_tags = Vec::with_capacity(in_degree.len());
-    let mut owned_configs: HashMap<_, _> =
-        configs.into_iter().map(|c| (c.tag.clone(), c)).collect();
 
     while let Some(tag) = queue.pop_front() {
         sorted_tags.push(tag.clone());
@@ -256,7 +314,7 @@ pub fn resolve_dependencies(
     }
 
     // Check for circular dependencies.
-    if sorted_tags.len() != owned_configs.len() {
+    if sorted_tags.len() != config_map.len() {
         let remaining: HashSet<String> = in_degree
             .iter()
             .filter_map(|(tag, degree)| if *degree > 0 { Some(tag.clone()) } else { None })
@@ -277,14 +335,21 @@ pub fn resolve_dependencies(
         )));
     }
 
-    let mut sorted = Vec::with_capacity(sorted_tags.len());
-    for tag in sorted_tags {
-        if let Some(config) = owned_configs.remove(&tag) {
-            sorted.push(config);
-        }
-    }
+    let mut nodes = configs
+        .iter()
+        .map(|config| DependencyGraphNode {
+            tag: config.tag.clone(),
+            plugin_type: config.plugin_type.clone(),
+            kind: get_kind(config),
+        })
+        .collect::<Vec<_>>();
+    nodes.sort_by(|a, b| a.tag.cmp(&b.tag));
 
-    Ok(sorted)
+    Ok(DependencyGraphReport {
+        nodes,
+        edges,
+        init_order: sorted_tags,
+    })
 }
 
 fn find_cycle_path(
@@ -417,6 +482,47 @@ mod tests {
         let sorted = resolve_dependencies(configs, &mock_get_deps, &mock_get_kind).unwrap();
         assert_eq!(sorted.len(), 1);
         assert_eq!(sorted[0].tag, "forward");
+    }
+
+    #[test]
+    fn test_analyze_dependencies_reports_nodes_edges_and_init_order() {
+        let configs = vec![
+            PluginConfig {
+                tag: "server".to_string(),
+                plugin_type: "udp_server".to_string(),
+                args: Some(
+                    serde_yaml_ng::to_value(
+                        vec![("entry", "forward")]
+                            .into_iter()
+                            .collect::<std::collections::HashMap<_, _>>(),
+                    )
+                    .unwrap(),
+                ),
+            },
+            PluginConfig {
+                tag: "forward".to_string(),
+                plugin_type: "forward".to_string(),
+                args: None,
+            },
+        ];
+
+        let report = analyze_dependencies(&configs, &mock_get_deps, &mock_get_kind).unwrap();
+        assert_eq!(
+            report.init_order,
+            vec!["forward".to_string(), "server".to_string()]
+        );
+        assert!(
+            report
+                .nodes
+                .iter()
+                .any(|node| node.tag == "server" && node.kind == DependencyKind::Server)
+        );
+        assert!(report.edges.iter().any(|edge| {
+            edge.source_tag == "server"
+                && edge.field == "args.entry"
+                && edge.target_tag == "forward"
+                && edge.expected_kind == DependencyKind::Executor
+        }));
     }
 
     #[test]

@@ -70,6 +70,7 @@ Typical usage:
 forgedns check -c config.yaml
 forgedns check -c /etc/forgedns/config.yaml
 forgedns check -c config.yaml -d /etc/forgedns
+forgedns check -c config.yaml --graph
 ```
 
 Arguments:
@@ -80,6 +81,8 @@ Arguments:
 - `-d, --working-dir <PATH>`
   - Change to the specified working directory before validation.
   - Useful when the config relies on relative paths.
+- `--graph`
+  - Print the plugin dependency graph after validation succeeds.
 
 Behavior:
 
@@ -89,6 +92,7 @@ Behavior:
   - plugin type and dependency validation
 - Does not initialize plugins, bind listeners, or start the runtime.
 - On success, exits with code `0` and prints a short success line.
+- With `--graph`, it also prints a plain-text dependency graph in plugin initialization order.
 - On failure, exits non-zero and prints the validation error.
 
 ## `export-dat`

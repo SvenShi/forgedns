@@ -55,6 +55,10 @@ pub struct CheckOptions {
     /// Working directory for resolving relative paths
     #[arg(short = 'd', long = "working-dir")]
     pub working_dir: Option<PathBuf>,
+
+    /// Print plugin dependency graph after validation succeeds
+    #[arg(long = "graph", default_value_t = false)]
+    pub graph: bool,
 }
 
 /// Dat export options.
@@ -195,6 +199,7 @@ mod tests {
             Command::Check(CheckOptions {
                 config: PathBuf::from("config.yaml"),
                 working_dir: None,
+                graph: false,
             })
         );
     }
@@ -209,6 +214,7 @@ mod tests {
             Command::Check(CheckOptions {
                 config: PathBuf::from("custom.yaml"),
                 working_dir: None,
+                graph: false,
             })
         );
     }
@@ -230,6 +236,22 @@ mod tests {
             Command::Check(CheckOptions {
                 config: PathBuf::from("custom.yaml"),
                 working_dir: Some(PathBuf::from("/tmp/forgedns")),
+                graph: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_check_command_with_graph() {
+        let args = ["forgedns", "check", "--graph"];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Check(CheckOptions {
+                config: PathBuf::from("config.yaml"),
+                working_dir: None,
+                graph: true,
             })
         );
     }
