@@ -433,62 +433,10 @@ impl PluginFactory for TcpServerFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::DnsContext;
-    use crate::core::error::Result;
-    use crate::plugin::Plugin;
-    use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::{plugin_config, test_registry};
-    use crate::proto::Rcode;
-    use async_trait::async_trait;
     use serde_yaml_ng::from_str;
     use std::net::{IpAddr, Ipv4Addr};
-    use std::sync::{Arc, Mutex};
     use tokio::time::Duration;
-
-    #[derive(Debug, Default, Clone, PartialEq, Eq)]
-    struct ObservedMeta {
-        server_name: Option<String>,
-        qname: Option<String>,
-    }
-
-    #[derive(Debug)]
-    struct RespondAndCaptureExecutor {
-        observed: Arc<Mutex<Option<ObservedMeta>>>,
-    }
-
-    #[async_trait]
-    impl Plugin for RespondAndCaptureExecutor {
-        fn tag(&self) -> &str {
-            "respond_and_capture"
-        }
-
-        async fn init(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        async fn destroy(&self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl Executor for RespondAndCaptureExecutor {
-        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-            let observed = ObservedMeta {
-                server_name: context.server_name().map(str::to_string),
-                qname: context
-                    .request
-                    .first_question()
-                    .map(|question| question.name().to_fqdn()),
-            };
-            self.observed
-                .lock()
-                .expect("capture lock should not be poisoned")
-                .replace(observed);
-            context.set_response(context.request.response(Rcode::Refused));
-            Ok(ExecStep::Stop)
-        }
-    }
 
     #[test]
     fn test_tcp_factory_requires_args() {

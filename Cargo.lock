@@ -685,6 +685,7 @@ dependencies = [
  "quinn",
  "rand 0.10.0",
  "regex",
+ "ripset",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -1899,6 +1900,14 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ripset"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -1554,7 +1554,7 @@ Collects Prometheus metrics for query handling.
 
 ### Purpose
 
-Writes response IPs into Linux `ipset`.
+Writes response IPs into Linux `ipset` through the embedded Rust netlink backend, without requiring the runtime `ipset` command.
 
 ### Example Configuration
 
@@ -1630,7 +1630,7 @@ Here, `family` is `4` or `6`.
 
 ### Purpose
 
-Writes response IPs into nftables sets.
+Writes response IPs into nftables sets through the embedded Rust netlink backend, without requiring the runtime `nft` command.
 
 ### Example Configuration
 

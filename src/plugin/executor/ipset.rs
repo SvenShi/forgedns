@@ -5,7 +5,8 @@
 
 //! `ipset` executor plugin.
 //!
-//! Writes response IP addresses into Linux ipset sets via system ipset.
+//! Writes response IP addresses into Linux ipset sets via the embedded Rust
+//! netlink backend.
 //!
 //! Runtime flow:
 //! - scans response answers and extracts unique A/AAAA addresses.
@@ -26,11 +27,11 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
+#[cfg(target_os = "linux")]
+use ripset::{IpCidr, ipset_add};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 use std::net::IpAddr;
-#[cfg(target_os = "linux")]
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
@@ -73,48 +74,6 @@ struct IpSetExecutor {
     enabled: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
     writer: SyncSender<Vec<IpSetEntry>>,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-struct IpSetBackend {
-    command: &'static str,
-}
-
-#[cfg(target_os = "linux")]
-impl IpSetBackend {
-    fn new() -> Result<Self> {
-        let output = Command::new("ipset")
-            .arg("help")
-            .output()
-            .map_err(|e| DnsError::plugin(format!("failed to execute ipset: {}", e)))?;
-        if !output.status.success() {
-            return Err(DnsError::plugin(format!(
-                "ipset help failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(Self { command: "ipset" })
-    }
-
-    fn add_entries(&mut self, entries: &[IpSetEntry]) -> Result<()> {
-        for entry in entries {
-            let prefix = format_ipset_prefix(entry.addr, entry.mask);
-            let output = Command::new(self.command)
-                .args(["add", &entry.set_name, &prefix, "-exist"])
-                .output()
-                .map_err(|e| DnsError::plugin(format!("failed to execute ipset add: {}", e)))?;
-            if !output.status.success() {
-                return Err(DnsError::plugin(format!(
-                    "ipset add failed for set '{}' and prefix '{}': {}",
-                    entry.set_name,
-                    prefix,
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )));
-            }
-        }
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -335,7 +294,6 @@ fn validate_masks(mask4: u8, mask6: u8) -> Result<()> {
 #[cfg(target_os = "linux")]
 fn spawn_ipset_writer(tag: &str, enabled: Arc<AtomicBool>) -> Result<SyncSender<Vec<IpSetEntry>>> {
     let (tx, rx) = sync_channel::<Vec<IpSetEntry>>(IPSET_WRITER_QUEUE_SIZE);
-    let mut backend = IpSetBackend::new()?;
     let thread_tag = tag.to_string();
     thread::Builder::new()
         .name(format!("ipset-{}", thread_tag))
@@ -347,7 +305,7 @@ fn spawn_ipset_writer(tag: &str, enabled: Arc<AtomicBool>) -> Result<SyncSender<
                 if entries.is_empty() {
                     continue;
                 }
-                if let Err(e) = backend.add_entries(&entries) {
+                if let Err(e) = write_ipset_entries(&entries) {
                     warn!(
                         plugin = %thread_tag,
                         err = %e,
@@ -363,38 +321,26 @@ fn spawn_ipset_writer(tag: &str, enabled: Arc<AtomicBool>) -> Result<SyncSender<
 }
 
 #[cfg(target_os = "linux")]
-fn normalize_ip_for_mask(addr: IpAddr, mask: u8) -> IpAddr {
-    match addr {
-        IpAddr::V4(v4) if mask < 32 => {
-            let host_bits = 32u32 - mask as u32;
-            let network_mask = if host_bits == 32 {
-                0
-            } else {
-                u32::MAX << host_bits
-            };
-            IpAddr::V4((u32::from(v4) & network_mask).into())
-        }
-        IpAddr::V6(v6) if mask < 128 => {
-            let host_bits = 128u32 - mask as u32;
-            let network_mask = if host_bits == 128 {
-                0
-            } else {
-                u128::MAX << host_bits
-            };
-            IpAddr::V6((u128::from(v6) & network_mask).into())
-        }
-        _ => addr,
+fn write_ipset_entries(entries: &[IpSetEntry]) -> Result<()> {
+    for entry in entries {
+        let cidr = IpCidr::new(entry.addr, entry.mask).map_err(|e| {
+            DnsError::plugin(format!("invalid ipset entry '{}': {}", entry.addr, e))
+        })?;
+        ipset_add(&entry.set_name, cidr).map_err(|e| {
+            DnsError::plugin(format!(
+                "ipset add failed for set '{}' and prefix '{}': {}",
+                entry.set_name, cidr, e
+            ))
+        })?;
     }
-}
-
-#[cfg(target_os = "linux")]
-fn format_ipset_prefix(addr: IpAddr, mask: u8) -> String {
-    format!("{}/{}", normalize_ip_for_mask(addr, mask), mask)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use ripset::IpCidr;
 
     #[test]
     fn test_parse_config_rejects_invalid_masks() {
@@ -405,18 +351,11 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn test_normalize_ip_for_mask_truncates_host_bits() {
+    fn test_ipcidr_normalizes_host_bits() {
         assert_eq!(
-            normalize_ip_for_mask(IpAddr::V4("192.0.2.10".parse().unwrap()), 24),
-            IpAddr::V4("192.0.2.0".parse().unwrap())
-        );
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn test_format_ipset_prefix_uses_masked_network() {
-        assert_eq!(
-            format_ipset_prefix(IpAddr::V4("192.0.2.10".parse().unwrap()), 24),
+            IpCidr::new(IpAddr::V4("192.0.2.10".parse().unwrap()), 24)
+                .unwrap()
+                .to_string(),
             "192.0.2.0/24"
         );
     }

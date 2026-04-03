@@ -5,7 +5,8 @@
 
 //! `nftset` executor plugin.
 //!
-//! Writes response IP addresses into nftables sets via system nft.
+//! Writes response IP addresses into nftables sets via the embedded Rust
+//! netlink backend.
 //!
 //! Operational model:
 //! - extracts unique A/AAAA addresses from response answers.
@@ -27,13 +28,11 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use ahash::AHashSet;
 use async_trait::async_trait;
+#[cfg(target_os = "linux")]
+use ripset::{IpCidr, nftset_add};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 use std::net::IpAddr;
-#[cfg(target_os = "linux")]
-use std::net::{Ipv4Addr, Ipv6Addr};
-#[cfg(target_os = "linux")]
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
@@ -112,106 +111,6 @@ struct NftSetExecutor {
 struct NftSetBatch {
     ipv4_prefixes: Vec<IpPrefix>,
     ipv6_prefixes: Vec<IpPrefix>,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-struct NftSetBackend {
-    command: &'static str,
-}
-
-#[cfg(target_os = "linux")]
-impl NftSetBackend {
-    fn new() -> Result<Self> {
-        let output = Command::new("nft")
-            .arg("--version")
-            .output()
-            .map_err(|e| DnsError::plugin(format!("failed to execute nft: {}", e)))?;
-        if !output.status.success() {
-            return Err(DnsError::plugin(format!(
-                "nft --version failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(Self { command: "nft" })
-    }
-
-    fn add_prefixes(&mut self, set: &ResolvedSet, prefixes: &[IpPrefix]) -> Result<()> {
-        let elements = prefixes
-            .iter()
-            .map(|prefix| format_nft_prefix(prefix.addr, prefix.mask))
-            .collect::<Vec<_>>();
-        let spec = format!("{{ {} }}", elements.join(", "));
-        let output = Command::new(self.command)
-            .args([
-                "add",
-                "element",
-                set.table_family.as_str(),
-                set.table_name.as_str(),
-                set.set_name.as_str(),
-                spec.as_str(),
-            ])
-            .output()
-            .map_err(|e| DnsError::plugin(format!("failed to execute nft add element: {}", e)))?;
-        if !output.status.success() {
-            return Err(DnsError::plugin(format!(
-                "nft add element failed for {}/{}/{}: {}",
-                set.table_family,
-                set.table_name,
-                set.set_name,
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(())
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn prefix_range_v4(addr: Ipv4Addr, mask: u8) -> (Ipv4Addr, Option<Ipv4Addr>) {
-    if mask >= 32 {
-        return (addr, None);
-    }
-
-    let addr_u32 = u32::from(addr);
-    let host_bits = 32u32 - mask as u32;
-    let network_mask = if host_bits == 32 {
-        0
-    } else {
-        u32::MAX << host_bits
-    };
-    let start = addr_u32 & network_mask;
-    let last = if host_bits == 32 {
-        u32::MAX
-    } else {
-        start | ((1u32 << host_bits) - 1)
-    };
-    let end = last.checked_add(1).map(Ipv4Addr::from);
-
-    (Ipv4Addr::from(start), end)
-}
-
-#[cfg(target_os = "linux")]
-fn prefix_range_v6(addr: Ipv6Addr, mask: u8) -> (Ipv6Addr, Option<Ipv6Addr>) {
-    if mask >= 128 {
-        return (addr, None);
-    }
-
-    let addr_u128 = u128::from(addr);
-    let host_bits = 128u32 - mask as u32;
-    let network_mask = if host_bits == 128 {
-        0
-    } else {
-        u128::MAX << host_bits
-    };
-    let start = addr_u128 & network_mask;
-    let last = if host_bits == 128 {
-        u128::MAX
-    } else {
-        start | ((1u128 << host_bits) - 1)
-    };
-    let end = last.checked_add(1).map(Ipv6Addr::from);
-
-    (Ipv6Addr::from(start), end)
 }
 
 #[async_trait]
@@ -500,7 +399,6 @@ fn spawn_nftset_writer(
 ) -> Result<SyncSender<NftSetBatch>> {
     let (tx, rx) = sync_channel::<NftSetBatch>(NFTSET_WRITER_QUEUE_SIZE);
     let thread_tag = tag.to_string();
-    let mut backend = NftSetBackend::new()?;
 
     thread::Builder::new()
         .name(format!("nftset-{}", thread_tag))
@@ -512,7 +410,7 @@ fn spawn_nftset_writer(
 
                 if let Some(set) = ipv4.as_ref()
                     && !batch.ipv4_prefixes.is_empty()
-                    && let Err(e) = backend.add_prefixes(set, &batch.ipv4_prefixes)
+                    && let Err(e) = write_nftset_prefixes(set, &batch.ipv4_prefixes)
                 {
                     warn!(
                         plugin = %thread_tag,
@@ -528,7 +426,7 @@ fn spawn_nftset_writer(
 
                 if let Some(set) = ipv6.as_ref()
                     && !batch.ipv6_prefixes.is_empty()
-                    && let Err(e) = backend.add_prefixes(set, &batch.ipv6_prefixes)
+                    && let Err(e) = write_nftset_prefixes(set, &batch.ipv6_prefixes)
                 {
                     warn!(
                         plugin = %thread_tag,
@@ -548,22 +446,32 @@ fn spawn_nftset_writer(
 }
 
 #[cfg(target_os = "linux")]
-fn format_nft_prefix(addr: IpAddr, mask: u8) -> String {
-    match addr {
-        IpAddr::V4(v4) => {
-            let (start, _) = prefix_range_v4(v4, mask);
-            format!("{}/{}", start, mask)
-        }
-        IpAddr::V6(v6) => {
-            let (start, _) = prefix_range_v6(v6, mask);
-            format!("{}/{}", start, mask)
-        }
+fn write_nftset_prefixes(set: &ResolvedSet, prefixes: &[IpPrefix]) -> Result<()> {
+    for prefix in prefixes {
+        let cidr = IpCidr::new(prefix.addr, prefix.mask).map_err(|e| {
+            DnsError::plugin(format!("invalid nftset prefix '{}': {}", prefix.addr, e))
+        })?;
+        nftset_add(
+            set.table_family.as_str(),
+            set.table_name.as_str(),
+            set.set_name.as_str(),
+            cidr,
+        )
+        .map_err(|e| {
+            DnsError::plugin(format!(
+                "nft add element failed for {}/{}/{} and prefix '{}': {}",
+                set.table_family, set.table_name, set.set_name, cidr, e
+            ))
+        })?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use ripset::IpCidr;
 
     #[test]
     fn test_parse_config_rejects_empty_table_or_set_name() {
@@ -572,9 +480,11 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn test_format_nft_prefix_uses_masked_network() {
+    fn test_ipcidr_normalizes_nft_prefix() {
         assert_eq!(
-            format_nft_prefix(IpAddr::V4("192.0.2.10".parse().unwrap()), 24),
+            IpCidr::new(IpAddr::V4("192.0.2.10".parse().unwrap()), 24)
+                .unwrap()
+                .to_string(),
             "192.0.2.0/24"
         );
     }

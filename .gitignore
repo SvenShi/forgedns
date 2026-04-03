@@ -95,3 +95,4 @@ docs/.docusaurus/
 docs/build/
 docs/node_modules/
 docs/package-lock.json
+/crates/ripset/Cargo.lock

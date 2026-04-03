@@ -1679,7 +1679,7 @@ plugins:
 
 ### 作用
 
-把响应中的 IP 写入 Linux `ipset`。
+把响应中的 IP 写入 Linux `ipset`。底层通过内置 Rust netlink 后端完成，不依赖运行时 `ipset` 命令。
 
 ### 配置示例
 
@@ -1755,7 +1755,7 @@ plugins:
 
 ### 作用
 
-把响应 IP 写入 Linux `nftables set`。
+把响应 IP 写入 Linux `nftables set`。底层通过内置 Rust netlink 后端完成，不依赖运行时 `nft` 命令。
 
 ### 配置示例
 

@@ -249,57 +249,6 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct FallthroughExecutor;
-
-    #[async_trait]
-    impl Plugin for FallthroughExecutor {
-        fn tag(&self) -> &str {
-            "fallthrough"
-        }
-
-        async fn init(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        async fn destroy(&self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl Executor for FallthroughExecutor {
-        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
-            Ok(ExecStep::Next)
-        }
-    }
-
-    #[derive(Debug)]
-    struct StopWithResponseExecutor;
-
-    #[async_trait]
-    impl Plugin for StopWithResponseExecutor {
-        fn tag(&self) -> &str {
-            "stop_with_response"
-        }
-
-        async fn init(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        async fn destroy(&self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl Executor for StopWithResponseExecutor {
-        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-            context.set_response(context.request.response(Rcode::Refused));
-            Ok(ExecStep::Stop)
-        }
-    }
-
-    #[derive(Debug)]
     struct ErrorExecutor;
 
     #[async_trait]
