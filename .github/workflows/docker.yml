@@ -12,6 +12,7 @@ on:
         required: false
         default: true
         type: boolean
+
   workflow_call:
     inputs:
       FORGEDNS_VERSION:
@@ -29,7 +30,6 @@ permissions:
 env:
   IMAGE_NAME_DOCKERHUB: svenshi/forgedns
   IMAGE_NAME_GHCR: ghcr.io/${{ github.repository }}
-  IMAGE_VERSION: ${{ inputs.FORGEDNS_VERSION || github.ref_name }}
 
 jobs:
   prepare:
@@ -38,7 +38,7 @@ jobs:
     outputs:
       push: ${{ steps.vars.outputs.push }}
       version: ${{ steps.vars.outputs.version }}
-      tags_amd64: ${{ steps.meta.outputs.tags }}
+      tags: ${{ steps.meta.outputs.tags }}
       labels: ${{ steps.meta.outputs.labels }}
       json: ${{ steps.meta.outputs.json }}
     steps:
@@ -46,25 +46,32 @@ jobs:
         id: vars
         shell: bash
         run: |
+          set -euo pipefail
+
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "push=false" >> "$GITHUB_OUTPUT"
+            PUSH=false
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "push=${{ inputs.PUSH }}" >> "$GITHUB_OUTPUT"
+            if [[ "${{ inputs.PUSH }}" == "true" ]]; then
+              PUSH=true
+            else
+              PUSH=false
+            fi
           else
-            echo "push=true" >> "$GITHUB_OUTPUT"
+            PUSH=true
           fi
+          echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
 
           VERSION="${{ inputs.FORGEDNS_VERSION }}"
-          if [[ -z "$VERSION" ]]; then
+          if [[ -z "${VERSION}" ]]; then
             if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
               VERSION="${GITHUB_REF_NAME}"
             else
               VERSION="${GITHUB_SHA}"
             fi
           fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Extract metadata
+      - name: Extract image metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -113,9 +120,8 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
-          push: ${{ needs.prepare.outputs.push == 'true' }}
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ needs.prepare.outputs.labels }}
+          outputs: type=image,"name=${{ env.IMAGE_NAME_DOCKERHUB }},${{ env.IMAGE_NAME_GHCR }}",push-by-digest=true,name-canonical=true,push=true
           provenance: false
           sbom: false
           cache-from: type=gha,scope=forgedns-amd64
@@ -125,7 +131,9 @@ jobs:
 
       - name: Export digest
         if: needs.prepare.outputs.push == 'true'
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
@@ -175,9 +183,8 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/arm64
-          push: ${{ needs.prepare.outputs.push == 'true' }}
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ needs.prepare.outputs.labels }}
+          outputs: type=image,"name=${{ env.IMAGE_NAME_DOCKERHUB }},${{ env.IMAGE_NAME_GHCR }}",push-by-digest=true,name-canonical=true,push=true
           provenance: false
           sbom: false
           cache-from: type=gha,scope=forgedns-arm64
@@ -187,7 +194,9 @@ jobs:
 
       - name: Export digest
         if: needs.prepare.outputs.push == 'true'
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
@@ -201,69 +210,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  build-armv7:
-    name: Build arm/v7
-    runs-on: ubuntu-latest
-    needs: prepare
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to Docker Hub
-        if: needs.prepare.outputs.push == 'true'
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Log in to GitHub Container Registry
-        if: needs.prepare.outputs.push == 'true'
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push arm/v7 by digest
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/arm/v7
-          push: ${{ needs.prepare.outputs.push == 'true' }}
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
-          labels: ${{ needs.prepare.outputs.labels }}
-          provenance: false
-          sbom: false
-          cache-from: type=gha,scope=forgedns-armv7
-          cache-to: type=gha,mode=max,scope=forgedns-armv7
-          build-args: |
-            FORGEDNS_VERSION=${{ needs.prepare.outputs.version }}
-
-      - name: Export digest
-        if: needs.prepare.outputs.push == 'true'
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        if: needs.prepare.outputs.push == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: digests-armv7
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
   merge:
     name: Create multi-arch manifest
     runs-on: ubuntu-latest
@@ -271,8 +217,11 @@ jobs:
       - prepare
       - build-amd64
       - build-arm64
-      - build-armv7
-    if: always() && needs.prepare.outputs.push == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    if: |
+      always() &&
+      needs.prepare.outputs.push == 'true' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
@@ -302,19 +251,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          TAGS=$(jq -r '.tags[]' <<< '${{ needs.prepare.outputs.json }}')
+          mapfile -t TAGS < <(jq -r '.tags[]' <<< '${{ needs.prepare.outputs.json }}')
 
-          for TAG in $TAGS; do
-            ARGS=""
+          if [[ ${#TAGS[@]} -eq 0 ]]; then
+            echo "No tags generated by metadata-action"
+            exit 1
+          fi
+
+          for TAG in "${TAGS[@]}"; do
+            REPO="${TAG%%:*}"
+            ARGS=()
+
             for f in /tmp/digests/*; do
               DIGEST="sha256:$(basename "$f")"
-              ARGS="$ARGS ${TAG%@*}@${DIGEST}"
+              ARGS+=("${REPO}@${DIGEST}")
             done
 
-            docker buildx imagetools create -t "$TAG" $ARGS
+            echo "Creating manifest for $TAG"
+            docker buildx imagetools create -t "$TAG" "${ARGS[@]}"
           done
 
-      - name: Inspect final image
+      - name: Inspect Docker Hub image
         shell: bash
         run: |
-          docker buildx imagetools inspect ${{ env.IMAGE_NAME_GHCR }}:${{ github.ref_name || 'latest' }}
+          mapfile -t TAGS < <(jq -r '.tags[]' <<< '${{ needs.prepare.outputs.json }}')
+          for TAG in "${TAGS[@]}"; do
+            docker buildx imagetools inspect "$TAG" || true
+          done
