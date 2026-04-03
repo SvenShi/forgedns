@@ -23,8 +23,9 @@ mod logging;
 
 use crate::api::control::{AppController, ControlCommand};
 use crate::app::bootstrap::AppAssembly;
-use crate::app::cli::StartOptions;
+use crate::app::cli::{CheckOptions, StartOptions};
 use crate::config;
+use crate::config::ConfigValidationSummary;
 use crate::config::types::Config;
 use crate::core;
 use crate::core::app_clock::AppClock;
@@ -36,13 +37,24 @@ use tracing::{error, info};
 /// Start ForgeDNS in the foreground using the provided CLI options.
 pub fn run(start: StartOptions) -> Result<()> {
     AppClock::start();
-    prepare_start_options(&start)?;
+    prepare_working_dir(start.working_dir.as_ref())?;
     let config = load_config(&start)?;
     init_runtime(start, config)
 }
 
-fn prepare_start_options(start: &StartOptions) -> Result<()> {
-    if let Some(working_dir) = &start.working_dir {
+/// Validate a configuration file from the CLI without starting runtime services.
+pub fn check(options: CheckOptions) -> Result<()> {
+    let summary = run_check(&options)?;
+    println!(
+        "Configuration is valid: {} (plugins: {})",
+        options.config.display(),
+        summary.plugin_count
+    );
+    Ok(())
+}
+
+fn prepare_working_dir(working_dir: Option<&std::path::PathBuf>) -> Result<()> {
+    if let Some(working_dir) = working_dir {
         std::env::set_current_dir(working_dir).map_err(|err| {
             DnsError::runtime(format!(
                 "Failed to switch working directory to {}: {}",
@@ -52,6 +64,17 @@ fn prepare_start_options(start: &StartOptions) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+fn run_check(options: &CheckOptions) -> Result<ConfigValidationSummary> {
+    prepare_working_dir(options.working_dir.as_ref())?;
+    config::validate_file(&options.config).map_err(|err| {
+        DnsError::config(format!(
+            "Configuration initialization failed for {}: {}",
+            options.config.display(),
+            err
+        ))
+    })
 }
 
 fn init_runtime(options: StartOptions, config: Config) -> Result<()> {
@@ -75,6 +98,63 @@ fn load_config(options: &StartOptions) -> Result<Config> {
             err
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_config(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write config");
+        path
+    }
+
+    #[test]
+    fn run_check_accepts_valid_config() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = write_config(
+            temp.path(),
+            "config.yaml",
+            r#"
+plugins:
+  - tag: debug_main
+    type: debug_print
+"#,
+        );
+
+        let summary = run_check(&CheckOptions {
+            config: config_path,
+            working_dir: None,
+        })
+        .expect("valid config should pass");
+
+        assert_eq!(summary.plugin_count, 1);
+    }
+
+    #[test]
+    fn run_check_supports_working_directory_for_relative_paths() {
+        let temp = TempDir::new().expect("temp dir");
+        write_config(
+            temp.path(),
+            "config.yaml",
+            r#"
+plugins:
+  - tag: debug_main
+    type: debug_print
+"#,
+        );
+
+        let original_dir = std::env::current_dir().expect("current dir");
+        let result = run_check(&CheckOptions {
+            config: std::path::PathBuf::from("config.yaml"),
+            working_dir: Some(temp.path().to_path_buf()),
+        });
+        std::env::set_current_dir(&original_dir).expect("restore current dir");
+
+        assert!(result.is_ok());
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -10,6 +10,7 @@ sidebar_position: 3
 可用顶层命令如下：
 
 - `start`
+- `check`
 - `export-dat`
 - `service`
 
@@ -25,6 +26,7 @@ forgedns --help
 
 ```bash
 forgedns start --help
+forgedns check --help
 forgedns export-dat --help
 forgedns service --help
 ```
@@ -57,6 +59,37 @@ forgedns start -c /etc/forgedns/config.yaml -d /etc/forgedns
 - 本地调试
 - 前台运行
 - 容器内直接启动
+
+## `check`
+
+静态检查配置文件是否有效，但不会真正启动 ForgeDNS。
+
+典型用法：
+
+```bash
+forgedns check -c config.yaml
+forgedns check -c /etc/forgedns/config.yaml
+forgedns check -c config.yaml -d /etc/forgedns
+```
+
+参数说明：
+
+- `-c, --config <PATH>`
+  - 配置文件路径。
+  - 默认值：`config.yaml`
+- `-d, --working-dir <PATH>`
+  - 校验前切换到指定工作目录。
+  - 适合配置里使用相对路径时配合使用。
+
+行为说明：
+
+- 只做静态校验：
+  - YAML 解析
+  - 配置结构校验
+  - 插件类型和依赖关系校验
+- 不会初始化插件，不会绑定监听端口，也不会启动运行时。
+- 校验成功时返回退出码 `0`，并输出简短成功信息。
+- 校验失败时返回非零退出码，并输出具体错误原因。
 
 ## `export-dat`
 
@@ -209,4 +242,4 @@ sudo forgedns service uninstall
 
 ## 当前范围
 
-当前 CLI 只包含上述命令。文档中如果看到旧的 `check` 示例，应以本页列出的实际命令为准。
+当前 CLI 包含上述命令；本页即为当前实际行为的说明。

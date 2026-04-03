@@ -10,6 +10,7 @@ ForgeDNS currently ships a single executable: `forgedns`.
 Available top-level commands:
 
 - `start`
+- `check`
 - `export-dat`
 - `service`
 
@@ -25,6 +26,7 @@ Show help for a specific subcommand:
 
 ```bash
 forgedns start --help
+forgedns check --help
 forgedns export-dat --help
 forgedns service --help
 ```
@@ -57,6 +59,37 @@ Common use cases:
 - Local debugging
 - Foreground execution
 - Direct container startup
+
+## `check`
+
+Statically validates a configuration file without starting ForgeDNS.
+
+Typical usage:
+
+```bash
+forgedns check -c config.yaml
+forgedns check -c /etc/forgedns/config.yaml
+forgedns check -c config.yaml -d /etc/forgedns
+```
+
+Arguments:
+
+- `-c, --config <PATH>`
+  - Path to the configuration file.
+  - Default: `config.yaml`
+- `-d, --working-dir <PATH>`
+  - Change to the specified working directory before validation.
+  - Useful when the config relies on relative paths.
+
+Behavior:
+
+- Performs static validation only:
+  - YAML parsing
+  - schema-level config validation
+  - plugin type and dependency validation
+- Does not initialize plugins, bind listeners, or start the runtime.
+- On success, exits with code `0` and prints a short success line.
+- On failure, exits non-zero and prints the validation error.
 
 ## `export-dat`
 
@@ -209,4 +242,4 @@ sudo forgedns service uninstall
 
 ## Current Scope
 
-The CLI currently consists only of the commands listed on this page. If you see older `check` examples elsewhere, prefer this page as the source of truth.
+The CLI currently consists of the commands listed on this page, and this page is the source of truth for their behavior.

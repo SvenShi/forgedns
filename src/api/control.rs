@@ -7,10 +7,8 @@
 
 use crate::api::{ApiHandler, ApiRegister, json_error, json_ok};
 use crate::config;
-use crate::config::types::Config;
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
-use crate::plugin;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};
@@ -339,26 +337,23 @@ impl ApiHandler for ConfigValidateHandler {
 }
 
 fn validate_config_file(path: &Path) -> std::result::Result<ConfigCheckResponse, String> {
-    let config = config::init(&path.to_path_buf()).map_err(|err| err.to_string())?;
-    plugin::validate_configuration(&config).map_err(|err| err.to_string())?;
+    let summary = config::validate_file(path).map_err(|err| err.to_string())?;
     Ok(ConfigCheckResponse {
         ok: true,
         source: "file",
         path: Some(path.display().to_string()),
-        plugin_count: config.plugins.len(),
+        plugin_count: summary.plugin_count,
         message: "configuration is valid".to_string(),
     })
 }
 
 fn validate_config_text(text: &str) -> std::result::Result<ConfigCheckResponse, String> {
-    let config: Config = serde_yaml_ng::from_str(text).map_err(|err| err.to_string())?;
-    config.validate().map_err(|err| err.to_string())?;
-    plugin::validate_configuration(&config).map_err(|err| err.to_string())?;
+    let summary = config::validate_text(text).map_err(|err| err.to_string())?;
     Ok(ConfigCheckResponse {
         ok: true,
         source: "body",
         path: None,
-        plugin_count: config.plugins.len(),
+        plugin_count: summary.plugin_count,
         message: "configuration is valid".to_string(),
     })
 }

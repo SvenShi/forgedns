@@ -19,9 +19,14 @@
 use crate::config::types::Config;
 use crate::core::error::Result;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod types;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigValidationSummary {
+    pub plugin_count: usize,
+}
 
 /// Load and parse configuration from YAML file
 ///
@@ -35,4 +40,68 @@ pub fn init(file: &PathBuf) -> Result<Config> {
     // Validate configuration - ConfigError is auto-converted to DnsError
     config.validate()?;
     Ok(config)
+}
+
+/// Validate configuration from an on-disk YAML file.
+pub fn validate_file(path: &Path) -> Result<ConfigValidationSummary> {
+    let config = init(&path.to_path_buf())?;
+    crate::plugin::validate_configuration(&config)?;
+    Ok(ConfigValidationSummary {
+        plugin_count: config.plugins.len(),
+    })
+}
+
+/// Validate configuration from YAML text.
+pub fn validate_text(text: &str) -> Result<ConfigValidationSummary> {
+    let config: Config = serde_yaml_ng::from_str(text)?;
+    config.validate()?;
+    crate::plugin::validate_configuration(&config)?;
+    Ok(ConfigValidationSummary {
+        plugin_count: config.plugins.len(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn valid_config_yaml() -> &'static str {
+        r#"
+plugins:
+  - tag: debug_main
+    type: debug_print
+"#
+    }
+
+    #[test]
+    fn validate_file_accepts_valid_config() {
+        let temp = NamedTempFile::new().expect("temp file");
+        std::fs::write(temp.path(), valid_config_yaml()).expect("write config");
+
+        let summary = validate_file(temp.path()).expect("valid config should pass");
+        assert_eq!(summary.plugin_count, 1);
+    }
+
+    #[test]
+    fn validate_file_rejects_invalid_yaml() {
+        let temp = NamedTempFile::new().expect("temp file");
+        std::fs::write(temp.path(), "plugins: [").expect("write config");
+
+        assert!(validate_file(temp.path()).is_err());
+    }
+
+    #[test]
+    fn validate_text_rejects_unknown_plugin_type() {
+        let err = validate_text(
+            r#"
+plugins:
+  - tag: bad
+    type: missing_plugin
+"#,
+        )
+        .expect_err("unknown plugin should fail");
+
+        assert!(err.to_string().contains("Unknown plugin type"));
+    }
 }

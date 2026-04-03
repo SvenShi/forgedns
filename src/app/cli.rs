@@ -21,6 +21,8 @@ pub struct Cli {
 pub enum Command {
     /// Start ForgeDNS in the foreground.
     Start(StartOptions),
+    /// Check whether a configuration file is valid.
+    Check(CheckOptions),
     /// Export selected rules from a dat file into text files.
     ExportDat(ExportDatOptions),
     /// Manage the operating system service.
@@ -41,6 +43,18 @@ pub struct StartOptions {
     /// Log level override (overrides config file): off, trace, debug, info, warn, error
     #[arg(short = 'l', long = "log-level")]
     pub log_level: Option<String>,
+}
+
+/// Static configuration check options.
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+pub struct CheckOptions {
+    /// Path to configuration file
+    #[arg(short = 'c', long = "config", default_value = "config.yaml")]
+    pub config: PathBuf,
+
+    /// Working directory for resolving relative paths
+    #[arg(short = 'd', long = "working-dir")]
+    pub working_dir: Option<PathBuf>,
 }
 
 /// Dat export options.
@@ -167,6 +181,55 @@ mod tests {
                 config: PathBuf::from("config.yaml"),
                 working_dir: None,
                 log_level: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_check_command_uses_default_config() {
+        let args = ["forgedns", "check"];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Check(CheckOptions {
+                config: PathBuf::from("config.yaml"),
+                working_dir: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_check_command_with_explicit_config() {
+        let args = ["forgedns", "check", "-c", "custom.yaml"];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Check(CheckOptions {
+                config: PathBuf::from("custom.yaml"),
+                working_dir: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_check_command_with_working_dir() {
+        let args = [
+            "forgedns",
+            "check",
+            "-c",
+            "custom.yaml",
+            "-d",
+            "/tmp/forgedns",
+        ];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Check(CheckOptions {
+                config: PathBuf::from("custom.yaml"),
+                working_dir: Some(PathBuf::from("/tmp/forgedns")),
             })
         );
     }
