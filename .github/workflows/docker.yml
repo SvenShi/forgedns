@@ -21,11 +21,6 @@ on:
         required: false
         default: true
         type: boolean
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
 
 permissions:
   contents: read
