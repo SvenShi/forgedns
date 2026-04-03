@@ -29,7 +29,7 @@ permissions:
 
 env:
   IMAGE_NAME_DOCKERHUB: svenshi/forgedns
-  IMAGE_NAME_GHCR: ghcr.io/${{ github.repository }}
+  IMAGE_NAME_GHCR: ghcr.io/svenshi/forgedns
 
 jobs:
   prepare:
