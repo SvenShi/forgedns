@@ -6,7 +6,6 @@
 //! Shared test utilities for plugin unit tests.
 
 #![cfg(test)]
-
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::PluginRegistry;

@@ -35,7 +35,6 @@ pub mod provider;
 pub mod registry;
 pub mod server;
 
-#[cfg(test)]
 pub(crate) mod test_utils;
 
 use crate::api::ApiRegister;

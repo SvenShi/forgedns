@@ -202,7 +202,7 @@ impl RequestHandle {
 mod tests {
     use super::*;
     use crate::continue_next;
-    use crate::core::error::{DnsError, Result};
+    use crate::core::error::Result;
     use crate::plugin::test_utils::test_registry;
     use crate::proto::Question;
     use crate::proto::{Name, RecordType};
@@ -245,31 +245,6 @@ mod tests {
         RequestHandle {
             entry_executor: executor,
             registry: test_registry(),
-        }
-    }
-
-    #[derive(Debug)]
-    struct ErrorExecutor;
-
-    #[async_trait]
-    impl Plugin for ErrorExecutor {
-        fn tag(&self) -> &str {
-            "error"
-        }
-
-        async fn init(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        async fn destroy(&self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl Executor for ErrorExecutor {
-        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
-            Err(DnsError::plugin("execute failed"))
         }
     }
 
