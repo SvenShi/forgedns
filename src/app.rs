@@ -18,6 +18,7 @@
 
 pub mod bootstrap;
 pub mod cli;
+pub mod export_dat;
 mod logging;
 
 use crate::api::control::{AppController, ControlCommand};

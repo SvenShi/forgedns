@@ -2,6 +2,7 @@ const sidebars = {
   docsSidebar: [
     'intro',
     'quickstart',
+    'cli',
     'configuration',
     'releases',
     {

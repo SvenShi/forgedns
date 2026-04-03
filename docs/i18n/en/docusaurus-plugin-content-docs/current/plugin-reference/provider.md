@@ -195,6 +195,7 @@ Loads reusable domain rules from v2ray-rules-dat `geosite.dat`.
 - `RootDomain` becomes `domain:`.
 - `Full` becomes `full:`.
 - Can be referenced directly by `qname`, `cname`, and `question`, or aggregated by `domain_set`.
+- If you want to pre-export selected rules into text files before runtime, use `forgedns export-dat --kind geosite`.
 
 ---
 
@@ -322,3 +323,4 @@ Loads reusable IP and CIDR rules from v2ray-rules-dat `geoip.dat`.
 
 - Exposes IP-only membership checks.
 - Can be referenced directly by `client_ip`, `resp_ip`, and `ptr_ip`, or aggregated by `ip_set`.
+- If you want to pre-export selected rules into text files before runtime, use `forgedns export-dat --kind geoip`.

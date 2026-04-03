@@ -37,12 +37,6 @@ Run with debug logging:
 cargo run -- -c config.yaml -l debug
 ```
 
-Validate configuration:
-
-```bash
-./target/release/forgedns check -c config.yaml
-```
-
 ## 2. Install From GitHub Release Archives
 
 The release workflow generates standalone binaries for multiple platforms. Each archive includes:
@@ -171,10 +165,9 @@ Default installed paths:
 
 The project also ships systemd packaging metadata, so Debian-family systems are a good fit for service-based deployment.
 
-Verify:
+Verify service status:
 
 ```bash
-forgedns check -c /etc/forgedns/config.yaml
 sudo systemctl status forgedns
 ```
 

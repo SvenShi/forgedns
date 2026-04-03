@@ -37,12 +37,6 @@ cargo build --release
 cargo run -- -c config.yaml -l debug
 ```
 
-配置检查：
-
-```bash
-./target/release/forgedns check -c config.yaml
-```
-
 ## 2. 使用 GitHub Releases 二进制包
 
 ForgeDNS 的 release 工作流会为多个平台生成独立二进制压缩包。压缩包内默认包含：
@@ -171,10 +165,9 @@ sudo dpkg -i forgedns_*_arm64.deb
 
 项目也包含 systemd 打包配置，因此在 Debian 系发行版上适合直接作为系统服务部署。
 
-验证：
+验证服务状态：
 
 ```bash
-forgedns check -c /etc/forgedns/config.yaml
 sudo systemctl status forgedns
 ```
 

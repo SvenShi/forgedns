@@ -15,6 +15,7 @@ use forgedns::{app, service};
 fn main() -> Result<()> {
     match cli::parse_cli().command {
         Command::Start(start) => app::run(start),
+        Command::ExportDat(export) => app::export_dat::run(export),
         Command::Service(service_opts) => service::run(service_opts),
     }
 }

@@ -21,6 +21,8 @@ pub struct Cli {
 pub enum Command {
     /// Start ForgeDNS in the foreground.
     Start(StartOptions),
+    /// Export selected rules from a dat file into text files.
+    ExportDat(ExportDatOptions),
     /// Manage the operating system service.
     Service(ServiceOptions),
 }
@@ -39,6 +41,53 @@ pub struct StartOptions {
     /// Log level override (overrides config file): off, trace, debug, info, warn, error
     #[arg(short = 'l', long = "log-level")]
     pub log_level: Option<String>,
+}
+
+/// Dat export options.
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+pub struct ExportDatOptions {
+    /// Path to the source dat file
+    #[arg(long = "file")]
+    pub file: PathBuf,
+
+    /// Explicit dat kind: auto, geosite, geoip
+    #[arg(long = "kind", value_enum, default_value_t = DatKind::Auto)]
+    pub kind: DatKind,
+
+    /// Output text format: forgedns or original
+    #[arg(long = "format", value_enum, default_value_t = ExportFormat::Forgedns)]
+    pub format: ExportFormat,
+
+    /// Selector to export; repeat this flag to export multiple selectors
+    #[arg(long = "selector")]
+    pub selectors: Vec<String>,
+
+    /// Output directory for exported files
+    #[arg(long = "out-dir")]
+    pub out_dir: PathBuf,
+
+    /// Optional merged output file name written inside --out-dir
+    #[arg(long = "merged-file")]
+    pub merged_file: Option<String>,
+
+    /// Allow overwriting existing output files
+    #[arg(long = "overwrite", default_value_t = false)]
+    pub overwrite: bool,
+}
+
+/// Supported dat kinds.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatKind {
+    Auto,
+    Geosite,
+    Geoip,
+}
+
+/// Supported export text formats.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFormat {
+    Forgedns,
+    Original,
 }
 
 /// Service command options.
@@ -181,6 +230,69 @@ mod tests {
             cli.command,
             Command::Service(ServiceOptions {
                 command: ServiceCommand::Uninstall,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_export_dat_command() {
+        let args = [
+            "forgedns",
+            "export-dat",
+            "--file",
+            "rules/geosite.dat",
+            "--selector",
+            "cn",
+            "--selector",
+            "geolocation-!cn",
+            "--out-dir",
+            "/tmp/out",
+            "--kind",
+            "geosite",
+            "--format",
+            "original",
+            "--merged-file",
+            "all.txt",
+            "--overwrite",
+        ];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::ExportDat(ExportDatOptions {
+                file: PathBuf::from("rules/geosite.dat"),
+                kind: DatKind::Geosite,
+                format: ExportFormat::Original,
+                selectors: vec!["cn".to_string(), "geolocation-!cn".to_string()],
+                out_dir: PathBuf::from("/tmp/out"),
+                merged_file: Some("all.txt".to_string()),
+                overwrite: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_export_dat_command_without_selectors() {
+        let args = [
+            "forgedns",
+            "export-dat",
+            "--file",
+            "rules/geoip.dat",
+            "--out-dir",
+            "/tmp/out",
+        ];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::ExportDat(ExportDatOptions {
+                file: PathBuf::from("rules/geoip.dat"),
+                kind: DatKind::Auto,
+                format: ExportFormat::Forgedns,
+                selectors: Vec::new(),
+                out_dir: PathBuf::from("/tmp/out"),
+                merged_file: None,
+                overwrite: false,
             })
         );
     }

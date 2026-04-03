@@ -10,7 +10,10 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::plugin::provider::Provider;
-use crate::plugin::provider::v2ray_dat::{DomainType, GeoSite, GeoSiteList, attribute};
+use crate::plugin::provider::v2ray_dat::{
+    GeoSiteList, geosite_code, geosite_domain_expression, geosite_domain_matches_selectors,
+    matched_geosite_selectors, parse_geosite_selectors,
+};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
@@ -18,7 +21,6 @@ use async_trait::async_trait;
 use prost::Message;
 use serde::Deserialize;
 use std::any::Any;
-use std::fmt::Debug;
 use std::fs;
 use std::sync::Arc;
 use tracing::info;
@@ -28,12 +30,6 @@ struct GeoSiteArgs {
     file: String,
     #[serde(default)]
     selectors: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-struct GeoSiteSelector {
-    code: String,
-    attr: Option<String>,
 }
 
 #[derive(Debug)]
@@ -131,7 +127,14 @@ impl PluginFactory for GeoSiteFactory {
             if selectors.is_empty() {
                 matched_entries += 1;
                 for domain in &entry.domain {
-                    let exp = geosite_domain_expression(plugin_config.tag.as_str(), entry, domain)?;
+                    let exp = geosite_domain_expression(domain).map_err(|e| {
+                        DnsError::plugin(format!(
+                            "plugin '{}' geosite code '{}' {}",
+                            plugin_config.tag,
+                            geosite_code(entry),
+                            e
+                        ))
+                    })?;
                     let source = format!("geosite code '{}'", geosite_code(entry));
                     matcher
                         .add_expression(&exp, &source)
@@ -142,16 +145,23 @@ impl PluginFactory for GeoSiteFactory {
                 continue;
             }
 
-            let matched_selectors = matched_selectors(entry, &selectors);
+            let matched_selectors = matched_geosite_selectors(entry, &selectors);
             if matched_selectors.is_empty() {
                 continue;
             }
             matched_entries += 1;
             for domain in &entry.domain {
-                if !domain_matches_selectors(domain, &matched_selectors) {
+                if !geosite_domain_matches_selectors(domain, &matched_selectors) {
                     continue;
                 }
-                let exp = geosite_domain_expression(plugin_config.tag.as_str(), entry, domain)?;
+                let exp = geosite_domain_expression(domain).map_err(|e| {
+                    DnsError::plugin(format!(
+                        "plugin '{}' geosite code '{}' {}",
+                        plugin_config.tag,
+                        geosite_code(entry),
+                        e
+                    ))
+                })?;
                 let source = format!("geosite code '{}'", geosite_code(entry));
                 matcher
                     .add_expression(&exp, &source)
@@ -208,102 +218,4 @@ impl PluginFactory for GeoSiteFactory {
             matcher,
         })))
     }
-}
-
-fn geosite_code(entry: &GeoSite) -> &str {
-    if entry.code.is_empty() {
-        entry.country_code.as_str()
-    } else {
-        entry.code.as_str()
-    }
-}
-
-fn geosite_domain_expression(
-    provider_tag: &str,
-    entry: &GeoSite,
-    domain: &crate::plugin::provider::v2ray_dat::Domain,
-) -> DnsResult<String> {
-    let prefix = match DomainType::try_from(domain.r#type).map_err(|_| {
-        DnsError::plugin(format!(
-            "plugin '{}' geosite code '{}' contains unsupported domain type '{}' for '{}'",
-            provider_tag,
-            geosite_code(entry),
-            domain.r#type,
-            domain.value
-        ))
-    })? {
-        DomainType::Plain => "keyword:",
-        DomainType::Regex => "regexp:",
-        DomainType::RootDomain => "domain:",
-        DomainType::Full => "full:",
-    };
-    Ok(format!("{}{}", prefix, domain.value))
-}
-
-fn parse_geosite_selectors(raw_selectors: &[String]) -> Result<Vec<GeoSiteSelector>, String> {
-    let mut selectors = Vec::new();
-    for raw in raw_selectors {
-        let token = raw.trim();
-        if token.is_empty() {
-            continue;
-        }
-        let (code, attr) = match token.split_once('@') {
-            Some((code, attr)) => (code.trim(), Some(attr.trim())),
-            None => (token, None),
-        };
-        if code.is_empty() {
-            return Err(format!("invalid empty geosite code selector '{}'", token));
-        }
-        if attr.is_some_and(str::is_empty) {
-            return Err(format!(
-                "invalid geosite selector '{}' with empty attribute name",
-                token
-            ));
-        }
-        selectors.push(GeoSiteSelector {
-            code: code.to_ascii_lowercase(),
-            attr: attr.map(|value| value.to_ascii_lowercase()),
-        });
-    }
-    Ok(selectors)
-}
-
-fn matched_selectors<'a>(
-    entry: &GeoSite,
-    selectors: &'a [GeoSiteSelector],
-) -> Vec<&'a GeoSiteSelector> {
-    if selectors.is_empty() {
-        return Vec::new();
-    }
-    let code = geosite_code(entry).to_ascii_lowercase();
-    selectors
-        .iter()
-        .filter(|selector| selector.code == code)
-        .collect()
-}
-
-fn domain_matches_selectors(
-    domain: &crate::plugin::provider::v2ray_dat::Domain,
-    selectors: &[&GeoSiteSelector],
-) -> bool {
-    if selectors.is_empty() {
-        return true;
-    }
-    selectors.iter().any(|selector| match &selector.attr {
-        None => true,
-        Some(attr) => domain_has_attribute(domain, attr),
-    })
-}
-
-fn domain_has_attribute(domain: &crate::plugin::provider::v2ray_dat::Domain, attr: &str) -> bool {
-    domain.attribute.iter().any(|attribute| {
-        if !attribute.key.eq_ignore_ascii_case(attr) {
-            return false;
-        }
-        match &attribute.typed_value {
-            None => true,
-            Some(attribute::TypedValue::BoolValue(value)) => *value,
-            Some(attribute::TypedValue::IntValue(value)) => *value != 0,
-        }
-    })
 }

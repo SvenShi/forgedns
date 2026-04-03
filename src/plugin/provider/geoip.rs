@@ -10,14 +10,15 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::provider::Provider;
-use crate::plugin::provider::v2ray_dat::{GeoIp, GeoIpList, normalized_selectors};
+use crate::plugin::provider::v2ray_dat::{
+    GeoIp, GeoIpList, cidr_to_rule, geoip_code, normalized_selectors,
+};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use prost::Message;
 use serde::Deserialize;
 use std::any::Any;
-use std::fmt::Debug;
 use std::fs;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -193,31 +194,4 @@ fn matches_selector(entry: &GeoIp, requested_selectors: &[String]) -> bool {
     }
     let code = geoip_code(entry).to_ascii_lowercase();
     requested_selectors.iter().any(|wanted| wanted == &code)
-}
-
-fn geoip_code(entry: &GeoIp) -> &str {
-    if entry.code.is_empty() {
-        entry.country_code.as_str()
-    } else {
-        entry.code.as_str()
-    }
-}
-
-fn cidr_to_rule(cidr: &crate::plugin::provider::v2ray_dat::Cidr) -> Option<String> {
-    match cidr.ip.len() {
-        4 => Some(format!(
-            "{}.{}.{}.{}/{}",
-            cidr.ip[0], cidr.ip[1], cidr.ip[2], cidr.ip[3], cidr.prefix
-        )),
-        16 => {
-            let mut octets = [0u8; 16];
-            octets.copy_from_slice(&cidr.ip);
-            Some(format!(
-                "{}/{}",
-                std::net::Ipv6Addr::from(octets),
-                cidr.prefix
-            ))
-        }
-        _ => None,
-    }
 }
