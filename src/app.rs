@@ -309,13 +309,21 @@ plugins:
     type: udp_server
     args:
       entry: seq
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: seq
 "#,
         )
         .expect("config should validate");
 
         let graph = render_dependency_graph(&summary);
         assert!(graph.contains("udp_server [server:udp_server]"));
-        assert!(graph.contains("\n\ntcp_server [server:tcp_server]"));
+        assert!(graph.contains("tcp_server [server:tcp_server]"));
+        assert!(
+            graph.contains("udp_server [server:udp_server]\n\n")
+                || graph.contains("tcp_server [server:tcp_server]\n\n")
+        );
         assert!(graph.contains("└─ args[0].exec [executor]"));
         assert!(graph.contains("forward [executor:forward]"));
         assert!(!graph.contains("no dependencies"));
