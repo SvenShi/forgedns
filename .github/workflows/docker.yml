@@ -114,10 +114,10 @@ jobs:
 
           gh release download "${{ needs.prepare.outputs.version }}" \
             --repo "${{ github.repository }}" \
-            --pattern "forgedns-x86_64-unknown-linux-gnu.tar.gz" \
+            --pattern "forgedns-x86_64-unknown-linux-musl.tar.gz" \
             --dir /tmp/forgedns-release
 
-          tar -xzf /tmp/forgedns-release/forgedns-x86_64-unknown-linux-gnu.tar.gz -C .docker-dist
+          tar -xzf /tmp/forgedns-release/forgedns-x86_64-unknown-linux-musl.tar.gz -C .docker-dist
           test -f .docker-dist/forgedns
           test -f .docker-dist/config.yaml
           test -f .docker-dist/LICENSE
@@ -219,10 +219,10 @@ jobs:
 
           gh release download "${{ needs.prepare.outputs.version }}" \
             --repo "${{ github.repository }}" \
-            --pattern "forgedns-aarch64-unknown-linux-gnu.tar.gz" \
+            --pattern "forgedns-aarch64-unknown-linux-musl.tar.gz" \
             --dir /tmp/forgedns-release
 
-          tar -xzf /tmp/forgedns-release/forgedns-aarch64-unknown-linux-gnu.tar.gz -C .docker-dist
+          tar -xzf /tmp/forgedns-release/forgedns-aarch64-unknown-linux-musl.tar.gz -C .docker-dist
           test -f .docker-dist/forgedns
           test -f .docker-dist/config.yaml
           test -f .docker-dist/LICENSE
