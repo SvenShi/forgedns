@@ -1,0 +1,26 @@
+FROM debian:bookworm-slim
+
+ARG FORGEDNS_VERSION=dev
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /etc/forgedns
+
+COPY .docker-dist/forgedns /usr/local/bin/forgedns
+COPY .docker-dist/config.yaml /etc/forgedns/config.yaml
+COPY .docker-dist/LICENSE /usr/share/licenses/forgedns/LICENSE
+
+RUN chmod +x /usr/local/bin/forgedns \
+    && sed -i 's/0.0.0.0:5335/0.0.0.0:53/' /etc/forgedns/config.yaml || true
+
+ENV FORGEDNS_VERSION=${FORGEDNS_VERSION}
+ENV TZ=UTC
+
+EXPOSE 53/udp
+EXPOSE 53/tcp
+EXPOSE 9088/tcp
+
+ENTRYPOINT ["forgedns"]
+CMD ["start", "-c", "/etc/forgedns/config.yaml"]
