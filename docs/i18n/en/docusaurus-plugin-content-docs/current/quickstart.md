@@ -188,25 +188,27 @@ sudo systemctl enable --now forgedns
 
 The repository publishes a GHCR image at:
 
+#### GitHub
 - `ghcr.io/svenshi/forgedns`
+#### Docker Hub
+- `svenshi/forgedns`
 
 The Docker workflow builds:
 
 - `linux/amd64`
 - `linux/arm64`
-- `linux/arm/v7`
 
 Pull and run:
 
 ```bash
-docker pull ghcr.io/svenshi/forgedns:TAG
+docker pull svenshi/forgedns:latest
 
 docker run --rm \
   -p 53:53/udp \
   -p 53:53/tcp \
   -p 9088:9088/tcp \
   -v "$(pwd)/config.yaml:/etc/forgedns/config.yaml:ro" \
-  ghcr.io/svenshi/forgedns:TAG
+  svenshi/forgedns:latest
 ```
 
 If the default-branch image is published, you can also use the `latest` tag.
@@ -222,6 +224,36 @@ The container exposes:
 - `53/udp`
 - `53/tcp`
 - `9088/tcp`
+
+### Docker Compose Example
+
+If you prefer Compose for port mappings and config management, use this `docker-compose.yml`:
+
+```yaml
+services:
+  forgedns:
+    image: svenshi/forgedns:latest
+    container_name: forgedns
+    restart: unless-stopped
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "9088:9088/tcp"
+    volumes:
+      - ./config.yaml:/etc/forgedns/config.yaml:ro
+```
+
+Start it with:
+
+```bash
+docker compose up -d
+```
+
+Follow logs with:
+
+```bash
+docker compose logs -f forgedns
+```
 
 ## 5. Which One Should You Use?
 
