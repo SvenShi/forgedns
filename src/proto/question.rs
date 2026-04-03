@@ -6,13 +6,26 @@
 //! Owned DNS question model.
 
 use crate::proto::{DNSClass, Name, RecordType};
+use std::fmt::{Debug, Display, Formatter};
 
 /// Owned DNS question used by the message representation.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Question {
     name: Name,
     qtype: RecordType,
     qclass: DNSClass,
+}
+
+impl Debug for Question {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} {}", self.name, self.qclass, self.qtype)
+    }
+}
+
+impl Display for Question {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} {}", self.name, self.qclass, self.qtype)
+    }
 }
 
 impl Question {
@@ -86,5 +99,16 @@ mod tests {
         assert_eq!(cloned.name().to_fqdn(), "other.example.");
         assert_eq!(cloned.qtype(), RecordType::AAAA);
         assert_eq!(cloned.qclass(), DNSClass::CH);
+    }
+
+    #[test]
+    fn display_formats_question_in_dns_style() {
+        let question = Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::AAAA,
+            DNSClass::IN,
+        );
+
+        assert_eq!(question.to_string(), "example.com IN AAAA");
     }
 }

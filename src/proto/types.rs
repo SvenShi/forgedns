@@ -418,6 +418,27 @@ impl DNSClass {
     }
 }
 
+/// Convert from `DNSClass` to `&str`
+impl From<DNSClass> for &'static str {
+    fn from(rt: DNSClass) -> &'static str {
+        match rt {
+            DNSClass::IN => "IN",
+            DNSClass::CS => "CS",
+            DNSClass::CH => "CH",
+            DNSClass::HS => "HS",
+            DNSClass::NONE => "NONE",
+            DNSClass::ANY => "ANY",
+            DNSClass::OPT(_) => "OPT",
+            DNSClass::Unknown(..) => "UNKNOWN",
+        }
+    }
+}
+impl Display for DNSClass {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+        f.write_str(Into::<&str>::into(*self))
+    }
+}
+
 /// The type of the resource record.
 ///
 /// This specifies the type of data in the RData field of the Resource Record
