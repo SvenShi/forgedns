@@ -10,7 +10,20 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.2.0" badge="Feature Release" date="2026-04-02" defaultOpen>
+  <ReleaseCard version="v0.2.1" badge="Patch Release" date="2026-04-03" defaultOpen>
+      **Fixes**
+
+      - 修复 DoH over HTTP/2 上游 GET 请求未正确结束 stream，导致部分上游在 5 秒后超时的问题。
+      - 完善 `Question` 的 `Display` 输出，统一日志和调试信息中的查询展示格式。
+      - 放宽 cache TTL 单测中的时间边界假设，避免 CI 在跨秒时出现偶发失败。
+
+      **Docs**
+
+      - quickstart 文档移除 Docker `linux/arm/v7` 支持说明。
+      - quickstart 文档新增 `docker compose` 部署示例。
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.2.0" badge="Feature Release" date="2026-04-02">
       **Highlights**
 
       - 新增 `download` executor，支持将远程 `http/https` 文件下载到本地目录。

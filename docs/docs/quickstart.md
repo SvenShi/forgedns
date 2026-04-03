@@ -188,25 +188,27 @@ sudo systemctl enable --now forgedns
 
 仓库提供 GHCR 镜像发布流程，镜像仓库地址为：
 
+#### GitHub
 - `ghcr.io/svenshi/forgedns`
+#### Docker Hub
+- `svenshi/forgedns`
 
 当前 Docker 发布流程构建以下平台：
 
 - `linux/amd64`
 - `linux/arm64`
-- `linux/arm/v7`
 
 拉取并运行：
 
 ```bash
-docker pull ghcr.io/svenshi/forgedns:TAG
+docker pull svenshi/forgedns:latest
 
 docker run --rm \
   -p 53:53/udp \
   -p 53:53/tcp \
   -p 9088:9088/tcp \
   -v "$(pwd)/config.yaml:/etc/forgedns/config.yaml:ro" \
-  ghcr.io/svenshi/forgedns:TAG
+  svenshi/forgedns:latest
 ```
 
 如果默认分支镜像已发布，也可以使用 `latest` 标签。
@@ -222,6 +224,36 @@ forgedns start -c /etc/forgedns/config.yaml
 - `53/udp`
 - `53/tcp`
 - `9088/tcp`
+
+### Docker Compose 示例
+
+如果你更习惯用 Compose 管理配置和端口映射，可以使用下面的 `docker-compose.yml`：
+
+```yaml
+services:
+  forgedns:
+    image: svenshi/forgedns:latest
+    container_name: forgedns
+    restart: unless-stopped
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "9088:9088/tcp"
+    volumes:
+      - ./config.yaml:/etc/forgedns/config.yaml:ro
+```
+
+启动：
+
+```bash
+docker compose up -d
+```
+
+查看日志：
+
+```bash
+docker compose logs -f forgedns
+```
 
 ## 5. 选择建议
 

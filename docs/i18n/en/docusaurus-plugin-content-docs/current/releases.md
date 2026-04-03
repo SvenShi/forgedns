@@ -10,7 +10,20 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.2.0" badge="Feature Release" date="2026-04-02" defaultOpen>
+  <ReleaseCard version="v0.2.1" badge="Patch Release" date="2026-04-03" defaultOpen>
+      **Fixes**
+
+      - Fixed a DoH over HTTP/2 bug where GET requests did not close the request stream, causing some upstreams to time out after 5 seconds.
+      - Completed the `Question` `Display` implementation so logs and debug output render DNS questions consistently.
+      - Relaxed the cache TTL unit test to tolerate cross-second timing drift in CI.
+
+      **Docs**
+
+      - Removed the Docker `linux/arm/v7` support note from quickstart.
+      - Added a `docker compose` deployment example to quickstart.
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.2.0" badge="Feature Release" date="2026-04-02">
       **Highlights**
 
       - Added the `download` executor for downloading remote `http/https` files to local storage.
