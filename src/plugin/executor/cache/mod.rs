@@ -1412,7 +1412,10 @@ mod tests {
         let response = context.response().expect("cache hit should set response");
         assert_eq!(response.id(), 7);
         assert_eq!(response.answers().len(), 1);
-        assert_eq!(response.answers()[0].ttl(), 120);
+        assert!(
+            (119..=120).contains(&response.answers()[0].ttl()),
+            "fresh cache hit should preserve the original TTL or decrement by at most one second"
+        );
     }
 
     #[tokio::test]
