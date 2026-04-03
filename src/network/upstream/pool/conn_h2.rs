@@ -62,7 +62,10 @@ impl Connection for H2Connection {
         let (response_future, _send_stream) = self
             .sender
             .clone()
-            .send_request(request, false)
+            // DoH GET carries the DNS payload in the URI, so the request body is empty.
+            // Mark the stream as finished when sending headers, otherwise some servers
+            // will wait for an end-of-stream signal and never produce a response.
+            .send_request(request, true)
             .map_err(|e| {
                 self.using_count.fetch_sub(1, Ordering::Relaxed);
                 DnsError::protocol(format!("H2 send_request error: {e}"))
