@@ -63,14 +63,12 @@ jobs:
           echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
 
           VERSION="${{ inputs.FORGEDNS_VERSION }}"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -z "${VERSION}" ]]; then
-            echo "workflow_dispatch requires FORGEDNS_VERSION to be an existing release tag"
-            exit 1
-          fi
-
           if [[ -z "${VERSION}" ]]; then
             if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
               VERSION="${GITHUB_REF_NAME}"
+            elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+              echo "workflow_dispatch requires FORGEDNS_VERSION or a tag ref"
+              exit 1
             else
               VERSION="${GITHUB_SHA}"
             fi
