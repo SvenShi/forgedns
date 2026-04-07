@@ -187,7 +187,7 @@ jobs:
 
       - name: Upload digest
         if: needs.prepare.outputs.push == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-amd64
           path: /tmp/digests/*
@@ -292,7 +292,7 @@ jobs:
 
       - name: Upload digest
         if: needs.prepare.outputs.push == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-arm64
           path: /tmp/digests/*
@@ -313,7 +313,7 @@ jobs:
       !contains(needs.*.result, 'cancelled')
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digests-*
