@@ -3,7 +3,7 @@ use forgedns::config::types::{ApiConfig, Config, LogConfig, PluginConfig, Runtim
 use forgedns::core::context::DnsContext;
 use forgedns::plugin::{PluginRegistry, init as init_plugins};
 use forgedns::proto::{DNSClass, Message, Name, Question, RecordType};
-use serde_yaml_ng::Value;
+use serde_yaml_ng::{Mapping, Value};
 use std::hint::black_box;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -19,6 +19,15 @@ fn plugin_config(tag: &str, plugin_type: &str, args: Value) -> PluginConfig {
         plugin_type: plugin_type.to_string(),
         args: Some(args),
     }
+}
+
+fn hosts_args(entries: &[String]) -> Value {
+    let mut mapping = Mapping::new();
+    mapping.insert(
+        Value::String("entries".to_string()),
+        Value::Sequence(entries.iter().cloned().map(Value::String).collect()),
+    );
+    Value::Mapping(mapping)
 }
 
 fn make_config(plugin: PluginConfig) -> Config {
@@ -148,8 +157,7 @@ fn bench_hosts(c: &mut Criterion) {
             "api42.bench.test.",
         ),
     ] {
-        let args: Value = serde_yaml_ng::from_str(&format!("entries:\n  - '{entry}'"))
-            .expect("hosts args should parse");
+        let args = hosts_args(&[entry.to_string()]);
         let (executor, registry) = load_executor(&rt, plugin_config("bench", "hosts", args));
 
         group.bench_function(BenchmarkId::new("execute", label), |b| {
@@ -163,6 +171,68 @@ fn bench_hosts(c: &mut Criterion) {
             })
         });
     }
+
+    let mut large_entries = Vec::with_capacity(4_000);
+    for idx in 0..1_000usize {
+        large_entries.push(format!("full:edge-{idx}.bench.example 192.0.2.10"));
+        large_entries.push(format!("domain:zone-{idx}.bench.example 192.0.2.11"));
+        large_entries.push(format!("keyword:tenant-{idx} 192.0.2.12"));
+    }
+    for idx in 0..1_000usize {
+        large_entries.push(format!(
+            r"regexp:^svc{idx}-[a-z0-9-]+\.bench\.example$ 192.0.2.13"
+        ));
+    }
+
+    let (large_executor, large_registry) = load_executor(
+        &rt,
+        plugin_config("bench", "hosts", hosts_args(&large_entries)),
+    );
+    for (label, qname, qtype) in [
+        ("large_full", "edge-777.bench.example.", RecordType::A),
+        ("large_domain", "api.zone-777.bench.example.", RecordType::A),
+        (
+            "large_keyword",
+            "tenant-777-gateway.prod.example.",
+            RecordType::A,
+        ),
+        ("large_regex", "svc777-alpha.bench.example.", RecordType::A),
+        ("large_miss", "miss.case.example.", RecordType::A),
+    ] {
+        group.bench_function(BenchmarkId::new("execute", label), |b| {
+            b.iter(|| {
+                let mut ctx = make_context(large_registry.clone(), qname, qtype);
+                let step = rt
+                    .block_on(large_executor.execute_with_next(&mut ctx, None))
+                    .expect("hosts execute should succeed");
+                black_box(step);
+                black_box(ctx.response());
+            })
+        });
+    }
+
+    let (nadata_executor, nodata_registry) = load_executor(
+        &rt,
+        plugin_config(
+            "bench",
+            "hosts",
+            hosts_args(&["full:v4-only.bench.test 192.0.2.10".to_string()]),
+        ),
+    );
+    group.bench_function(BenchmarkId::new("execute", "family_mismatch_nodata"), |b| {
+        b.iter(|| {
+            let mut ctx = make_context(
+                nodata_registry.clone(),
+                "v4-only.bench.test.",
+                RecordType::AAAA,
+            );
+            let step = rt
+                .block_on(nadata_executor.execute_with_next(&mut ctx, None))
+                .expect("hosts execute should succeed");
+            black_box(step);
+            black_box(ctx.response().expect("response should be present"));
+        })
+    });
 
     group.finish();
 }

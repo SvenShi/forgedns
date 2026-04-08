@@ -847,8 +847,10 @@ Returns local static answers using host-style entries.
   type: hosts
   args:
     entries:
+      # Unprefixed rules default to full:
+      - "router.local 192.168.1.1"
       # Exact-name rule
-      - "full:router.local 192.168.1.1"
+      - "full:gateway.local 192.168.1.2"
       # Suffix rule returning both IPv4 and IPv6
       - "domain:svc.local 10.0.0.10 fd00::10"
       # Keyword rule
@@ -888,11 +890,15 @@ Rule format:
 
 ### Behavior
 
-- Handles only `IN` class `A` / `AAAA` requests.
-- Returns same-family addresses according to the query type.
-- Passes through to subsequent execution when there is no match.
-- By default it keeps running the remaining chain after a match; enable `short_circuit` to stop immediately.
-- The TTL is fixed at `300`.
+- Handles only `IN` class `A` / `AAAA` requests with exactly one question.
+- Unprefixed rules default to `full:` to match mosdns `hosts`.
+- Rule-family priority is fixed as `full -> domain -> regexp -> keyword`.
+- `domain:` uses the longest matching suffix.
+- Repeated patterns use last-write-wins semantics in load order: inline `entries` first, then each configured file line by line.
+- Positive local answers return same-family addresses with a fixed TTL of `10`.
+- If the domain matches but the requested address family is missing, the plugin returns `NoError + empty answer + fake SOA` instead of passing through.
+- Non-matching queries pass through to subsequent execution.
+- By default it keeps running the remaining chain after a local response; enable `short_circuit` to stop immediately for both positive and empty local replies.
 
 ### Typical Uses
 

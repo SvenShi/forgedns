@@ -917,8 +917,10 @@ plugins:
   type: hosts
   args:
     entries:
+      # 无前缀规则默认按 full: 处理
+      - "router.local 192.168.1.1"
       # 精确匹配单个主机名
-      - "full:router.local 192.168.1.1"
+      - "full:gateway.local 192.168.1.2"
       # 后缀匹配，可同时返回 IPv4 / IPv6
       - "domain:svc.local 10.0.0.10 fd00::10"
       # 关键字匹配
@@ -952,11 +954,15 @@ plugins:
 
 ### 行为说明
 
-- 仅处理 `IN` 类的 `A` / `AAAA` 请求。
-- 根据查询类型返回同族地址。
+- 仅处理“恰好一个 question”的 `IN` 类 `A` / `AAAA` 请求。
+- 无前缀规则默认等价于 `full:`，与 mosdns `hosts` 保持一致。
+- 规则优先级固定为 `full -> domain -> regexp -> keyword`。
+- `domain:` 按最长后缀命中。
+- 相同 pattern 按加载顺序后写覆盖前写；加载顺序为 `entries` 先，再按 `files` 顺序逐文件逐行覆盖。
+- 根据查询类型返回同族地址，正向本地答案 TTL 固定为 `10`。
+- 域名命中但请求家族没有对应地址时，返回 `NoError + 空 Answer + fake SOA`，不会透传后续执行。
 - 未命中时透传后续执行。
-- 命中后默认继续后续执行；开启 `short_circuit` 时会立即返回。
-- TTL 固定为 `300`。
+- 命中后默认继续后续执行；开启 `short_circuit` 时，无论是正向答案还是空本地答复，都会立即停止后续 executor 链。
 
 ### 典型用途
 
