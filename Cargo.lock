@@ -693,7 +693,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "service-manager",
- "smallvec",
  "socket2 0.6.3",
  "tempfile",
  "thiserror 2.0.18",

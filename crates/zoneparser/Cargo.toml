@@ -9,3 +9,8 @@ description = "Vendored zonefile parser adapted for ForgeDNS"
 [dependencies]
 forgedns-proto = { path = "../forgedns-proto" }
 thiserror = "2.0"
+
+[lib]
+name = "zoneparser"
+path = "src/lib.rs"
+doctest = false
