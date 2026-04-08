@@ -6,6 +6,9 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/forgedns-proto/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ripset/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/zoneparser/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/benchmarks" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/tests/testdata" />
