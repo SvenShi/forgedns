@@ -10,6 +10,7 @@
 //! to maintain.
 
 use crate::config::types::ConfigError;
+use forgedns_proto::ProtoError;
 use thiserror::Error;
 
 /// Main error type for ForgeDNS
@@ -132,6 +133,17 @@ impl From<&str> for DnsError {
 impl From<ConfigError> for DnsError {
     fn from(e: ConfigError) -> Self {
         DnsError::Config(e.to_string())
+    }
+}
+
+impl From<ProtoError> for DnsError {
+    fn from(value: ProtoError) -> Self {
+        match value {
+            ProtoError::Io(error) => Self::Io(error),
+            ProtoError::Protocol(message) => Self::Protocol(message),
+            ProtoError::UnknownDnsClassStr(value) => Self::UnknownDnsClassStr(value),
+            ProtoError::UnknownRecordTypeStr(value) => Self::UnknownRecordTypeStr(value),
+        }
     }
 }
 

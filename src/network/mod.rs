@@ -20,6 +20,8 @@
 //!
 //! Submodules:
 //!
+//! - [`buffer_pool`]: shared reusable wire buffers for short-lived encoding and
+//!   transport writes;
 //! - [`listen`]: shared listen-address parsing helpers used by server and API
 //!   entry points.
 //! - [`tls_config`]: TLS certificate, key, and client configuration loading for
@@ -27,6 +29,7 @@
 //! - [`transport`]: reusable transport adapters for UDP, TCP, and QUIC I/O.
 //! - [`upstream`]: outbound DNS resolver construction, bootstrap resolution,
 //!   and connection pooling across supported upstream protocols.
+pub mod buffer_pool;
 pub mod listen;
 pub mod tls_config;
 pub mod transport;

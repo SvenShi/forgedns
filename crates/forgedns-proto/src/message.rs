@@ -6,13 +6,13 @@
 //! Owned DNS message model.
 
 use crate::core::error::{DnsError, Result};
+use crate::network::buffer_pool::{PooledWireBuffer, wire_buffer_pool};
 use crate::proto::rdata::{A, AAAA, Edns};
 use crate::proto::wire::{
-    decode_message, edns_record_len, encode_message_into, encode_message_with_limit,
+    DNS_HEADER_LEN, decode_message, edns_record_len, encode_message_into, encode_message_with_limit,
 };
 use crate::proto::{
-    DNSClass, EdnsFlags, Header, MessageType, Name, Opcode, Question, RData, Rcode, Record,
-    RecordType,
+    DNSClass, Header, MessageType, Name, Opcode, Question, RData, Rcode, Record, RecordType,
 };
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -33,37 +33,28 @@ pub struct Message {
 #[allow(dead_code)]
 impl Message {
     #[inline]
-    fn build_response_edns(&self, rcode: Rcode) -> Option<Edns> {
-        let ext_rcode = rcode.high();
-        if let Some(request_edns) = self.edns.as_ref() {
-            let edns = Edns::new_with_param(
-                request_edns.udp_payload_size(),
-                ext_rcode,
-                request_edns.version(),
-                *request_edns.flags(),
-                Vec::new(),
-            );
-            Some(edns)
-        } else if ext_rcode != 0 {
-            let edns = Edns::new_with_param(1232, ext_rcode, 0, EdnsFlags::default(), Vec::new());
-            Some(edns)
-        } else {
-            None
-        }
+    fn pooled_capacity_for_limit(max_size: usize) -> usize {
+        max_size.max(DNS_HEADER_LEN)
     }
 
     #[inline]
     fn init_response(&self, rcode: Rcode, answer_capacity: usize) -> Message {
+        let (recursion_desired, checking_disabled) = if self.opcode() == Opcode::Query {
+            (self.recursion_desired(), self.checking_disabled())
+        } else {
+            (false, false)
+        };
+
         let header = Header {
             id: self.header.id(),
             message_type: MessageType::Response,
             opcode: self.header.opcode(),
             authoritative: false,
             truncated: false,
-            recursion_desired: self.header.recursion_desired(),
+            recursion_desired,
             recursion_available: false,
             authentic_data: false,
-            checking_disabled: self.header.checking_disabled(),
+            checking_disabled,
             rcode,
         };
 
@@ -72,10 +63,10 @@ impl Message {
             compress: false,
             questions: self.questions.clone(),
             answers: Vec::with_capacity(answer_capacity),
-            authorities: Vec::new(),
-            additionals: Vec::new(),
-            signature: Vec::new(),
-            edns: self.build_response_edns(rcode),
+            authorities: Vec::default(),
+            additionals: Vec::default(),
+            signature: Vec::default(),
+            edns: None,
         }
     }
 
@@ -105,6 +96,13 @@ impl Message {
         Ok(out)
     }
 
+    /// Encode the message into a pooled wire buffer for short-lived immediate use.
+    pub fn to_pooled_bytes(&self) -> Result<PooledWireBuffer<'static>> {
+        let mut out = wire_buffer_pool().acquire(1024);
+        encode_message_into(self, self.id(), &mut out)?;
+        Ok(out)
+    }
+
     /// Append the encoded wire message to the provided buffer.
     ///
     /// This method preserves any bytes that are already present in `out` and
@@ -125,6 +123,13 @@ impl Message {
         Ok(out)
     }
 
+    /// Encode the message into a pooled wire buffer with an overridden ID.
+    pub fn to_pooled_bytes_with_id(&self, id: u16) -> Result<PooledWireBuffer<'static>> {
+        let mut out = wire_buffer_pool().acquire(512);
+        encode_message_into(self, id, &mut out)?;
+        Ok(out)
+    }
+
     /// Append the encoded wire message with an overridden ID to the provided buffer.
     ///
     /// This method preserves any bytes that are already present in `out` and
@@ -138,6 +143,21 @@ impl Message {
         encode_message_into(self, id, out)
     }
 
+    /// Append the encoded wire message while honoring `max_size`.
+    pub fn append_to_with_limit(&self, max_size: usize, out: &mut Vec<u8>) -> Result<()> {
+        encode_message_with_limit(self, Some(max_size), self.id(), out)
+    }
+
+    /// Append the encoded wire message with an overridden ID while honoring `max_size`.
+    pub fn append_to_with_limit_and_id(
+        &self,
+        max_size: usize,
+        id: u16,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        encode_message_with_limit(self, Some(max_size), id, out)
+    }
+
     /// Encode the message into a newly allocated byte vector while honoring `max_size`.
     pub fn to_bytes_with_limit(&self, max_size: usize) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(512);
@@ -145,9 +165,27 @@ impl Message {
         Ok(out)
     }
 
+    /// Encode the message into a pooled wire buffer while honoring `max_size`.
+    pub fn to_pooled_bytes_with_limit(&self, max_size: usize) -> Result<PooledWireBuffer<'static>> {
+        let mut out = wire_buffer_pool().acquire(Self::pooled_capacity_for_limit(max_size));
+        encode_message_with_limit(self, Some(max_size), self.id(), &mut out)?;
+        Ok(out)
+    }
+
     /// Encode the message into a newly allocated byte vector with an overridden ID and size cap.
     pub fn to_bytes_with_limit_and_id(&self, max_size: usize, id: u16) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(512);
+        encode_message_with_limit(self, Some(max_size), id, &mut out)?;
+        Ok(out)
+    }
+
+    /// Encode the message into a pooled wire buffer with an overridden ID and size cap.
+    pub fn to_pooled_bytes_with_limit_and_id(
+        &self,
+        max_size: usize,
+        id: u16,
+    ) -> Result<PooledWireBuffer<'static>> {
+        let mut out = wire_buffer_pool().acquire(Self::pooled_capacity_for_limit(max_size));
         encode_message_with_limit(self, Some(max_size), id, &mut out)?;
         Ok(out)
     }
@@ -516,7 +554,7 @@ impl Message {
     }
 
     pub fn response(&self, rcode: Rcode) -> Message {
-        self.init_response(rcode, 0)
+        self.init_response(rcode, 3)
     }
 
     pub fn address_response(
@@ -1044,5 +1082,107 @@ mod tests {
             panic!("expected response local edns option");
         };
         assert_eq!(local.data(), &[9, 9, 9]);
+    }
+
+    #[test]
+    fn append_to_with_limit_matches_owned_encoding_for_small_message() {
+        let mut query = Message::new();
+        query.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+        let response = query
+            .address_response(
+                query.first_question().unwrap(),
+                60,
+                &[IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1))],
+            )
+            .unwrap();
+
+        let expected = response.to_bytes_with_limit(1232).unwrap();
+        let mut actual = Vec::with_capacity(512);
+        response.append_to_with_limit(1232, &mut actual).unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn append_to_with_limit_matches_owned_encoding_for_truncated_message() {
+        let mut message = Message::new();
+        message.add_question(Question::new(
+            Name::from_ascii("large.example.com.").unwrap(),
+            RecordType::SRV,
+            DNSClass::IN,
+        ));
+
+        for index in 0..32 {
+            let target = Name::from_ascii(&format!("pod-{index}.svc.example.com.")).unwrap();
+            message.add_answer(Record::from_rdata(
+                Name::from_ascii("large.example.com.").unwrap(),
+                10,
+                RData::SRV(crate::proto::rdata::SRV::new(0, 0, 80, target)),
+            ));
+        }
+
+        let mut edns = Edns::new();
+        edns.set_udp_payload_size(1232);
+        message.set_edns(edns);
+
+        let expected = message.to_bytes_with_limit(512).unwrap();
+        let mut actual = Vec::with_capacity(512);
+        message.append_to_with_limit(512, &mut actual).unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn to_pooled_bytes_matches_owned_encoding() {
+        let mut query = Message::new();
+        query.add_question(Question::new(
+            Name::from_ascii("pooled.example.com.").unwrap(),
+            RecordType::AAAA,
+            DNSClass::IN,
+        ));
+        let response = query
+            .address_response(
+                query.first_question().unwrap(),
+                120,
+                &[IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)],
+            )
+            .unwrap();
+
+        let expected = response.to_bytes().unwrap();
+        let actual = response.to_pooled_bytes().unwrap();
+
+        assert_eq!(actual.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn to_pooled_bytes_with_limit_matches_owned_encoding_for_truncated_message() {
+        let mut message = Message::new();
+        message.add_question(Question::new(
+            Name::from_ascii("pooled-limit.example.com.").unwrap(),
+            RecordType::SRV,
+            DNSClass::IN,
+        ));
+
+        for index in 0..32 {
+            let target = Name::from_ascii(&format!("pod-{index}.svc.example.com.")).unwrap();
+            message.add_answer(Record::from_rdata(
+                Name::from_ascii("pooled-limit.example.com.").unwrap(),
+                10,
+                RData::SRV(crate::proto::rdata::SRV::new(0, 0, 80, target)),
+            ));
+        }
+
+        let mut edns = Edns::new();
+        edns.set_udp_payload_size(1232);
+        message.set_edns(edns);
+
+        let expected = message.to_bytes_with_limit(512).unwrap();
+        let actual = message.to_pooled_bytes_with_limit(512).unwrap();
+
+        assert_eq!(actual.as_slice(), expected.as_slice());
     }
 }

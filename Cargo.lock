@@ -668,6 +668,7 @@ dependencies = [
  "crossbeam-queue",
  "dashmap",
  "fast-socks5",
+ "forgedns-proto",
  "futures",
  "h2",
  "h3",
@@ -706,6 +707,17 @@ dependencies = [
  "url",
  "webpki-roots",
  "wincode",
+ "zoneparser",
+]
+
+[[package]]
+name = "forgedns-proto"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "crossbeam-queue",
+ "smallvec",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3289,3 +3301,11 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zoneparser"
+version = "0.1.0"
+dependencies = [
+ "forgedns-proto",
+ "thiserror 2.0.18",
+]

@@ -1,0 +1,7 @@
+; This zone has various comments
+;
+; 
+simple.zn.      (3600 ()   IN)   (SOA)  (
+ns1.simple.zn.                      ; Comment in the middle of record
+hostmaster.simple.zn.
+  2024090906 7200 1800 86400 7200)  ; Comment at the end of record

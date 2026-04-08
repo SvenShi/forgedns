@@ -1,0 +1,9 @@
+simple.zn.	3600	IN	SOA	ns1.simple.zn. hostmaster.simple.zn. 2024090906 7200 1800 86400 7200
+
+simple.zn.	3600	IN	NS	ns1.simple.zn.
+simple.zn.	3600	IN	NS	ns2.simple.zn.
+
+info.simple.zn.	3600	IN	MX	10 mail.simple.zn.
+
+mail.simple.zn.	3600	IN	A	1.2.3.4
+mail.simple.zn.	3600	IN	AAAA	1:2:3:4::

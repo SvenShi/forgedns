@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/ripset", "crates/forgedns-proto", "crates/zoneparser"]
+
 [package]
 name = "forgedns"
 version = "0.2.1"
@@ -41,6 +44,7 @@ rand = "0.10"
 smallvec = "1.15.1"
 url = "2.5"
 wincode = { version = "0.5", features = ["derive"] }
+forgedns-proto = { path = "crates/forgedns-proto" }
 
 # DNS transport and TLS stack used by server plugins and upstream clients
 h2 = "0.4"
@@ -73,6 +77,8 @@ mikrotik-rs = "0.6.1"
 
 # Service management
 service-manager = "0.11.0"
+zoneparser = { path = "crates/zoneparser" }
+tempfile = "3.23.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ripset = { path = "crates/ripset" }

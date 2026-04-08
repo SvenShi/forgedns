@@ -14,3 +14,18 @@ pub(crate) use codec::*;
 pub(crate) use compression::*;
 pub(crate) use length::*;
 pub(crate) use rdata::*;
+
+pub fn decode_rdata_from_wire(
+    rr_type: crate::RecordType,
+    data: &[u8],
+) -> crate::Result<crate::RData> {
+    parse_rdata(
+        data,
+        &crate::Name::root(),
+        rr_type,
+        u16::from(crate::DNSClass::IN),
+        0,
+        0,
+        data.len(),
+    )
+}

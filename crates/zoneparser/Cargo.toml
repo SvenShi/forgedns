@@ -1,0 +1,11 @@
+[package]
+name = "zoneparser"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+readme = "README.md"
+description = "Vendored zonefile parser adapted for ForgeDNS"
+
+[dependencies]
+forgedns-proto = { path = "../forgedns-proto" }
+thiserror = "2.0"

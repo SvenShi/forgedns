@@ -926,7 +926,7 @@ Injects arbitrary DNS records from zone-style rule strings.
     files:
       # Load more static records from files
       - "/etc/forgedns/zone.txt"
-    short_circuit: true
+    short_circuit: false
 ```
 
 ### Configuration Details
@@ -935,21 +935,33 @@ Injects arbitrary DNS records from zone-style rule strings.
 
 - Type: `array`; Required: no
 - Purpose: Inline record rules.
+- Syntax:
+  - Each list item is parsed as an independent zone snippet.
+  - Supports `$ORIGIN`, `$TTL`, `$INCLUDE`, `$GENERATE`, owner inheritance, TTL units, comments, quoted strings, and multiline `(` `)` syntax.
+  - Common record types are parsed directly, including `A`, `AAAA`, `CNAME`, `NS`, `PTR`, `DNAME`, `ANAME`, `MD`, `MF`, `MB`, `MG`, `MR`, `NSAPPTR`, `MX`, `RT`, `AFSDB`, `RP`, `MINFO`, `HINFO`, `TXT`, `SPF`, `AVC`, `RESINFO`, `SOA`, `SRV`, `NAPTR`, and `CAA`.
+  - Other record types can be loaded through RFC3597 generic syntax: `TYPE#### \# <len> <hex>`.
+  - Defaults TTL to `3600` when omitted.
 
 #### `files`
 
 - Type: `array`; Required: no
 - Purpose: External rule files.
+- Syntax: Uses the same zone parser as `rules`.
 
 #### `short_circuit`
 
 - Type: `bool`; Required: no; Default: `false`
-- Purpose: Stops the remaining executor chain after a local answer is generated.
+- Purpose: Stop the remaining executor chain after setting a synthetic response.
+- Notes: By default `arbitrary` only sets the response and lets the chain continue.
 
 ### Behavior
 
 - Produces fully synthetic answers.
-- By default it keeps running the remaining chain after a match; enable `short_circuit` to stop immediately.
+- Matches exactly on `qname + qtype + qclass`.
+- When a request carries multiple questions, all matched records are accumulated into one response.
+- By default the executor only sets the response and keeps the remaining chain running.
+- When `short_circuit` is enabled it returns `Stop` after a match.
+- Quick setup syntax is intentionally not supported.
 - Useful when `hosts` is too limited.
 
 ### Typical Uses
@@ -960,6 +972,8 @@ Injects arbitrary DNS records from zone-style rule strings.
 ### Notes
 
 - Keep rule files readable. Arbitrary records become hard to audit faster than `hosts` entries.
+- This is still a static answer generator, not a full authoritative server with transfer or dynamic update support.
+- The parser is broader than the zone parser used by mosdns `arbitrary`, but matching remains an exact static lookup.
 
 ---
 

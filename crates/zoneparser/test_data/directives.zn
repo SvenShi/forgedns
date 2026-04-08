@@ -1,0 +1,7 @@
+$ORIGIN simple.zn.
+$TTL 3600
+
+@	7200	IN	SOA	ns1.simple.zn. hostmaster.simple.zn. 2024090906 7200 1800 86400 7200
+
+	300	IN	NS	ns1.simple.zn.
+		IN	NS	ns2.simple.zn.

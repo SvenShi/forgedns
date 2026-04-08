@@ -1,0 +1,15 @@
+[package]
+name = "forgedns-proto"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[lib]
+name = "forgedns_proto"
+path = "src/lib.rs"
+
+[dependencies]
+ahash = "0.8.12"
+crossbeam-queue = "0.3.12"
+smallvec = "1.15.1"
+thiserror = "2.0"

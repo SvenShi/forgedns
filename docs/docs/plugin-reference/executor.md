@@ -991,7 +991,7 @@ plugins:
     files:
       # 从文件加载更多静态记录
       - "/etc/forgedns/zone.txt"
-    short_circuit: true
+    short_circuit: false
 ```
 
 ### 配置项
@@ -1000,23 +1000,32 @@ plugins:
 
 - 类型：`array`；必填：否；默认值：空数组
 - 作用：定义内联静态记录列表。
+- 语法：
+  - 每个数组项会作为独立 zone 片段解析。
+  - 支持 `$ORIGIN`、`$TTL`、`$INCLUDE`、`$GENERATE`、owner 继承、TTL 单位写法、注释、quoted string、多行 `(` `)` 语法。
+  - 常见记录类型支持直接文本解析，包括 `A`、`AAAA`、`CNAME`、`NS`、`PTR`、`DNAME`、`ANAME`、`MD`、`MF`、`MB`、`MG`、`MR`、`NSAPPTR`、`MX`、`RT`、`AFSDB`、`RP`、`MINFO`、`HINFO`、`TXT`、`SPF`、`AVC`、`RESINFO`、`SOA`、`SRV`、`NAPTR`、`CAA`。
+  - 其他记录类型可通过 RFC3597 通用语法 `TYPE#### \# <len> <hex>` 导入。
+  - 省略 TTL 时默认使用 `3600`。
 
 #### `files`
 
 - 类型：`array`；必填：否；默认值：空数组
 - 作用：指定静态记录文件列表。
+- 语法：使用同一套 zone parser，支持与 `rules` 一致的语法能力。
 
 #### `short_circuit`
 
 - 类型：`bool`；必填：否；默认值：`false`
-- 作用：命中并生成本地应答后，是否立即停止后续 executor 链。
+- 作用：命中并生成本地响应后，是否立即停止后续 executor 链。
+- 说明：默认只设置 response 并继续执行；显式开启时返回 `Stop`。
 
 ### 行为说明
 
-- 查询名与类型匹配时，直接生成本地应答。
-- `ANY` 查询会返回该名称下全部已加载记录。
-- 常见 `A` / `AAAA` 走了快路径优化。
-- 命中后默认继续后续执行；开启 `short_circuit` 时会立即返回。
+- 按 `qname + qtype + qclass` 精确匹配。
+- 一个请求里如果有多个 question，会把所有命中的记录按顺序累积到同一个响应中。
+- 命中后默认只设置 response，不会中断后续 executor 链。
+- 开启 `short_circuit` 时，命中后会立即结束后续 executor 链。
+- 不提供 `quick setup` 语法。
 
 ### 典型用途
 
@@ -1026,7 +1035,8 @@ plugins:
 
 ### 注意事项
 
-- 这是“静态响应生成器”，不负责 zone 传送或权威服务器全语义。
+- 这是“静态响应生成器”，不负责 zone 传送、动态更新或权威服务器完整语义。
+- 解析器能力比 mosdns `arbitrary` 使用的 zone parser 更宽，但命中行为仍是静态记录的精确匹配。
 
 ---
 
@@ -1431,18 +1441,6 @@ plugins:
 
 - 类型：`bool`；必填：否；默认值：`false`
 - 作用：命中并生成本地应答后，是否立即停止后续 executor 链。
-
-### quick setup
-
-```yaml
-- exec: "arbitrary example.com. 60 IN A 192.0.2.10"
-- exec: "arbitrary example.com. 60 IN A 192.0.2.10 short_circuit=true"
-```
-
-说明：
-
-- quick setup 用于单条静态记录。
-- 尾部支持 `short_circuit`、`short_circuit=true`、`short_circuit=false`。
 
 ### quick setup
 

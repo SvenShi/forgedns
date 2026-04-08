@@ -11,7 +11,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 const MAX_NAME_WIRE_OCTETS: usize = 255;
 const MAX_COMPRESSION_POINTERS: usize = (MAX_NAME_WIRE_OCTETS + 1).div_ceil(2) - 2;
@@ -71,37 +71,23 @@ const ASCII_LOWERCASE_TABLE: [u8; 256] = build_ascii_lowercase_table();
 /// Layout:
 /// - `wire`: expanded wire name preserving original input/packet case
 /// - `wire_label_offsets`: start offset of each label length octet in `wire`
-/// - `presentation`: lazily built canonical lowercased escaped fqdn with offsets
+/// - `presentation`: eagerly built canonical lowercased escaped fqdn with offsets
 #[derive(Debug, Clone)]
 pub struct Name {
     inner: Arc<NameInner>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NameInner {
     wire: WireBuf,
     wire_label_offsets: WireLabelOffsets,
-    presentation: OnceLock<PresentationData>,
+    presentation: PresentationData,
 }
 
 #[derive(Debug, Clone)]
 struct PresentationData {
     fqdn: CanonicalFqdnBuf,
     fqdn_label_offsets: FqdnLabelOffsets,
-}
-
-impl Clone for NameInner {
-    fn clone(&self) -> Self {
-        let cloned = Self {
-            wire: self.wire.clone(),
-            wire_label_offsets: self.wire_label_offsets.clone(),
-            presentation: OnceLock::new(),
-        };
-        if let Some(data) = self.presentation.get() {
-            let _ = cloned.presentation.set(data.clone());
-        }
-        cloned
-    }
 }
 
 #[allow(dead_code)]
@@ -235,13 +221,7 @@ impl Name {
             return Err(DnsError::protocol("dns name exceeds 255 bytes"));
         }
 
-        Ok(Self {
-            inner: Arc::new(NameInner {
-                wire,
-                wire_label_offsets,
-                presentation: OnceLock::new(),
-            }),
-        })
+        Ok(Self::from_wire_parts(wire, wire_label_offsets))
     }
 
     /// Return the DNS root name.
@@ -249,13 +229,7 @@ impl Name {
         let mut wire = WireBuf::new();
         wire.push(0);
 
-        Self {
-            inner: Arc::new(NameInner {
-                wire,
-                wire_label_offsets: WireLabelOffsets::new(),
-                presentation: OnceLock::new(),
-            }),
-        }
+        Self::from_wire_parts(wire, WireLabelOffsets::new())
     }
 
     /// Borrow the canonical fqdn presentation without a trailing dot.
@@ -493,16 +467,7 @@ impl Name {
                             return Err(DnsError::protocol("dns name exceeds 255 bytes"));
                         }
 
-                        return Ok((
-                            Self {
-                                inner: Arc::new(NameInner {
-                                    wire,
-                                    wire_label_offsets,
-                                    presentation: OnceLock::new(),
-                                }),
-                            },
-                            end,
-                        ));
+                        return Ok((Self::from_wire_parts(wire, wire_label_offsets), end));
                     }
 
                     if len > 63 {
@@ -571,10 +536,20 @@ impl Name {
 
 impl Name {
     #[inline]
+    fn from_wire_parts(wire: WireBuf, wire_label_offsets: WireLabelOffsets) -> Self {
+        let presentation = build_presentation_from_wire(&wire, &wire_label_offsets);
+        Self {
+            inner: Arc::new(NameInner {
+                wire,
+                wire_label_offsets,
+                presentation,
+            }),
+        }
+    }
+
+    #[inline]
     fn presentation(&self) -> &PresentationData {
-        self.inner.presentation.get_or_init(|| {
-            build_presentation_from_wire(&self.inner.wire, &self.inner.wire_label_offsets)
-        })
+        &self.inner.presentation
     }
 }
 

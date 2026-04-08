@@ -1,0 +1,7 @@
+$ORIGIN simple.zn.
+
+@	3600	IN	SOA	ns1.simple.zn. hostmaster.simple.zn. 2024090906 7200 1800 86400 7200
+
+	3600	IN	NS	ns1.simple.zn.
+info	3600	IN	MX	10 mail.simple.zn.
+mail	3600	IN	A	1.2.3.4

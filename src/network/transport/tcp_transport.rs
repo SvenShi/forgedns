@@ -4,7 +4,7 @@
  */
 
 use crate::core::error::{DnsError, Result};
-use crate::proto::{Message, codec};
+use crate::proto::Message;
 use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 
@@ -98,7 +98,7 @@ where
         loop {
             let buf_len = self.buf.len();
             if buf_len >= 2 {
-                let msg_len = codec::read_u16_be(&self.buf, 0) as usize;
+                let msg_len = u16::from_be_bytes([self.buf[0], self.buf[1]]) as usize;
                 let frame_len = 2 + msg_len;
 
                 if msg_len == 0 {
