@@ -1010,7 +1010,7 @@ impl CAA {
 }
 
 /// Owned TXT payload stored as raw TXT RDATA wire:
-/// [len][bytes][len][bytes]...
+/// `[len][bytes][len][bytes]...`
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TXT {
     wire: Box<[u8]>,

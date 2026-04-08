@@ -117,13 +117,12 @@ impl Token {
         self.raw.to_ascii_uppercase()
     }
 
-    fn decode_text_bytes(&self) -> Result<Vec<u8>, String> {
-        decode_escaped_bytes(&self.raw)
+    fn decode_include_path(&self) -> Result<String, String> {
+        decode_include_path(&self.raw)
     }
 
-    fn decode_text(&self) -> Result<String, String> {
-        String::from_utf8(self.decode_text_bytes()?)
-            .map_err(|e| format!("text field is not valid UTF-8: {}", e))
+    fn decode_text_bytes(&self) -> Result<Vec<u8>, String> {
+        decode_escaped_bytes(&self.raw)
     }
 }
 
@@ -262,7 +261,7 @@ fn handle_include(
     }
 
     let include_path = tokens[1]
-        .decode_text()
+        .decode_include_path()
         .map_err(|message| syntax_error(source, line.line, message))?;
     let include_path = resolve_include_path(source, options, &include_path)?;
     let include_text =
@@ -1039,6 +1038,30 @@ fn resolve_include_path(
     Err(ZoneParseError::RelativeIncludeWithoutBaseDir)
 }
 
+fn decode_include_path(raw: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+
+        let Some(next) = chars.next() else {
+            return Err("unterminated escape sequence".to_string());
+        };
+
+        match next {
+            ' ' | '\t' | '"' | '\\' | ';' | '(' | ')' => out.push(next),
+            _ => {
+                out.push('\\');
+                out.push(next);
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn decode_escaped_bytes(raw: &str) -> Result<Vec<u8>, String> {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -1438,6 +1461,30 @@ mod tests {
         assert_eq!(records[0].name().to_fqdn(), "api.child.example.");
         assert_eq!(records[1].name().to_fqdn(), "host1.example.com.");
         assert_eq!(records[2].name().to_fqdn(), "host2.example.com.");
+    }
+
+    #[test]
+    fn preserves_windows_backslashes_in_include_path() {
+        let token = Token {
+            raw: r"C:\Users\tester\AppData\Local\Temp\child.zone".to_string(),
+            quoted: false,
+        };
+        assert_eq!(
+            token.decode_include_path().unwrap(),
+            r"C:\Users\tester\AppData\Local\Temp\child.zone"
+        );
+    }
+
+    #[test]
+    fn decodes_escaped_spaces_in_include_path() {
+        let token = Token {
+            raw: r"dir\ with\ spaces/child.zone".to_string(),
+            quoted: false,
+        };
+        assert_eq!(
+            token.decode_include_path().unwrap(),
+            "dir with spaces/child.zone"
+        );
     }
 
     #[test]
