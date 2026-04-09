@@ -34,7 +34,9 @@ sidebar_position: 4
 
 ---
 
-## `_true` {#true}
+<span id="true"></span>
+
+## `_true`
 
 ### 作用
 
@@ -58,7 +60,9 @@ sidebar_position: 4
 
 ---
 
-## `_false` {#false}
+<span id="false"></span>
+
+## `_false`
 
 ### 作用
 

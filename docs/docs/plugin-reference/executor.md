@@ -1360,7 +1360,9 @@ plugins:
 
 ---
 
-## `prefer_ipv4` / `prefer_ipv6` {#prefer_ipv4-prefer_ipv6}
+<span id="prefer_ipv4-prefer_ipv6"></span>
+
+## `prefer_ipv4` / `prefer_ipv6`
 
 ### 作用
 

@@ -34,7 +34,9 @@ Negation:
 
 ---
 
-## `_true` {#true}
+<span id="true"></span>
+
+## `_true`
 
 ### Purpose
 
@@ -58,7 +60,9 @@ No standalone configuration fields.
 
 ---
 
-## `_false` {#false}
+<span id="false"></span>
+
+## `_false`
 
 ### Purpose
 

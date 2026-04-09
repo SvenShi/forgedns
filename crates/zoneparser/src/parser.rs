@@ -1284,17 +1284,31 @@ impl fmt::Display for Token {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     fn temp_dir() -> PathBuf {
-        let mut path = std::env::temp_dir();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        path.push(format!("zoneparser-test-{}", nanos));
-        fs::create_dir_all(&path).unwrap();
-        path
+        let base = std::env::temp_dir();
+        let pid = std::process::id();
+
+        for _ in 0..1024 {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let unique = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = base.join(format!("zoneparser-test-{}-{}-{}", pid, nanos, unique));
+
+            match fs::create_dir(&path) {
+                Ok(()) => return path,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("failed to create temp dir '{}': {}", path.display(), error),
+            }
+        }
+
+        panic!("failed to allocate unique temp dir for zoneparser tests");
     }
 
     fn fixture_path(name: &str) -> PathBuf {
