@@ -334,11 +334,13 @@ pub(crate) fn increment_ip(addr: IpAddr) -> Option<IpAddr> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) enum IpAddrBytes {
     V4([u8; 4]),
     V6([u8; 16]),
 }
 
+#[allow(dead_code)]
 impl IpAddrBytes {
     pub(crate) fn from_ip(addr: IpAddr) -> Self {
         match addr {
@@ -376,6 +378,7 @@ pub(crate) fn ip_after_last(network: IpAddr, prefix_len: u8) -> Option<IpAddr> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn range_to_target(start: IpAddr, end_exclusive: Option<IpAddr>) -> Result<IpTarget> {
     let Some(end_exclusive) = end_exclusive else {
         return Ok(IpTarget::Addr(start));
