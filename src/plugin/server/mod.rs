@@ -99,6 +99,7 @@ pub struct RequestResult {
 }
 
 impl RequestHandle {
+    #[hotpath::measure]
     pub async fn handle_request(
         &self,
         msg: Message,
@@ -156,14 +157,12 @@ impl RequestHandle {
 
         // Log response details only when debug logging is enabled
         if event_enabled!(Level::DEBUG) {
-            let response_len = response.to_bytes().ok().map(|bytes| bytes.len());
             debug!(
-                "Sending response to {}, exit: {:?}, question_count: {}, id: {}, response_size: {:?}",
+                "Sending response to {}, exit: {:?}, question_count: {}, id: {}",
                 &src_addr,
                 exit,
                 context.request.question_count(),
-                context.request.id(),
-                response_len
+                context.request.id()
             );
         }
 

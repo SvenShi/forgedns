@@ -6,7 +6,6 @@
 //! Owned DNS message model.
 
 use crate::core::error::{DnsError, Result};
-use crate::network::buffer_pool::{PooledWireBuffer, wire_buffer_pool};
 use crate::proto::rdata::{A, AAAA, Edns};
 use crate::proto::wire::{
     DNS_HEADER_LEN, decode_message, edns_record_len, encode_message_into, encode_message_with_limit,
@@ -32,11 +31,6 @@ pub struct Message {
 
 #[allow(dead_code)]
 impl Message {
-    #[inline]
-    fn pooled_capacity_for_limit(max_size: usize) -> usize {
-        max_size.max(DNS_HEADER_LEN)
-    }
-
     #[inline]
     fn init_response(&self, rcode: Rcode, answer_capacity: usize) -> Message {
         let (recursion_desired, checking_disabled) = if self.opcode() == Opcode::Query {
@@ -85,21 +79,16 @@ impl Message {
     }
 
     /// Decode a DNS message from wire bytes.
+    #[hotpath::measure]
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         decode_message(bytes)
     }
 
     /// Encode the message into a newly allocated byte vector.
+    #[hotpath::measure]
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(1024);
-        encode_message_into(self, self.id(), &mut out)?;
-        Ok(out)
-    }
-
-    /// Encode the message into a pooled wire buffer for short-lived immediate use.
-    pub fn to_pooled_bytes(&self) -> Result<PooledWireBuffer<'static>> {
-        let mut out = wire_buffer_pool().acquire(1024);
-        encode_message_into(self, self.id(), &mut out)?;
+        let mut out = Vec::with_capacity(self.bytes_len());
+        self.append_to(&mut out)?;
         Ok(out)
     }
 
@@ -107,26 +96,22 @@ impl Message {
     ///
     /// This method preserves any bytes that are already present in `out` and
     /// writes the DNS header and body after the current end of the buffer.
+    #[hotpath::measure]
     pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<()> {
         encode_message_into(self, self.id(), out)
     }
 
     /// Append the encoded wire message to the provided buffer without clearing it first.
+    #[hotpath::measure]
     pub fn append_to(&self, out: &mut Vec<u8>) -> Result<()> {
         encode_message_into(self, self.id(), out)
     }
 
     /// Encode the message into a newly allocated byte vector with an overridden ID.
+    #[hotpath::measure]
     pub fn to_bytes_with_id(&self, id: u16) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(512);
-        encode_message_into(self, id, &mut out)?;
-        Ok(out)
-    }
-
-    /// Encode the message into a pooled wire buffer with an overridden ID.
-    pub fn to_pooled_bytes_with_id(&self, id: u16) -> Result<PooledWireBuffer<'static>> {
-        let mut out = wire_buffer_pool().acquire(512);
-        encode_message_into(self, id, &mut out)?;
+        let mut out = Vec::with_capacity(self.bytes_len());
+        self.append_to_with_id(id, &mut out)?;
         Ok(out)
     }
 
@@ -134,21 +119,25 @@ impl Message {
     ///
     /// This method preserves any bytes that are already present in `out` and
     /// writes the DNS header and body after the current end of the buffer.
+    #[hotpath::measure]
     pub fn encode_into_with_id(&self, id: u16, out: &mut Vec<u8>) -> Result<()> {
         encode_message_into(self, id, out)
     }
 
     /// Append the encoded wire message with an overridden ID to the provided buffer.
+    #[hotpath::measure]
     pub fn append_to_with_id(&self, id: u16, out: &mut Vec<u8>) -> Result<()> {
         encode_message_into(self, id, out)
     }
 
     /// Append the encoded wire message while honoring `max_size`.
+    #[hotpath::measure]
     pub fn append_to_with_limit(&self, max_size: usize, out: &mut Vec<u8>) -> Result<()> {
         encode_message_with_limit(self, Some(max_size), self.id(), out)
     }
 
     /// Append the encoded wire message with an overridden ID while honoring `max_size`.
+    #[hotpath::measure]
     pub fn append_to_with_limit_and_id(
         &self,
         max_size: usize,
@@ -159,34 +148,18 @@ impl Message {
     }
 
     /// Encode the message into a newly allocated byte vector while honoring `max_size`.
+    #[hotpath::measure]
     pub fn to_bytes_with_limit(&self, max_size: usize) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(512);
-        encode_message_with_limit(self, Some(max_size), self.id(), &mut out)?;
-        Ok(out)
-    }
-
-    /// Encode the message into a pooled wire buffer while honoring `max_size`.
-    pub fn to_pooled_bytes_with_limit(&self, max_size: usize) -> Result<PooledWireBuffer<'static>> {
-        let mut out = wire_buffer_pool().acquire(Self::pooled_capacity_for_limit(max_size));
-        encode_message_with_limit(self, Some(max_size), self.id(), &mut out)?;
+        let mut out = Vec::with_capacity(self.bytes_len().min(max_size.max(DNS_HEADER_LEN)));
+        self.append_to_with_limit(max_size, &mut out)?;
         Ok(out)
     }
 
     /// Encode the message into a newly allocated byte vector with an overridden ID and size cap.
+    #[hotpath::measure]
     pub fn to_bytes_with_limit_and_id(&self, max_size: usize, id: u16) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(512);
-        encode_message_with_limit(self, Some(max_size), id, &mut out)?;
-        Ok(out)
-    }
-
-    /// Encode the message into a pooled wire buffer with an overridden ID and size cap.
-    pub fn to_pooled_bytes_with_limit_and_id(
-        &self,
-        max_size: usize,
-        id: u16,
-    ) -> Result<PooledWireBuffer<'static>> {
-        let mut out = wire_buffer_pool().acquire(Self::pooled_capacity_for_limit(max_size));
-        encode_message_with_limit(self, Some(max_size), id, &mut out)?;
+        let mut out = Vec::with_capacity(self.bytes_len().min(max_size.max(DNS_HEADER_LEN)));
+        self.append_to_with_limit_and_id(max_size, id, &mut out)?;
         Ok(out)
     }
 
@@ -553,10 +526,12 @@ impl Message {
             .unwrap_or(512)
     }
 
+    #[hotpath::measure]
     pub fn response(&self, rcode: Rcode) -> Message {
         self.init_response(rcode, 3)
     }
 
+    #[hotpath::measure]
     pub fn address_response(
         &self,
         question: &Question,
@@ -589,6 +564,7 @@ impl Message {
         Ok(response)
     }
 
+    #[hotpath::measure]
     pub fn address_response_rdata(
         &self,
         question: &Question,
@@ -1137,10 +1113,10 @@ mod tests {
     }
 
     #[test]
-    fn to_pooled_bytes_matches_owned_encoding() {
+    fn append_to_matches_owned_encoding() {
         let mut query = Message::new();
         query.add_question(Question::new(
-            Name::from_ascii("pooled.example.com.").unwrap(),
+            Name::from_ascii("append.example.com.").unwrap(),
             RecordType::AAAA,
             DNSClass::IN,
         ));
@@ -1153,36 +1129,9 @@ mod tests {
             .unwrap();
 
         let expected = response.to_bytes().unwrap();
-        let actual = response.to_pooled_bytes().unwrap();
+        let mut actual = Vec::with_capacity(expected.len());
+        response.append_to(&mut actual).unwrap();
 
-        assert_eq!(actual.as_slice(), expected.as_slice());
-    }
-
-    #[test]
-    fn to_pooled_bytes_with_limit_matches_owned_encoding_for_truncated_message() {
-        let mut message = Message::new();
-        message.add_question(Question::new(
-            Name::from_ascii("pooled-limit.example.com.").unwrap(),
-            RecordType::SRV,
-            DNSClass::IN,
-        ));
-
-        for index in 0..32 {
-            let target = Name::from_ascii(&format!("pod-{index}.svc.example.com.")).unwrap();
-            message.add_answer(Record::from_rdata(
-                Name::from_ascii("pooled-limit.example.com.").unwrap(),
-                10,
-                RData::SRV(crate::proto::rdata::SRV::new(0, 0, 80, target)),
-            ));
-        }
-
-        let mut edns = Edns::new();
-        edns.set_udp_payload_size(1232);
-        message.set_edns(edns);
-
-        let expected = message.to_bytes_with_limit(512).unwrap();
-        let actual = message.to_pooled_bytes_with_limit(512).unwrap();
-
-        assert_eq!(actual.as_slice(), expected.as_slice());
+        assert_eq!(actual, expected);
     }
 }

@@ -29,6 +29,7 @@ use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 const UDP_RECV_BUFFER_SIZE: usize = 65_535;
+const UDP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
 
 /// UDP server configuration
 #[derive(Deserialize)]
@@ -218,6 +219,8 @@ pub fn build_udp_socket(addr: &str) -> Result<StdUdpSocket> {
     let _ = sock.set_reuse_address(true);
     #[cfg(not(target_os = "windows"))]
     let _ = sock.set_reuse_port(true);
+    let _ = sock.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
+    let _ = sock.set_send_buffer_size(UDP_SOCKET_BUFFER_SIZE);
 
     sock.bind(&addr.into())?;
 

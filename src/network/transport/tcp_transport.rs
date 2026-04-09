@@ -4,6 +4,7 @@
  */
 
 use crate::core::error::{DnsError, Result};
+use crate::network::buffer_pool::wire_buffer_pool;
 use crate::proto::Message;
 use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
@@ -27,17 +28,13 @@ where
                 reader,
                 buf: BytesMut::with_capacity(8192),
             },
-            TcpTransportWriter {
-                writer,
-                write_buf: Vec::with_capacity(1234),
-            },
+            TcpTransportWriter { writer },
         )
     }
 }
 
 pub struct TcpTransportWriter<S> {
     writer: WriteHalf<S>,
-    write_buf: Vec<u8>,
 }
 
 impl<S> TcpTransportWriter<S>
@@ -45,39 +42,41 @@ where
     S: AsyncWrite,
 {
     #[inline]
+    #[hotpath::measure]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
-        self.write_buf.clear();
-        self.write_buf.extend_from_slice(&[0, 0]);
+        let mut write_buf = wire_buffer_pool().acquire();
+        write_buf.extend_from_slice(&[0, 0]);
 
-        msg.append_to(&mut self.write_buf)?;
+        msg.append_to(&mut write_buf)?;
 
-        let body_len = self.write_buf.len() - 2;
+        let body_len = write_buf.len() - 2;
 
-        self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
+        write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
 
         self.writer
-            .write_all(&self.write_buf)
+            .write_all(&write_buf)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to write TCP DNS frame: {}", e)))?;
         Ok(())
     }
 
     #[inline]
+    #[hotpath::measure]
     pub async fn write_message_with_id(&mut self, msg: &Message, id: u16) -> Result<()> {
-        self.write_buf.clear();
-        self.write_buf.extend_from_slice(&[0, 0]);
+        let mut write_buf = wire_buffer_pool().acquire();
+        write_buf.extend_from_slice(&[0, 0]);
 
-        msg.append_to_with_id(id, &mut self.write_buf)
+        msg.append_to_with_id(id, &mut write_buf)
             .map_err(|e| DnsError::protocol(format!("Failed to serialize DNS message: {}", e)))?;
 
-        let body_len = self.write_buf.len() - 2;
+        let body_len = write_buf.len() - 2;
 
         debug_assert!(body_len < u16::MAX as usize);
 
-        self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
+        write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
 
         self.writer
-            .write_all(&self.write_buf)
+            .write_all(&write_buf)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to write DNS frame: {}", e)))?;
         Ok(())
@@ -94,6 +93,7 @@ where
     S: AsyncRead,
 {
     #[inline]
+    #[hotpath::measure]
     pub async fn read_message(&mut self) -> Result<Message> {
         loop {
             let buf_len = self.buf.len();

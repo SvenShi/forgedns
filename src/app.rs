@@ -451,6 +451,7 @@ async fn wait_for_shutdown_signal() -> Result<ShutdownSignal> {
     Ok(ShutdownSignal::CtrlC)
 }
 
+#[hotpath::main]
 async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<Result<ShutdownSignal>>();
     tokio::spawn(async move {

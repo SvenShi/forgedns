@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 
 use crate::core::error::{DnsError, Result};
+use crate::network::buffer_pool::wire_buffer_pool;
 
 /// UDP transport wrapper for DNS messages.
 ///
@@ -29,6 +30,7 @@ impl UdpTransport {
     /// Receive one UDP datagram and decode it as a DNS message.
     /// Blocks until a datagram arrives or the socket errors.
     #[inline]
+    #[hotpath::measure]
     pub async fn read_message(&self, buf: &mut [u8]) -> Result<Message> {
         let n = self
             .socket
@@ -42,6 +44,7 @@ impl UdpTransport {
 
     /// Receive one UDP datagram from any peer and decode it as DNS message.
     #[inline]
+    #[hotpath::measure]
     pub async fn read_message_from(&self, buf: &mut [u8]) -> Result<(Message, SocketAddr)> {
         let (n, addr) = self
             .socket
@@ -57,8 +60,10 @@ impl UdpTransport {
 
     /// Serialize and send a DNS message while overriding the wire ID.
     #[inline]
+    #[hotpath::measure]
     pub async fn write_message_with_id(&self, msg: &Message, id: u16) -> Result<()> {
-        let bytes = msg.to_bytes_with_id(id)?;
+        let mut bytes = wire_buffer_pool().acquire();
+        msg.append_to_with_id(id, &mut bytes)?;
 
         let n = self
             .socket
@@ -83,17 +88,19 @@ impl UdpTransport {
         to: SocketAddr,
         max_payload: u16,
     ) -> Result<()> {
-        let bytes = msg.to_bytes_with_limit(max_payload as usize)?;
+        let max_payload = usize::from(max_payload);
+        let mut bytes = wire_buffer_pool().acquire();
+        msg.append_to_with_limit(max_payload, &mut bytes)?;
         let n = self
             .socket
             .send_to(&bytes, to)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to send_to UDP: {}", e)))?;
-        if n != bytes.as_slice().len() {
+        if n != bytes.len() {
             return Err(DnsError::protocol(format!(
                 "Partial UDP send_to: sent {} of {} bytes",
                 n,
-                bytes.as_slice().len()
+                bytes.len()
             )));
         }
         Ok(())

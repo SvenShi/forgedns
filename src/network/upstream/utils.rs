@@ -171,7 +171,7 @@ const DNS_HEADER_VALUE: HeaderValue = HeaderValue::from_static("application/dns-
 /// # Example URI
 /// `https://dns.example.com/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB`
 #[inline]
-pub fn build_dns_get_request(mut uri: String, buf: Vec<u8>, version: Version) -> Request<()> {
+pub fn build_dns_get_request(mut uri: String, buf: &[u8], version: Version) -> Request<()> {
     // Encode DNS message using base64url without padding (RFC 4648 Section 5)
     uri.push_str(&BASE64_URL_SAFE_NO_PAD.encode(buf));
 
@@ -621,7 +621,7 @@ mod tests {
     fn test_build_dns_get_request_sets_uri_method_and_headers() {
         let request = build_dns_get_request(
             "https://dns.example.test/dns-query?dns=".to_string(),
-            vec![0, 1, 2, 3],
+            &[0, 1, 2, 3],
             Version::HTTP_2,
         );
 

@@ -44,6 +44,7 @@ rand = "0.10"
 url = "2.5"
 wincode = { version = "0.5", features = ["derive"] }
 forgedns-proto = { path = "crates/forgedns-proto" }
+hotpath = "0.14"
 
 # DNS transport and TLS stack used by server plugins and upstream clients
 h2 = "0.4"
@@ -82,6 +83,10 @@ tempfile = "3.23.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 ripset = { path = "crates/ripset" }
 
+
+[features]
+hotpath = ["hotpath/hotpath"]
+hotpath-alloc = ["hotpath/hotpath-alloc"]
 
 [dev-dependencies]
 hickory-proto = "0.25.2"

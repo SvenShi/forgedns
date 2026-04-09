@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 use crate::core::error::{DnsError, Result};
+use crate::network::buffer_pool::wire_buffer_pool;
 use crate::proto::Message;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 
@@ -27,10 +28,7 @@ impl QuicTransport {
                     recv,
                     read_buf: Vec::with_capacity(2048),
                 },
-                QuicTransportWriter {
-                    send,
-                    write_buf: Vec::with_capacity(2048),
-                },
+                QuicTransportWriter { send },
             )),
             Err(e) => Err(DnsError::protocol(format!(
                 "Failed to accept QUIC bidirectional stream: {}",
@@ -49,10 +47,7 @@ impl QuicTransport {
                     recv,
                     read_buf: Vec::with_capacity(2048),
                 },
-                QuicTransportWriter {
-                    send,
-                    write_buf: Vec::with_capacity(2048),
-                },
+                QuicTransportWriter { send },
             )),
             Err(e) => Err(DnsError::protocol(format!(
                 "Failed to open QUIC bidirectional stream: {}",
@@ -78,27 +73,27 @@ impl QuicTransport {
 /// with 2-byte big-endian length prefix before writing.
 pub struct QuicTransportWriter {
     send: SendStream,
-    write_buf: Vec<u8>,
 }
 
 impl QuicTransportWriter {
     /// Write a single DNS message as a length-prefixed frame.
     #[inline]
+    #[hotpath::measure]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
-        self.write_buf.clear();
-        self.write_buf.extend_from_slice(&[0, 0]);
+        let mut write_buf = wire_buffer_pool().acquire();
+        write_buf.extend_from_slice(&[0, 0]);
 
         // RFC 9250: query ID SHOULD be set to 0
-        msg.append_to_with_id(0, &mut self.write_buf)?;
+        msg.append_to_with_id(0, &mut write_buf)?;
 
-        let body_len = self.write_buf.len() - 2;
+        let body_len = write_buf.len() - 2;
 
         debug_assert!(body_len < u16::MAX as usize);
 
-        self.write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
+        write_buf[..2].copy_from_slice(&(body_len as u16).to_be_bytes());
 
         self.send
-            .write_all(&self.write_buf)
+            .write_all(&write_buf)
             .await
             .map_err(|e| DnsError::protocol(format!("Failed to write QUIC DNS frame: {}", e)))?;
         Ok(())
@@ -121,6 +116,7 @@ pub struct QuicTransportReader {
 }
 impl QuicTransportReader {
     #[inline]
+    #[hotpath::measure]
     pub async fn read_message(&mut self) -> Result<Message> {
         let mut len_prefix = [0u8; 2];
         self.recv

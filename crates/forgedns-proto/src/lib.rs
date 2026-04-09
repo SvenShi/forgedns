@@ -5,7 +5,6 @@
 
 //! Owned DNS protocol model and wire-format codec.
 
-pub mod buffer_pool;
 pub mod error;
 pub mod header;
 pub mod message;
@@ -34,12 +33,6 @@ pub fn decode_rdata_from_wire(rr_type: RecordType, data: &[u8]) -> Result<RData>
 pub mod core {
     pub mod error {
         pub use crate::error::{ProtoError as DnsError, Result};
-    }
-}
-
-pub mod network {
-    pub mod buffer_pool {
-        pub use crate::buffer_pool::{PooledWireBuffer, WireBufferPool, wire_buffer_pool};
     }
 }
 

@@ -4,6 +4,7 @@
  */
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
+use crate::network::buffer_pool::wire_buffer_pool;
 use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{
     build_dns_get_request, build_doh_request_uri, connect_quic, connect_socket,
@@ -61,9 +62,14 @@ impl Connection for H3Connection {
             .store(AppClock::elapsed_millis(), Ordering::Relaxed);
 
         let raw_id = request.id();
-        let body_bytes = request.to_bytes_with_id(0)?;
+        let mut body_bytes = wire_buffer_pool().acquire();
+        request.append_to_with_id(0, &mut body_bytes)?;
 
-        let request = build_dns_get_request(self.request_uri.clone(), body_bytes, Version::HTTP_3);
+        let request = build_dns_get_request(
+            self.request_uri.clone(),
+            body_bytes.as_slice(),
+            Version::HTTP_3,
+        );
 
         let mut request_stream = self
             .sender

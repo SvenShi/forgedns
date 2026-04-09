@@ -71,6 +71,7 @@ impl Plugin for TrueMatcher {
 }
 
 impl Matcher for TrueMatcher {
+    #[hotpath::measure]
     fn is_match(&self, _context: &mut DnsContext) -> bool {
         true
     }
