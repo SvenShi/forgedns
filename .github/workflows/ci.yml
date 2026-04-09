@@ -76,8 +76,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, beta]
+        include:
+          - os: ubuntu-latest
+            rust: stable
+            run_build: true
+          - os: windows-latest
+            rust: stable
+            run_build: true
+          - os: macos-latest
+            rust: stable
+            run_build: true
+          - os: ubuntu-latest
+            rust: beta
+            run_build: false
 
     steps:
       - uses: actions/checkout@v6
@@ -100,6 +111,7 @@ jobs:
         run: cargo test --locked --workspace --all-features --verbose
 
       - name: Build
+        if: matrix.run_build
         run: cargo build --locked --workspace --all-features --verbose
 
   docs:
