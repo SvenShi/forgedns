@@ -44,7 +44,7 @@ rand = "0.10"
 url = "2.5"
 wincode = { version = "0.5", features = ["derive"] }
 forgedns-proto = { path = "crates/forgedns-proto" }
-hotpath = "0.14"
+hotpath = "0.15"
 
 # DNS transport and TLS stack used by server plugins and upstream clients
 h2 = "0.4"
