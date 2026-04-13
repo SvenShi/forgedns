@@ -5,7 +5,7 @@ plugins:
   - tag: seq_main
     type: sequence
     args:
-      - matches: ["qtype A"]
+      - matches: ["qtype 1"]
         exec: reject 5
       - exec: reject 2
 
