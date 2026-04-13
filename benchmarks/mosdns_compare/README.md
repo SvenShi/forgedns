@@ -2,6 +2,13 @@
 
 This directory keeps a compare pack for ForgeDNS vs mosdns.
 
+There are now two runners with different goals:
+
+- `run_dnsperf_compare.sh`
+  - throughput-oriented, better for saturated or higher-concurrency comparisons
+- `run_dnsperf_latency_compare.sh`
+  - latency-oriented, keeps concurrency intentionally low and reports latency first
+
 The pack now treats `scenarios.tsv` as a single scenario catalog instead of a flat
 "run everything" list. Each row carries tags and a short purpose string so the
 runner can default to the most decision-relevant scenarios first.
@@ -31,6 +38,8 @@ Useful commands:
 
 - `./run_dnsperf_compare.sh`
   - run the default `core` scenarios
+- `./run_dnsperf_latency_compare.sh`
+  - run the default `latency-core` scenarios with low-concurrency latency sweep
 - `./run_dnsperf_compare.sh macro`
   - only run end-to-end macro scenarios
 - `./run_dnsperf_compare.sh micro`
@@ -49,6 +58,10 @@ Useful commands:
   - quick smoke run with no repeat aggregation
 - `BENCH_REPEATS=3 BENCH_SECONDS=15 DNSPERF_CLIENTS=64 ./run_dnsperf_compare.sh macro`
   - slower but much more publishable macro compare
+- `BENCH_REPEATS=1 LATENCY_CLIENT_LEVELS="1 2" ./run_dnsperf_latency_compare.sh`
+  - quick latency smoke run at one and two outstanding queries
+- `LATENCY_CLIENT_LEVELS="1 2 4 8" BENCH_REPEATS=3 ./run_dnsperf_latency_compare.sh latency-core`
+  - publishable low-concurrency latency sweep with four load points
 - `BENCH_PLUGIN_FLAG=1 ./run_dnsperf_compare.sh 18-match-env`
   - override the shared env matcher input when needed
 
@@ -86,6 +99,13 @@ Common tags:
 - `artificial`
   - synthetic control scenarios rather than real workloads
 
+Extra built-in selector:
+
+- `latency-core`
+  - a shorter latency-oriented shortlist used by `run_dnsperf_latency_compare.sh`
+  - includes baseline forward, cache hotpath, dual-entry UDP/TCP, local answers,
+    dataset-backed matching, provider chain, and minimal UDP/TCP server paths
+
 ## Output Files
 
 The runner writes raw logs and derived reports into `results/<timestamp>/`.
@@ -103,12 +123,20 @@ Important artifacts:
 - `report.md`
   - ready-to-read Markdown report with parameters, environment, and pair table
 
+The latency runner writes the same artifact names under a `results/latency-*`
+directory, but the pair table is keyed by client count and puts latency plus
+jitter ahead of QPS.
+
 Interpretation rules:
 
 - `QPS diff` uses mosdns as the baseline:
   `(ForgeDNS - mosdns) / mosdns`
 - `Latency diff` also uses mosdns as the baseline:
   a negative value means ForgeDNS has lower latency
+- `run_dnsperf_compare.sh` is the better choice when you want to compare
+  saturated throughput or higher-concurrency queueing behavior
+- `run_dnsperf_latency_compare.sh` is the better choice when you want to compare
+  low-concurrency response latency with `clients == outstanding`
 - `BENCH_REPEATS=3` is the recommended floor for results you plan to quote
 - observer scenarios such as `debug_print` and `query_summary` are useful for
   overhead comparison, but not for broad "which server is faster" claims
@@ -140,6 +168,8 @@ Interpretation rules:
 
 - UDP and TCP server-path comparisons are now included through
   `47-server-local-udp` and `48-server-local-tcp`
+- The latency runner still depends on `dnsperf`, so it reports average latency
+  and latency standard deviation rather than full percentile histograms
 - `http_server` and `quic_server` are still not in the catalog because this
   compare pack is driven by `dnsperf` in UDP/TCP mode and does not exercise
   HTTP or QUIC transports directly

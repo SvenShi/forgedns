@@ -38,6 +38,11 @@ Load-test parameters:
 
 The table below shows the average of three runs for each scenario.
 
+Additional note:
+
+* The public table above is still throughput-biased and comes from `run_dnsperf_compare.sh`
+* The repository now also ships `run_dnsperf_latency_compare.sh` for low-concurrency latency sweeps with `1 / 2 / 4` client levels by default
+
 Legend:
 
 * <span className="benchmark-delta benchmark-delta--up">Green</span> means ForgeDNS performs better on that metric
@@ -78,3 +83,4 @@ So the more accurate conclusion is not "ForgeDNS is faster across the board", bu
 * Benchmark directory: [`benchmarks/mosdns_compare/README.md`](https://github.com/SvenShi/forgedns/tree/main/benchmarks/mosdns_compare)
 * Scenario list: [`benchmarks/mosdns_compare/scenarios.tsv`](https://github.com/SvenShi/forgedns/blob/main/benchmarks/mosdns_compare/scenarios.tsv)
 * Load-test script: [`benchmarks/mosdns_compare/run_dnsperf_compare.sh`](https://github.com/SvenShi/forgedns/blob/main/benchmarks/mosdns_compare/run_dnsperf_compare.sh)
+* Low-concurrency latency script: [`benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh`](https://github.com/SvenShi/forgedns/blob/main/benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh)
