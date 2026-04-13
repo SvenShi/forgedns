@@ -13,7 +13,7 @@ use forgedns::plugin::executor::ExecStep;
 use forgedns::plugin::{PluginRegistry, PluginType};
 use forgedns::proto::{DNSClass, Message, Question, Rcode};
 use forgedns::proto::{Name, RecordType};
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::header::LOCATION;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -30,6 +30,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 #[cfg(target_os = "linux")]
 use tokio::time::sleep;
 use tokio::time::{Duration, timeout};
@@ -209,6 +210,7 @@ struct TestHttpRoute {
     status: StatusCode,
     body: Vec<u8>,
     location: Option<String>,
+    response_delay: Option<Duration>,
 }
 
 impl TestHttpRoute {
@@ -218,7 +220,30 @@ impl TestHttpRoute {
             status,
             body,
             location: None,
+            response_delay: None,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CapturedHttpRequest {
+    method: String,
+    path: String,
+    query: Option<String>,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl CapturedHttpRequest {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn body_text(&self) -> String {
+        String::from_utf8_lossy(self.body.as_slice()).into_owned()
     }
 }
 
@@ -246,17 +271,25 @@ async fn start_test_http_server_routes(routes: Vec<TestHttpRoute>) -> Result<Soc
                                 if let Some(location) = route.location.as_deref() {
                                     builder = builder.header(LOCATION, location);
                                 }
+                                let delay = route.response_delay;
                                 builder
                                     .body(Full::new(Bytes::from(route.body.clone())))
+                                    .map(|response| (response, delay))
                                     .expect("response should build")
                             })
                             .unwrap_or_else(|| {
-                                Response::builder()
-                                    .status(StatusCode::NOT_FOUND)
-                                    .body(Full::new(Bytes::from_static(b"not found")))
-                                    .expect("response should build")
+                                (
+                                    Response::builder()
+                                        .status(StatusCode::NOT_FOUND)
+                                        .body(Full::new(Bytes::from_static(b"not found")))
+                                        .expect("response should build"),
+                                    None,
+                                )
                             });
-                        Ok::<_, std::convert::Infallible>(response)
+                        if let Some(delay) = response.1 {
+                            tokio::time::sleep(delay).await;
+                        }
+                        Ok::<_, std::convert::Infallible>(response.0)
                     }
                 });
                 let _ = http1::Builder::new()
@@ -267,6 +300,98 @@ async fn start_test_http_server_routes(routes: Vec<TestHttpRoute>) -> Result<Soc
     });
 
     Ok(addr)
+}
+
+async fn start_recording_http_server_routes(
+    routes: Vec<TestHttpRoute>,
+) -> Result<(SocketAddr, mpsc::UnboundedReceiver<CapturedHttpRequest>)> {
+    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+    let addr = listener.local_addr()?;
+    let routes = Arc::new(routes);
+    let (tx, rx) = mpsc::unbounded_channel::<CapturedHttpRequest>();
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            let routes = routes.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let service = service_fn(move |request: Request<hyper::body::Incoming>| {
+                    let routes = routes.clone();
+                    let tx = tx.clone();
+                    async move {
+                        let (parts, body) = request.into_parts();
+                        let body = body
+                            .collect()
+                            .await
+                            .map(|collected| collected.to_bytes().to_vec())
+                            .unwrap_or_default();
+                        let captured = CapturedHttpRequest {
+                            method: parts.method.to_string(),
+                            path: parts.uri.path().to_string(),
+                            query: parts.uri.query().map(str::to_string),
+                            headers: parts
+                                .headers
+                                .iter()
+                                .map(|(key, value)| {
+                                    (
+                                        key.as_str().to_string(),
+                                        String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                                    )
+                                })
+                                .collect(),
+                            body,
+                        };
+                        let _ = tx.send(captured);
+
+                        let response = routes
+                            .iter()
+                            .find(|route| route.path == parts.uri.path())
+                            .map(|route| {
+                                let mut builder = Response::builder().status(route.status);
+                                if let Some(location) = route.location.as_deref() {
+                                    builder = builder.header(LOCATION, location);
+                                }
+                                let delay = route.response_delay;
+                                builder
+                                    .body(Full::new(Bytes::from(route.body.clone())))
+                                    .map(|response| (response, delay))
+                                    .expect("response should build")
+                            })
+                            .unwrap_or_else(|| {
+                                (
+                                    Response::builder()
+                                        .status(StatusCode::NOT_FOUND)
+                                        .body(Full::new(Bytes::from_static(b"not found")))
+                                        .expect("response should build"),
+                                    None,
+                                )
+                            });
+                        if let Some(delay) = response.1 {
+                            tokio::time::sleep(delay).await;
+                        }
+                        Ok::<_, std::convert::Infallible>(response.0)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+
+    Ok((addr, rx))
+}
+
+async fn wait_for_captured_request(
+    rx: &mut mpsc::UnboundedReceiver<CapturedHttpRequest>,
+) -> Result<CapturedHttpRequest> {
+    timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .map_err(|_| DnsError::runtime("timed out waiting for recorded HTTP request"))?
+        .ok_or_else(|| DnsError::runtime("recording HTTP server channel closed unexpectedly"))
 }
 
 async fn start_test_socks5_proxy() -> Result<SocketAddr> {
@@ -2305,6 +2430,7 @@ async fn test_download_executor_startup_if_missing_bootstraps_files_before_provi
             status: StatusCode::FOUND,
             body: Vec::new(),
             location: Some("/assets/geosite.dat".to_string()),
+            response_delay: None,
         },
         TestHttpRoute::new(
             "/assets/geosite.dat".to_string(),
@@ -2605,6 +2731,472 @@ plugins:
 
     assert!(err.to_string().contains("script plugin"));
     registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_sync_before_get_sends_headers_and_query_params() -> Result<()> {
+    let (server_addr, mut rx) = start_recording_http_server_routes(vec![TestHttpRoute::new(
+        "/hook".to_string(),
+        StatusCode::OK,
+        b"ok".to_vec(),
+    )])
+    .await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: GET
+      url: "http://{server_addr}/hook"
+      phase: before
+      async: false
+      headers:
+        X-Qname: "${{qname}}"
+      query_params:
+        client: "${{client_ip}}"
+        name: "${{qname}}"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    let captured = wait_for_captured_request(&mut rx).await?;
+    assert_eq!(captured.method, "GET");
+    assert_eq!(captured.path, "/hook");
+    assert_eq!(captured.header("x-qname"), Some("example.com"));
+    assert!(
+        captured
+            .query
+            .as_deref()
+            .unwrap_or_default()
+            .contains("client=127.0.0.1")
+    );
+    assert!(
+        captured
+            .query
+            .as_deref()
+            .unwrap_or_default()
+            .contains("name=example.com")
+    );
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_sync_after_post_json_uses_response_placeholders() -> Result<()>
+{
+    let (server_addr, mut rx) = start_recording_http_server_routes(vec![TestHttpRoute::new(
+        "/notify".to_string(),
+        StatusCode::OK,
+        b"ok".to_vec(),
+    )])
+    .await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: POST
+      url: "http://{server_addr}/notify"
+      phase: after
+      async: false
+      json:
+        qname: "${{qname}}"
+        rcode: "${{rcode_name}}"
+        resp_ip: "${{resp_ip}}"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+    let mut response = context.request().response(Rcode::NoError);
+    response.add_answer(forgedns::proto::Record::from_rdata(
+        Name::from_ascii("example.com.").unwrap(),
+        60,
+        forgedns::proto::RData::A(forgedns::proto::rdata::A(Ipv4Addr::new(192, 0, 2, 1))),
+    ));
+    context.set_response(response);
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    let captured = wait_for_captured_request(&mut rx).await?;
+    let body: serde_json::Value = serde_json::from_slice(&captured.body)
+        .map_err(|e| DnsError::runtime(format!("invalid json body: {e}")))?;
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.header("content-type"), Some("application/json"));
+    assert_eq!(body["qname"], "example.com");
+    assert_eq!(body["rcode"], "NoError");
+    assert_eq!(body["resp_ip"], "192.0.2.1");
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_supports_raw_body_and_content_type() -> Result<()> {
+    let (server_addr, mut rx) = start_recording_http_server_routes(vec![TestHttpRoute::new(
+        "/raw".to_string(),
+        StatusCode::OK,
+        b"ok".to_vec(),
+    )])
+    .await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: POST
+      url: "http://{server_addr}/raw"
+      async: false
+      body: "q=${{qname}}&client=${{client_ip}}"
+      content_type: "text/plain"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    let captured = wait_for_captured_request(&mut rx).await?;
+    assert_eq!(captured.header("content-type"), Some("text/plain"));
+    assert_eq!(captured.body_text(), "q=example.com&client=127.0.0.1");
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_supports_form_body_encoding() -> Result<()> {
+    let (server_addr, mut rx) = start_recording_http_server_routes(vec![TestHttpRoute::new(
+        "/form".to_string(),
+        StatusCode::OK,
+        b"ok".to_vec(),
+    )])
+    .await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: POST
+      url: "http://{server_addr}/form"
+      async: false
+      form:
+        client: "${{client_ip}}"
+        name: "${{qname}}"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    let captured = wait_for_captured_request(&mut rx).await?;
+    let form = url::form_urlencoded::parse(captured.body.as_slice())
+        .into_owned()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        captured.header("content-type"),
+        Some("application/x-www-form-urlencoded")
+    );
+    assert_eq!(form.get("client").map(String::as_str), Some("127.0.0.1"));
+    assert_eq!(form.get("name").map(String::as_str), Some("example.com"));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_follows_redirects() -> Result<()> {
+    let mut redirect = TestHttpRoute::new("/start".to_string(), StatusCode::FOUND, Vec::new());
+    redirect.location = Some("/final".to_string());
+    let (server_addr, mut rx) = start_recording_http_server_routes(vec![
+        redirect,
+        TestHttpRoute::new("/final".to_string(), StatusCode::OK, b"ok".to_vec()),
+    ])
+    .await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: GET
+      url: "http://{server_addr}/start"
+      async: false
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    let first = wait_for_captured_request(&mut rx).await?;
+    let second = wait_for_captured_request(&mut rx).await?;
+    assert_eq!(first.path, "/start");
+    assert_eq!(second.path, "/final");
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_supports_socks5_proxy() -> Result<()> {
+    let (server_addr, mut rx) = start_recording_http_server_routes(vec![TestHttpRoute::new(
+        "/proxy".to_string(),
+        StatusCode::OK,
+        b"ok".to_vec(),
+    )])
+    .await?;
+    let socks5_addr = start_test_socks5_proxy().await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: GET
+      url: "http://{server_addr}/proxy"
+      async: false
+      socks5: "{socks5_addr}"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    let captured = wait_for_captured_request(&mut rx).await?;
+    assert_eq!(captured.path, "/proxy");
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_error_modes_map_sync_failures() -> Result<()> {
+    let server_addr =
+        start_test_http_server(vec![("/missing", StatusCode::NOT_FOUND, "missing")]).await?;
+
+    async fn run_case(
+        server_addr: SocketAddr,
+        error_mode: &str,
+    ) -> Result<std::result::Result<ExecStep, DnsError>> {
+        let yaml = format!(
+            r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: GET
+      url: "http://{server_addr}/missing"
+      async: false
+      error_mode: {error_mode}
+"#,
+        );
+
+        let config = parse_config(&yaml)?;
+        let registry = plugin::init(config, None).await?;
+        let executor = registry
+            .get_plugin("http_main")
+            .expect("http_request plugin should exist")
+            .to_executor();
+        let mut context = make_context(registry.clone(), "example.com.");
+        let result = executor.execute(&mut context).await;
+        registry.destory().await;
+        Ok(result)
+    }
+
+    let continue_result = run_case(server_addr, "continue").await?;
+    assert!(matches!(continue_result?, ExecStep::Next));
+
+    let stop_result = run_case(server_addr, "stop").await?;
+    assert!(matches!(stop_result?, ExecStep::Stop));
+
+    let fail_result = run_case(server_addr, "fail").await?;
+    let fail_err = fail_result.expect_err("fail mode should return an error");
+    assert!(fail_err.to_string().contains("http_request plugin"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_async_mode_enqueues_and_sends_in_background() -> Result<()> {
+    let (server_addr, mut rx) = start_recording_http_server_routes(vec![TestHttpRoute::new(
+        "/async".to_string(),
+        StatusCode::OK,
+        b"ok".to_vec(),
+    )])
+    .await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: POST
+      url: "http://{server_addr}/async"
+      async: true
+      body: "${{qname}}"
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = executor.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Next));
+    let captured = wait_for_captured_request(&mut rx).await?;
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.body_text(), "example.com");
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_async_queue_full_returns_stop() -> Result<()> {
+    let mut slow_route = TestHttpRoute::new("/slow".to_string(), StatusCode::OK, b"ok".to_vec());
+    slow_route.response_delay = Some(Duration::from_millis(400));
+    let (server_addr, _rx) = start_recording_http_server_routes(vec![slow_route]).await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: GET
+      url: "http://{server_addr}/slow"
+      async: true
+      queue_size: 1
+      error_mode: stop
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+
+    let mut saw_stop = false;
+    for _ in 0..16 {
+        let mut context = make_context(registry.clone(), "example.com.");
+        let step = executor.execute(&mut context).await?;
+        if matches!(step, ExecStep::Stop) {
+            saw_stop = true;
+            break;
+        }
+    }
+
+    assert!(saw_stop, "async queue should eventually become full");
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_request_executor_async_closed_channel_returns_stop() -> Result<()> {
+    let server_addr = start_test_http_server(vec![("/closed", StatusCode::OK, "ok")]).await?;
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: http_main
+    type: http_request
+    args:
+      method: GET
+      url: "http://{server_addr}/closed"
+      async: true
+      error_mode: stop
+"#,
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let executor = registry
+        .get_plugin("http_main")
+        .expect("http_request plugin should exist")
+        .to_executor();
+
+    registry.destory().await;
+
+    let mut context = make_context(registry.clone(), "example.com.");
+    let step = executor.execute(&mut context).await?;
+    assert!(matches!(step, ExecStep::Stop));
     Ok(())
 }
 

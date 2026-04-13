@@ -25,7 +25,7 @@ ForgeDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor
 | --- | --- |
 | 协议 | UDP、TCP、DoT、DoQ、DoH |
 | 策略 | `sequence`、`matcher`、`executor`、`provider` |
-| 执行器 | `forward`、`cache`、`fallback`、`hosts`、`arbitrary`、`redirect`、`ecs_handler`、`ttl`、`download`、`reload`、`script` |
+| 执行器 | `forward`、`cache`、`fallback`、`hosts`、`arbitrary`、`redirect`、`ecs_handler`、`ttl`、`download`、`reload`、`script`、`http_request` |
 | 匹配器 | `qname`、`question`、`qtype`、`qclass`、`client_ip`、`resp_ip`、`rcode`、`rate_limiter` 等 |
 | 数据集 | `domain_set`、`ip_set`、`geoip`、`geosite`、`adguard_rule` |
 | 系统联动 | `ipset`、`nftset`、`ros_address_list`、`reverse_lookup` |

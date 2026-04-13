@@ -381,6 +381,158 @@ plugins:
 
 ---
 
+## `http_request`
+
+### 作用
+
+向外部 `http/https` 服务发送回调请求。它既可以在当前 DNS 链路进入下游 executor 之前触发，也可以在下游执行完成后触发，适合 webhook、审计、告警和外部联动。
+
+### 配置示例
+
+```yaml
+- tag: webhook_notify_after
+  type: http_request
+  args:
+    method: POST
+    url: "https://hooks.example.com/dns"
+    phase: after
+    async: true
+    timeout: 5s
+    headers:
+      X-Client-IP: "${client_ip}"
+      X-Qname: "${qname}"
+    query_params:
+      source: "forgedns"
+      qname: "${qname}"
+    json:
+      qname: "${qname}"
+      client_ip: "${client_ip}"
+      rcode: "${rcode_name}"
+      resp_ip: "${resp_ip}"
+```
+
+### 配置项
+
+#### `args.method`
+
+- 类型：`string`；必填：是
+- 作用：指定 HTTP 方法，例如 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`。
+
+#### `args.url`
+
+- 类型：`string`；必填：是
+- 作用：目标 URL。
+- 说明：支持 `${key}` 占位符插值；渲染后的 URL 只允许使用 `http` 或 `https`。
+
+#### `args.phase`
+
+- 类型：`string`；必填：否；默认值：`after`
+- 可选值：`before`、`after`
+- 作用：控制请求在下游 executor 之前发送，还是在下游执行完成后发送。
+
+#### `args.async`
+
+- 类型：`boolean`；必填：否；默认值：`true`
+- 作用：控制使用异步后台队列发送，还是在当前请求路径同步等待 HTTP 完成。
+
+#### `args.timeout`
+
+- 类型：`string`；必填：否；默认值：`5s`
+- 作用：限制单次 HTTP 调用的总超时时间。
+- 支持单位：`ms`、`s`、`m`、`h`、`d`
+
+#### `args.error_mode`
+
+- 类型：`string`；必填：否；默认值：`continue`
+- 可选值：
+  - `continue`：失败仅记录日志，然后继续后续链路
+  - `stop`：失败后返回 `Stop`
+  - `fail`：失败后直接返回 executor 错误
+
+#### `args.headers`
+
+- 类型：`map<string,string>`；必填：否；默认值：空
+- 作用：附加 HTTP 请求头。
+- 说明：header value 支持 `${key}` 占位符插值。
+
+#### `args.query_params`
+
+- 类型：`map<string,string>`；必填：否；默认值：空
+- 作用：把额外参数追加到 URL query 上。
+- 说明：value 支持 `${key}` 占位符插值；会与 URL 自带 query 一起发送。
+
+#### `args.body`
+
+- 类型：`string`；必填：否
+- 作用：原始字符串请求体。
+- 说明：支持 `${key}` 占位符插值；可选配 `args.content_type`。
+
+#### `args.json`
+
+- 类型：`object | array`；必填：否
+- 作用：以 JSON 方式发送请求体。
+- 说明：会自动设置 `Content-Type: application/json`；其中所有字符串叶子节点支持 `${key}` 占位符插值，非字符串值原样保留。
+
+#### `args.form`
+
+- 类型：`map<string,string>`；必填：否
+- 作用：以 `application/x-www-form-urlencoded` 方式发送表单。
+- 说明：value 支持 `${key}` 占位符插值；会自动设置对应的 `Content-Type`。
+
+#### `args.content_type`
+
+- 类型：`string`；必填：否
+- 作用：为原始 `args.body` 指定 `Content-Type`。
+- 说明：只能和 `args.body` 搭配，不能与 `args.json` 或 `args.form` 同时使用。
+
+#### `args.socks5`
+
+- 类型：`string`；必填：否
+- 作用：指定 SOCKS5 代理。
+- 说明：格式与 `upstream[].socks5` 一致，支持 `host:port`、`username:password@host:port` 和带中括号的 IPv6。
+
+#### `args.insecure_skip_verify`
+
+- 类型：`boolean`；必填：否；默认值：`false`
+- 作用：是否跳过 HTTPS 证书校验。
+
+#### `args.max_redirects`
+
+- 类型：`integer`；必填：否；默认值：`5`
+- 作用：限制最多跟随多少次重定向。
+
+#### `args.queue_size`
+
+- 类型：`integer`；必填：否；默认值：`256`
+- 作用：异步模式下后台发送队列的容量。
+
+### 可注入占位符
+
+- 与 `script` 插件相同：`qname`、`qtype`、`qtype_name`、`qclass`、`qclass_name`
+- 来源相关：`client_ip`、`client_port`、`server_name`、`url_path`
+- 运行态相关：`marks`、`has_resp`、`flow`
+- 响应相关：`rcode`、`rcode_name`、`resp_ip`
+- cron 元数据：`cron_plugin_tag`、`cron_job_name`、`cron_trigger_kind`、`cron_scheduled_at_unix_ms`
+
+### 行为说明
+
+- `phase: before` 时，会先发 HTTP 请求，再进入下游 executor。
+- `phase: after` 时，会先执行下游 executor，再根据当前上下文发送 HTTP 请求。
+- `async: true` 使用有界后台队列；入队失败会按 `error_mode` 处理。
+- `async: false` 会在当前请求路径内等待 HTTP 请求完成。
+- 只有最终返回 `2xx` 才视为成功；`3xx` 会在 `max_redirects` 范围内继续跟随。
+- 插件会读取并丢弃 HTTP 响应体，以便连接复用，但不会把响应内容写回 `DnsContext`。
+- 如果请求头里已经显式设置 `Content-Type`，插件不会再覆盖它。
+
+### 注意事项
+
+- `args.body`、`args.json`、`args.form` 三者互斥。
+- 这是副作用执行器，v1 不支持根据 HTTP 返回结果改写 DNS 请求、响应、marks 或 attrs。
+- v1 不支持 multipart 上传，也不支持 quick setup 语法。
+- 如果你同时需要 `before` 和 `after` 两种时机，请配置两个独立的 `http_request` 插件实例。
+
+---
+
 ## `sequence`
 
 ### 作用

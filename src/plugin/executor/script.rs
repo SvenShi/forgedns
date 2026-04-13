@@ -15,9 +15,10 @@
 //! - v1 is side-effect only: scripts do not mutate DNS responses or attrs.
 
 use crate::config::types::PluginConfig;
-use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
+use crate::plugin::executor::template::Template;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -35,11 +36,6 @@ use tracing::{info, warn};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 4096;
-const CRON_ATTR_PLUGIN_TAG: &str = "cron.plugin_tag";
-const CRON_ATTR_JOB_NAME: &str = "cron.job_name";
-const CRON_ATTR_TRIGGER_KIND: &str = "cron.trigger_kind";
-const CRON_ATTR_SCHEDULED_AT_UNIX_MS: &str = "cron.scheduled_at_unix_ms";
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptConfig {
@@ -73,17 +69,6 @@ struct ScriptExecutor {
     max_output_bytes: usize,
 }
 
-#[derive(Debug, Clone)]
-struct Template {
-    segments: Vec<TemplateSegment>,
-}
-
-#[derive(Debug, Clone)]
-enum TemplateSegment {
-    Literal(String),
-    Builtin(&'static str),
-}
-
 #[derive(Debug, Default)]
 struct CapturedOutput {
     bytes: Vec<u8>,
@@ -109,28 +94,6 @@ enum ExecutionFailure {
         detail: String,
     },
 }
-
-const BUILTIN_KEYS: &[&str] = &[
-    "qname",
-    "qtype",
-    "qtype_name",
-    "qclass",
-    "qclass_name",
-    "client_ip",
-    "client_port",
-    "server_name",
-    "url_path",
-    "marks",
-    "has_resp",
-    "rcode",
-    "rcode_name",
-    "resp_ip",
-    "flow",
-    "cron_plugin_tag",
-    "cron_job_name",
-    "cron_trigger_kind",
-    "cron_scheduled_at_unix_ms",
-];
 
 #[async_trait]
 impl Plugin for ScriptExecutor {
@@ -306,178 +269,6 @@ impl ScriptExecutor {
     }
 }
 
-impl Template {
-    fn parse(raw: &str) -> Result<Self> {
-        let mut segments = Vec::new();
-        let mut literal = String::new();
-        let mut chars = raw.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch != '$' {
-                literal.push(ch);
-                continue;
-            }
-
-            match chars.peek().copied() {
-                Some('$') => {
-                    chars.next();
-                    literal.push('$');
-                }
-                Some('{') => {
-                    chars.next();
-                    if !literal.is_empty() {
-                        segments.push(TemplateSegment::Literal(std::mem::take(&mut literal)));
-                    }
-
-                    let mut key = String::new();
-                    let mut closed = false;
-                    for ch in chars.by_ref() {
-                        if ch == '}' {
-                            closed = true;
-                            break;
-                        }
-                        key.push(ch);
-                    }
-
-                    if !closed {
-                        return Err(DnsError::plugin(format!(
-                            "invalid script template '{}': missing closing '}}'",
-                            raw
-                        )));
-                    }
-
-                    let builtin = validate_builtin_key(key.trim(), raw)?;
-                    segments.push(TemplateSegment::Builtin(builtin));
-                }
-                _ => literal.push('$'),
-            }
-        }
-
-        if !literal.is_empty() {
-            segments.push(TemplateSegment::Literal(literal));
-        }
-
-        Ok(Self { segments })
-    }
-
-    fn render(&self, context: &DnsContext) -> String {
-        let mut out = String::new();
-        for segment in &self.segments {
-            match segment {
-                TemplateSegment::Literal(value) => out.push_str(value),
-                TemplateSegment::Builtin(key) => {
-                    out.push_str(resolve_builtin(context, key).as_str())
-                }
-            }
-        }
-        out
-    }
-}
-
-fn validate_builtin_key(key: &str, raw: &str) -> Result<&'static str> {
-    if key.is_empty() {
-        return Err(DnsError::plugin(format!(
-            "invalid script template '{}': placeholder key cannot be empty",
-            raw
-        )));
-    }
-
-    BUILTIN_KEYS
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == key)
-        .ok_or_else(|| {
-            DnsError::plugin(format!(
-                "invalid script template '{}': unsupported placeholder '{}'",
-                raw, key
-            ))
-        })
-}
-
-fn resolve_builtin(context: &DnsContext, key: &str) -> String {
-    match key {
-        "qname" => context
-            .request()
-            .first_question()
-            .map(|question| question.name().normalized().to_string())
-            .unwrap_or_default(),
-        "qtype" => context
-            .request()
-            .first_qtype()
-            .map(|qtype| u16::from(qtype).to_string())
-            .unwrap_or_default(),
-        "qtype_name" => context
-            .request()
-            .first_qtype()
-            .map(|qtype| format!("{:?}", qtype))
-            .unwrap_or_default(),
-        "qclass" => context
-            .request()
-            .first_qclass()
-            .map(|qclass| u16::from(qclass).to_string())
-            .unwrap_or_default(),
-        "qclass_name" => context
-            .request()
-            .first_qclass()
-            .map(|qclass| format!("{:?}", qclass))
-            .unwrap_or_default(),
-        "client_ip" => context.peer_addr().ip().to_string(),
-        "client_port" => context.peer_addr().port().to_string(),
-        "server_name" => context.server_name().unwrap_or_default().to_string(),
-        "url_path" => context.url_path().unwrap_or_default().to_string(),
-        "marks" => {
-            let mut marks = context.marks().iter().cloned().collect::<Vec<_>>();
-            marks.sort_unstable();
-            marks.join(",")
-        }
-        "has_resp" => context.response().is_some().to_string(),
-        "rcode" => context
-            .response()
-            .map(|response| response.rcode().value().to_string())
-            .unwrap_or_default(),
-        "rcode_name" => context
-            .response()
-            .map(|response| format!("{:?}", response.rcode()))
-            .unwrap_or_default(),
-        "resp_ip" => {
-            let mut ips = context
-                .response()
-                .map(|response| {
-                    response
-                        .answer_ips()
-                        .into_iter()
-                        .map(|ip| ip.to_string())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            ips.sort_unstable();
-            ips.join(",")
-        }
-        "flow" => match context.flow() {
-            ExecFlowState::Running => "running".to_string(),
-            ExecFlowState::ReachedTail => "reached_tail".to_string(),
-            ExecFlowState::Broken => "broken".to_string(),
-        },
-        "cron_plugin_tag" => context
-            .get_attr::<String>(CRON_ATTR_PLUGIN_TAG)
-            .cloned()
-            .unwrap_or_default(),
-        "cron_job_name" => context
-            .get_attr::<String>(CRON_ATTR_JOB_NAME)
-            .cloned()
-            .unwrap_or_default(),
-        "cron_trigger_kind" => context
-            .get_attr::<String>(CRON_ATTR_TRIGGER_KIND)
-            .cloned()
-            .unwrap_or_default(),
-        "cron_scheduled_at_unix_ms" => context
-            .get_attr::<i64>(CRON_ATTR_SCHEDULED_AT_UNIX_MS)
-            .map(i64::to_string)
-            .unwrap_or_default(),
-        _ => String::new(),
-    }
-}
-
 fn format_exit_status(code: Option<i32>) -> String {
     match code {
         Some(code) => format!("exit code {}", code),
@@ -612,6 +403,7 @@ fn build_executor(tag: &str, config: ScriptConfig) -> Result<ScriptExecutor> {
 mod tests {
     use super::*;
     use crate::plugin::executor::ExecStep;
+    use crate::plugin::executor::template::resolve_builtin;
     use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
     use crate::proto::rdata::A;
     use crate::proto::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
@@ -671,10 +463,10 @@ mod tests {
     #[test]
     fn test_resolve_builtin_reads_cron_attrs() {
         let mut ctx = test_context();
-        ctx.set_attr(CRON_ATTR_PLUGIN_TAG, "cron_main".to_string());
-        ctx.set_attr(CRON_ATTR_JOB_NAME, "job1".to_string());
-        ctx.set_attr(CRON_ATTR_TRIGGER_KIND, "interval".to_string());
-        ctx.set_attr(CRON_ATTR_SCHEDULED_AT_UNIX_MS, 123_i64);
+        ctx.set_attr("cron.plugin_tag", "cron_main".to_string());
+        ctx.set_attr("cron.job_name", "job1".to_string());
+        ctx.set_attr("cron.trigger_kind", "interval".to_string());
+        ctx.set_attr("cron.scheduled_at_unix_ms", 123_i64);
 
         assert_eq!(resolve_builtin(&ctx, "cron_plugin_tag"), "cron_main");
         assert_eq!(resolve_builtin(&ctx, "cron_job_name"), "job1");

@@ -382,6 +382,158 @@ Runs an explicitly configured external command and injects a stable subset of th
 
 ---
 
+## `http_request`
+
+### Purpose
+
+Sends callback requests to external `http/https` services. It can trigger before the current DNS flow enters downstream executors or after downstream execution completes, which makes it suitable for webhooks, audit pipelines, alerts, and external integrations.
+
+### Example Configuration
+
+```yaml
+- tag: webhook_notify_after
+  type: http_request
+  args:
+    method: POST
+    url: "https://hooks.example.com/dns"
+    phase: after
+    async: true
+    timeout: 5s
+    headers:
+      X-Client-IP: "${client_ip}"
+      X-Qname: "${qname}"
+    query_params:
+      source: "forgedns"
+      qname: "${qname}"
+    json:
+      qname: "${qname}"
+      client_ip: "${client_ip}"
+      rcode: "${rcode_name}"
+      resp_ip: "${resp_ip}"
+```
+
+### Config Fields
+
+#### `args.method`
+
+- Type: `string`; Required: yes
+- Purpose: Selects the HTTP method such as `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`.
+
+#### `args.url`
+
+- Type: `string`; Required: yes
+- Purpose: The target URL.
+- Notes: Supports `${key}` placeholder interpolation. The rendered URL must use either `http` or `https`.
+
+#### `args.phase`
+
+- Type: `string`; Required: no; Default: `after`
+- Allowed values: `before`, `after`
+- Purpose: Controls whether the request is sent before or after downstream executors run.
+
+#### `args.async`
+
+- Type: `boolean`; Required: no; Default: `true`
+- Purpose: Chooses bounded background dispatch or inline synchronous dispatch.
+
+#### `args.timeout`
+
+- Type: `string`; Required: no; Default: `5s`
+- Purpose: Caps the total time budget for one HTTP call.
+- Supported units: `ms`, `s`, `m`, `h`, `d`
+
+#### `args.error_mode`
+
+- Type: `string`; Required: no; Default: `continue`
+- Allowed values:
+  - `continue`: only log the failure and keep running
+  - `stop`: return `Stop` on failure
+  - `fail`: return an executor error immediately
+
+#### `args.headers`
+
+- Type: `map<string,string>`; Required: no; Default: empty
+- Purpose: Adds HTTP request headers.
+- Notes: Header values support `${key}` placeholder interpolation.
+
+#### `args.query_params`
+
+- Type: `map<string,string>`; Required: no; Default: empty
+- Purpose: Appends additional query parameters to the rendered URL.
+- Notes: Values support `${key}` placeholder interpolation and are combined with any query already present in `args.url`.
+
+#### `args.body`
+
+- Type: `string`; Required: no
+- Purpose: Sends a raw string body.
+- Notes: Supports `${key}` placeholder interpolation and can be paired with `args.content_type`.
+
+#### `args.json`
+
+- Type: `object | array`; Required: no
+- Purpose: Sends a JSON body.
+- Notes: Automatically sets `Content-Type: application/json`. Every string leaf supports `${key}` interpolation while non-string values are preserved as-is.
+
+#### `args.form`
+
+- Type: `map<string,string>`; Required: no
+- Purpose: Sends an `application/x-www-form-urlencoded` body.
+- Notes: Values support `${key}` interpolation and the plugin automatically sets the matching `Content-Type`.
+
+#### `args.content_type`
+
+- Type: `string`; Required: no
+- Purpose: Sets `Content-Type` for raw `args.body`.
+- Notes: This helper can only be used with `args.body`, not with `args.json` or `args.form`.
+
+#### `args.socks5`
+
+- Type: `string`; Required: no
+- Purpose: Routes requests through a SOCKS5 proxy.
+- Notes: Uses the same format as `upstream[].socks5`, including `host:port`, `username:password@host:port`, and bracketed IPv6.
+
+#### `args.insecure_skip_verify`
+
+- Type: `boolean`; Required: no; Default: `false`
+- Purpose: Skips HTTPS certificate validation.
+
+#### `args.max_redirects`
+
+- Type: `integer`; Required: no; Default: `5`
+- Purpose: Limits how many redirects are followed.
+
+#### `args.queue_size`
+
+- Type: `integer`; Required: no; Default: `256`
+- Purpose: Sets the bounded queue capacity used by async mode.
+
+### Available Placeholders
+
+- Same as `script`: `qname`, `qtype`, `qtype_name`, `qclass`, `qclass_name`
+- Source fields: `client_ip`, `client_port`, `server_name`, `url_path`
+- Runtime fields: `marks`, `has_resp`, `flow`
+- Response fields: `rcode`, `rcode_name`, `resp_ip`
+- Cron metadata: `cron_plugin_tag`, `cron_job_name`, `cron_trigger_kind`, `cron_scheduled_at_unix_ms`
+
+### Behavior
+
+- With `phase: before`, the HTTP request is dispatched first and the downstream executor chain runs afterward.
+- With `phase: after`, the downstream executor chain runs first and the HTTP request is dispatched against the resulting context.
+- `async: true` uses a bounded background queue. Queue insertion failures are handled according to `error_mode`.
+- `async: false` waits for the HTTP call on the current request path.
+- Only terminal `2xx` responses are treated as success. `3xx` responses are followed up to `max_redirects`.
+- The plugin drains and discards the HTTP response body so connections remain reusable, but it does not write that body back into `DnsContext`.
+- If `Content-Type` is already set explicitly in `args.headers`, the plugin does not overwrite it.
+
+### Notes
+
+- `args.body`, `args.json`, and `args.form` are mutually exclusive.
+- This is a side-effect executor. In v1 it cannot rewrite DNS requests, responses, marks, or attrs based on the HTTP result.
+- v1 does not support multipart uploads or quick setup syntax.
+- If you need both trigger moments, configure two separate `http_request` plugin instances.
+
+---
+
 ## `sequence`
 
 ### Purpose

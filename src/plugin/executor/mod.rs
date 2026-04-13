@@ -49,6 +49,7 @@ pub mod fallback;
 pub mod forward;
 pub mod forward_edns0opt;
 pub mod hosts;
+pub mod http_request;
 pub mod ipset;
 pub mod metrics_collector;
 pub mod nftset;
@@ -60,6 +61,7 @@ pub mod ros_address_list;
 pub mod script;
 pub mod sequence;
 pub mod sleep;
+pub(crate) mod template;
 pub mod ttl;
 
 // Helper macro to continue to next chain node if present
