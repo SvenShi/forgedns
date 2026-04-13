@@ -220,7 +220,6 @@ pub fn build_udp_socket(addr: &str) -> Result<StdUdpSocket> {
     #[cfg(not(target_os = "windows"))]
     let _ = sock.set_reuse_port(true);
     let _ = sock.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
-    let _ = sock.set_send_buffer_size(UDP_SOCKET_BUFFER_SIZE);
 
     sock.bind(&addr.into())?;
 

@@ -43,6 +43,8 @@ use tracing::{debug, error, info, warn};
 
 const DEFAULT_IDLE_TIMEOUT: u64 = 10;
 
+const TCP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
+
 /// TCP server configuration
 #[derive(Deserialize)]
 pub struct TcpServerConfig {
@@ -352,6 +354,7 @@ pub fn build_tcp_listener(addr: &str, idle_timeout: Duration) -> Result<TcpListe
     let _ = sock.set_tcp_keepalive(&keepalive);
     #[cfg(not(target_os = "windows"))]
     let _ = sock.set_reuse_port(true);
+    let _ = sock.set_recv_buffer_size(TCP_SOCKET_BUFFER_SIZE);
 
     sock.bind(&addr.into())?;
     sock.listen(512)?;

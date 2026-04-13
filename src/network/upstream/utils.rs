@@ -346,6 +346,8 @@ pub fn connect_socket(
     // Configure socket for async I/O
     let _ = socket.set_nonblocking(true);
     let _ = socket.set_reuse_address(true);
+    let _ = socket.set_reuse_port(true);
+    let _ = socket.set_recv_buffer_size(64 * 1024);
 
     // Linux-specific socket options for advanced routing
     #[cfg(target_os = "linux")]
