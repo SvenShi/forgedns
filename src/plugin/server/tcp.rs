@@ -339,7 +339,7 @@ async fn handle_dns_stream<S>(
     handle.abort();
 }
 
-/// Build a TCP socket with reuse_address and reuse_port options
+/// Build a TCP socket with reuse_address and reuse_port options when available
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
 pub fn build_tcp_listener(addr: &str, idle_timeout: Duration) -> Result<TcpListener> {
@@ -352,7 +352,15 @@ pub fn build_tcp_listener(addr: &str, idle_timeout: Duration) -> Result<TcpListe
     let _ = sock.set_tcp_nodelay(true);
     let keepalive = TcpKeepalive::new().with_interval(idle_timeout);
     let _ = sock.set_tcp_keepalive(&keepalive);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(
+        unix,
+        not(any(
+            target_os = "solaris",
+            target_os = "illumos",
+            target_os = "cygwin",
+            target_os = "wasi"
+        ))
+    ))]
     let _ = sock.set_reuse_port(true);
     let _ = sock.set_recv_buffer_size(TCP_SOCKET_BUFFER_SIZE);
 

@@ -207,7 +207,7 @@ async fn run_server(
     info!(listen = %addr, "UDP server stopped");
 }
 
-/// Build a UDP socket with reuse_address and reuse_port options
+/// Build a UDP socket with reuse_address and reuse_port options when available
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
 pub fn build_udp_socket(addr: &str) -> Result<StdUdpSocket> {
@@ -217,7 +217,15 @@ pub fn build_udp_socket(addr: &str) -> Result<StdUdpSocket> {
 
     let _ = sock.set_nonblocking(true);
     let _ = sock.set_reuse_address(true);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(
+        unix,
+        not(any(
+            target_os = "solaris",
+            target_os = "illumos",
+            target_os = "cygwin",
+            target_os = "wasi"
+        ))
+    ))]
     let _ = sock.set_reuse_port(true);
     let _ = sock.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
 

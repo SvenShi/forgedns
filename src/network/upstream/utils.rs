@@ -346,6 +346,15 @@ pub fn connect_socket(
     // Configure socket for async I/O
     let _ = socket.set_nonblocking(true);
     let _ = socket.set_reuse_address(true);
+    #[cfg(all(
+        unix,
+        not(any(
+            target_os = "solaris",
+            target_os = "illumos",
+            target_os = "cygwin",
+            target_os = "wasi"
+        ))
+    ))]
     let _ = socket.set_reuse_port(true);
     let _ = socket.set_recv_buffer_size(64 * 1024);
 
@@ -390,17 +399,12 @@ fn is_connect_in_progress(err: &std::io::Error) -> bool {
         return true;
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
-        err.raw_os_error() == Some(115)
+        err.raw_os_error() == Some(libc::EINPROGRESS)
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        err.raw_os_error() == Some(36)
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(unix))]
     {
         false
     }

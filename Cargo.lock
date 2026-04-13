@@ -746,6 +746,7 @@ dependencies = [
  "hyper-util",
  "inventory",
  "lazy_static",
+ "libc",
  "mikrotik-rs",
  "prost",
  "quinn",
