@@ -438,8 +438,8 @@ mod tests {
     #[test]
     fn test_resolve_builtin_formats_collections_stably() {
         let mut ctx = context_with_question();
-        ctx.marks_mut().insert("b".to_string());
-        ctx.marks_mut().insert("a".to_string());
+        ctx.marks_mut().insert(2);
+        ctx.marks_mut().insert(1);
 
         let mut response = ctx.request().response(Rcode::NoError);
         response.add_answer(Record::from_rdata(
@@ -454,7 +454,7 @@ mod tests {
         ));
         ctx.set_response(response);
 
-        assert_eq!(resolve_builtin(&ctx, "marks"), "a,b");
+        assert_eq!(resolve_builtin(&ctx, "marks"), "1,2");
         assert_eq!(resolve_builtin(&ctx, "resp_ip"), "192.0.2.1,198.51.100.2");
         assert_eq!(resolve_builtin(&ctx, "rcode"), "0");
         assert_eq!(resolve_builtin(&ctx, "rcode_name"), "NoError");

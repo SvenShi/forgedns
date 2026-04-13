@@ -209,7 +209,7 @@ impl StringSource {
                     if !out.is_empty() {
                         out.push(',');
                     }
-                    out.push_str(mark);
+                    out.push_str(mark.to_string().as_str());
                 }
                 Cow::Owned(out)
             }
@@ -377,7 +377,7 @@ mod tests {
             request,
             Arc::new(PluginRegistry::new()),
         );
-        context.marks_mut().insert("1".to_string());
+        context.marks_mut().insert(1);
         context
     }
 

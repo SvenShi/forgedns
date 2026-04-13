@@ -42,7 +42,7 @@ enum BuiltinOp {
     /// Execute another sequence executor and stop current program immediately.
     Goto(Arc<dyn Executor>),
     /// Insert marks into context and continue execution.
-    Mark(AHashSet<String>),
+    Mark(AHashSet<u32>),
 }
 
 #[derive(Debug)]
@@ -439,7 +439,7 @@ fn parse_matcher_expr(raw: &str) -> Result<(bool, &str)> {
 /// - `mark 1`
 /// - `mark 1,2,3`
 /// - `mark 1 2 3`
-fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<String>> {
+fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<u32>> {
     let Some(raw) = arg else {
         return Err(DnsError::plugin("mark requires at least one value"));
     };
@@ -453,7 +453,7 @@ fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<String>> {
         let mark = token
             .parse::<u32>()
             .map_err(|e| DnsError::plugin(format!("invalid mark value '{}': {}", token, e)))?;
-        marks.insert(mark.to_string());
+        marks.insert(mark);
     }
 
     if marks.is_empty() {

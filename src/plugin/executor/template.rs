@@ -219,7 +219,11 @@ pub(crate) fn resolve_builtin(context: &DnsContext, key: &str) -> String {
         "server_name" => context.server_name().unwrap_or_default().to_string(),
         "url_path" => context.url_path().unwrap_or_default().to_string(),
         "marks" => {
-            let mut marks = context.marks().iter().cloned().collect::<Vec<_>>();
+            let mut marks = context
+                .marks()
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>();
             marks.sort_unstable();
             marks.join(",")
         }

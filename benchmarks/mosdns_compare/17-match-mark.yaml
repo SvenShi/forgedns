@@ -6,7 +6,7 @@ plugins:
     type: sequence
     args:
       - exec: mark plugin-bench
-      - matches: ["mark plugin-bench"]
+      - matches: ["mark 1"]
         exec: reject 5
       - exec: reject 2
 

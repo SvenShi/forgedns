@@ -53,7 +53,7 @@ fn build_mark_matcher(tag: String, marks: Vec<String>) -> DnsResult<Uninitialize
     })))
 }
 
-fn parse_mark_values(raw_marks: &[String]) -> DnsResult<AHashSet<String>> {
+fn parse_mark_values(raw_marks: &[String]) -> DnsResult<AHashSet<u32>> {
     if raw_marks.is_empty() {
         return Err(DnsError::plugin("mark matcher requires at least one mark"));
     }
@@ -67,7 +67,7 @@ fn parse_mark_values(raw_marks: &[String]) -> DnsResult<AHashSet<String>> {
         let mark = v
             .parse::<u32>()
             .map_err(|e| DnsError::plugin(format!("invalid mark value '{}': {}", v, e)))?;
-        marks.insert(mark.to_string());
+        marks.insert(mark);
     }
 
     if marks.is_empty() {
@@ -80,7 +80,7 @@ fn parse_mark_values(raw_marks: &[String]) -> DnsResult<AHashSet<String>> {
 #[derive(Debug)]
 struct MarkMatcher {
     tag: String,
-    marks: AHashSet<String>,
+    marks: AHashSet<u32>,
 }
 
 #[async_trait]
@@ -116,22 +116,22 @@ mod tests {
 
         let parsed = parse_mark_values(&["1".to_string(), " 2 ".to_string()])
             .expect("numeric marks should parse");
-        assert!(parsed.contains("1"));
-        assert!(parsed.contains("2"));
+        assert!(parsed.contains(&1));
+        assert!(parsed.contains(&2));
     }
 
     #[test]
     fn test_mark_matcher_checks_mark_intersection() {
         let matcher = MarkMatcher {
             tag: "mark".to_string(),
-            marks: ["1".to_string(), "2".to_string()].into_iter().collect(),
+            marks: [1, 2].into_iter().collect(),
         };
 
         let mut ctx = test_context();
-        ctx.marks_mut().insert("3".to_string());
+        ctx.marks_mut().insert(3);
         assert!(!matcher.is_match(&mut ctx));
 
-        ctx.marks_mut().insert("1".to_string());
+        ctx.marks_mut().insert(1);
         assert!(matcher.is_match(&mut ctx));
     }
 }

@@ -92,7 +92,7 @@ impl IngressContext {
 #[derive(Debug)]
 pub struct RuntimeContext {
     flow: ExecFlowState,
-    marks: AHashSet<String>,
+    marks: AHashSet<u32>,
     extensions: AHashMap<String, Box<dyn Any + Send + Sync>>,
 }
 
@@ -118,12 +118,12 @@ impl RuntimeContext {
     }
 
     #[inline]
-    pub fn marks(&self) -> &AHashSet<String> {
+    pub fn marks(&self) -> &AHashSet<u32> {
         &self.marks
     }
 
     #[inline]
-    pub fn marks_mut(&mut self) -> &mut AHashSet<String> {
+    pub fn marks_mut(&mut self) -> &mut AHashSet<u32> {
         &mut self.marks
     }
 
@@ -266,12 +266,12 @@ impl DnsContext {
     }
 
     #[inline]
-    pub fn marks(&self) -> &AHashSet<String> {
+    pub fn marks(&self) -> &AHashSet<u32> {
         self.runtime.marks()
     }
 
     #[inline]
-    pub fn marks_mut(&mut self) -> &mut AHashSet<String> {
+    pub fn marks_mut(&mut self) -> &mut AHashSet<u32> {
         self.runtime.marks_mut()
     }
 

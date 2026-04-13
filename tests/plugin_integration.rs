@@ -672,7 +672,7 @@ plugins:
 
     assert!(matches!(step, ExecStep::Next));
     assert_eq!(context.flow(), ExecFlowState::Broken);
-    assert!(context.marks().contains("100"));
+    assert!(context.marks().contains(&100));
     assert_eq!(
         context
             .response()
@@ -765,8 +765,8 @@ plugins:
 
     assert!(matches!(step, ExecStep::Next));
     assert_eq!(context.flow(), ExecFlowState::Broken);
-    assert!(context.marks().contains("100"));
-    assert!(context.marks().contains("200"));
+    assert!(context.marks().contains(&100));
+    assert!(context.marks().contains(&200));
     assert_eq!(
         context
             .response()
@@ -811,10 +811,10 @@ plugins:
 
     assert!(matches!(step, ExecStep::Next));
     assert_eq!(context.flow(), ExecFlowState::Broken);
-    assert!(context.marks().contains("1"));
-    assert!(context.marks().contains("2"));
-    assert!(!context.marks().contains("3"));
-    assert!(!context.marks().contains("4"));
+    assert!(context.marks().contains(&1));
+    assert!(context.marks().contains(&2));
+    assert!(!context.marks().contains(&3));
+    assert!(!context.marks().contains(&4));
     assert!(context.response().is_none());
 
     registry.destory().await;
@@ -853,10 +853,10 @@ plugins:
 
     assert!(matches!(step, ExecStep::Next));
     assert_eq!(context.flow(), ExecFlowState::Broken);
-    assert!(context.marks().contains("1"));
-    assert!(context.marks().contains("2"));
-    assert!(!context.marks().contains("3"));
-    assert!(!context.marks().contains("4"));
+    assert!(context.marks().contains(&1));
+    assert!(context.marks().contains(&2));
+    assert!(!context.marks().contains(&3));
+    assert!(!context.marks().contains(&4));
     assert_eq!(
         context
             .response()
@@ -901,10 +901,10 @@ plugins:
 
     assert!(matches!(step, ExecStep::Next));
     assert_eq!(context.flow(), ExecFlowState::ReachedTail);
-    assert!(context.marks().contains("1"));
-    assert!(context.marks().contains("2"));
-    assert!(!context.marks().contains("3"));
-    assert!(context.marks().contains("4"));
+    assert!(context.marks().contains(&1));
+    assert!(context.marks().contains(&2));
+    assert!(!context.marks().contains(&3));
+    assert!(context.marks().contains(&4));
 
     registry.destory().await;
     Ok(())
@@ -942,10 +942,10 @@ plugins:
 
     assert!(matches!(step, ExecStep::Next));
     assert_eq!(context.flow(), ExecFlowState::ReachedTail);
-    assert!(context.marks().contains("1"));
-    assert!(context.marks().contains("2"));
-    assert!(!context.marks().contains("3"));
-    assert!(!context.marks().contains("4"));
+    assert!(context.marks().contains(&1));
+    assert!(context.marks().contains(&2));
+    assert!(!context.marks().contains(&3));
+    assert!(!context.marks().contains(&4));
 
     registry.destory().await;
     Ok(())
@@ -2571,8 +2571,8 @@ plugins:
         server_name: Some(StdArc::from("dns.example.com")),
         url_path: Some(StdArc::from("/dns-query")),
     });
-    context.marks_mut().insert("beta".to_string());
-    context.marks_mut().insert("alpha".to_string());
+    context.marks_mut().insert(2);
+    context.marks_mut().insert(1);
     context.set_attr("cron.job_name", "nightly".to_string());
     let mut response = context.request().response(Rcode::NoError);
     response.add_answer(forgedns::proto::Record::from_rdata(
@@ -2591,7 +2591,7 @@ plugins:
     assert!(output.contains("CLIENT=127.0.0.1"));
     assert!(output.contains("SERVER=dns.example.com"));
     assert!(output.contains("URL=/dns-query"));
-    assert!(output.contains("MARKS=alpha,beta"));
+    assert!(output.contains("MARKS=1,2"));
     assert!(output.contains("HAS_RESP=true"));
     assert!(output.contains("RCODE=NoError"));
     assert!(output.contains("RESP_IP=192.0.2.1"));
