@@ -608,6 +608,47 @@ plugins:
 - 一条规则里多个 `matches` 需要同时为真。
 - 可以通过 `jump` / `goto` 调用其它 `sequence`。
 
+### 内建控制流
+
+`sequence.args[].exec` 除了调用插件，也可以直接写内建控制流：
+
+#### `accept`
+
+- 立即结束当前 `sequence`。
+- 会把请求流标记为已中断，因此外层不会继续执行后续规则。
+- 不会自动生成响应；通常用于前面已经有 response 的场景。
+
+#### `return`
+
+- 立即结束当前 `sequence`，并把控制权交回调用方。
+- 不会自动生成响应，也不会把 flow 标记为 `Broken`。
+- 若当前 `sequence` 是被 `jump` 调用的，调用方会从下一条规则继续。
+
+#### `reject [rcode]`
+
+- 立即生成响应并结束当前 `sequence`。
+- 默认 `rcode` 为 `REFUSED`。
+- 只支持十进制数值，例如 `reject 2`、`reject 3`。
+- 会中断后续规则，不再继续执行。
+
+#### `mark ...`
+
+- 写入一个或多个整数 mark，然后继续当前 `sequence` 的下一条规则。
+- 支持 `mark 1`、`mark 1 2 3`、`mark 1,2,3`。
+
+#### `jump seq_tag`
+
+- 调用另一个 `sequence`，语义类似子过程调用。
+- 参数必须是目标 `sequence` 的 tag，不能写 `$`。
+- 目标 `sequence` 跑到尾部或执行 `return` 后，当前 `sequence` 会继续下一条规则。
+- 如果目标 `sequence` 执行 `accept` / `reject` 并打断 flow，当前 `sequence` 也会停止。
+
+#### `goto seq_tag`
+
+- 把控制权单向转交给另一个 `sequence`。
+- 参数必须是目标 `sequence` 的 tag，不能写 `$`。
+- 一旦执行 `goto`，当前 `sequence` 就不会再回到后续规则。
+
 ### 典型用途
 
 - 统一总入口。

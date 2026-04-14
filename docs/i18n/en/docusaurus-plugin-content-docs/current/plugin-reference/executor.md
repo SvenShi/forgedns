@@ -601,6 +601,47 @@ Orchestrates matchers and executors into a pipeline. This is the most common ent
 - A rule with multiple `matches` requires all of them to be true.
 - Other `sequence` instances can be called with `jump` or `goto`.
 
+### Built-In Control Flow
+
+Besides plugin calls, `sequence.args[].exec` can also use built-in control flow:
+
+#### `accept`
+
+- Ends the current `sequence` immediately.
+- Marks the request flow as broken, so outer callers do not continue with later rules.
+- Does not build a response by itself; it is usually used after an earlier stage has already produced one.
+
+#### `return`
+
+- Ends the current `sequence` immediately and gives control back to the caller.
+- Does not build a response and does not mark the flow as `Broken`.
+- If the current `sequence` was entered by `jump`, the caller continues with the next rule.
+
+#### `reject [rcode]`
+
+- Builds a response immediately and ends the current `sequence`.
+- The default `rcode` is `REFUSED`.
+- Only decimal numeric rcodes are accepted, for example `reject 2` or `reject 3`.
+- Stops later rules from running.
+
+#### `mark ...`
+
+- Inserts one or more integer marks, then continues to the next rule in the current `sequence`.
+- Supports `mark 1`, `mark 1 2 3`, and `mark 1,2,3`.
+
+#### `jump seq_tag`
+
+- Calls another `sequence`; conceptually this is a subroutine call.
+- The parameter must be the target `sequence` tag without `$`.
+- If the target `sequence` reaches its tail or executes `return`, the current `sequence` resumes with the next rule.
+- If the target `sequence` executes `accept` or `reject` and breaks the flow, the current `sequence` stops too.
+
+#### `goto seq_tag`
+
+- Transfers control one-way to another `sequence`.
+- The parameter must be the target `sequence` tag without `$`.
+- Once `goto` runs, the current `sequence` never resumes at later rules.
+
 ### Typical Uses
 
 - One readable top-level entry.

@@ -12,7 +12,7 @@ Inside `sequence`, quick-setup matcher expressions are usually the clearest form
 ```yaml
 - matches:
     - "client_ip $lan_ip_set"
-    - "qtype A"
+    - "qtype 1"
   exec: "$forward_main"
 ```
 
@@ -21,7 +21,7 @@ You can combine other quick-setup matchers in the same way:
 ```yaml
 - matches:
     - "qname domain:example.com"
-    - "qclass IN"
+    - "qclass 1"
   exec: "$forward_main"
 ```
 
@@ -181,23 +181,25 @@ Matches request qtypes.
 - tag: only_a_aaaa
   type: qtype
   args:
-    - "A"
-    - "AAAA"
+    - "1"
+    - "28"
 ```
 
 ### Configuration Details
 
 - Type: `array`; Required: yes; Default: none
-- Supports:
-  - standard type names such as `A`, `AAAA`, `PTR`
-  - numeric values
+- The examples below use numeric qtype codes.
+- Common mappings:
+  - `1` = `A`
+  - `28` = `AAAA`
+  - `12` = `PTR`
 - Runtime impact:
   - Returns `true` if any question type matches the configured set.
 
 ### quick setup
 
 ```yaml
-- matches: "qtype A"
+- matches: "qtype 1"
 ```
 
 ### Typical Uses
@@ -218,20 +220,24 @@ Matches request qclasses.
 - tag: only_in
   type: qclass
   args:
-    - "IN"
+    - "1"
 ```
 
 ### Configuration Details
 
 - Type: `array`; Required: yes; Default: none
-- Supports standard class names or numeric values.
+- The examples below use numeric qclass codes.
+- Common mappings:
+  - `1` = `IN`
+  - `3` = `CH`
+  - `4` = `HS`
 - Runtime impact:
   - Returns `true` if any question class matches the configured set.
 
 ### quick setup
 
 ```yaml
-- matches: "qclass IN"
+- matches: "qclass 1"
 ```
 
 ### Typical Uses
@@ -409,13 +415,14 @@ Matches marks already written into the DNS context.
 
 - Type: `array`; Required: yes; Default: none
 - Supports integer mark values.
+- Multiple marks can be separated by commas or whitespace.
 - Runtime impact:
   - Returns `true` if any configured mark exists in the context.
 
 ### quick setup
 
 ```yaml
-- matches: "mark 100"
+- matches: "mark 100 200"
 ```
 
 ### Typical Uses
@@ -577,13 +584,17 @@ Matches the current response code.
 - tag: only_noerror
   type: rcode
   args:
-    - "0"
+    - "2"
 ```
 
 ### Configuration Details
 
 - Type: `array`; Required: yes; Default: none
-- Supports standard rcode names or numeric values.
+- Supports decimal numeric rcodes only.
+- Common examples:
+  - `0` = `NOERROR`
+  - `2` = `SERVFAIL`
+  - `3` = `NXDOMAIN`
 - Runtime impact:
   - Returns `true` when the response rcode matches the configured set.
 

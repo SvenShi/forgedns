@@ -230,7 +230,7 @@ api:
   args:
     - matches:
         - "$lan_clients"
-        - "qtype A"
+        - "qtype 1"
       exec: "$cache_main"
     - matches: "!$has_resp"
       exec: "$forward_main"
@@ -307,22 +307,62 @@ api:
 
 ## sequence 内建控制流
 
-除了调用插件，`sequence` 还支持内建控制流：
+除了调用插件，`sequence.args[].exec` 还可以直接写内建控制流：
 
-- `accept`
-  - 终止当前 sequence，标记处理完成。
-- `return`
-  - 结束当前 sequence，回到调用方。
-- `reject [rcode]`
-  - 直接生成应答。
-  - 默认 `REFUSED`。
-  - 当前参数是十进制数字。
-- `mark 1,2,3`
-  - 写入上下文 marks。
-- `jump seq_tag`
-  - 调用另一个 `sequence`，回来后继续当前规则的下一条。
-- `goto seq_tag`
-  - 调用另一个 `sequence`，结束后不再回到当前 sequence。
+### `accept`
+
+- 立即结束当前 `sequence`。
+- 会把当前请求流标记为“已中断”，因此调用方不会继续执行后续规则。
+- 不会自动生成响应。
+- 典型用法：
+  - `cache`、`hosts`、`arbitrary` 等前置 executor 已经写入 response 后，直接收口。
+  - 命中某个分支后明确不希望再进入后续 `forward` / 副作用逻辑。
+
+### `return`
+
+- 立即结束当前 `sequence`，把控制权交回调用方。
+- 不会自动生成响应，也不会把请求流标记为 `Broken`。
+- 如果当前 `sequence` 是被 `jump` 调用的，调用方会从 `jump` 后一条规则继续执行。
+- 如果当前 `sequence` 是顶层入口，它等价于“提前结束当前规则链”。
+
+### `reject [rcode]`
+
+- 立即基于当前 request 构造一个 DNS 响应，并结束当前 `sequence`。
+- 默认 `rcode` 为 `REFUSED`，所以 `reject` 等价于拒绝请求。
+- 可以显式写十进制数值，例如：
+  - `reject 2` => `SERVFAIL`
+  - `reject 3` => `NXDOMAIN`
+- 当前参数只支持十进制数字，不支持 `SERVFAIL`、`NXDOMAIN` 这类名字。
+- 会把请求流标记为“已中断”，调用方不会继续执行后续规则。
+
+### `mark ...`
+
+- 向 `DnsContext.marks` 写入一个或多个无符号整数 mark。
+- 支持写法：
+  - `mark 1`
+  - `mark 1 2 3`
+  - `mark 1,2,3`
+- 写入后会继续执行当前 `sequence` 的下一条规则。
+- 它本身不会生成响应，也不会终止当前 `sequence`。
+
+### `jump seq_tag`
+
+- 调用另一个 `sequence`，语义上类似“子过程调用”。
+- 参数必须是目标 `sequence` 的 tag，且不能写 `$` 前缀。
+- 被调用的 `sequence` 如果：
+  - 正常执行到尾部，当前 `sequence` 会从 `jump` 的下一条规则继续。
+  - 中途执行了 `return`，当前 `sequence` 也会从 `jump` 的下一条规则继续。
+  - 中途执行了 `accept`、`reject` 等会打断 flow 的操作，当前 `sequence` 也会一起停止，不再继续后续规则。
+
+### `goto seq_tag`
+
+- 直接把控制权转交给另一个 `sequence`，语义上类似“单向跳转”。
+- 参数必须是目标 `sequence` 的 tag，且不能写 `$` 前缀。
+- 当前 `sequence` 在执行 `goto` 后不会恢复：
+  - 目标 `sequence` 正常跑到尾部，不回到 `goto` 后面的规则。
+  - 目标 `sequence` 执行 `return`，同样不回到 `goto` 后面的规则。
+  - 目标 `sequence` 执行 `accept` / `reject`，结果也直接向外层传播。
+- 适合把请求永久移交给另一个策略分支。
 
 示例：
 
@@ -332,6 +372,33 @@ api:
 - matches: "!$rate_ok"
   exec: "reject 2"
 ```
+
+`jump` / `goto` 的区别示例：
+
+```yaml
+- tag: child_seq
+  type: sequence
+  args:
+    - exec: "mark 2"
+    - exec: "return"
+
+- tag: parent_jump
+  type: sequence
+  args:
+    - exec: "mark 1"
+    - exec: "jump child_seq"
+    - exec: "mark 3"
+
+- tag: parent_goto
+  type: sequence
+  args:
+    - exec: "mark 1"
+    - exec: "goto child_seq"
+    - exec: "mark 3"
+```
+
+- `parent_jump` 最终会留下 `1,2,3`，因为 `jump` 调用结束后会继续执行下一条。
+- `parent_goto` 最终只会留下 `1,2`，因为控制权不会回到 `goto` 之后。
 
 ## 通用规则语法
 

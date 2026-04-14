@@ -12,7 +12,7 @@ sidebar_position: 4
 ```yaml
 - matches:
     - "client_ip $lan_ip_set"
-    - "qtype A"
+    - "qtype 1"
   exec: "$forward_main"
 ```
 
@@ -21,7 +21,7 @@ sidebar_position: 4
 ```yaml
 - matches:
     - "qname domain:example.com"
-    - "qclass IN"
+    - "qclass 1"
   exec: "$forward_main"
 ```
 
@@ -179,8 +179,8 @@ sidebar_position: 4
 - tag: only_a_aaaa
   type: qtype
   args: 
-    - "A"
-    - "AAAA"
+    - "1"
+    - "28"
 ```
 
 ### 配置项
@@ -189,16 +189,15 @@ sidebar_position: 4
 
 - 类型：`array`；必填：是；默认值：无
 - 作用：定义允许命中的查询类型集合。
-- 支持取值：
-  - 标准类型名，例如 `A`、`AAAA`、`PTR`
-  - 对应的数值形式
+- 文档示例统一使用查询类型对应的数值形式。
+- 常见映射：`1` = `A`、`28` = `AAAA`、`12` = `PTR`
 - 运行影响：
   - 请求中的任意问题类型命中配置集合时返回 `true`。
 
 ### quick setup
 
 ```yaml
-- matches: "qtype A"
+- matches: "qtype 1"
 ```
 
 ### 典型用途
@@ -219,7 +218,7 @@ sidebar_position: 4
 - tag: only_in
   type: qclass
   args: 
-    - "IN"
+    - "1"
 ```
 
 ### 配置项
@@ -228,16 +227,15 @@ sidebar_position: 4
 
 - 类型：`array`；必填：是；默认值：无
 - 作用：定义允许命中的查询类别集合。
-- 支持取值：
-  - 标准类别名，例如 `IN`
-  - 对应的数值形式
+- 文档示例统一使用查询类别对应的数值形式。
+- 常见映射：`1` = `IN`、`3` = `CH`、`4` = `HS`
 - 运行影响：
   - 请求中的任意问题类别命中配置集合时返回 `true`。
 
 ### quick setup
 
 ```yaml
-- matches: "qclass IN"
+- matches: "qclass 1"
 ```
 
 ### 典型用途
@@ -430,6 +428,7 @@ sidebar_position: 4
 说明：
 
 - 参数会被解析为整数 mark。
+- 支持使用逗号或空白分隔多个 mark。
 - 只要上下文 marks 与配置 marks 有交集就算命中。
 
 ### 配置项
@@ -446,7 +445,7 @@ sidebar_position: 4
 ### quick setup
 
 ```yaml
-- matches: "mark 100"
+- matches: "mark 100 200"
 ```
 
 ### 典型用途
@@ -621,7 +620,7 @@ args:
 - tag: only_noerror
   type: rcode
   args:
-    - "0"
+    - "2"
 ```
 
 ### 配置项

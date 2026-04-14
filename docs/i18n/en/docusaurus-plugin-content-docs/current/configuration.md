@@ -229,7 +229,7 @@ Example:
   args:
     - matches:
         - "$lan_clients"
-        - "qtype A"
+        - "qtype 1"
       exec: "$cache_main"
     - matches: "!$has_resp"
       exec: "$forward_main"
@@ -306,22 +306,62 @@ Common quick setup forms today:
 
 ## Built-In `sequence` Control Flow
 
-Besides calling plugins, `sequence` also supports built-in control flow:
+Besides calling plugins, `sequence.args[].exec` can also use built-in control flow:
 
-- `accept`
-  - Terminates the current `sequence` and marks processing complete.
-- `return`
-  - Ends the current `sequence` and returns to the caller.
-- `reject [rcode]`
-  - Generates a response immediately.
-  - Default is `REFUSED`.
-  - The current parameter form is a decimal integer.
-- `mark 1,2,3`
-  - Writes marks into the context.
-- `jump seq_tag`
-  - Calls another `sequence` and then resumes at the next rule in the current one.
-- `goto seq_tag`
-  - Calls another `sequence` and does not return to the current one afterward.
+### `accept`
+
+- Ends the current `sequence` immediately.
+- Marks the request flow as broken, so callers do not continue with later rules.
+- Does not build a response by itself.
+- Typical use:
+  - Close out the pipeline after `cache`, `hosts`, or `arbitrary` has already written a response.
+  - Stop later `forward` or side-effect stages once a branch has already made the decision.
+
+### `return`
+
+- Ends the current `sequence` immediately and returns control to the caller.
+- Does not build a response and does not mark the flow as `Broken`.
+- If the current `sequence` was entered via `jump`, the caller resumes at the rule after `jump`.
+- If the current `sequence` is the top-level entry, this acts like an early exit from the current rule chain.
+
+### `reject [rcode]`
+
+- Builds a DNS response from the current request immediately and ends the current `sequence`.
+- The default `rcode` is `REFUSED`, so plain `reject` means “reject this request”.
+- You can provide a decimal numeric code explicitly, for example:
+  - `reject 2` => `SERVFAIL`
+  - `reject 3` => `NXDOMAIN`
+- The parameter currently accepts decimal integers only, not mnemonic names such as `SERVFAIL`.
+- Marks the request flow as broken, so callers do not continue with later rules.
+
+### `mark ...`
+
+- Inserts one or more unsigned integer marks into `DnsContext.marks`.
+- Supported forms:
+  - `mark 1`
+  - `mark 1 2 3`
+  - `mark 1,2,3`
+- Continues to the next rule in the current `sequence`.
+- Does not build a response and does not terminate the current `sequence`.
+
+### `jump seq_tag`
+
+- Calls another `sequence`; conceptually this behaves like a subroutine call.
+- The parameter must be the target `sequence` tag without a leading `$`.
+- If the called `sequence`:
+  - reaches its tail normally, the current `sequence` resumes at the rule after `jump`.
+  - executes `return`, the current `sequence` also resumes at the rule after `jump`.
+  - executes `accept`, `reject`, or another flow-breaking operation, the current `sequence` stops as well.
+
+### `goto seq_tag`
+
+- Transfers control to another `sequence`; conceptually this behaves like a one-way jump.
+- The parameter must be the target `sequence` tag without a leading `$`.
+- The current `sequence` never resumes after `goto`:
+  - If the target `sequence` reaches its tail, control does not return to the rules after `goto`.
+  - If the target `sequence` executes `return`, control still does not return to the rules after `goto`.
+  - If the target `sequence` executes `accept` or `reject`, that result propagates outward directly.
+- This is useful when ownership of the request should be handed off permanently to another policy branch.
 
 Example:
 
@@ -331,6 +371,33 @@ Example:
 - matches: "!$rate_ok"
   exec: "reject 2"
 ```
+
+Example showing the difference between `jump` and `goto`:
+
+```yaml
+- tag: child_seq
+  type: sequence
+  args:
+    - exec: "mark 2"
+    - exec: "return"
+
+- tag: parent_jump
+  type: sequence
+  args:
+    - exec: "mark 1"
+    - exec: "jump child_seq"
+    - exec: "mark 3"
+
+- tag: parent_goto
+  type: sequence
+  args:
+    - exec: "mark 1"
+    - exec: "goto child_seq"
+    - exec: "mark 3"
+```
+
+- `parent_jump` ends with marks `1,2,3` because execution resumes after `jump`.
+- `parent_goto` ends with marks `1,2` because execution never returns after `goto`.
 
 ## Common Rule Syntax
 
