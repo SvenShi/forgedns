@@ -23,7 +23,6 @@
 18-match-env|18-match-env.yaml|18-match-env.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Environment matcher|Reads BENCH_PLUGIN_FLAG from the runner environment.
 19-match-random|19-match-random.yaml|19-match-random.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Random rollout matcher|Relevant for canary or percentage rollout logic.
 20-match-rate-limiter|20-match-rate-limiter.yaml|20-match-rate-limiter.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Rate-limit matcher|Adds stateful per-request accounting.
-21-match-string-exp|21-match-string-exp.yaml|21-match-string-exp.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|String expression matcher|Covers expression parsing and evaluation overhead.
 22-match-has-resp|22-match-has-resp.yaml|22-match-has-resp.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Has-response matcher|Useful around local answer short-circuit paths.
 23-match-has-wanted-ans|23-match-has-wanted-ans.yaml|23-match-has-wanted-ans.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Has-wanted-answer matcher|Response-aware match path after answer construction.
 24-match-resp-ip|24-match-resp-ip.yaml|24-match-resp-ip.yaml|queries/plugin-a.txt|udp|plugin-matchers|-|micro,matchers,stable|Response IP matcher|Focuses on response-side IP inspection.
