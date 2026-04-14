@@ -536,15 +536,26 @@ mod tests {
             context: &mut DnsContext,
             next: Option<ExecutorNext>,
         ) -> Result<ExecStep> {
-            if let Some(label) = self.execute_log {
-                self.log.lock().unwrap().push(label);
-            }
+            match self.behavior {
+                StubBehavior::AroundNext => {
+                    if let Some(label) = self.execute_log {
+                        self.log.lock().unwrap().push(label);
+                    }
 
-            let result = continue_next!(next, context);
-            if let Some(label) = self.post_log {
-                self.log.lock().unwrap().push(label);
+                    let result = continue_next!(next, context);
+                    if let Some(label) = self.post_log {
+                        self.log.lock().unwrap().push(label);
+                    }
+                    result
+                }
+                StubBehavior::Next | StubBehavior::Return | StubBehavior::Error(_) => {
+                    let result = self.execute(context).await?;
+                    match result {
+                        ExecStep::Next => continue_next!(next, context),
+                        ExecStep::Stop | ExecStep::Return => Ok(result),
+                    }
+                }
             }
-            result
         }
     }
 
