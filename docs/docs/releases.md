@@ -10,7 +10,34 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.2.1" badge="Patch Release" date="2026-04-03" defaultOpen>
+  <ReleaseCard version="v0.3.0" badge="Minor Release" date="2026-04-14" defaultOpen>
+      **Highlights**
+
+      - 新增 `http_request` executor，支持在 `before/after` 两个阶段向外部 `http/https` 服务发起同步或异步回调，并支持模板变量、`json/form/body`、SOCKS5、重定向和错误策略。
+      - CLI 新增 `check` 与 `export-dat` 命令；`check --graph` 可静态校验配置并输出插件依赖图，`export-dat` 可把 `geosite.dat` / `geoip.dat` 按 selector 导出为 ForgeDNS 或原始文本规则。
+      - `hosts` 语义向 mosdns 对齐；`arbitrary` 引入更完整的 zone parser，支持 `$ORIGIN`、`$TTL`、`$INCLUDE`、`$GENERATE`、RFC3597 等更丰富记录语法。
+      - 继续补充和统一多个 executor 的 `short_circuit` 说明与行为边界，便于在命中本地响应、缓存或分支胜出后显式停止后续 executor 链；`hosts` 在空本地答复场景下的短路语义也更明确。
+      - Linux `ipset` / `nftset` executor 改为内置 Rust netlink 后端，不再依赖运行时 `ipset` / `nft` 命令。
+
+      **Core And Performance**
+
+      - workspace 新增 `forgedns-proto`、`zoneparser`、`ripset` 三个内部 crate，明确协议编解码、zone 解析和 Linux 集成边界。
+      - 网络热路径引入可复用 wire buffer 池，并优化 UDP/TCP/上游 socket 参数，减少短生命周期分配与连接侧开销。
+      - 新增低并发延迟基准脚本，补充 `v0.3.0` 公布基准快照，并系统整理 benchmark 文档。
+      - 修复 Windows 构建兼容性以及若干 benchmark / CI 配置问题。
+
+      **Upgrade Notes**
+
+      - `hosts` 中无前缀规则现在等价于 `full:`；正向本地答案 TTL 固定为 `10`；域名命中但地址家族不匹配时会返回 `NoError + 空 Answer + fake SOA`，默认不再透传后续 executor。
+      - `arbitrary` 不再提供旧 quick setup 语法，建议升级时改为显式 `rules` / `files` 配置。
+
+      **Docs And Tooling**
+
+      - docs 新增 CLI 页面，并更新 `executor`、`provider`、`quickstart`、`benchmarks`、`releases` 等章节。
+      - quickstart 新增 Docker Compose 示例，补充 Docker 镜像仓库、Windows release 资产与服务部署说明。
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.2.1" badge="Patch Release" date="2026-04-03">
       **Fixes**
 
       - 修复 DoH over HTTP/2 上游 GET 请求未正确结束 stream，导致部分上游在 5 秒后超时的问题。

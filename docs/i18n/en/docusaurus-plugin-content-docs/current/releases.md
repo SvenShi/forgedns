@@ -10,7 +10,34 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.2.1" badge="Patch Release" date="2026-04-03" defaultOpen>
+  <ReleaseCard version="v0.3.0" badge="Minor Release" date="2026-04-14" defaultOpen>
+      **Highlights**
+
+      - Added the `http_request` executor for synchronous or asynchronous `http/https` callbacks in either the `before` or `after` phase, with template placeholders, `json/form/body` payloads, SOCKS5, redirect handling, and configurable error modes.
+      - Added the `check` and `export-dat` CLI commands. `check --graph` now performs static validation and prints the plugin dependency graph, while `export-dat` can export selected rules from `geosite.dat` / `geoip.dat` into ForgeDNS or original text formats.
+      - Aligned `hosts` behavior with mosdns semantics, and upgraded `arbitrary` with a fuller zone parser that supports `$ORIGIN`, `$TTL`, `$INCLUDE`, `$GENERATE`, RFC3597, and broader record syntax.
+      - Expanded and clarified `short_circuit` coverage and behavior notes across multiple executors, so local responses, cache hits, or winning branches can stop the remaining executor chain explicitly; `hosts` now also documents its short-circuit behavior for empty local replies.
+      - Switched the Linux `ipset` / `nftset` executors to an embedded Rust netlink backend, removing the runtime dependency on the `ipset` / `nft` shell commands.
+
+      **Core And Performance**
+
+      - Split protocol, zone parsing, and Linux integration internals into three workspace crates: `forgedns-proto`, `zoneparser`, and `ripset`.
+      - Added a reusable wire-buffer pool on the network hot path and tuned UDP/TCP/upstream socket parameters to reduce short-lived allocations and connection-side overhead.
+      - Added a low-concurrency latency benchmark script, published the `v0.3.0` benchmark snapshot, and expanded the benchmark documentation.
+      - Fixed Windows build compatibility issues plus several benchmark and CI configuration problems.
+
+      **Upgrade Notes**
+
+      - Unprefixed `hosts` rules now behave as `full:` rules; positive local answers now use a fixed TTL of `10`; and a name hit without a matching address family now returns `NoError + empty answer + fake SOA` instead of falling through the rest of the executor chain.
+      - `arbitrary` no longer provides the old quick-setup syntax. Migrate those cases to explicit `rules` / `files` configuration when upgrading.
+
+      **Docs And Tooling**
+
+      - Added a dedicated CLI docs page and refreshed the `executor`, `provider`, `quickstart`, `benchmarks`, and `releases` chapters.
+      - Added a Docker Compose quickstart example and clarified Docker image registry, Windows release assets, and service deployment guidance.
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.2.1" badge="Patch Release" date="2026-04-03">
       **Fixes**
 
       - Fixed a DoH over HTTP/2 bug where GET requests did not close the request stream, causing some upstreams to time out after 5 seconds.
