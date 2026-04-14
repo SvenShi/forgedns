@@ -768,7 +768,7 @@ async fn run_job(
 
     for executor in executors {
         match executor.execute(&mut context).await {
-            Ok(ExecStep::Next) | Ok(ExecStep::Stop) => {}
+            Ok(ExecStep::Next) | Ok(ExecStep::Stop) | Ok(ExecStep::Return) => {}
             Err(err) => {
                 warn!(
                     plugin = %plugin_tag,

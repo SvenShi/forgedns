@@ -9,7 +9,7 @@
 //! - mutate the request before upstream resolution;
 //! - call upstream resolvers and populate a response;
 //! - rewrite or filter an existing response;
-//! - update request-local marks and flow state; and
+//! - update request-local marks and request-local metadata; and
 //! - trigger side effects such as metrics or external system integration.
 //!
 //! Execution is centered on [`Executor::execute`] and
@@ -30,10 +30,14 @@ use crate::core::error::Result;
 pub use crate::plugin::executor::sequence::chain::ExecutorNext;
 use crate::{core::context::DnsContext, plugin::Plugin};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExecStep {
+    /// Continue executing the current chain or report natural completion.
     Next,
+    /// Stop the current chain immediately.
     Stop,
+    /// Return control to the caller without resuming the current sequence.
+    Return,
 }
 
 pub mod arbitrary;
@@ -71,9 +75,6 @@ macro_rules! continue_next {
         if let Some(next) = $next {
             next.next($ctx).await
         } else {
-            if $ctx.flow() == $crate::core::context::ExecFlowState::Running {
-                $ctx.set_flow($crate::core::context::ExecFlowState::ReachedTail);
-            }
             Ok($crate::plugin::executor::ExecStep::Next)
         }
     }};
@@ -99,7 +100,7 @@ pub trait Executor: Plugin {
         let result = self.execute(context).await?;
         match result {
             ExecStep::Next => continue_next!(next, context),
-            ExecStep::Stop => Ok(ExecStep::Stop),
+            ExecStep::Stop | ExecStep::Return => Ok(result),
         }
     }
 }

@@ -311,7 +311,7 @@ Besides calling plugins, `sequence.args[].exec` can also use built-in control fl
 ### `accept`
 
 - Ends the current `sequence` immediately.
-- Marks the request flow as broken, so callers do not continue with later rules.
+- This is an explicit early stop, so callers do not continue with later rules.
 - Does not build a response by itself.
 - Typical use:
   - Close out the pipeline after `cache`, `hosts`, or `arbitrary` has already written a response.
@@ -320,7 +320,7 @@ Besides calling plugins, `sequence.args[].exec` can also use built-in control fl
 ### `return`
 
 - Ends the current `sequence` immediately and returns control to the caller.
-- Does not build a response and does not mark the flow as `Broken`.
+- Does not build a response.
 - If the current `sequence` was entered via `jump`, the caller resumes at the rule after `jump`.
 - If the current `sequence` is the top-level entry, this acts like an early exit from the current rule chain.
 
@@ -332,7 +332,7 @@ Besides calling plugins, `sequence.args[].exec` can also use built-in control fl
   - `reject 2` => `SERVFAIL`
   - `reject 3` => `NXDOMAIN`
 - The parameter currently accepts decimal integers only, not mnemonic names such as `SERVFAIL`.
-- Marks the request flow as broken, so callers do not continue with later rules.
+- Callers do not continue with later rules.
 
 ### `mark ...`
 
@@ -351,7 +351,7 @@ Besides calling plugins, `sequence.args[].exec` can also use built-in control fl
 - If the called `sequence`:
   - reaches its tail normally, the current `sequence` resumes at the rule after `jump`.
   - executes `return`, the current `sequence` also resumes at the rule after `jump`.
-  - executes `accept`, `reject`, or another flow-breaking operation, the current `sequence` stops as well.
+  - executes `accept`, `reject`, or another operation that returns `Stop`, the current `sequence` stops as well.
 
 ### `goto seq_tag`
 
@@ -359,8 +359,8 @@ Besides calling plugins, `sequence.args[].exec` can also use built-in control fl
 - The parameter must be the target `sequence` tag without a leading `$`.
 - The current `sequence` never resumes after `goto`:
   - If the target `sequence` reaches its tail, control does not return to the rules after `goto`.
-  - If the target `sequence` executes `return`, control still does not return to the rules after `goto`.
-  - If the target `sequence` executes `accept` or `reject`, that result propagates outward directly.
+  - If the target `sequence` executes `return`, that `return` is propagated outward and still does not return to the rules after `goto`.
+  - If the target `sequence` executes `accept`, `reject`, or another `Stop`, that result propagates outward directly.
 - This is useful when ownership of the request should be handed off permanently to another policy branch.
 
 Example:

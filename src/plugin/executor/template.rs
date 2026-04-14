@@ -8,7 +8,7 @@
 //! These templates intentionally expose only a stable built-in key set so
 //! plugin behavior remains predictable and safe to validate during startup.
 
-use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use serde_json::{Number as JsonNumber, Value as JsonValue};
 
@@ -27,7 +27,6 @@ pub(crate) const BUILTIN_KEYS: &[&str] = &[
     "rcode",
     "rcode_name",
     "resp_ip",
-    "flow",
     "cron_plugin_tag",
     "cron_job_name",
     "cron_trigger_kind",
@@ -250,11 +249,6 @@ pub(crate) fn resolve_builtin(context: &DnsContext, key: &str) -> String {
             ips.sort_unstable();
             ips.join(",")
         }
-        "flow" => match context.flow() {
-            ExecFlowState::Running => "running".to_string(),
-            ExecFlowState::ReachedTail => "reached_tail".to_string(),
-            ExecFlowState::Broken => "broken".to_string(),
-        },
         "cron_plugin_tag" => context
             .get_attr::<String>(CRON_ATTR_PLUGIN_TAG)
             .cloned()

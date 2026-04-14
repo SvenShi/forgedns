@@ -361,7 +361,7 @@ plugins:
 
 - 请求相关：`qname`、`qtype`、`qtype_name`、`qclass`、`qclass_name`
 - 来源相关：`client_ip`、`client_port`、`server_name`、`url_path`
-- 运行态相关：`marks`、`has_resp`、`flow`
+- 运行态相关：`marks`、`has_resp`
 - 响应相关：`rcode`、`rcode_name`、`resp_ip`
 - cron 元数据：`cron_plugin_tag`、`cron_job_name`、`cron_trigger_kind`、`cron_scheduled_at_unix_ms`
 
@@ -510,7 +510,7 @@ plugins:
 
 - 与 `script` 插件相同：`qname`、`qtype`、`qtype_name`、`qclass`、`qclass_name`
 - 来源相关：`client_ip`、`client_port`、`server_name`、`url_path`
-- 运行态相关：`marks`、`has_resp`、`flow`
+- 运行态相关：`marks`、`has_resp`
 - 响应相关：`rcode`、`rcode_name`、`resp_ip`
 - cron 元数据：`cron_plugin_tag`、`cron_job_name`、`cron_trigger_kind`、`cron_scheduled_at_unix_ms`
 
@@ -615,13 +615,13 @@ plugins:
 #### `accept`
 
 - 立即结束当前 `sequence`。
-- 会把请求流标记为已中断，因此外层不会继续执行后续规则。
+- 这是一次明确的提前停止，因此外层不会继续执行后续规则。
 - 不会自动生成响应；通常用于前面已经有 response 的场景。
 
 #### `return`
 
 - 立即结束当前 `sequence`，并把控制权交回调用方。
-- 不会自动生成响应，也不会把 flow 标记为 `Broken`。
+- 不会自动生成响应。
 - 若当前 `sequence` 是被 `jump` 调用的，调用方会从下一条规则继续。
 
 #### `reject [rcode]`
@@ -641,13 +641,14 @@ plugins:
 - 调用另一个 `sequence`，语义类似子过程调用。
 - 参数必须是目标 `sequence` 的 tag，不能写 `$`。
 - 目标 `sequence` 跑到尾部或执行 `return` 后，当前 `sequence` 会继续下一条规则。
-- 如果目标 `sequence` 执行 `accept` / `reject` 并打断 flow，当前 `sequence` 也会停止。
+- 如果目标 `sequence` 执行 `accept` / `reject` / 其它 `Stop`，当前 `sequence` 也会停止。
 
 #### `goto seq_tag`
 
 - 把控制权单向转交给另一个 `sequence`。
 - 参数必须是目标 `sequence` 的 tag，不能写 `$`。
 - 一旦执行 `goto`，当前 `sequence` 就不会再回到后续规则。
+- 若目标 `sequence` 执行 `return`，该 `return` 会继续向外层传播。
 
 ### 典型用途
 

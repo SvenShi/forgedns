@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
@@ -75,9 +75,8 @@ impl ChainProgram {
     /// - Evaluate matchers for current instruction.
     /// - Execute either executor opcode or builtin opcode.
     /// - Advance `pc` according to returned [`ExecStep`] / builtin semantics.
-    pub async fn run(self: &Arc<Self>, context: &mut DnsContext) -> Result<()> {
-        let _ = self.run_from_inner(context, 0).await?;
-        Ok(())
+    pub async fn run(self: &Arc<Self>, context: &mut DnsContext) -> Result<ExecStep> {
+        self.run_from_inner(context, 0).await
     }
 
     async fn run_from_inner(
@@ -95,41 +94,30 @@ impl ChainProgram {
             match &instruction.op {
                 InstructionOp::Executor(executor) => match executor.execute(context).await? {
                     ExecStep::Next => pc += 1,
-                    ExecStep::Stop => return Ok(ExecStep::Stop),
+                    step @ (ExecStep::Stop | ExecStep::Return) => return Ok(step),
                 },
                 InstructionOp::ExecutorWithNext(executor) => {
                     let next = ExecutorNext::new(self.clone(), pc + 1);
                     return executor.execute_with_next(context, Some(next)).await;
                 }
                 InstructionOp::Builtin(op) => match op {
-                    BuiltinOp::Accept => {
-                        context.set_flow(ExecFlowState::Broken);
-                        return Ok(ExecStep::Stop);
-                    }
-                    BuiltinOp::Return => return Ok(ExecStep::Stop),
+                    BuiltinOp::Accept => return Ok(ExecStep::Stop),
+                    BuiltinOp::Return => return Ok(ExecStep::Return),
                     BuiltinOp::Reject(rcode) => {
                         context.set_response(context.request().response(*rcode));
-                        context.set_flow(ExecFlowState::Broken);
                         return Ok(ExecStep::Stop);
                     }
                     BuiltinOp::Jump(executor) => {
                         let step = executor.execute_with_next(context, None).await?;
                         match step {
                             ExecStep::Stop => return Ok(ExecStep::Stop),
-                            ExecStep::Next => {
-                                if context.flow() == ExecFlowState::Broken {
-                                    return Ok(ExecStep::Stop);
-                                }
-                                if context.flow() == ExecFlowState::ReachedTail {
-                                    context.set_flow(ExecFlowState::Running);
-                                }
+                            ExecStep::Next | ExecStep::Return => {
                                 pc += 1;
                             }
                         }
                     }
                     BuiltinOp::Goto(executor) => {
-                        let _ = executor.execute_with_next(context, None).await?;
-                        return Ok(ExecStep::Stop);
+                        return executor.execute_with_next(context, None).await;
                     }
                     BuiltinOp::Mark(marks) => {
                         context.marks_mut().extend(marks.iter().cloned());
@@ -467,7 +455,6 @@ fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<u32>> {
 mod tests {
     use super::*;
     use crate::continue_next;
-    use crate::core::context::ExecFlowState;
     use crate::plugin::Plugin;
     use crate::proto::{Message, Question};
     use crate::proto::{Name, RecordType};
@@ -478,6 +465,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     enum StubBehavior {
         Next,
+        Return,
         AroundNext,
         Error(&'static str),
     }
@@ -488,7 +476,6 @@ mod tests {
         behavior: StubBehavior,
         execute_log: Option<&'static str>,
         post_log: Option<&'static str>,
-        next_flow_state: Option<ExecFlowState>,
         log: Arc<Mutex<Vec<&'static str>>>,
     }
 
@@ -498,7 +485,6 @@ mod tests {
             behavior: StubBehavior,
             execute_log: Option<&'static str>,
             post_log: Option<&'static str>,
-            next_flow_state: Option<ExecFlowState>,
             log: Arc<Mutex<Vec<&'static str>>>,
         ) -> Self {
             Self {
@@ -506,7 +492,6 @@ mod tests {
                 behavior,
                 execute_log,
                 post_log,
-                next_flow_state,
                 log,
             }
         }
@@ -533,16 +518,14 @@ mod tests {
             matches!(self.behavior, StubBehavior::AroundNext)
         }
 
-        async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
             if let Some(label) = self.execute_log {
                 self.log.lock().unwrap().push(label);
-            }
-            if let Some(state) = self.next_flow_state {
-                context.set_flow(state);
             }
 
             match self.behavior {
                 StubBehavior::Next => Ok(ExecStep::Next),
+                StubBehavior::Return => Ok(ExecStep::Return),
                 StubBehavior::Error(message) => Err(DnsError::plugin(message)),
                 StubBehavior::AroundNext => Ok(ExecStep::Next),
             }
@@ -555,9 +538,6 @@ mod tests {
         ) -> Result<ExecStep> {
             if let Some(label) = self.execute_log {
                 self.log.lock().unwrap().push(label);
-            }
-            if let Some(state) = self.next_flow_state {
-                context.set_flow(state);
             }
 
             let result = continue_next!(next, context);
@@ -612,7 +592,6 @@ mod tests {
             StubBehavior::AroundNext,
             None,
             Some("post:first"),
-            None,
             log.clone(),
         ));
         let second: Arc<dyn Executor> = Arc::new(StubExecutor::new(
@@ -620,7 +599,6 @@ mod tests {
             StubBehavior::AroundNext,
             None,
             Some("post:second"),
-            None,
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
@@ -647,13 +625,11 @@ mod tests {
             StubBehavior::AroundNext,
             None,
             Some("post:deferred"),
-            None,
             log.clone(),
         ));
         let failing: Arc<dyn Executor> = Arc::new(StubExecutor::new(
             "failing",
             StubBehavior::Error("boom"),
-            None,
             None,
             None,
             log.clone(),
@@ -675,14 +651,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_reject_sets_response_and_breaks_flow() {
+    async fn test_run_reject_sets_response_and_stops() {
         // Arrange
         let log = Arc::new(Mutex::new(Vec::new()));
         let skipped: Arc<dyn Executor> = Arc::new(StubExecutor::new(
             "skipped",
             StubBehavior::Next,
             Some("execute:skipped"),
-            None,
             None,
             log.clone(),
         ));
@@ -701,7 +676,6 @@ mod tests {
         let response = context.response().expect("reject should build a response");
         assert_eq!(response.id(), 42);
         assert_eq!(response.rcode(), Rcode::ServFail);
-        assert_eq!(context.flow(), ExecFlowState::Broken);
         assert!(log.lock().unwrap().is_empty());
     }
 
@@ -713,7 +687,6 @@ mod tests {
             StubBehavior::AroundNext,
             Some("execute:terminal"),
             Some("post:terminal"),
-            None,
             log.clone(),
         );
         let mut context = make_context();
@@ -742,7 +715,6 @@ mod tests {
         let response = context.response().expect("reject should build response");
         assert_eq!(response.id(), 42);
         assert_eq!(response.rcode(), Rcode::ServFail);
-        assert_eq!(context.flow(), ExecFlowState::Broken);
     }
 
     #[tokio::test]
@@ -759,14 +731,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_accept_breaks_flow_without_building_response() {
+    async fn test_run_accept_stops_without_building_response() {
         // Arrange
         let log = Arc::new(Mutex::new(Vec::new()));
         let skipped: Arc<dyn Executor> = Arc::new(StubExecutor::new(
             "skipped",
             StubBehavior::Next,
             Some("execute:skipped"),
-            None,
             None,
             log.clone(),
         ));
@@ -783,19 +754,17 @@ mod tests {
 
         // Assert
         assert!(context.response().is_none());
-        assert_eq!(context.flow(), ExecFlowState::Broken);
         assert!(log.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn test_run_return_stops_without_breaking_flow() {
+    async fn test_run_return_returns_to_caller() {
         // Arrange
         let log = Arc::new(Mutex::new(Vec::new()));
         let skipped: Arc<dyn Executor> = Arc::new(StubExecutor::new(
             "skipped",
             StubBehavior::Next,
             Some("execute:skipped"),
-            None,
             None,
             log.clone(),
         ));
@@ -808,37 +777,34 @@ mod tests {
         let mut context = make_context();
 
         // Act
-        program.run(&mut context).await.unwrap();
+        let step = program.run(&mut context).await.unwrap();
 
         // Assert
+        assert!(matches!(step, ExecStep::Return));
         assert!(context.response().is_none());
-        assert_eq!(context.flow(), ExecFlowState::Running);
         assert!(log.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn test_run_jump_resets_reached_tail_and_continues_parent_program() {
+    async fn test_run_jump_resumes_parent_program_after_child_return() {
         // Arrange
         let log = Arc::new(Mutex::new(Vec::new()));
-        let jumped: Arc<dyn Executor> = Arc::new(StubExecutor::new(
-            "jumped",
-            StubBehavior::Next,
-            Some("execute:jumped"),
-            None,
-            Some(ExecFlowState::ReachedTail),
-            log.clone(),
-        ));
         let after_jump: Arc<dyn Executor> = Arc::new(StubExecutor::new(
             "after_jump",
             StubBehavior::Next,
             Some("execute:after_jump"),
             None,
-            None,
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
             instructions: vec![
-                builtin_instruction(BuiltinOp::Jump(jumped)),
+                builtin_instruction(BuiltinOp::Jump(Arc::new(StubExecutor::new(
+                    "jumped",
+                    StubBehavior::Return,
+                    Some("execute:jumped"),
+                    None,
+                    log.clone(),
+                )))),
                 executor_instruction(after_jump),
             ],
         });
@@ -852,6 +818,35 @@ mod tests {
             log.lock().unwrap().clone(),
             vec!["execute:jumped", "execute:after_jump"]
         );
-        assert_eq!(context.flow(), ExecFlowState::Running);
+    }
+
+    #[tokio::test]
+    async fn test_run_goto_propagates_child_return_without_resuming_parent() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let after_goto: Arc<dyn Executor> = Arc::new(StubExecutor::new(
+            "after_goto",
+            StubBehavior::Next,
+            Some("execute:after_goto"),
+            None,
+            log.clone(),
+        ));
+        let program = Arc::new(ChainProgram {
+            instructions: vec![
+                builtin_instruction(BuiltinOp::Goto(Arc::new(StubExecutor::new(
+                    "goto_child",
+                    StubBehavior::Return,
+                    Some("execute:goto_child"),
+                    None,
+                    log.clone(),
+                )))),
+                executor_instruction(after_goto),
+            ],
+        });
+        let mut context = make_context();
+
+        let step = program.run(&mut context).await.unwrap();
+
+        assert!(matches!(step, ExecStep::Return));
+        assert_eq!(log.lock().unwrap().clone(), vec!["execute:goto_child"]);
     }
 }

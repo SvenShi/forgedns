@@ -5,7 +5,7 @@
 pub mod chain;
 
 use crate::config::types::PluginConfig;
-use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainProgram};
@@ -164,11 +164,7 @@ impl Plugin for Sequence {
 impl Executor for Sequence {
     #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> DnsResult<ExecStep> {
-        self.program.get().unwrap().run(context).await?;
-        if context.flow() == ExecFlowState::Running {
-            context.set_flow(ExecFlowState::ReachedTail);
-        }
-        Ok(ExecStep::Next)
+        self.program.get().unwrap().run(context).await
     }
 }
 

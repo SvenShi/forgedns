@@ -362,7 +362,7 @@ Runs an explicitly configured external command and injects a stable subset of th
 
 - Request fields: `qname`, `qtype`, `qtype_name`, `qclass`, `qclass_name`
 - Source fields: `client_ip`, `client_port`, `server_name`, `url_path`
-- Runtime fields: `marks`, `has_resp`, `flow`
+- Runtime fields: `marks`, `has_resp`
 - Response fields: `rcode`, `rcode_name`, `resp_ip`
 - Cron metadata: `cron_plugin_tag`, `cron_job_name`, `cron_trigger_kind`, `cron_scheduled_at_unix_ms`
 
@@ -511,7 +511,7 @@ Sends callback requests to external `http/https` services. It can trigger before
 
 - Same as `script`: `qname`, `qtype`, `qtype_name`, `qclass`, `qclass_name`
 - Source fields: `client_ip`, `client_port`, `server_name`, `url_path`
-- Runtime fields: `marks`, `has_resp`, `flow`
+- Runtime fields: `marks`, `has_resp`
 - Response fields: `rcode`, `rcode_name`, `resp_ip`
 - Cron metadata: `cron_plugin_tag`, `cron_job_name`, `cron_trigger_kind`, `cron_scheduled_at_unix_ms`
 
@@ -608,13 +608,13 @@ Besides plugin calls, `sequence.args[].exec` can also use built-in control flow:
 #### `accept`
 
 - Ends the current `sequence` immediately.
-- Marks the request flow as broken, so outer callers do not continue with later rules.
+- This is an explicit early stop, so outer callers do not continue with later rules.
 - Does not build a response by itself; it is usually used after an earlier stage has already produced one.
 
 #### `return`
 
 - Ends the current `sequence` immediately and gives control back to the caller.
-- Does not build a response and does not mark the flow as `Broken`.
+- Does not build a response.
 - If the current `sequence` was entered by `jump`, the caller continues with the next rule.
 
 #### `reject [rcode]`
@@ -634,13 +634,14 @@ Besides plugin calls, `sequence.args[].exec` can also use built-in control flow:
 - Calls another `sequence`; conceptually this is a subroutine call.
 - The parameter must be the target `sequence` tag without `$`.
 - If the target `sequence` reaches its tail or executes `return`, the current `sequence` resumes with the next rule.
-- If the target `sequence` executes `accept` or `reject` and breaks the flow, the current `sequence` stops too.
+- If the target `sequence` executes `accept`, `reject`, or another `Stop`, the current `sequence` stops too.
 
 #### `goto seq_tag`
 
 - Transfers control one-way to another `sequence`.
 - The parameter must be the target `sequence` tag without `$`.
 - Once `goto` runs, the current `sequence` never resumes at later rules.
+- If the target `sequence` executes `return`, that `return` is propagated outward.
 
 ### Typical Uses
 
@@ -1694,7 +1695,7 @@ Prints a debug message.
 ### Typical Uses
 
 - Temporary debugging
-- Reading sequence flow during development
+- Reading sequence branches during development
 
 ---
 

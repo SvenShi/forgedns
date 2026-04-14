@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 use forgedns::config::types::Config;
-use forgedns::core::context::{DnsContext, ExecFlowState, RequestMeta};
+use forgedns::core::context::{DnsContext, RequestMeta};
 use forgedns::core::error::{DnsError, Result};
 use forgedns::network::transport::udp_transport::UdpTransport;
 use forgedns::plugin;
@@ -670,8 +670,7 @@ plugins:
 
     let step = sequence.execute(&mut context).await?;
 
-    assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(matches!(step, ExecStep::Stop));
     assert!(context.marks().contains(&100));
     assert_eq!(
         context
@@ -763,8 +762,7 @@ plugins:
 
     let step = sequence.execute(&mut context).await?;
 
-    assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(matches!(step, ExecStep::Stop));
     assert!(context.marks().contains(&100));
     assert!(context.marks().contains(&200));
     assert_eq!(
@@ -809,8 +807,7 @@ plugins:
 
     let step = sequence.execute(&mut context).await?;
 
-    assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(matches!(step, ExecStep::Stop));
     assert!(context.marks().contains(&1));
     assert!(context.marks().contains(&2));
     assert!(!context.marks().contains(&3));
@@ -851,8 +848,7 @@ plugins:
 
     let step = sequence.execute(&mut context).await?;
 
-    assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.flow(), ExecFlowState::Broken);
+    assert!(matches!(step, ExecStep::Stop));
     assert!(context.marks().contains(&1));
     assert!(context.marks().contains(&2));
     assert!(!context.marks().contains(&3));
@@ -900,7 +896,6 @@ plugins:
     let step = sequence.execute(&mut context).await?;
 
     assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.flow(), ExecFlowState::ReachedTail);
     assert!(context.marks().contains(&1));
     assert!(context.marks().contains(&2));
     assert!(!context.marks().contains(&3));
@@ -940,12 +935,96 @@ plugins:
 
     let step = sequence.execute(&mut context).await?;
 
-    assert!(matches!(step, ExecStep::Next));
-    assert_eq!(context.flow(), ExecFlowState::ReachedTail);
+    assert!(matches!(step, ExecStep::Return));
     assert!(context.marks().contains(&1));
     assert!(context.marks().contains(&2));
     assert!(!context.marks().contains(&3));
     assert!(!context.marks().contains(&4));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sequence_direct_child_return_propagates_to_parent_caller() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: mark 2
+      - exec: return
+      - exec: mark 3
+  - tag: parent
+    type: sequence
+    args:
+      - exec: mark 1
+      - exec: $child
+      - exec: mark 4
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let sequence = registry
+        .get_plugin("parent")
+        .expect("parent sequence should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Return));
+    assert!(context.marks().contains(&1));
+    assert!(context.marks().contains(&2));
+    assert!(!context.marks().contains(&3));
+    assert!(!context.marks().contains(&4));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sequence_jump_short_circuit_child_stops_parent() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: child
+    type: sequence
+    args:
+      - exec: "black_hole 0.0.0.0 short_circuit=true"
+      - exec: mark 3
+  - tag: parent
+    type: sequence
+    args:
+      - exec: mark 1
+      - exec: jump child
+      - exec: mark 4
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let sequence = registry
+        .get_plugin("parent")
+        .expect("parent sequence should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Stop));
+    assert!(context.marks().contains(&1));
+    assert!(!context.marks().contains(&3));
+    assert!(!context.marks().contains(&4));
+    assert_eq!(
+        context
+            .response()
+            .expect("black_hole should synthesize a response")
+            .rcode(),
+        Rcode::NoError
+    );
 
     registry.destory().await;
     Ok(())
@@ -1195,8 +1274,7 @@ plugins:
 
     let mut first_ctx = make_context(registry.clone(), "example.test.");
     let first_step = seq.execute(&mut first_ctx).await?;
-    assert!(matches!(first_step, ExecStep::Next));
-    assert_eq!(first_ctx.flow(), ExecFlowState::ReachedTail);
+    assert!(matches!(first_step, ExecStep::Stop));
     assert_eq!(
         first_ctx.response().expect("response should exist").rcode(),
         Rcode::NoError
@@ -1204,8 +1282,7 @@ plugins:
 
     let mut second_ctx = make_context(registry.clone(), "example.test.");
     let second_step = seq.execute(&mut second_ctx).await?;
-    assert!(matches!(second_step, ExecStep::Next));
-    assert_eq!(second_ctx.flow(), ExecFlowState::ReachedTail);
+    assert!(matches!(second_step, ExecStep::Stop));
     assert_eq!(
         second_ctx
             .response()
@@ -1782,8 +1859,7 @@ plugins:
 
     let mut blocked_ctx = make_context(registry.clone(), "ads.example.com.");
     let blocked_step = main.execute(&mut blocked_ctx).await?;
-    assert!(matches!(blocked_step, ExecStep::Next));
-    assert_eq!(blocked_ctx.flow(), ExecFlowState::Broken);
+    assert!(matches!(blocked_step, ExecStep::Stop));
     let blocked_response = blocked_ctx
         .response()
         .expect("blocked query should synthesize a response");
@@ -1793,8 +1869,7 @@ plugins:
 
     let mut allow_ctx = make_context(registry.clone(), "safe.ads.example.com.");
     let allow_step = main.execute(&mut allow_ctx).await?;
-    assert!(matches!(allow_step, ExecStep::Next));
-    assert_eq!(allow_ctx.flow(), ExecFlowState::Broken);
+    assert!(matches!(allow_step, ExecStep::Stop));
     assert_eq!(
         allow_ctx
             .response()
@@ -1805,8 +1880,7 @@ plugins:
 
     let mut unsupported_ctx = make_context(registry.clone(), "rewrite.example.com.");
     let unsupported_step = main.execute(&mut unsupported_ctx).await?;
-    assert!(matches!(unsupported_step, ExecStep::Next));
-    assert_eq!(unsupported_ctx.flow(), ExecFlowState::Broken);
+    assert!(matches!(unsupported_step, ExecStep::Stop));
     assert_eq!(
         unsupported_ctx
             .response()
@@ -1904,7 +1978,6 @@ plugins:
         .to_executor();
 
     let assert_blocked = |label: &str, ctx: &DnsContext| {
-        assert_eq!(ctx.flow(), ExecFlowState::Broken);
         let response = ctx
             .response()
             .unwrap_or_else(|| panic!("{label} should synthesize a blocked response"));
@@ -1920,7 +1993,6 @@ plugins:
     };
 
     let assert_rejected = |label: &str, ctx: &DnsContext| {
-        assert_eq!(ctx.flow(), ExecFlowState::Broken);
         assert_eq!(
             ctx.response()
                 .unwrap_or_else(|| panic!("{label} should fall through to reject"))
@@ -1932,47 +2004,47 @@ plugins:
     let mut plain_exact = make_context(registry.clone(), "plain-match.example.");
     assert!(matches!(
         main.execute(&mut plain_exact).await?,
-        ExecStep::Next
+        ExecStep::Stop
     ));
     assert_blocked("plain_exact", &plain_exact);
 
     let mut plain_subdomain = make_context(registry.clone(), "www.plain-match.example.");
     assert!(matches!(
         main.execute(&mut plain_subdomain).await?,
-        ExecStep::Next
+        ExecStep::Stop
     ));
     assert_rejected("plain_subdomain", &plain_subdomain);
 
     let mut suffix = make_context(registry.clone(), "cdn.suffix.example.");
-    assert!(matches!(main.execute(&mut suffix).await?, ExecStep::Next));
+    assert!(matches!(main.execute(&mut suffix).await?, ExecStep::Stop));
     assert_blocked("suffix", &suffix);
 
     let mut exception = make_context(registry.clone(), "allow.suffix.example.");
     assert!(matches!(
         main.execute(&mut exception).await?,
-        ExecStep::Next
+        ExecStep::Stop
     ));
     assert_rejected("exception", &exception);
 
     let mut wildcard = make_context(registry.clone(), "ad-banner.wild.example.");
-    assert!(matches!(main.execute(&mut wildcard).await?, ExecStep::Next));
+    assert!(matches!(main.execute(&mut wildcard).await?, ExecStep::Stop));
     assert_blocked("wildcard", &wildcard);
 
     let mut regex = make_context(registry.clone(), "metrics12.service.test.");
-    assert!(matches!(main.execute(&mut regex).await?, ExecStep::Next));
+    assert!(matches!(main.execute(&mut regex).await?, ExecStep::Stop));
     assert_blocked("regex", &regex);
 
     let mut denyallow_root = make_context(registry.clone(), "deny.example.");
     assert!(matches!(
         main.execute(&mut denyallow_root).await?,
-        ExecStep::Next
+        ExecStep::Stop
     ));
     assert_blocked("denyallow_root", &denyallow_root);
 
     let mut denyallow_sub = make_context(registry.clone(), "sub.deny.example.");
     assert!(matches!(
         main.execute(&mut denyallow_sub).await?,
-        ExecStep::Next
+        ExecStep::Stop
     ));
     assert_rejected("denyallow_sub", &denyallow_sub);
 
@@ -2003,21 +2075,21 @@ plugins:
     let mut important_exception = make_context(registry.clone(), "important.example.");
     assert!(matches!(
         main.execute(&mut important_exception).await?,
-        ExecStep::Next
+        ExecStep::Stop
     ));
     assert_rejected("important_exception", &important_exception);
 
     let mut badfilter_disabled = make_context(registry.clone(), "disabled.example.");
     assert!(matches!(
         main.execute(&mut badfilter_disabled).await?,
-        ExecStep::Next
+        ExecStep::Stop
     ));
     assert_rejected("badfilter_disabled", &badfilter_disabled);
 
     let mut unsupported_modifier = make_context(registry.clone(), "rewrite.example.");
     assert!(matches!(
         main.execute(&mut unsupported_modifier).await?,
-        ExecStep::Next
+        ExecStep::Stop
     ));
     assert_rejected("unsupported_modifier", &unsupported_modifier);
 

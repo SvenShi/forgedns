@@ -12,17 +12,6 @@ use std::any::Any;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// High-level execution state of the current plugin chain.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ExecFlowState {
-    /// Normal execution is still traversing the current chain.
-    Running,
-    /// Execution reached the natural end of the chain.
-    ReachedTail,
-    /// Execution stopped early due to control flow such as `accept` or `reject`.
-    Broken,
-}
-
 /// Typed metadata attached to the request by the inbound server layer.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct RequestMeta {
@@ -91,7 +80,6 @@ impl IngressContext {
 /// Runtime-only mutable execution state.
 #[derive(Debug)]
 pub struct RuntimeContext {
-    flow: ExecFlowState,
     marks: AHashSet<u32>,
     extensions: AHashMap<String, Box<dyn Any + Send + Sync>>,
 }
@@ -99,7 +87,6 @@ pub struct RuntimeContext {
 impl Default for RuntimeContext {
     fn default() -> Self {
         Self {
-            flow: ExecFlowState::Running,
             marks: AHashSet::new(),
             extensions: AHashMap::new(),
         }
@@ -107,16 +94,6 @@ impl Default for RuntimeContext {
 }
 
 impl RuntimeContext {
-    #[inline]
-    pub fn flow(&self) -> ExecFlowState {
-        self.flow
-    }
-
-    #[inline]
-    pub fn set_flow(&mut self, flow: ExecFlowState) {
-        self.flow = flow;
-    }
-
     #[inline]
     pub fn marks(&self) -> &AHashSet<u32> {
         &self.marks
@@ -256,16 +233,6 @@ impl DnsContext {
     }
 
     #[inline]
-    pub fn flow(&self) -> ExecFlowState {
-        self.runtime.flow()
-    }
-
-    #[inline]
-    pub fn set_flow(&mut self, flow: ExecFlowState) {
-        self.runtime.set_flow(flow);
-    }
-
-    #[inline]
     pub fn marks(&self) -> &AHashSet<u32> {
         self.runtime.marks()
     }
@@ -310,7 +277,6 @@ impl DnsContext {
             request: self.request.clone(),
             response: self.response.clone(),
             runtime: RuntimeContext {
-                flow: ExecFlowState::Running,
                 marks: self.runtime.marks.clone(),
                 extensions: AHashMap::new(),
             },
@@ -322,7 +288,6 @@ impl DnsContext {
         self.ingress = sub_ctx.ingress;
         self.request = sub_ctx.request;
         self.response = sub_ctx.response;
-        self.runtime.flow = sub_ctx.runtime.flow;
         self.runtime.marks = sub_ctx.runtime.marks;
         self.runtime.extensions = sub_ctx.runtime.extensions;
     }

@@ -20,7 +20,7 @@
 //!
 //! This separation keeps protocol code isolated from matchers, executors, and
 //! providers, while preserving a common request lifecycle across all servers.
-use crate::core::context::{DnsContext, ExecFlowState};
+use crate::core::context::DnsContext;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginRegistry};
 use crate::proto::{Message, Rcode};
@@ -127,16 +127,9 @@ impl RequestHandle {
             .await;
         let (response, exit) = match exec_outcome {
             Ok(step) => {
-                if context.flow() == ExecFlowState::Running {
-                    context.set_flow(match step {
-                        ExecStep::Next => ExecFlowState::ReachedTail,
-                        ExecStep::Stop => ExecFlowState::Broken,
-                    });
-                }
-                let exit = if context.flow() == ExecFlowState::ReachedTail {
-                    RequestExit::Completed
-                } else {
-                    RequestExit::Controlled
+                let exit = match step {
+                    ExecStep::Next => RequestExit::Completed,
+                    ExecStep::Stop | ExecStep::Return => RequestExit::Controlled,
                 };
                 let response = context
                     .take_response()

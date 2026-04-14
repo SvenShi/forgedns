@@ -361,7 +361,6 @@ impl PluginFactory for DualSelectorFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::ExecFlowState;
     use crate::plugin::executor::ExecStep;
     use crate::proto::rdata::{A, AAAA};
     use crate::proto::{DNSClass, Message, Question};
@@ -375,13 +374,11 @@ mod tests {
             qtype,
             DNSClass::IN,
         ));
-        let mut context = DnsContext::new(
+        DnsContext::new(
             "127.0.0.1:5533".parse().unwrap(),
             request,
             Arc::new(PluginRegistry::new()),
-        );
-        context.set_flow(ExecFlowState::Running);
-        context
+        )
     }
 
     fn make_selector(preferred_type: RecordType) -> DualSelector {

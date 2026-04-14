@@ -130,7 +130,7 @@ impl Matcher for QnameMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{DnsContext, ExecFlowState};
+    use crate::core::context::DnsContext;
     use crate::plugin::matcher::Matcher;
     use crate::proto::{DNSClass, Name, RecordType};
     use crate::proto::{Message, Question};
@@ -144,23 +144,19 @@ mod tests {
             DNSClass::IN,
         ));
 
-        let mut context = DnsContext::new(
+        DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             request,
             Arc::new(PluginRegistry::new()),
-        );
-        context.set_flow(ExecFlowState::Running);
-        context
+        )
     }
 
     fn make_context_without_query() -> DnsContext {
-        let mut context = DnsContext::new(
+        DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             Message::new(),
             Arc::new(PluginRegistry::new()),
-        );
-        context.set_flow(ExecFlowState::Running);
-        context
+        )
     }
 
     #[tokio::test]
