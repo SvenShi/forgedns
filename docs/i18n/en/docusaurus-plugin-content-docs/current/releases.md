@@ -10,7 +10,30 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.3.0" badge="Minor Release" date="2026-04-14" defaultOpen>
+  <ReleaseCard version="v0.3.1" badge="Patch Release" date="2026-04-14" defaultOpen>
+      **Highlights**
+
+      - Fixed `sequence` builtin control-flow semantics so `accept` / `reject` now stop the current chain consistently, `return` explicitly resumes the caller, and nested `jump` / `goto` behavior is easier to reason about.
+      - Removed the old internal flow-state dependency from control-flow propagation and now relies on `ExecStep` directly, reducing ambiguity when `sequence`, `with_next` executors, and nested calls are combined.
+      - Expanded unit and integration coverage around `sequence`, including `accept`, `return`, `reject`, `jump`, `goto`, and `adguard_rule` / `question` driven branches, to reduce regression risk.
+
+      **Packaging And Ecosystem**
+
+      - Added the metadata, README files, repository links, and versioned dependency declarations needed to publish `forgedns-proto`, `forgedns-zoneparser`, and `forgedns-ripset` to crates.io cleanly.
+      - Updated the main package dependency declarations to reference those internal crates with explicit versions, which keeps release packaging and downstream reuse aligned.
+
+      **Docs**
+
+      - Refreshed the `configuration`, `executor`, and `matcher` docs to explain builtin `sequence` control flow, `mark` syntax, and the numeric `qtype` / `qclass` forms more clearly.
+      - Added clearer `jump` / `goto` examples and edge-case notes to reduce upgrade friction for `v0.3.1`.
+
+      **Upgrade Notes**
+
+      - If your policy layout depends on nested `sequence` calls or `jump` / `goto` / `return` combinations, `v0.3.1` is the recommended upgrade for predictable control-flow behavior.
+      - This release does not introduce new config fields; it focuses on control-flow fixes, test hardening, and release metadata cleanup.
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.3.0" badge="Minor Release" date="2026-04-14">
       **Highlights**
 
       - Added the `http_request` executor for synchronous or asynchronous `http/https` callbacks in either the `before` or `after` phase, with template placeholders, `json/form/body` payloads, SOCKS5, redirect handling, and configurable error modes.

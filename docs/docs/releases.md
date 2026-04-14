@@ -10,7 +10,30 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.3.0" badge="Minor Release" date="2026-04-14" defaultOpen>
+  <ReleaseCard version="v0.3.1" badge="Patch Release" date="2026-04-14" defaultOpen>
+      **Highlights**
+
+      - 修正 `sequence` 的内建控制流语义：`accept` / `reject` 现在会稳定终止当前链路，`return` 会显式返回调用方，`jump` 与 `goto` 在嵌套 `sequence` 中的恢复行为也更一致。
+      - 移除依赖内部 flow state 的控制方式，改为由 `ExecStep` 显式传播控制流结果，减少 `sequence`、`with_next` executor 和嵌套调用混用时的语义歧义。
+      - 补强 `sequence` 的单元测试与集成测试，覆盖 `accept`、`return`、`reject`、`jump`、`goto` 以及 `adguard_rule` / `question` 组合分支，降低后续回归风险。
+
+      **Packaging And Ecosystem**
+
+      - 为 `forgedns-proto`、`forgedns-zoneparser`、`forgedns-ripset` 补齐 crates.io 发布所需的包元数据、README、仓库信息和依赖版本声明，方便 workspace 内部 crate 独立发布与复用。
+      - 主包依赖声明同步改为显式引用这些内部 crate 的版本，便于 release、打包和后续生态集成保持一致。
+
+      **Docs**
+
+      - 更新 `configuration`、`executor`、`matcher` 文档，对 `sequence` 内建控制流、`mark` 语法，以及 `qtype` / `qclass` 数值写法给出更明确说明。
+      - 补充 `jump` / `goto` 的示例和行为边界，降低升级到 `v0.3.1` 时对控制流语义的理解成本。
+
+      **Upgrade Notes**
+
+      - 如果你的配置依赖嵌套 `sequence`、`jump` / `goto` / `return` 组合，建议升级到 `v0.3.1` 以获得更稳定且可预测的控制流行为。
+      - 这次发布不引入新的配置字段，主要是控制流修正、测试补强和发布元数据整理。
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.3.0" badge="Minor Release" date="2026-04-14">
       **Highlights**
 
       - 新增 `http_request` executor，支持在 `before/after` 两个阶段向外部 `http/https` 服务发起同步或异步回调，并支持模板变量、`json/form/body`、SOCKS5、重定向和错误策略。
