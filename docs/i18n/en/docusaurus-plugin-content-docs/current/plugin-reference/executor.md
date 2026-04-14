@@ -677,6 +677,14 @@ Sends DNS queries to upstreams.
   - One upstream means normal forwarding.
   - More than one enables racing behavior.
 
+#### `short_circuit`
+
+- Type: `boolean`; Required: no; Default: `false`
+- Purpose: Stop the executor chain after a successful upstream response.
+- Notes:
+  - When disabled, `forward` still populates `response`, but later executors can continue processing it.
+  - When enabled, a successful upstream result immediately ends the remaining executor chain.
+
 #### `upstreams[].addr`
 
 - Type: `string`; Required: yes
@@ -774,15 +782,18 @@ Sends DNS queries to upstreams.
 ```yaml
 - exec: "forward 1.1.1.1"
 - exec: "forward 1.1.1.1 8.8.8.8"
+- exec: "forward 1.1.1.1 short_circuit=true"
 ```
 
-Quick setup accepts only upstream addresses. Use the full plugin form for bootstrap, proxy, HTTP/3, or pool settings.
+Quick setup supports the trailing flag forms `short_circuit`, `short_circuit=true`, and `short_circuit=false`.
+Use the full plugin form for bootstrap, proxy, HTTP/3, pool settings, and other advanced options.
 
 ### Behavior
 
 - Single-upstream mode queries the configured upstream directly.
 - Multi-upstream mode races queries from a randomized starting point and keeps the first successful answer.
 - When combined with `prefer_ipv4` or `prefer_ipv6`, it can run preferred-family probes.
+- With `short_circuit` enabled, a successful upstream response stops the remaining executor chain immediately.
 
 ### Typical Uses
 
@@ -970,10 +981,16 @@ Runs a primary executor first and falls back to a secondary executor when the pr
 - Type: `boolean`; Required: no; Default: `false`
 - Purpose: Keep the secondary in standby for all requests rather than only after the threshold condition.
 
+#### `short_circuit`
+
+- Type: `boolean`; Required: no; Default: `false`
+- Purpose: Stop the executor chain after fallback selects the winning response.
+
 ### Behavior
 
 - Provides controlled degradation instead of unconditional double-querying.
 - Useful when one path is usually faster but another path is more complete or stable.
+- With `short_circuit` enabled, the winning branch writes its response and then immediately stops the remaining executor chain.
 
 ### Typical Uses
 

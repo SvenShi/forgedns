@@ -44,6 +44,9 @@ pub struct SingleDnsForwarder {
 
     /// Upstream DNS resolver
     pub upstream: Box<dyn Upstream>,
+
+    /// Whether to stop the executor chain after a successful upstream response.
+    pub short_circuit: bool,
 }
 
 #[async_trait]
@@ -81,6 +84,15 @@ impl Executor for SingleDnsForwarder {
 
 impl SingleDnsForwarder {
     #[inline]
+    fn completion_step(&self) -> ExecStep {
+        if self.short_circuit {
+            ExecStep::Stop
+        } else {
+            ExecStep::Next
+        }
+    }
+
+    #[inline]
     async fn execute_standard(&self, context: &mut DnsContext) -> Result<ExecStep> {
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
@@ -100,7 +112,7 @@ impl SingleDnsForwarder {
                 )));
             }
         }
-        Ok(ExecStep::Next)
+        Ok(self.completion_step())
     }
 
     async fn execute_with_probe(
@@ -197,7 +209,7 @@ impl SingleDnsForwarder {
                 original_error: None,
             },
         );
-        Ok(ExecStep::Next)
+        Ok(self.completion_step())
     }
 }
 
@@ -210,6 +222,9 @@ pub struct ConcurrentForwarder {
     pub active_concurrent: usize,
 
     pub upstreams: Vec<Arc<dyn Upstream>>,
+
+    /// Whether to stop the executor chain after a successful upstream response.
+    pub short_circuit: bool,
 }
 
 #[async_trait]
@@ -246,6 +261,15 @@ impl Executor for ConcurrentForwarder {
 }
 
 impl ConcurrentForwarder {
+    #[inline]
+    fn completion_step(&self) -> ExecStep {
+        if self.short_circuit {
+            ExecStep::Stop
+        } else {
+            ExecStep::Next
+        }
+    }
+
     async fn query_any_upstream(&self, request: Message) -> (Option<Message>, Option<String>) {
         let total_upstreams = self.upstreams.len();
         if total_upstreams == 0 {
@@ -301,7 +325,7 @@ impl ConcurrentForwarder {
         let (response, last_error) = self.query_any_upstream(context.request.clone()).await;
         if let Some(response) = response {
             context.set_response(response);
-            return Ok(ExecStep::Next);
+            return Ok(self.completion_step());
         }
 
         let err = last_error.unwrap_or_else(|| "no upstream response".to_string());
@@ -411,7 +435,7 @@ impl ConcurrentForwarder {
             },
         );
 
-        Ok(ExecStep::Next)
+        Ok(self.completion_step())
     }
 }
 
@@ -474,10 +498,11 @@ fn resolve_active_concurrent(concurrent: Option<usize>) -> usize {
     concurrent.unwrap_or(1).clamp(1, MAX_CONCURRENT_QUERIES)
 }
 
-fn parse_quick_setup_upstream_addrs(param: Option<String>) -> Result<Vec<String>> {
+fn parse_quick_setup_param(param: Option<String>) -> Result<(Vec<String>, bool)> {
     let param = param.ok_or_else(|| {
         DnsError::plugin("forward quick setup requires non-empty upstream address parameter")
     })?;
+    let (param, short_circuit) = strip_short_circuit_suffix(&param)?;
     let upstream_addrs: Vec<String> = param
         .split_whitespace()
         .map(str::trim)
@@ -489,7 +514,41 @@ fn parse_quick_setup_upstream_addrs(param: Option<String>) -> Result<Vec<String>
             "forward quick setup requires non-empty upstream address parameter",
         ));
     }
-    Ok(upstream_addrs)
+    Ok((upstream_addrs, short_circuit))
+}
+
+fn strip_short_circuit_suffix(raw: &str) -> Result<(String, bool)> {
+    let mut tokens: Vec<&str> = raw.split_whitespace().collect();
+    let mut short_circuit = false;
+
+    while let Some(last) = tokens.last().copied() {
+        let Some(value) = parse_short_circuit_token(last)? else {
+            break;
+        };
+        short_circuit = value;
+        tokens.pop();
+    }
+
+    Ok((tokens.join(" "), short_circuit))
+}
+
+fn parse_short_circuit_token(token: &str) -> Result<Option<bool>> {
+    if token == "short_circuit" {
+        return Ok(Some(true));
+    }
+
+    let Some(value) = token.strip_prefix("short_circuit=") else {
+        return Ok(None);
+    };
+
+    match value {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        _ => Err(DnsError::plugin(format!(
+            "invalid short_circuit value '{}', expected true or false",
+            value
+        ))),
+    }
 }
 
 #[inline]
@@ -524,6 +583,10 @@ pub struct ForwardConfig {
 
     /// List of upstream DNS servers
     pub upstreams: Vec<UpstreamConfig>,
+
+    /// Whether to stop the executor chain after a successful upstream response.
+    #[serde(default)]
+    pub short_circuit: bool,
 }
 
 /// Factory for creating DNS forwarder plugins
@@ -539,6 +602,7 @@ impl PluginFactory for ForwardFactory {
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
         let forward_config = parse_forward_config(plugin_config)?;
+        let short_circuit = forward_config.short_circuit;
 
         if forward_config.upstreams.len() == 1 {
             // Single upstream configuration
@@ -552,6 +616,7 @@ impl PluginFactory for ForwardFactory {
                 SingleDnsForwarder {
                     tag: plugin_config.tag.clone(),
                     upstream: build_upstream(upstream_config.clone())?,
+                    short_circuit,
                 },
             )))
         } else {
@@ -569,6 +634,7 @@ impl PluginFactory for ForwardFactory {
                     tag: plugin_config.tag.clone(),
                     active_concurrent,
                     upstreams,
+                    short_circuit,
                 },
             )))
         }
@@ -580,7 +646,7 @@ impl PluginFactory for ForwardFactory {
         param: Option<String>,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
-        let upstream_addrs = parse_quick_setup_upstream_addrs(param)?;
+        let (upstream_addrs, short_circuit) = parse_quick_setup_param(param)?;
         let mut upstream_configs = Vec::with_capacity(upstream_addrs.len());
 
         for (idx, upstream_addr) in upstream_addrs.into_iter().enumerate() {
@@ -599,6 +665,7 @@ impl PluginFactory for ForwardFactory {
                 SingleDnsForwarder {
                     tag: tag.to_string(),
                     upstream: build_upstream(upstream_config)?,
+                    short_circuit,
                 },
             )))
         } else {
@@ -611,6 +678,7 @@ impl PluginFactory for ForwardFactory {
                     tag: tag.to_string(),
                     active_concurrent: MAX_CONCURRENT_QUERIES,
                     upstreams,
+                    short_circuit,
                 },
             )))
         }
@@ -706,6 +774,7 @@ mod tests {
                 Arc::new(MockUpstream::fail("u1 fail", Duration::ZERO)),
                 Arc::new(MockUpstream::fail("u2 fail", Duration::ZERO)),
             ],
+            short_circuit: false,
         };
 
         let mut context = make_context();
@@ -760,6 +829,33 @@ upstreams:
         assert!(err.to_string().contains("is invalid"));
     }
 
+    #[test]
+    fn parse_forward_config_accepts_short_circuit() {
+        let cfg = parse_forward_config(&make_plugin_config(
+            r#"
+short_circuit: true
+upstreams:
+  - addr: "udp://1.1.1.1:53"
+"#,
+        ))
+        .expect("forward config should parse");
+
+        assert!(cfg.short_circuit);
+    }
+
+    #[test]
+    fn quick_setup_supports_short_circuit_flag() {
+        let (upstreams, short_circuit) =
+            parse_quick_setup_param(Some("1.1.1.1 8.8.8.8 short_circuit=true".to_string()))
+                .expect("quick setup should parse");
+
+        assert_eq!(
+            upstreams,
+            vec!["1.1.1.1".to_string(), "8.8.8.8".to_string()]
+        );
+        assert!(short_circuit);
+    }
+
     #[tokio::test]
     async fn quick_setup_accepts_multiple_upstreams() {
         let factory = ForwardFactory;
@@ -791,11 +887,41 @@ upstreams:
             tag: "forward-test".to_string(),
             active_concurrent: 1,
             upstreams: vec![Arc::new(MockUpstream::ok())],
+            short_circuit: false,
         };
 
         let mut context = make_context();
         let step = forwarder.execute(&mut context).await.unwrap();
         assert!(matches!(step, ExecStep::Next));
+        assert!(context.response().is_some());
+    }
+
+    #[tokio::test]
+    async fn single_success_stops_when_short_circuit_enabled() {
+        let forwarder = SingleDnsForwarder {
+            tag: "forward-test".to_string(),
+            upstream: Box::new(MockUpstream::ok()),
+            short_circuit: true,
+        };
+
+        let mut context = make_context();
+        let step = forwarder.execute(&mut context).await.unwrap();
+        assert!(matches!(step, ExecStep::Stop));
+        assert!(context.response().is_some());
+    }
+
+    #[tokio::test]
+    async fn concurrent_success_stops_when_short_circuit_enabled() {
+        let forwarder = ConcurrentForwarder {
+            tag: "forward-test".to_string(),
+            active_concurrent: 1,
+            upstreams: vec![Arc::new(MockUpstream::ok())],
+            short_circuit: true,
+        };
+
+        let mut context = make_context();
+        let step = forwarder.execute(&mut context).await.unwrap();
+        assert!(matches!(step, ExecStep::Stop));
         assert!(context.response().is_some());
     }
 
@@ -811,6 +937,7 @@ upstreams:
                     Duration::from_millis(20),
                 )),
             ],
+            short_circuit: false,
         };
 
         let mut context = make_context();
@@ -834,6 +961,7 @@ upstreams:
                     Duration::from_millis(20),
                 )),
             ],
+            short_circuit: false,
         };
 
         let mut context = make_context();

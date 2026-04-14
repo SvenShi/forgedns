@@ -685,6 +685,14 @@ plugins:
   - 数组长度为 `1` 时使用单上游模式。
   - 数组长度大于 `1` 时使用竞争式查询模式。
 
+#### `short_circuit`
+
+- 类型：`boolean`；必填：否；默认值：`false`
+- 作用：控制在拿到成功上游响应后，是否立即停止后续 executor 链。
+- 说明：
+  - 关闭时，`forward` 仍会写入 `response`，但后续 executor 还能继续处理这份响应。
+  - 开启时，成功返回后会直接结束后续 executor 链。
+
 #### `upstreams[].addr`
 
 - 类型：`string`；必填：是；默认值：无
@@ -825,19 +833,22 @@ plugins:
 ```yaml
 - exec: "forward 1.1.1.1"
 - exec: "forward 1.1.1.1 8.8.8.8"
+- exec: "forward 1.1.1.1 short_circuit=true"
 ```
 
 说明：
 
 - 单个地址创建单上游转发。
 - 多个地址创建并发竞争转发。
-- quick setup 只接受地址列表，进阶参数需要完整插件形式。
+- quick setup 支持尾部开关 `short_circuit`、`short_circuit=true`、`short_circuit=false`。
+- 其它进阶参数需要完整插件形式。
 
 ### 行为说明
 
 - 单上游模式：直接查询该上游。
 - 多上游模式：从随机起点选择上游并发查询，先返回成功结果者胜出。
 - 当与 `prefer_ipv4` / `prefer_ipv6` 联动时，支持额外 preferred qtype probe。
+- 开启 `short_circuit` 时，一旦拿到可用上游响应，就会立即停止后续 executor 链。
 
 ### 常见用途
 
@@ -1037,12 +1048,18 @@ plugins:
 - 类型：`boolean`；必填：否；默认值：`false`
 - 作用：控制备用路径是否与主路径同时待命。
 
+#### `short_circuit`
+
+- 类型：`boolean`；必填：否；默认值：`false`
+- 作用：控制在主/备路径选出最终响应后，是否立即停止后续 executor 链。
+
 ### 行为说明
 
 - 正向启动主路径。
 - 到达阈值或主路径失败后启动/释放备用路径。
 - 谁先拿到有效响应，谁赢。
 - 另一分支会被取消。
+- 开启 `short_circuit` 时，胜出分支写回响应后会直接结束后续 executor 链。
 
 ### 典型用途
 

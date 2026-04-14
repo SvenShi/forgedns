@@ -46,6 +46,9 @@ struct FallbackConfig {
     /// Always run standby path in parallel regardless of primary latency.
     #[serde(default)]
     always_standby: bool,
+    /// Whether to stop the executor chain after fallback picks a response.
+    #[serde(default)]
+    short_circuit: bool,
 }
 
 #[derive(Debug)]
@@ -57,6 +60,7 @@ struct FallbackExecutor {
     secondary: Arc<dyn Executor>,
     threshold: Duration,
     always_standby: bool,
+    short_circuit: bool,
 }
 
 struct Outcome {
@@ -156,7 +160,7 @@ impl Executor for FallbackExecutor {
                     if let Some(secondary_ctx) = buffered_secondary.take() {
                         context.apply_subquery_result(secondary_ctx);
                         join_set.abort_all();
-                        return Ok(ExecStep::Next);
+                        return Ok(self.completion_step());
                     }
                 }
                 joined = join_set.join_next() => {
@@ -176,12 +180,12 @@ impl Executor for FallbackExecutor {
                             if let Some(primary_ctx) = outcome.context {
                                 context.apply_subquery_result(primary_ctx);
                                 join_set.abort_all();
-                                return Ok(ExecStep::Next);
+                                return Ok(self.completion_step());
                             }
                             if let Some(secondary_ctx) = buffered_secondary.take() {
                                 context.apply_subquery_result(secondary_ctx);
                                 join_set.abort_all();
-                                return Ok(ExecStep::Next);
+                                return Ok(self.completion_step());
                             }
                         }
                         "secondary" => {
@@ -189,7 +193,7 @@ impl Executor for FallbackExecutor {
                                 if !self.always_standby || threshold_reached {
                                     context.apply_subquery_result(secondary_ctx);
                                     join_set.abort_all();
-                                    return Ok(ExecStep::Next);
+                                    return Ok(self.completion_step());
                                 }
                                 // Standby mode before threshold: keep secondary result as backup
                                 // and still wait for primary to finish or timer to fire.
@@ -217,6 +221,17 @@ impl Executor for FallbackExecutor {
         }
 
         Err(DnsError::plugin(last_err))
+    }
+}
+
+impl FallbackExecutor {
+    #[inline]
+    fn completion_step(&self) -> ExecStep {
+        if self.short_circuit {
+            ExecStep::Stop
+        } else {
+            ExecStep::Next
+        }
     }
 }
 
@@ -276,6 +291,7 @@ impl PluginFactory for FallbackFactory {
                 cfg.threshold
             }),
             always_standby: cfg.always_standby,
+            short_circuit: cfg.short_circuit,
         })))
     }
 }
@@ -453,5 +469,49 @@ mod tests {
             crate::proto::Rcode::Refused
         );
         assert!(outcome.error.is_none());
+    }
+
+    #[test]
+    fn test_fallback_config_accepts_short_circuit() {
+        let cfg: FallbackConfig = serde_yaml_ng::from_str(
+            r#"
+primary: "fast"
+secondary: "slow"
+short_circuit: true
+"#,
+        )
+        .expect("fallback config should parse");
+
+        assert!(cfg.short_circuit);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_execute_stops_when_short_circuit_enabled() {
+        let executor = FallbackExecutor {
+            tag: "fb".to_string(),
+            primary_tag: "primary".to_string(),
+            secondary_tag: "secondary".to_string(),
+            primary: Arc::new(StubExecutor {
+                tag: "primary".to_string(),
+                should_fail: false,
+                produce_response: true,
+                refused_with_next: false,
+            }),
+            secondary: Arc::new(StubExecutor {
+                tag: "secondary".to_string(),
+                should_fail: false,
+                produce_response: false,
+                refused_with_next: false,
+            }),
+            threshold: Duration::from_secs(60),
+            always_standby: false,
+            short_circuit: true,
+        };
+
+        let mut context = test_context();
+        let step = executor.execute(&mut context).await.unwrap();
+
+        assert!(matches!(step, ExecStep::Stop));
+        assert!(context.response().is_some());
     }
 }
