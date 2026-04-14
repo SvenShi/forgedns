@@ -733,6 +733,8 @@ dependencies = [
  "dashmap",
  "fast-socks5",
  "forgedns-proto",
+ "forgedns-ripset",
+ "forgedns-zoneparser",
  "futures",
  "h2",
  "h3",
@@ -752,7 +754,6 @@ dependencies = [
  "quinn",
  "rand 0.10.1",
  "regex",
- "ripset",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -772,7 +773,6 @@ dependencies = [
  "url",
  "webpki-roots",
  "wincode",
- "zoneparser",
 ]
 
 [[package]]
@@ -782,6 +782,22 @@ dependencies = [
  "ahash",
  "hotpath",
  "smallvec",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "forgedns-ripset"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "forgedns-zoneparser"
+version = "0.1.0"
+dependencies = [
+ "forgedns-proto",
  "thiserror 2.0.18",
 ]
 
@@ -2109,14 +2125,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "ripset"
-version = "0.1.0"
-dependencies = [
- "libc",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3534,11 +3542,3 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[package]]
-name = "zoneparser"
-version = "0.1.0"
-dependencies = [
- "forgedns-proto",
- "thiserror 2.0.18",
-]

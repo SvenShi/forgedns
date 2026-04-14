@@ -1,13 +1,17 @@
 [package]
-name = "zoneparser"
+name = "forgedns-zoneparser"
 version = "0.1.0"
 edition = "2024"
+authors = ["Sven Shi <isvenshi@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 description = "Vendored zonefile parser adapted for ForgeDNS"
+repository = "https://github.com/SvenShi/forgedns"
+keywords = ["dns", "zonefile", "parser"]
+categories = ["parser-implementations", "network-programming"]
 
 [dependencies]
-forgedns-proto = { path = "../forgedns-proto" }
+forgedns-proto = { version = "0.1.0", path = "../forgedns-proto" }
 thiserror = "2.0"
 
 [lib]

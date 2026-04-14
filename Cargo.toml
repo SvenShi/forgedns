@@ -44,7 +44,7 @@ libc = "0.2"
 rand = "0.10.1"
 url = "2.5"
 wincode = { version = "0.5", features = ["derive"] }
-forgedns-proto = { path = "crates/forgedns-proto" }
+forgedns-proto = { version = "0.1.0", path = "crates/forgedns-proto" }
 hotpath = "0.15"
 
 # DNS transport and TLS stack used by server plugins and upstream clients
@@ -78,11 +78,11 @@ mikrotik-rs = "0.6.1"
 
 # Service management
 service-manager = "0.11.0"
-zoneparser = { path = "crates/zoneparser" }
+zoneparser = { package = "forgedns-zoneparser", version = "0.1.0", path = "crates/zoneparser" }
 tempfile = "3.23.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ripset = { path = "crates/ripset" }
+ripset = { package = "forgedns-ripset", version = "0.1.0", path = "crates/ripset" }
 
 
 [features]

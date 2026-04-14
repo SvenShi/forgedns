@@ -1,6 +1,9 @@
-# ripset
+# forgedns-ripset
 
 Pure Rust library for managing Linux `ipset` and nftables sets through netlink.
+
+This package is published to crates.io as `forgedns-ripset` to avoid the
+upstream name conflict. The library crate name remains `ripset`.
 
 ## Features
 
@@ -14,7 +17,7 @@ Pure Rust library for managing Linux `ipset` and nftables sets through netlink.
 
 ```toml
 [dependencies]
-ripset = "0.1"
+ripset = { package = "forgedns-ripset", version = "0.1" }
 ```
 
 ## Library Usage

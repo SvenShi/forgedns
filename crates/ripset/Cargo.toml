@@ -1,15 +1,19 @@
 [package]
-name = "ripset"
+name = "forgedns-ripset"
 version = "0.1.0"
 edition = "2024"
-authors = ["Chen Xu <windoze@0d0a.com>"]
-homepage = "https://github.com/windoze/ripset"
-description = "Pure Rust implementation of ipset/nftset operations via netlink"
+authors = ["Chen Xu <windoze@0d0a.com>", "Sven Shi <isvenshi@gmail.com>"]
+homepage = "https://github.com/SvenShi/forgedns/tree/main/crates/ripset"
+description = "Pure Rust implementation of ipset/nftset operations via netlink, maintained for ForgeDNS"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/windoze/ripset"
+repository = "https://github.com/SvenShi/forgedns"
 readme = "README.md"
 keywords = ["linux", "ipset", "netlink", "nftables", "networking"]
 categories = ["network-programming"]
+
+[lib]
+name = "ripset"
+path = "src/lib.rs"
 
 [dependencies]
 thiserror = "2"

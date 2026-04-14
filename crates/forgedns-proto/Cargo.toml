@@ -2,7 +2,13 @@
 name = "forgedns-proto"
 version = "0.1.0"
 edition = "2024"
+authors = ["Sven Shi <isvenshi@gmail.com>"]
+description = "DNS message model and wire codec primitives used by ForgeDNS"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/SvenShi/forgedns"
+readme = "README.md"
+keywords = ["dns", "protocol", "codec", "wire"]
+categories = ["network-programming", "parser-implementations"]
 
 [lib]
 name = "forgedns_proto"

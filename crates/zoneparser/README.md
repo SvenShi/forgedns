@@ -1,6 +1,9 @@
-# zoneparser
+# forgedns-zoneparser
 
 This crate is a vendored and locally maintained zone file parser for ForgeDNS.
+
+The crates.io package name is `forgedns-zoneparser` to avoid name conflicts,
+while the library crate name remains `zoneparser`.
 
 It started from the upstream `zoneparser` project, but the public API and the
 parsing pipeline are now adapted for ForgeDNS:
@@ -20,6 +23,11 @@ let options = ParseOptions::default();
 let inline_records = parse_str("$ORIGIN example.com.\nwww 60 IN A 192.0.2.1\n", &options)?;
 let file_records = parse_file("/etc/forgedns/zone.txt", &options)?;
 # Ok::<(), zoneparser::ZoneParseError>(())
+```
+
+```toml
+[dependencies]
+zoneparser = { package = "forgedns-zoneparser", version = "0.1" }
 ```
 
 ## Syntax Coverage
