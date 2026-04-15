@@ -406,8 +406,9 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
 
     /// Optional startup-only preparation hook.
     ///
-    /// Factories can use this to perform startup prerequisites before
-    /// dependency sorting and normal plugin construction begin.
+    /// Factories can use this to perform startup prerequisites after
+    /// dependency analysis decides the live plugin set, but before normal
+    /// plugin construction begins.
     fn prepare_startup<'a>(
         &'a self,
         _plugin_config: &'a PluginConfig,

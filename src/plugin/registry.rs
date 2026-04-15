@@ -18,9 +18,9 @@ use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::Provider;
 use crate::plugin::{PluginCreateContext, PluginDependent, PluginFactory, PluginInfo, PluginType};
 use dashmap::DashMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Plugin registry that manages plugin factories and instances
 ///
@@ -131,18 +131,14 @@ impl PluginRegistry {
             }
         }
 
-        // Step 0: Run startup-only preparation hooks before dependency sorting.
-        //
-        // This is used by plugins such as `download` that may need to create
-        // prerequisite files before providers or servers are initialized.
+        // Step 0: Validate plugin types before dependency analysis.
         for plugin_config in &configs {
-            let Some(factory) = self.factories.get(&plugin_config.plugin_type) else {
+            if !self.factories.contains_key(&plugin_config.plugin_type) {
                 return Err(DnsError::plugin(format!(
                     "Unknown plugin type: {}",
                     plugin_config.plugin_type
                 )));
-            };
-            factory.prepare_startup(plugin_config, self.clone()).await?;
+            }
         }
 
         // Step 1: Resolve dependencies from structured factory descriptors.
@@ -168,22 +164,62 @@ impl PluginRegistry {
                 .unwrap_or(DependencyKind::Unknown)
         };
         let dependency_report = dependency::analyze_dependencies(&configs, &get_deps, &get_kind)?;
-        let create_contexts = build_create_contexts(&dependency_report);
+        let runtime_init_plan = build_runtime_init_plan(&dependency_report);
+        for skipped_provider in &runtime_init_plan.skipped_providers {
+            warn!(
+                plugin = %skipped_provider.tag,
+                plugin_type = %skipped_provider.plugin_type,
+                reason = "no live dependents",
+                "skipped provider initialization"
+            );
+        }
+
+        let live_tags = runtime_init_plan
+            .report
+            .init_order
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+
+        // Step 2: Run startup-only preparation hooks for live plugins.
+        //
+        // This is used by plugins such as `download` that may need to create
+        // prerequisite files before providers or servers are initialized.
+        // Keep source config order here so startup-only side effects remain
+        // predictable even when no explicit dependency edge exists.
+        for plugin_config in configs
+            .iter()
+            .filter(|config| live_tags.contains(&config.tag))
+        {
+            let factory = self
+                .factories
+                .get(&plugin_config.plugin_type)
+                .ok_or_else(|| {
+                    DnsError::plugin(format!(
+                        "Unknown plugin type: {}",
+                        plugin_config.plugin_type
+                    ))
+                })?;
+            factory.prepare_startup(plugin_config, self.clone()).await?;
+        }
+
+        let create_contexts = build_create_contexts(&runtime_init_plan.report);
         let mut owned_configs: HashMap<_, _> = configs
             .into_iter()
             .map(|config| (config.tag.clone(), config))
             .collect();
-        let mut sorted_plugins = Vec::with_capacity(dependency_report.init_order.len());
-        for tag in &dependency_report.init_order {
+        let mut sorted_plugins = Vec::with_capacity(runtime_init_plan.report.init_order.len());
+        for tag in &runtime_init_plan.report.init_order {
             if let Some(config) = owned_configs.remove(tag) {
                 sorted_plugins.push(config);
             }
         }
 
-        // Step 2: Initialize plugins in dependency order.
+        // Step 3: Initialize live plugins in dependency order.
         info!(
-            "Initializing {} plugins in dependency order",
-            sorted_plugins.len()
+            live_plugins = sorted_plugins.len(),
+            skipped_providers = runtime_init_plan.skipped_providers.len(),
+            "Initializing live plugins in dependency order"
         );
 
         for (idx, plugin_config) in sorted_plugins.iter().enumerate() {
@@ -484,6 +520,91 @@ impl PluginRegistry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeInitPlan {
+    report: crate::plugin::dependency::DependencyGraphReport,
+    skipped_providers: Vec<SkippedProvider>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkippedProvider {
+    tag: String,
+    plugin_type: String,
+}
+
+fn build_runtime_init_plan(
+    report: &crate::plugin::dependency::DependencyGraphReport,
+) -> RuntimeInitPlan {
+    let mut edges_by_source: HashMap<&str, Vec<&crate::plugin::dependency::DependencyGraphEdge>> =
+        HashMap::new();
+    for edge in &report.edges {
+        edges_by_source
+            .entry(edge.source_tag.as_str())
+            .or_default()
+            .push(edge);
+    }
+
+    let mut live_tags = HashSet::new();
+    let mut stack = Vec::new();
+
+    for node in &report.nodes {
+        if node.kind != DependencyKind::Provider && live_tags.insert(node.tag.clone()) {
+            stack.push(node.tag.clone());
+        }
+    }
+
+    while let Some(tag) = stack.pop() {
+        if let Some(edges) = edges_by_source.get(tag.as_str()) {
+            for edge in edges {
+                if live_tags.insert(edge.target_tag.clone()) {
+                    stack.push(edge.target_tag.clone());
+                }
+            }
+        }
+    }
+
+    let mut skipped_providers = report
+        .nodes
+        .iter()
+        .filter(|node| node.kind == DependencyKind::Provider && !live_tags.contains(&node.tag))
+        .map(|node| SkippedProvider {
+            tag: node.tag.clone(),
+            plugin_type: node.plugin_type.clone(),
+        })
+        .collect::<Vec<_>>();
+    skipped_providers.sort_by(|a, b| {
+        a.tag
+            .cmp(&b.tag)
+            .then_with(|| a.plugin_type.cmp(&b.plugin_type))
+    });
+
+    RuntimeInitPlan {
+        report: crate::plugin::dependency::DependencyGraphReport {
+            nodes: report
+                .nodes
+                .iter()
+                .filter(|node| live_tags.contains(&node.tag))
+                .cloned()
+                .collect(),
+            edges: report
+                .edges
+                .iter()
+                .filter(|edge| {
+                    live_tags.contains(&edge.source_tag) && live_tags.contains(&edge.target_tag)
+                })
+                .cloned()
+                .collect(),
+            init_order: report
+                .init_order
+                .iter()
+                .filter(|tag| live_tags.contains(*tag))
+                .cloned()
+                .collect(),
+        },
+        skipped_providers,
+    }
+}
+
 fn build_create_contexts(
     report: &crate::plugin::dependency::DependencyGraphReport,
 ) -> HashMap<String, PluginCreateContext> {
@@ -533,6 +654,9 @@ impl Default for PluginRegistry {
 mod tests {
     use super::*;
     use crate::config::types::PluginConfig;
+    use crate::plugin::dependency::{
+        DependencyGraphEdge, DependencyGraphNode, DependencyGraphReport, DependencySpec,
+    };
     use crate::plugin::executor::sequence::SequenceFactory;
     use crate::plugin::matcher::qname::QnameFactory;
     use crate::plugin::provider::Provider;
@@ -540,7 +664,10 @@ mod tests {
     use crate::proto::Name;
     use async_trait::async_trait;
     use std::any::Any;
+    use std::collections::HashMap as StdHashMap;
+    use std::io::{self, Write};
     use std::sync::Mutex as StdMutex;
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[test]
     fn test_registry_creation() {
@@ -593,17 +720,34 @@ mod tests {
 
     #[derive(Debug)]
     struct CaptureProviderFactory {
-        captured: Arc<StdMutex<Option<PluginCreateContext>>>,
+        captured: Arc<StdMutex<StdHashMap<String, PluginCreateContext>>>,
+        created_tags: Arc<StdMutex<Vec<String>>>,
     }
 
     impl PluginFactory for CaptureProviderFactory {
+        fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
+            plugin_config
+                .args
+                .as_ref()
+                .and_then(|value| value.as_str())
+                .map(|target| vec![DependencySpec::provider("args", target)])
+                .unwrap_or_default()
+        }
+
         fn create(
             &self,
             plugin_config: &PluginConfig,
             _registry: Arc<PluginRegistry>,
             context: &PluginCreateContext,
         ) -> Result<UninitializedPlugin> {
-            *self.captured.lock().expect("context mutex poisoned") = Some(context.clone());
+            self.captured
+                .lock()
+                .expect("context mutex poisoned")
+                .insert(plugin_config.tag.clone(), context.clone());
+            self.created_tags
+                .lock()
+                .expect("created tags mutex poisoned")
+                .push(plugin_config.tag.clone());
             Ok(UninitializedPlugin::Provider(Box::new(CaptureProvider {
                 tag: plugin_config.tag.clone(),
                 rules: vec!["example.com".to_string()],
@@ -613,7 +757,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_init_plugins_passes_quick_setup_dependents_to_create_context() {
-        let captured = Arc::new(StdMutex::new(None));
+        let captured = Arc::new(StdMutex::new(StdHashMap::new()));
+        let created_tags = Arc::new(StdMutex::new(Vec::new()));
         let mut registry = PluginRegistry::new();
         registry.register_factory(
             "sequence",
@@ -626,6 +771,7 @@ mod tests {
             DependencyKind::Provider,
             Box::new(CaptureProviderFactory {
                 captured: captured.clone(),
+                created_tags,
             }),
         );
         let registry = Arc::new(registry);
@@ -660,7 +806,8 @@ mod tests {
         let context = captured
             .lock()
             .expect("context mutex poisoned")
-            .clone()
+            .get("zzz_provider")
+            .cloned()
             .expect("create context should be captured");
         assert_eq!(
             context.dependents,
@@ -671,6 +818,267 @@ mod tests {
                 field: "args[0].matches[0] -> quick_setup(qname).domain_set_tags[0]".to_string(),
             }]
         );
+
+        registry.destory().await;
+    }
+
+    #[test]
+    fn test_build_runtime_init_plan_skips_unreachable_provider_chain() {
+        let report = DependencyGraphReport {
+            nodes: vec![
+                DependencyGraphNode {
+                    tag: "entry".to_string(),
+                    plugin_type: "sequence".to_string(),
+                    kind: DependencyKind::Executor,
+                },
+                DependencyGraphNode {
+                    tag: "live_provider".to_string(),
+                    plugin_type: "capture_provider".to_string(),
+                    kind: DependencyKind::Provider,
+                },
+                DependencyGraphNode {
+                    tag: "live_leaf".to_string(),
+                    plugin_type: "capture_provider".to_string(),
+                    kind: DependencyKind::Provider,
+                },
+                DependencyGraphNode {
+                    tag: "dead_provider".to_string(),
+                    plugin_type: "capture_provider".to_string(),
+                    kind: DependencyKind::Provider,
+                },
+                DependencyGraphNode {
+                    tag: "dead_leaf".to_string(),
+                    plugin_type: "capture_provider".to_string(),
+                    kind: DependencyKind::Provider,
+                },
+            ],
+            edges: vec![
+                DependencyGraphEdge {
+                    source_tag: "entry".to_string(),
+                    field: "args[0].matches[0]".to_string(),
+                    target_tag: "live_provider".to_string(),
+                    expected_kind: DependencyKind::Provider,
+                    expected_plugin_type: None,
+                },
+                DependencyGraphEdge {
+                    source_tag: "live_provider".to_string(),
+                    field: "args".to_string(),
+                    target_tag: "live_leaf".to_string(),
+                    expected_kind: DependencyKind::Provider,
+                    expected_plugin_type: None,
+                },
+                DependencyGraphEdge {
+                    source_tag: "dead_provider".to_string(),
+                    field: "args".to_string(),
+                    target_tag: "dead_leaf".to_string(),
+                    expected_kind: DependencyKind::Provider,
+                    expected_plugin_type: None,
+                },
+            ],
+            init_order: vec![
+                "dead_leaf".to_string(),
+                "live_leaf".to_string(),
+                "dead_provider".to_string(),
+                "live_provider".to_string(),
+                "entry".to_string(),
+            ],
+        };
+
+        let runtime_plan = build_runtime_init_plan(&report);
+
+        assert_eq!(
+            runtime_plan.report.init_order,
+            vec![
+                "live_leaf".to_string(),
+                "live_provider".to_string(),
+                "entry".to_string(),
+            ]
+        );
+        assert_eq!(
+            runtime_plan.skipped_providers,
+            vec![
+                SkippedProvider {
+                    tag: "dead_leaf".to_string(),
+                    plugin_type: "capture_provider".to_string(),
+                },
+                SkippedProvider {
+                    tag: "dead_provider".to_string(),
+                    plugin_type: "capture_provider".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn test_init_plugins_filters_create_contexts_to_live_dependents() {
+        let captured = Arc::new(StdMutex::new(StdHashMap::new()));
+        let created_tags = Arc::new(StdMutex::new(Vec::new()));
+        let mut registry = PluginRegistry::new();
+        registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
+        registry.register_factory(
+            "capture_provider",
+            DependencyKind::Provider,
+            Box::new(CaptureProviderFactory {
+                captured: captured.clone(),
+                created_tags: created_tags.clone(),
+            }),
+        );
+        let registry = Arc::new(registry);
+
+        let configs = vec![
+            PluginConfig {
+                tag: "orphan_provider".to_string(),
+                plugin_type: "capture_provider".to_string(),
+                args: Some(serde_yaml_ng::Value::String("shared_provider".to_string())),
+            },
+            PluginConfig {
+                tag: "shared_provider".to_string(),
+                plugin_type: "capture_provider".to_string(),
+                args: None,
+            },
+            PluginConfig {
+                tag: "entry_provider".to_string(),
+                plugin_type: "capture_provider".to_string(),
+                args: Some(serde_yaml_ng::Value::String("shared_provider".to_string())),
+            },
+            PluginConfig {
+                tag: "match_qname".to_string(),
+                plugin_type: "qname".to_string(),
+                args: Some(
+                    serde_yaml_ng::from_str(
+                        r#"
+- "$entry_provider"
+"#,
+                    )
+                    .expect("qname args should parse"),
+                ),
+            },
+        ];
+
+        registry
+            .clone()
+            .init_plugins(configs)
+            .await
+            .expect("plugin init should succeed");
+
+        let contexts = captured.lock().expect("context mutex poisoned");
+        assert!(!contexts.contains_key("orphan_provider"));
+        assert_eq!(
+            contexts
+                .get("shared_provider")
+                .expect("shared provider should be created")
+                .dependents,
+            vec![PluginDependent {
+                tag: "entry_provider".to_string(),
+                plugin_type: "capture_provider".to_string(),
+                kind: DependencyKind::Provider,
+                field: "args".to_string(),
+            }]
+        );
+
+        let created_tags = created_tags.lock().expect("created tags mutex poisoned");
+        assert_eq!(
+            created_tags.as_slice(),
+            ["shared_provider", "entry_provider"]
+        );
+
+        registry.destory().await;
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLogBuffer {
+        bytes: Arc<StdMutex<Vec<u8>>>,
+    }
+
+    impl SharedLogBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(
+                self.bytes
+                    .lock()
+                    .expect("log buffer mutex poisoned")
+                    .clone(),
+            )
+            .expect("log output should be utf-8")
+        }
+    }
+
+    struct SharedLogWriter {
+        bytes: Arc<StdMutex<Vec<u8>>>,
+    }
+
+    impl Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("log buffer mutex poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedLogBuffer {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter {
+                bytes: self.bytes.clone(),
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_init_plugins_warns_when_skipping_unused_provider() {
+        let captured = Arc::new(StdMutex::new(StdHashMap::new()));
+        let created_tags = Arc::new(StdMutex::new(Vec::new()));
+        let mut registry = PluginRegistry::new();
+        registry.register_factory(
+            "capture_provider",
+            DependencyKind::Provider,
+            Box::new(CaptureProviderFactory {
+                captured,
+                created_tags: created_tags.clone(),
+            }),
+        );
+        let registry = Arc::new(registry);
+        let configs = vec![PluginConfig {
+            tag: "orphan_provider".to_string(),
+            plugin_type: "capture_provider".to_string(),
+            args: None,
+        }];
+
+        let logs = SharedLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .without_time()
+            .with_target(false)
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        registry
+            .clone()
+            .init_plugins(configs)
+            .await
+            .expect("plugin init should succeed");
+
+        assert!(
+            created_tags
+                .lock()
+                .expect("created tags mutex poisoned")
+                .is_empty(),
+            "unused provider should not be created"
+        );
+        let output = logs.contents();
+        assert!(output.contains("WARN"));
+        assert!(output.contains("orphan_provider"));
+        assert!(output.contains("capture_provider"));
+        assert!(output.contains("no live dependents"));
+        assert!(output.contains("skipped provider initialization"));
 
         registry.destory().await;
     }

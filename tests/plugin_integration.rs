@@ -699,6 +699,10 @@ plugins:
 
     let config = parse_config(yaml)?;
     let registry = plugin::init(config, None).await?;
+    assert!(
+        registry.get_plugin("zzz_set").is_some(),
+        "provider used by quick setup should still be visible"
+    );
 
     let sequence = registry
         .get_plugin("seq")
@@ -1394,7 +1398,30 @@ plugins:
 }
 
 #[tokio::test]
-async fn test_domain_set_provider_flattens_referenced_sets() -> Result<()> {
+async fn test_unused_provider_plugins_are_skipped_at_runtime() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: orphan_domain
+    type: domain_set
+    args:
+      exps:
+        - example.com
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+
+    assert_eq!(registry.plugin_count(), 0);
+    assert!(registry.get_plugin("orphan_domain").is_none());
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_unused_provider_chains_are_skipped_transitively() -> Result<()> {
     let yaml = r#"
 log:
   level: info
@@ -1416,14 +1443,54 @@ plugins:
     let config = parse_config(yaml)?;
     let registry = plugin::init(config, None).await?;
 
-    let provider = registry
-        .get_plugin("combined_domain")
-        .expect("combined domain provider should exist")
-        .to_provider();
+    assert_eq!(registry.plugin_count(), 0);
+    assert!(registry.get_plugin("shared_domain").is_none());
+    assert!(registry.get_plugin("combined_domain").is_none());
 
-    assert!(provider.contains_name(&Name::from_ascii("local.example").unwrap()));
-    assert!(provider.contains_name(&Name::from_ascii("www.shared.example").unwrap()));
-    assert!(!provider.contains_name(&Name::from_ascii("missing.example").unwrap()));
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_domain_set_provider_flattens_referenced_sets() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: shared_domain
+    type: domain_set
+    args:
+      exps:
+        - shared.example
+  - tag: combined_domain
+    type: domain_set
+    args:
+      exps:
+        - full:local.example
+      sets:
+        - shared_domain
+  - tag: domain_match
+    type: qname
+    args:
+      - "$combined_domain"
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+
+    let matcher = registry
+        .get_plugin("domain_match")
+        .expect("domain matcher should exist")
+        .to_matcher();
+
+    let mut local_ctx = make_context(registry.clone(), "local.example.");
+    assert!(matcher.is_match(&mut local_ctx));
+
+    let mut shared_ctx = make_context(registry.clone(), "www.shared.example.");
+    assert!(matcher.is_match(&mut shared_ctx));
+
+    let mut missing_ctx = make_context(registry.clone(), "missing.example.");
+    assert!(!matcher.is_match(&mut missing_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1442,25 +1509,42 @@ plugins:
     args:
       files:
         - "{domain_rules}"
+  - tag: domain_match
+    type: qname
+    args:
+      - "$domain_rules"
 "#
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
 
-    let provider = registry
-        .get_plugin("domain_rules")
-        .expect("domain_rules provider should exist")
-        .to_provider();
+    let matcher = registry
+        .get_plugin("domain_match")
+        .expect("domain matcher should exist")
+        .to_matcher();
 
-    assert!(provider.contains_name(&Name::from_ascii("www.example.test").unwrap()));
-    assert!(provider.contains_name(&Name::from_ascii("img.cdn.example.test").unwrap()));
-    assert!(provider.contains_name(&Name::from_ascii("exact-only.test").unwrap()));
-    assert!(provider.contains_name(&Name::from_ascii("cdn.analytics-node.test").unwrap()));
-    assert!(provider.contains_name(&Name::from_ascii("api12.service.test").unwrap()));
-    assert!(!provider.contains_name(&Name::from_ascii("www.exact-only.test").unwrap()));
-    assert!(!provider.contains_name(&Name::from_ascii("api.service.test").unwrap()));
-    assert!(!provider.contains_name(&Name::from_ascii("missing.example").unwrap()));
+    let matching_names = [
+        "www.example.test.",
+        "img.cdn.example.test.",
+        "exact-only.test.",
+        "cdn.analytics-node.test.",
+        "api12.service.test.",
+    ];
+    for qname in matching_names {
+        let mut ctx = make_context(registry.clone(), qname);
+        assert!(matcher.is_match(&mut ctx), "{qname} should match");
+    }
+
+    let missing_names = [
+        "www.exact-only.test.",
+        "api.service.test.",
+        "missing.example.",
+    ];
+    for qname in missing_names {
+        let mut ctx = make_context(registry.clone(), qname);
+        assert!(!matcher.is_match(&mut ctx), "{qname} should not match");
+    }
 
     registry.destory().await;
     Ok(())
@@ -1484,19 +1568,31 @@ plugins:
         - 198.51.100.0/24
       sets:
         - shared_ip
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$combined_ip"
 "#;
 
     let config = parse_config(yaml)?;
     let registry = plugin::init(config, None).await?;
 
-    let provider = registry
-        .get_plugin("combined_ip")
-        .expect("combined ip provider should exist")
-        .to_provider();
+    let matcher = registry
+        .get_plugin("match_client")
+        .expect("client matcher should exist")
+        .to_matcher();
 
-    assert!(provider.contains_ip("203.0.113.7".parse().unwrap()));
-    assert!(provider.contains_ip("198.51.100.42".parse().unwrap()));
-    assert!(!provider.contains_ip("198.51.101.1".parse().unwrap()));
+    let mut shared_ctx = make_context(registry.clone(), "example.com.");
+    shared_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 7), 5300)));
+    assert!(matcher.is_match(&mut shared_ctx));
+
+    let mut range_ctx = make_context(registry.clone(), "example.com.");
+    range_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(198, 51, 100, 42), 5300)));
+    assert!(matcher.is_match(&mut range_ctx));
+
+    let mut missing_ctx = make_context(registry.clone(), "example.com.");
+    missing_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(198, 51, 101, 1), 5300)));
+    assert!(!matcher.is_match(&mut missing_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1515,25 +1611,42 @@ plugins:
     args:
       files:
         - "{ip_rules}"
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$ip_rules"
 "#
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
 
-    let provider = registry
-        .get_plugin("ip_rules")
-        .expect("ip_rules provider should exist")
-        .to_provider();
+    let matcher = registry
+        .get_plugin("match_client")
+        .expect("client matcher should exist")
+        .to_matcher();
 
-    assert!(provider.contains_ip("203.0.113.7".parse().unwrap()));
-    assert!(provider.contains_ip("198.51.100.42".parse().unwrap()));
-    assert!(provider.contains_ip("2001:db8::7".parse().unwrap()));
-    assert!(provider.contains_ip("2001:db8:abcd::1234".parse().unwrap()));
-    assert!(!provider.contains_ip("203.0.113.8".parse().unwrap()));
-    assert!(!provider.contains_ip("198.51.101.1".parse().unwrap()));
-    assert!(!provider.contains_ip("2001:db8::8".parse().unwrap()));
-    assert!(!provider.contains_ip("2001:db8:abce::1".parse().unwrap()));
+    for ip in [
+        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+        IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42)),
+        IpAddr::V6(Ipv6Addr::from([0x2001, 0xdb8, 0, 0, 0, 0, 0, 7])),
+        IpAddr::V6(Ipv6Addr::from([0x2001, 0xdb8, 0xabcd, 0, 0, 0, 0, 0x1234])),
+    ] {
+        let mut ctx = make_context(registry.clone(), "example.com.");
+        ctx.set_peer_addr(SocketAddr::new(ip, 5300));
+        assert!(matcher.is_match(&mut ctx), "{ip} should match");
+    }
+
+    for ip in [
+        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 8)),
+        IpAddr::V4(Ipv4Addr::new(198, 51, 101, 1)),
+        IpAddr::V6(Ipv6Addr::from([0x2001, 0xdb8, 0, 0, 0, 0, 0, 8])),
+        IpAddr::V6(Ipv6Addr::from([0x2001, 0xdb8, 0xabce, 0, 0, 0, 0, 1])),
+    ] {
+        let mut ctx = make_context(registry.clone(), "example.com.");
+        ctx.set_peer_addr(SocketAddr::new(ip, 5300));
+        assert!(!matcher.is_match(&mut ctx), "{ip} should not match");
+    }
 
     registry.destory().await;
     Ok(())
@@ -1553,18 +1666,27 @@ plugins:
       file: "{geoip_dat}"
       selectors:
         - "CN"
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$geoip_cn"
 "#
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
-    let provider = registry
-        .get_plugin("geoip_cn")
-        .expect("geoip provider should exist")
-        .to_provider();
+    let matcher = registry
+        .get_plugin("match_client")
+        .expect("client matcher should exist")
+        .to_matcher();
 
-    assert!(provider.contains_ip("1.0.1.1".parse().unwrap()));
-    assert!(!provider.contains_ip("8.8.8.8".parse().unwrap()));
+    let mut cn_ctx = make_context(registry.clone(), "example.com.");
+    cn_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(1, 0, 1, 1), 5300)));
+    assert!(matcher.is_match(&mut cn_ctx));
+
+    let mut foreign_ctx = make_context(registry.clone(), "example.com.");
+    foreign_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(8, 8, 8, 8), 5300)));
+    assert!(!matcher.is_match(&mut foreign_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1582,18 +1704,27 @@ plugins:
     type: geoip
     args:
       file: "{geoip_dat}"
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$geoip_all"
 "#
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
-    let provider = registry
-        .get_plugin("geoip_all")
-        .expect("geoip provider should exist")
-        .to_provider();
+    let matcher = registry
+        .get_plugin("match_client")
+        .expect("client matcher should exist")
+        .to_matcher();
 
-    assert!(provider.contains_ip("1.0.1.1".parse().unwrap()));
-    assert!(provider.contains_ip("8.8.8.8".parse().unwrap()));
+    let mut cn_ctx = make_context(registry.clone(), "example.com.");
+    cn_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(1, 0, 1, 1), 5300)));
+    assert!(matcher.is_match(&mut cn_ctx));
+
+    let mut foreign_ctx = make_context(registry.clone(), "example.com.");
+    foreign_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(8, 8, 8, 8), 5300)));
+    assert!(matcher.is_match(&mut foreign_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1614,23 +1745,36 @@ plugins:
       selectors:
         - "cn"
         - "geolocation-!cn"
+  - tag: match_qname
+    type: qname
+    args:
+      - "$geosite_target"
+  - tag: match_question
+    type: question
+    args:
+      - "$geosite_target"
 "#
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
-    let provider = registry
-        .get_plugin("geosite_target")
-        .expect("geosite provider should exist")
-        .to_provider();
+    let qname_matcher = registry
+        .get_plugin("match_qname")
+        .expect("qname matcher should exist")
+        .to_matcher();
+    let question_matcher = registry
+        .get_plugin("match_question")
+        .expect("question matcher should exist")
+        .to_matcher();
 
-    assert!(provider.contains_name(&Name::from_ascii("265.com").unwrap()));
-    assert!(provider.contains_name(&Name::from_ascii("a.ppy.sh").unwrap()));
-    assert!(provider.contains_question(&Question::new(
-        Name::from_ascii("a.ppy.sh").unwrap(),
-        RecordType::A,
-        DNSClass::IN,
-    )));
+    let mut cn_ctx = make_context(registry.clone(), "265.com.");
+    assert!(qname_matcher.is_match(&mut cn_ctx));
+
+    let mut foreign_ctx = make_context(registry.clone(), "a.ppy.sh.");
+    assert!(qname_matcher.is_match(&mut foreign_ctx));
+
+    let mut question_ctx = make_context_with_qtype(registry.clone(), "a.ppy.sh.", RecordType::A);
+    assert!(question_matcher.is_match(&mut question_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1648,18 +1792,25 @@ plugins:
     type: geosite
     args:
       file: "{geosite_dat}"
+  - tag: match_qname
+    type: qname
+    args:
+      - "$geosite_all"
 "#
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
-    let provider = registry
-        .get_plugin("geosite_all")
-        .expect("geosite provider should exist")
-        .to_provider();
+    let matcher = registry
+        .get_plugin("match_qname")
+        .expect("qname matcher should exist")
+        .to_matcher();
 
-    assert!(provider.contains_name(&Name::from_ascii("265.com").unwrap()));
-    assert!(provider.contains_name(&Name::from_ascii("a.ppy.sh").unwrap()));
+    let mut cn_ctx = make_context(registry.clone(), "265.com.");
+    assert!(matcher.is_match(&mut cn_ctx));
+
+    let mut foreign_ctx = make_context(registry.clone(), "a.ppy.sh.");
+    assert!(matcher.is_match(&mut foreign_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1679,19 +1830,28 @@ plugins:
       file: "{geosite_dat}"
       selectors:
         - "mastercard@cn"
+  - tag: match_qname
+    type: qname
+    args:
+      - "$geosite_mastercard_cn"
 "#
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
-    let provider = registry
-        .get_plugin("geosite_mastercard_cn")
-        .expect("geosite provider should exist")
-        .to_provider();
+    let matcher = registry
+        .get_plugin("match_qname")
+        .expect("qname matcher should exist")
+        .to_matcher();
 
-    assert!(provider.contains_name(&Name::from_ascii("mastercard.cn").unwrap()));
-    assert!(!provider.contains_name(&Name::from_ascii("a.ppy.sh").unwrap()));
-    assert!(!provider.contains_name(&Name::from_ascii("mastercard.com").unwrap()));
+    let mut cn_ctx = make_context(registry.clone(), "mastercard.cn.");
+    assert!(matcher.is_match(&mut cn_ctx));
+
+    let mut foreign_ctx = make_context(registry.clone(), "a.ppy.sh.");
+    assert!(!matcher.is_match(&mut foreign_ctx));
+
+    let mut global_ctx = make_context(registry.clone(), "mastercard.com.");
+    assert!(!matcher.is_match(&mut global_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1738,6 +1898,9 @@ plugins:
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
+    assert!(registry.get_plugin("geoip_cn").is_some());
+    assert!(registry.get_plugin("geosite_cn").is_some());
+    assert!(registry.get_plugin("geosite_foreign").is_some());
 
     let client_matcher = registry
         .get_plugin("match_client")
@@ -1797,25 +1960,42 @@ plugins:
         - "full:custom.example"
       sets:
         - "geosite_cn"
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$mixed_ip"
+  - tag: match_qname
+    type: qname
+    args:
+      - "$mixed_domain"
 "#
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
 
-    let ip_provider = registry
-        .get_plugin("mixed_ip")
-        .expect("mixed ip provider should exist")
-        .to_provider();
-    let domain_provider = registry
-        .get_plugin("mixed_domain")
-        .expect("mixed domain provider should exist")
-        .to_provider();
+    let ip_matcher = registry
+        .get_plugin("match_client")
+        .expect("client matcher should exist")
+        .to_matcher();
+    let domain_matcher = registry
+        .get_plugin("match_qname")
+        .expect("qname matcher should exist")
+        .to_matcher();
 
-    assert!(ip_provider.contains_ip("1.0.1.1".parse().unwrap()));
-    assert!(ip_provider.contains_ip("198.51.100.7".parse().unwrap()));
-    assert!(domain_provider.contains_name(&Name::from_ascii("265.com").unwrap()));
-    assert!(domain_provider.contains_name(&Name::from_ascii("custom.example").unwrap()));
+    let mut geo_ctx = make_context(registry.clone(), "example.com.");
+    geo_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(1, 0, 1, 1), 5300)));
+    assert!(ip_matcher.is_match(&mut geo_ctx));
+
+    let mut inline_ip_ctx = make_context(registry.clone(), "example.com.");
+    inline_ip_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(198, 51, 100, 7), 5300)));
+    assert!(ip_matcher.is_match(&mut inline_ip_ctx));
+
+    let mut geo_domain_ctx = make_context(registry.clone(), "265.com.");
+    assert!(domain_matcher.is_match(&mut geo_domain_ctx));
+
+    let mut inline_domain_ctx = make_context(registry.clone(), "custom.example.");
+    assert!(domain_matcher.is_match(&mut inline_domain_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1836,6 +2016,10 @@ plugins:
     args:
       file: "{geoip_dat}"
       selectors: ["not-found-code"]
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$geoip_missing"
 "#
     );
     let err = plugin::init(parse_config(&missing_code_yaml)?, None)
@@ -1858,6 +2042,10 @@ plugins:
     args:
       sets:
         - "geosite_cn"
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$invalid_ip_set"
 "#
     );
     let err = plugin::init(parse_config(&wrong_set_yaml)?, None)
@@ -2633,18 +2821,23 @@ plugins:
       file: "{dat_file_yaml}"
       selectors:
         - "cn"
+  - tag: match_qname
+    type: qname
+    args:
+      - "$geosite_cn"
 "#,
     );
 
     let config = parse_config(&yaml)?;
     let registry = plugin::init(config, None).await?;
-    let provider = registry
-        .get_plugin("geosite_cn")
-        .expect("geosite provider should exist")
-        .to_provider();
+    let matcher = registry
+        .get_plugin("match_qname")
+        .expect("qname matcher should exist")
+        .to_matcher();
 
     assert!(dat_file.exists());
-    assert!(provider.contains_name(&Name::from_ascii("265.com").unwrap()));
+    let mut ctx = make_context(registry.clone(), "265.com.");
+    assert!(matcher.is_match(&mut ctx));
 
     registry.destory().await;
     Ok(())

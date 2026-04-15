@@ -7,6 +7,8 @@ Providers turn rule sets from one-off literals into reusable data assets. In lar
 
 Providers with domain or IP match capability can be referenced directly by matchers through `"$tag"` and can also be aggregated by `domain_set` or `ip_set`. A small number of providers only support direct matcher use and cannot be flattened into `domain_set` or `ip_set`.
 
+At runtime, ForgeDNS only initializes providers that are actually consumed. If a provider is not referenced directly or indirectly by any `server`, `executor`, or `matcher`, it is skipped during startup, does not appear in the runtime registry, and emits a warning log so the unused configuration is visible.
+
 ---
 
 ## `adguard_rule`
