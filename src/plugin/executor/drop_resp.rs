@@ -58,6 +58,7 @@ impl PluginFactory for DropRespFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(DropResp {
             tag: plugin_config.tag.clone(),

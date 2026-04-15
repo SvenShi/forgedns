@@ -110,6 +110,7 @@ impl PluginFactory for ForwardEdns0OptFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let code_set = parse_codes_from_value(plugin_config.args.clone())?;
         Ok(UninitializedPlugin::Executor(Box::new(ForwardEdns0Opt {

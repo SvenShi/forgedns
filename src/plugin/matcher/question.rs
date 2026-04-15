@@ -13,7 +13,8 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    parse_quick_setup_rules, parse_rules_from_value, resolve_provider_tags, split_rule_sources,
+    parse_quick_setup_rules, parse_rules_from_value, provider_dependency_specs,
+    resolve_provider_tags, split_rule_sources,
 };
 use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -31,13 +32,14 @@ register_plugin_factory!("question", QuestionFactory {});
 impl PluginFactory for QuestionFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
         parse_provider_tags_from_value(plugin_config.args.clone())
-            .map(|provider_tags| {
-                provider_tags
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, tag)| DependencySpec::provider(format!("args[{}]", idx), tag))
-                    .collect()
-            })
+            .map(|provider_tags| provider_dependency_specs("args", provider_tags))
+            .unwrap_or_default()
+    }
+
+    fn get_quick_setup_dependency_specs(&self, param: Option<&str>) -> Vec<DependencySpec> {
+        parse_quick_setup_rules(param.map(str::to_owned))
+            .and_then(parse_provider_tags)
+            .map(|provider_tags| provider_dependency_specs("provider_tags", provider_tags))
             .unwrap_or_default()
     }
 
@@ -45,6 +47,7 @@ impl PluginFactory for QuestionFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let provider_tags = parse_provider_tags_from_value(plugin_config.args.clone())?;
 

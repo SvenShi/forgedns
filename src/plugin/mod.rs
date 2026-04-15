@@ -246,6 +246,69 @@ pub(crate) fn registered_plugin_kind(plugin_type: &str) -> Option<dependency::De
         .map(|registration| dependency_kind_from_module_path(registration.module_path))
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginCreateContext {
+    pub dependents: Vec<PluginDependent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDependent {
+    pub tag: String,
+    pub plugin_type: String,
+    pub kind: dependency::DependencyKind,
+    pub field: String,
+}
+
+fn factory_from_inventory(plugin_type: &str) -> Option<Box<dyn PluginFactory>> {
+    inventory::iter::<FactoryRegistration>
+        .into_iter()
+        .find(|registration| registration.plugin_type == plugin_type)
+        .map(|registration| (registration.constructor)())
+}
+
+pub(crate) fn quick_setup_dependency_specs(
+    plugin_type: &str,
+    param: Option<&str>,
+) -> Vec<dependency::DependencySpec> {
+    factory_from_inventory(plugin_type)
+        .map(|factory| factory.get_quick_setup_dependency_specs(param))
+        .unwrap_or_default()
+}
+
+pub(crate) fn format_quick_setup_dependency_field(
+    owner_field: &str,
+    plugin_type: &str,
+    nested_field: &str,
+) -> String {
+    let owner_field = owner_field.trim();
+    let owner_field = if owner_field.is_empty() {
+        "<unknown>"
+    } else {
+        owner_field
+    };
+    let nested_field = nested_field.trim();
+    let nested_field = if nested_field.is_empty() {
+        "<unknown>"
+    } else {
+        nested_field
+    };
+    format!("{owner_field} -> quick_setup({plugin_type}).{nested_field}")
+}
+
+pub(crate) fn expand_quick_setup_dependency_specs(
+    owner_field: &str,
+    plugin_type: &str,
+    param: Option<&str>,
+) -> Vec<dependency::DependencySpec> {
+    quick_setup_dependency_specs(plugin_type, param)
+        .into_iter()
+        .map(|mut spec| {
+            spec.field = format_quick_setup_dependency_field(owner_field, plugin_type, &spec.field);
+            spec
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginType {
     Server,
@@ -330,6 +393,17 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
         vec![]
     }
 
+    /// Optional dependency extraction for runtime-only quick setup forms.
+    ///
+    /// Returned dependency fields should be relative to the quick-setup plugin
+    /// itself, for example `domain_set_tags[0]`.
+    fn get_quick_setup_dependency_specs(
+        &self,
+        _param: Option<&str>,
+    ) -> Vec<dependency::DependencySpec> {
+        vec![]
+    }
+
     /// Optional startup-only preparation hook.
     ///
     /// Factories can use this to perform startup prerequisites before
@@ -354,6 +428,7 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &PluginCreateContext,
     ) -> Result<UninitializedPlugin>;
 
     /// Create a plugin from sequence quick setup syntax: `type [param...]`.

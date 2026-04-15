@@ -86,6 +86,7 @@ impl PluginFactory for RateLimiterFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
         validate_cfg(&cfg)?;

@@ -884,6 +884,7 @@ impl PluginFactory for CacheFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cache_config = parse_cache_config(plugin_config.args.clone())?;
         validate_cache_config(&cache_config)?;

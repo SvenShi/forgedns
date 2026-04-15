@@ -72,6 +72,7 @@ impl PluginFactory for SleepFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = plugin_config
             .args
@@ -155,7 +156,11 @@ mod tests {
     fn test_sleep_factory_create_rejects_invalid_config_type() {
         let factory = SleepFactory;
         let cfg = plugin_config("sleep", "sleep", Some(Value::String("bad".into())));
-        assert!(factory.create(&cfg, test_registry()).is_err());
+        assert!(
+            factory
+                .create(&cfg, test_registry(), &Default::default())
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -259,6 +259,7 @@ impl PluginFactory for FallbackFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg: FallbackConfig = serde_yaml_ng::from_value(
             plugin_config
@@ -333,7 +334,11 @@ mod tests {
     fn test_fallback_factory_requires_args() {
         let factory = FallbackFactory;
         let cfg = plugin_config("fb", "fallback", None);
-        assert!(factory.create(&cfg, test_registry()).is_err());
+        assert!(
+            factory
+                .create(&cfg, test_registry(), &Default::default())
+                .is_err()
+        );
     }
 
     #[derive(Debug)]

@@ -115,6 +115,7 @@ impl PluginFactory for IpSetFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         // Plugin init duration only needs coarse monotonic timing from AppClock.
         let start_ms = AppClock::elapsed_millis();

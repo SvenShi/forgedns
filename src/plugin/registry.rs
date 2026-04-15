@@ -16,7 +16,7 @@ use crate::plugin::dependency::DependencyKind;
 use crate::plugin::executor::Executor;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::Provider;
-use crate::plugin::{PluginFactory, PluginInfo, PluginType};
+use crate::plugin::{PluginCreateContext, PluginDependent, PluginFactory, PluginInfo, PluginType};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -167,7 +167,18 @@ impl PluginRegistry {
                 .copied()
                 .unwrap_or(DependencyKind::Unknown)
         };
-        let sorted_plugins = dependency::resolve_dependencies(configs, &get_deps, &get_kind)?;
+        let dependency_report = dependency::analyze_dependencies(&configs, &get_deps, &get_kind)?;
+        let create_contexts = build_create_contexts(&dependency_report);
+        let mut owned_configs: HashMap<_, _> = configs
+            .into_iter()
+            .map(|config| (config.tag.clone(), config))
+            .collect();
+        let mut sorted_plugins = Vec::with_capacity(dependency_report.init_order.len());
+        for tag in &dependency_report.init_order {
+            if let Some(config) = owned_configs.remove(tag) {
+                sorted_plugins.push(config);
+            }
+        }
 
         // Step 2: Initialize plugins in dependency order.
         info!(
@@ -196,8 +207,12 @@ impl PluginRegistry {
                 })?;
 
             // Create plugin using the factory and registry
+            let create_context = create_contexts
+                .get(&plugin_config.tag)
+                .cloned()
+                .unwrap_or_default();
             let plugin_info = self
-                .create_plugin_info_and_init(plugin_config, factory.as_ref())
+                .create_plugin_info_and_init(plugin_config, factory.as_ref(), &create_context)
                 .await?;
 
             // DashMap allows insertion even with Arc<Self>
@@ -227,9 +242,10 @@ impl PluginRegistry {
         self: &Arc<Self>,
         config: &PluginConfig,
         factory: &dyn PluginFactory,
+        context: &PluginCreateContext,
     ) -> Result<PluginInfo> {
         // Factory creates uninitialized plugin
-        let uninitialized = factory.create(config, self.clone())?;
+        let uninitialized = factory.create(config, self.clone(), context)?;
 
         // Initialize and wrap into PluginType (with Arc)
         let plugin_holder = uninitialized.init_and_wrap().await?;
@@ -468,6 +484,45 @@ impl PluginRegistry {
     }
 }
 
+fn build_create_contexts(
+    report: &crate::plugin::dependency::DependencyGraphReport,
+) -> HashMap<String, PluginCreateContext> {
+    let node_map = report
+        .nodes
+        .iter()
+        .map(|node| (node.tag.as_str(), node))
+        .collect::<HashMap<_, _>>();
+    let mut dependents_by_target: HashMap<String, Vec<PluginDependent>> = HashMap::new();
+
+    for edge in &report.edges {
+        let Some(source_node) = node_map.get(edge.source_tag.as_str()) else {
+            continue;
+        };
+        dependents_by_target
+            .entry(edge.target_tag.clone())
+            .or_default()
+            .push(PluginDependent {
+                tag: edge.source_tag.clone(),
+                plugin_type: source_node.plugin_type.clone(),
+                kind: source_node.kind,
+                field: edge.field.clone(),
+            });
+    }
+
+    dependents_by_target
+        .into_iter()
+        .map(|(tag, mut dependents)| {
+            dependents.sort_by(|a, b| {
+                a.tag
+                    .cmp(&b.tag)
+                    .then_with(|| a.field.cmp(&b.field))
+                    .then_with(|| a.plugin_type.cmp(&b.plugin_type))
+            });
+            (tag, PluginCreateContext { dependents })
+        })
+        .collect()
+}
+
 impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()
@@ -477,6 +532,15 @@ impl Default for PluginRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::PluginConfig;
+    use crate::plugin::executor::sequence::SequenceFactory;
+    use crate::plugin::matcher::qname::QnameFactory;
+    use crate::plugin::provider::Provider;
+    use crate::plugin::{Plugin, UninitializedPlugin};
+    use crate::proto::Name;
+    use async_trait::async_trait;
+    use std::any::Any;
+    use std::sync::Mutex as StdMutex;
 
     #[test]
     fn test_registry_creation() {
@@ -489,5 +553,125 @@ mod tests {
     fn test_get_nonexistent_plugin() {
         let registry = PluginRegistry::new();
         assert!(registry.get_plugin("nonexistent").is_none());
+    }
+
+    #[derive(Debug)]
+    struct CaptureProvider {
+        tag: String,
+        rules: Vec<String>,
+    }
+
+    #[async_trait]
+    impl Plugin for CaptureProvider {
+        fn tag(&self) -> &str {
+            &self.tag
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Provider for CaptureProvider {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn contains_name(&self, _name: &Name) -> bool {
+            false
+        }
+
+        fn domain_rules(&self) -> Option<&[String]> {
+            Some(&self.rules)
+        }
+    }
+
+    #[derive(Debug)]
+    struct CaptureProviderFactory {
+        captured: Arc<StdMutex<Option<PluginCreateContext>>>,
+    }
+
+    impl PluginFactory for CaptureProviderFactory {
+        fn create(
+            &self,
+            plugin_config: &PluginConfig,
+            _registry: Arc<PluginRegistry>,
+            context: &PluginCreateContext,
+        ) -> Result<UninitializedPlugin> {
+            *self.captured.lock().expect("context mutex poisoned") = Some(context.clone());
+            Ok(UninitializedPlugin::Provider(Box::new(CaptureProvider {
+                tag: plugin_config.tag.clone(),
+                rules: vec!["example.com".to_string()],
+            })))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_init_plugins_passes_quick_setup_dependents_to_create_context() {
+        let captured = Arc::new(StdMutex::new(None));
+        let mut registry = PluginRegistry::new();
+        registry.register_factory(
+            "sequence",
+            DependencyKind::Executor,
+            Box::new(SequenceFactory {}),
+        );
+        registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
+        registry.register_factory(
+            "capture_provider",
+            DependencyKind::Provider,
+            Box::new(CaptureProviderFactory {
+                captured: captured.clone(),
+            }),
+        );
+        let registry = Arc::new(registry);
+
+        let sequence_args = serde_yaml_ng::from_str(
+            r#"
+- matches:
+    - qname $zzz_provider
+  exec: accept
+"#,
+        )
+        .expect("sequence args should parse");
+        let configs = vec![
+            PluginConfig {
+                tag: "seq".to_string(),
+                plugin_type: "sequence".to_string(),
+                args: Some(sequence_args),
+            },
+            PluginConfig {
+                tag: "zzz_provider".to_string(),
+                plugin_type: "capture_provider".to_string(),
+                args: None,
+            },
+        ];
+
+        registry
+            .clone()
+            .init_plugins(configs)
+            .await
+            .expect("plugin init should succeed");
+
+        let context = captured
+            .lock()
+            .expect("context mutex poisoned")
+            .clone()
+            .expect("create context should be captured");
+        assert_eq!(
+            context.dependents,
+            vec![PluginDependent {
+                tag: "seq".to_string(),
+                plugin_type: "sequence".to_string(),
+                kind: DependencyKind::Executor,
+                field: "args[0].matches[0] -> quick_setup(qname).domain_set_tags[0]".to_string(),
+            }]
+        );
+
+        registry.destory().await;
     }
 }

@@ -16,7 +16,8 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
     ensure_domain_capable_providers, parse_domain_rules_and_set_tags, parse_quick_setup_rules,
-    parse_rules_from_value, resolve_provider_tags, validate_non_empty_domain_rules_or_set_tags,
+    parse_rules_from_value, provider_dependency_specs, resolve_provider_tags,
+    validate_non_empty_domain_rules_or_set_tags,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
@@ -37,19 +38,24 @@ impl PluginFactory for CnameFactory {
         let Ok((_, domain_set_tags)) = parse_domain_rules_and_set_tags(rules, "cname") else {
             return vec![];
         };
-        domain_set_tags
-            .into_iter()
-            .enumerate()
-            .map(|(idx, tag)| {
-                DependencySpec::provider(format!("args.domain_set_tags[{}]", idx), tag)
-            })
-            .collect()
+        provider_dependency_specs("args.domain_set_tags", domain_set_tags)
+    }
+
+    fn get_quick_setup_dependency_specs(&self, param: Option<&str>) -> Vec<DependencySpec> {
+        let Ok(rules) = parse_quick_setup_rules(param.map(str::to_owned)) else {
+            return vec![];
+        };
+        let Ok((_, domain_set_tags)) = parse_domain_rules_and_set_tags(rules, "cname") else {
+            return vec![];
+        };
+        provider_dependency_specs("domain_set_tags", domain_set_tags)
     }
 
     fn create(
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
         build_cname_matcher(plugin_config.tag.clone(), rules, registry)

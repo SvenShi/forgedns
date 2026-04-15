@@ -8,6 +8,7 @@
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
 use crate::plugin::PluginRegistry;
+use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::proto::{DNSClass, Rcode, RecordType};
 use ahash::AHashSet;
@@ -203,6 +204,16 @@ pub(crate) fn split_rule_sources(
     }
 
     (inline_rules, set_tags, files)
+}
+
+pub(crate) fn provider_dependency_specs(
+    field_prefix: &str,
+    tags: Vec<String>,
+) -> Vec<DependencySpec> {
+    tags.into_iter()
+        .enumerate()
+        .map(|(idx, tag)| DependencySpec::provider(format!("{field_prefix}[{idx}]"), tag))
+        .collect()
 }
 
 pub(crate) fn load_rules_from_files(files: &[String], field: &str) -> DnsResult<Vec<String>> {

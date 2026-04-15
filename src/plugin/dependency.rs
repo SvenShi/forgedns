@@ -138,6 +138,7 @@ impl DependencySpec {
 ///
 /// The function validates missing nodes, self references, type mismatches, then
 /// performs topological sorting. All checks are startup-only and never on hot path.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn resolve_dependencies(
     configs: Vec<PluginConfig>,
     get_deps: &dyn Fn(&PluginConfig) -> Vec<DependencySpec>,

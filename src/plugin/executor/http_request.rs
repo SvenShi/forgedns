@@ -479,6 +479,7 @@ impl PluginFactory for HttpRequestFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let config = build_http_request_runtime_config(plugin_config)?;
         Ok(UninitializedPlugin::Executor(Box::new(
@@ -947,7 +948,7 @@ query_params:
         );
 
         let plugin = HttpRequestFactory
-            .create(&config, test_registry())
+            .create(&config, test_registry(), &Default::default())
             .expect("valid get config should build");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }
@@ -966,7 +967,7 @@ json:
         );
 
         let plugin = HttpRequestFactory
-            .create(&config, test_registry())
+            .create(&config, test_registry(), &Default::default())
             .expect("valid json config should build");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }
@@ -980,7 +981,7 @@ url: "https://example.com/hook"
 "#,
         );
 
-        let err = match HttpRequestFactory.create(&config, test_registry()) {
+        let err = match HttpRequestFactory.create(&config, test_registry(), &Default::default()) {
             Ok(_) => panic!("invalid method should fail"),
             Err(err) => err,
         };
@@ -997,7 +998,7 @@ timeout: "xyz"
 "#,
         );
 
-        let err = match HttpRequestFactory.create(&config, test_registry()) {
+        let err = match HttpRequestFactory.create(&config, test_registry(), &Default::default()) {
             Ok(_) => panic!("invalid timeout should fail"),
             Err(err) => err,
         };
@@ -1016,7 +1017,7 @@ json:
 "#,
         );
 
-        let err = match HttpRequestFactory.create(&config, test_registry()) {
+        let err = match HttpRequestFactory.create(&config, test_registry(), &Default::default()) {
             Ok(_) => panic!("conflicting body config should fail"),
             Err(err) => err,
         };
@@ -1033,7 +1034,7 @@ queue_size: 0
 "#,
         );
 
-        let err = match HttpRequestFactory.create(&config, test_registry()) {
+        let err = match HttpRequestFactory.create(&config, test_registry(), &Default::default()) {
             Ok(_) => panic!("zero queue size should fail"),
             Err(err) => err,
         };

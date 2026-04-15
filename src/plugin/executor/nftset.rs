@@ -222,6 +222,7 @@ impl PluginFactory for NftSetFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
         let (ipv4, ipv6) = resolve_sets(&cfg)?;

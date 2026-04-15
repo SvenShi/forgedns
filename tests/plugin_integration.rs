@@ -643,6 +643,77 @@ plugins:
     Ok(())
 }
 
+#[test]
+fn test_analyze_configuration_expands_sequence_quick_setup_dependency_edges() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: seq
+    type: sequence
+    args:
+      - matches:
+          - qname $zzz_set
+        exec: accept
+  - tag: zzz_set
+    type: domain_set
+    args:
+      exps:
+        - example.com
+"#;
+
+    let config = parse_config(yaml)?;
+    let report = plugin::analyze_configuration(&config)?;
+
+    assert_eq!(
+        report.init_order,
+        vec!["zzz_set".to_string(), "seq".to_string()]
+    );
+    assert!(report.edges.iter().any(|edge| {
+        edge.source_tag == "seq"
+            && edge.target_tag == "zzz_set"
+            && edge.field == "args[0].matches[0] -> quick_setup(qname).domain_set_tags[0]"
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_plugin_system_init_resolves_sequence_quick_setup_provider_dependency() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: seq
+    type: sequence
+    args:
+      - matches:
+          - qname $zzz_set
+        exec: accept
+      - exec: reject 2
+  - tag: zzz_set
+    type: domain_set
+    args:
+      exps:
+        - example.com
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+
+    let sequence = registry
+        .get_plugin("seq")
+        .expect("sequence plugin should exist")
+        .to_executor();
+    let mut context = make_context(registry.clone(), "example.com.");
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Stop));
+    assert!(context.response().is_none());
+
+    registry.destory().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_sequence_supports_single_match_string_dependency_and_execution() -> Result<()> {
     let yaml = r#"
@@ -733,6 +804,33 @@ plugins:
     assert!(msg.contains("plugin 'seq'"));
     assert!(msg.contains("args[0].matches[0]"));
     assert!(msg.contains("missing plugin 'missing_matcher'"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_plugin_system_init_reports_missing_quick_setup_dependency_with_field_context()
+-> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: seq
+    type: sequence
+    args:
+      - matches:
+          - qname $missing_set
+        exec: accept
+"#;
+
+    let config = parse_config(yaml)?;
+    let err = plugin::init(config, None)
+        .await
+        .expect_err("missing quick setup dependency should fail plugin init");
+    let msg = err.to_string();
+
+    assert!(msg.contains("plugin 'seq'"));
+    assert!(msg.contains("args[0].matches[0] -> quick_setup(qname).domain_set_tags[0]"));
+    assert!(msg.contains("missing plugin 'missing_set'"));
     Ok(())
 }
 

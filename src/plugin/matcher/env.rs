@@ -28,6 +28,7 @@ impl PluginFactory for EnvFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let args = parse_rules_from_value(plugin_config.args.clone())?;
         let (key, value) = parse_env_args(args)?;

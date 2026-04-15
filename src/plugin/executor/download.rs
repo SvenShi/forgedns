@@ -353,6 +353,7 @@ impl PluginFactory for DownloadFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let runtime = build_download_runtime_config(plugin_config)?;
 
@@ -754,7 +755,11 @@ mod tests {
     fn test_download_factory_create_rejects_invalid_config() {
         let factory = DownloadFactory;
         let cfg = plugin_config("download", "download", Some(Value::String("bad".into())));
-        assert!(factory.create(&cfg, test_registry()).is_err());
+        assert!(
+            factory
+                .create(&cfg, test_registry(), &Default::default())
+                .is_err()
+        );
     }
 
     #[test]

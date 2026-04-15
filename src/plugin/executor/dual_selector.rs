@@ -327,6 +327,7 @@ impl PluginFactory for DualSelectorFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let (cache_enabled, cache_ttl_ms) = parse_dual_selector_config(plugin_config.args.clone())?;
         Ok(UninitializedPlugin::Executor(Box::new(DualSelector {

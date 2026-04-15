@@ -313,6 +313,7 @@ impl PluginFactory for HttpServerFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let http_config = serde_yaml_ng::from_value::<HttpServerConfig>(
             plugin_config
@@ -455,7 +456,11 @@ mod tests {
     fn test_http_factory_requires_args() {
         let factory = HttpServerFactory {};
         let cfg = plugin_config("http", "http_server", None);
-        assert!(factory.create(&cfg, test_registry()).is_err());
+        assert!(
+            factory
+                .create(&cfg, test_registry(), &Default::default())
+                .is_err()
+        );
     }
 
     #[test]

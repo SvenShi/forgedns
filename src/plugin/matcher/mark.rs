@@ -29,6 +29,7 @@ impl PluginFactory for MarkFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let marks = parse_rules_from_value(plugin_config.args.clone())?;
         build_mark_matcher(plugin_config.tag.clone(), marks)

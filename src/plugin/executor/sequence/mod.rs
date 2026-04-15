@@ -10,7 +10,9 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainProgram};
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{
+    Plugin, PluginFactory, PluginRegistry, UninitializedPlugin, expand_quick_setup_dependency_specs,
+};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer};
@@ -202,11 +204,19 @@ impl PluginFactory for SequenceFactory {
         for (rule_idx, rule) in rules.into_iter().enumerate() {
             if let Some(matches) = rule.matches {
                 for (match_idx, matcher) in matches.into_iter().enumerate() {
-                    if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&matcher) {
-                        result.push(DependencySpec::matcher(
-                            format!("args[{}].matches[{}]", rule_idx, match_idx),
-                            tag,
-                        ));
+                    let field = format!("args[{}].matches[{}]", rule_idx, match_idx);
+                    match parse_sequence_ref(&matcher) {
+                        Ok(SequenceRef::PluginTag(tag)) => {
+                            result.push(DependencySpec::matcher(field, tag));
+                        }
+                        Ok(SequenceRef::QuickSetup { plugin_type, param }) => {
+                            result.extend(expand_quick_setup_dependency_specs(
+                                &field,
+                                &plugin_type,
+                                param.as_deref(),
+                            ));
+                        }
+                        Err(_) => {}
                     }
                 }
             }
@@ -214,8 +224,20 @@ impl PluginFactory for SequenceFactory {
                 let field = format!("args[{}].exec", rule_idx);
                 if let Some(tag) = parse_control_flow_dependency(&exec) {
                     result.push(DependencySpec::executor_type(field, tag, "sequence"));
-                } else if let Ok(SequenceRef::PluginTag(tag)) = parse_sequence_ref(&exec) {
-                    result.push(DependencySpec::executor(field, tag));
+                } else {
+                    match parse_sequence_ref(&exec) {
+                        Ok(SequenceRef::PluginTag(tag)) => {
+                            result.push(DependencySpec::executor(field, tag));
+                        }
+                        Ok(SequenceRef::QuickSetup { plugin_type, param }) => {
+                            result.extend(expand_quick_setup_dependency_specs(
+                                &field,
+                                &plugin_type,
+                                param.as_deref(),
+                            ));
+                        }
+                        Err(_) => {}
+                    }
                 }
             }
         }
@@ -226,6 +248,7 @@ impl PluginFactory for SequenceFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = serde_yaml_ng::from_value::<Vec<Rule>>(
             plugin_config

@@ -87,6 +87,7 @@ impl PluginFactory for GeoIpFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let start_ms = AppClock::elapsed_millis();
         let args = plugin_config

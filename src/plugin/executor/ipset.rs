@@ -174,6 +174,7 @@ impl PluginFactory for IpSetFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
         let mask4 = cfg.mask4.unwrap_or(24);

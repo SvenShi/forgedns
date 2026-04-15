@@ -600,6 +600,7 @@ impl PluginFactory for ForwardFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let forward_config = parse_forward_config(plugin_config)?;
         let short_circuit = forward_config.short_circuit;
@@ -791,7 +792,7 @@ mod tests {
     fn validate_rejects_empty_upstreams() {
         let factory = ForwardFactory;
         let cfg = make_plugin_config("upstreams: []");
-        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new())) {
+        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new()), &Default::default()) {
             Ok(_) => panic!("expected create to fail for empty upstreams"),
             Err(err) => err,
         };
@@ -807,7 +808,7 @@ upstreams:
   - addr: "udp://"
 "#,
         );
-        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new())) {
+        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new()), &Default::default()) {
             Ok(_) => panic!("expected create to fail for invalid upstream addr"),
             Err(err) => err,
         };

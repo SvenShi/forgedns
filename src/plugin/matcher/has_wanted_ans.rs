@@ -28,6 +28,7 @@ impl PluginFactory for HasWantedAnsFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         Ok(UninitializedPlugin::Matcher(Box::new(
             HasWantedAnsMatcher {

@@ -99,6 +99,7 @@ impl PluginFactory for BlackHoleFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let (ips, short_circuit) = parse_ip_tokens_from_value(plugin_config.args.clone())?;
         let (ipv4, ipv6) = split_ips(ips);

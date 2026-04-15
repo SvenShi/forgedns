@@ -36,6 +36,7 @@ impl PluginFactory for RcodeFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
         build_rcode_matcher(plugin_config.tag.clone(), rules)

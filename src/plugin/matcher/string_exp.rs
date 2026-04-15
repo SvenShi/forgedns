@@ -40,6 +40,7 @@ impl PluginFactory for StringExpFactory {
         &self,
         plugin_config: &PluginConfig,
         _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let expression = parse_expression_from_value(plugin_config.args.clone())?;
         let expression = parse_string_expression(&expression)?;

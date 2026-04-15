@@ -26,7 +26,7 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{
     Plugin, PluginFactory, PluginHolder, PluginRegistry, UninitializedPlugin,
-    registered_plugin_kind,
+    expand_quick_setup_dependency_specs, registered_plugin_kind,
 };
 use crate::proto::Message;
 use crate::register_plugin_factory;
@@ -340,8 +340,18 @@ impl PluginFactory for CronFactory {
         for (job_index, job) in config.jobs.into_iter().enumerate() {
             for (exec_index, raw) in job.executors.into_iter().enumerate() {
                 let field = format!("args.jobs[{}].executors[{}]", job_index, exec_index);
-                if let Ok(ExecutorRef::PluginTag(tag)) = parse_executor_ref(&raw) {
-                    deps.push(DependencySpec::executor(field, tag));
+                match parse_executor_ref(&raw) {
+                    Ok(ExecutorRef::PluginTag(tag)) => {
+                        deps.push(DependencySpec::executor(field, tag));
+                    }
+                    Ok(ExecutorRef::QuickSetup { plugin_type, param }) => {
+                        deps.extend(expand_quick_setup_dependency_specs(
+                            &field,
+                            &plugin_type,
+                            param.as_deref(),
+                        ));
+                    }
+                    Err(_) => {}
                 }
             }
         }
@@ -352,6 +362,7 @@ impl PluginFactory for CronFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let args = plugin_config
             .args
@@ -792,8 +803,10 @@ async fn run_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::dependency::DependencySpec;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{plugin_config, test_registry};
+    use crate::register_plugin_factory;
     use async_trait::async_trait;
     use serde_yaml_ng::Value;
     use std::sync::Mutex as StdMutex;
@@ -867,6 +880,52 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone)]
+    struct TestQuickSetupDependencyExecutorFactory;
+
+    register_plugin_factory!(
+        "test_cron_quick_dep_exec",
+        TestQuickSetupDependencyExecutorFactory {}
+    );
+
+    impl PluginFactory for TestQuickSetupDependencyExecutorFactory {
+        fn get_quick_setup_dependency_specs(&self, param: Option<&str>) -> Vec<DependencySpec> {
+            let Some(tag) = param.map(str::trim).filter(|tag| !tag.is_empty()) else {
+                return vec![];
+            };
+            vec![DependencySpec::provider(
+                "provider_tags[0]",
+                tag.to_string(),
+            )]
+        }
+
+        fn create(
+            &self,
+            plugin_config: &PluginConfig,
+            _registry: Arc<PluginRegistry>,
+            _context: &crate::plugin::PluginCreateContext,
+        ) -> Result<UninitializedPlugin> {
+            Ok(UninitializedPlugin::Executor(Box::new(StubExecutor::new(
+                &plugin_config.tag,
+                StubBehavior::Next,
+                Arc::new(StdMutex::new(Vec::new())),
+            ))))
+        }
+
+        fn quick_setup(
+            &self,
+            tag: &str,
+            _param: Option<String>,
+            _registry: Arc<PluginRegistry>,
+        ) -> Result<UninitializedPlugin> {
+            Ok(UninitializedPlugin::Executor(Box::new(StubExecutor::new(
+                tag,
+                StubBehavior::Next,
+                Arc::new(StdMutex::new(Vec::new())),
+            ))))
+        }
+    }
+
     #[test]
     fn test_parse_executor_ref_supports_tag_and_quick_setup() {
         assert_eq!(
@@ -883,6 +942,35 @@ mod tests {
                 plugin_type: "debug_print".to_string(),
                 param: Some("hello".to_string())
             }
+        );
+    }
+
+    #[test]
+    fn test_factory_dependency_specs_expand_quick_setup_dependencies() {
+        let cfg = plugin_config(
+            "cron",
+            "cron",
+            Some(
+                serde_yaml_ng::from_str(
+                    r#"
+jobs:
+  - name: job
+    schedule: "0 * * * *"
+    executors:
+      - test_cron_quick_dep_exec dep_provider
+"#,
+                )
+                .expect("cron args should parse"),
+            ),
+        );
+
+        let deps = CronFactory.get_dependency_specs(&cfg);
+        assert_eq!(
+            deps,
+            vec![DependencySpec::provider(
+                "args.jobs[0].executors[0] -> quick_setup(test_cron_quick_dep_exec).provider_tags[0]",
+                "dep_provider",
+            )]
         );
     }
 
@@ -1079,7 +1167,11 @@ mod tests {
     fn test_factory_create_rejects_invalid_args() {
         let factory = CronFactory;
         let cfg = plugin_config("cron", "cron", Some(Value::String("bad".into())));
-        assert!(factory.create(&cfg, test_registry()).is_err());
+        assert!(
+            factory
+                .create(&cfg, test_registry(), &Default::default())
+                .is_err()
+        );
     }
 
     #[test]

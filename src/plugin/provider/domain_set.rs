@@ -114,6 +114,7 @@ impl PluginFactory for DomainSetFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         // Provider init latency logging does not require high-precision syscall timing.
         let start_ms = AppClock::elapsed_millis();
