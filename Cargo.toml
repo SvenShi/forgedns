@@ -79,7 +79,6 @@ mikrotik-rs = "0.6.1"
 # Service management
 service-manager = "0.11.0"
 zoneparser = { package = "forgedns-zoneparser", version = "0.1.0", path = "crates/zoneparser" }
-tempfile = "3.23.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ripset = { package = "forgedns-ripset", version = "0.1.0", path = "crates/ripset" }
@@ -93,7 +92,6 @@ hotpath-alloc = ["hotpath/hotpath-alloc"]
 hickory-proto = "0.25.2"
 criterion = "0.8.2"
 tempfile = "3.23.0"
-hyper-util = { version = "0.1.20", features = ["server", "client", "client-legacy", "http1", "http2", "tokio"] }
 
 [[bench]]
 name = "message_codec"
