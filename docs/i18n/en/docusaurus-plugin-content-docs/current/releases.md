@@ -10,7 +10,25 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.3.1" badge="Patch Release" date="2026-04-14" defaultOpen>
+  <ReleaseCard version="v0.3.2" badge="Patch Release" date="2026-04-16" defaultOpen>
+      **Fixes**
+
+      - Adjusted UDP, TCP, DoT, and DoQ upstream pool initialization so ForgeDNS no longer pre-creates idle connections during startup, which reduces false EOF / reset warnings when upstreams close idle sockets on their own.
+      - Expected TCP upstream lifecycle events such as EOF, connection recycling, and invalid-connection eviction are now logged at `debug` instead of `warn`, so normal connection churn no longer looks like an operational fault.
+      - Downgraded DoH server-side TLS, HTTP/2, and HTTP/3 handshake aborts plus client-closed response-send failures to `debug`, which removes warning noise from browsers or proxies that disconnect early.
+
+      **Observability**
+
+      - Debug request/response logging now prints DNS `questions`, message IDs, EDNS data, and answers directly instead of only showing counters.
+      - `Record` now has a more readable `Debug` / `Display` representation, making response records easier to inspect in logs.
+
+      **Upgrade Notes**
+
+      - This release does not introduce any new configuration fields; existing `0.3.x` configs can be upgraded as-is.
+      - If you rely on warning-count based alerting, expect a noticeable drop in noise after `v0.3.2` because normal upstream disconnects and DoH client aborts are no longer treated as warnings.
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.3.1" badge="Patch Release" date="2026-04-14">
       **Highlights**
 
       - Fixed `sequence` builtin control-flow semantics so `accept` / `reject` now stop the current chain consistently, `return` explicitly resumes the caller, and nested `jump` / `goto` behavior is easier to reason about.

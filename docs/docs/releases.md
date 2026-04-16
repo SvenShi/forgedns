@@ -10,7 +10,25 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.3.1" badge="Patch Release" date="2026-04-14" defaultOpen>
+  <ReleaseCard version="v0.3.2" badge="Patch Release" date="2026-04-16" defaultOpen>
+      **Fixes**
+
+      - 调整 UDP、TCP、DoT、DoQ 上游连接池的初始化策略，不再在启动时预创建空闲连接，减少部分上游主动关闭空闲连接时产生的误报 EOF / reset 日志。
+      - TCP 上游连接复用流程现在把预期内的 EOF、连接回收和失效连接淘汰视为 `debug` 级事件，避免正常连接生命周期被误记为告警。
+      - DoH 服务端将浏览器或代理主动中断引发的 TLS、HTTP/2、HTTP/3 握手失败，以及客户端提前关闭响应流导致的发送失败，下调为 `debug` 日志，显著降低无效噪音。
+
+      **Observability**
+
+      - Debug 日志中的 DNS 请求与响应信息现在直接输出 `questions`、消息 ID、EDNS 和 answers 内容，排障时不再只有计数值。
+      - `Record` 新增更易读的 `Debug` / `Display` 输出格式，便于跟踪响应记录内容。
+
+      **Upgrade Notes**
+
+      - 这次发布不引入新的配置字段，现有 `0.3.x` 配置可直接升级。
+      - 如果你的监控依赖 warning 日志计数，升级到 `v0.3.2` 后，正常的上游断连和 DoH 客户端中断将不再放大告警噪音。
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.3.1" badge="Patch Release" date="2026-04-14">
       **Highlights**
 
       - 修正 `sequence` 的内建控制流语义：`accept` / `reject` 现在会稳定终止当前链路，`return` 会显式返回调用方，`jump` 与 `goto` 在嵌套 `sequence` 中的恢复行为也更一致。
