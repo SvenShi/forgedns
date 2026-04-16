@@ -92,7 +92,7 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
                         self.active_count.fetch_sub(1, Ordering::Relaxed);
                     }
                 } else {
-                    warn!("Dropping invalid connection");
+                    debug!("Dropping invalid connection");
                     invalid_vec.push(conn);
                     self.active_count.fetch_sub(1, Ordering::Relaxed);
                 }
