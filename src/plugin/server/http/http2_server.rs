@@ -134,7 +134,7 @@ pub async fn run_server(
                                                 .await;
                                             }
                                             Err(e) => {
-                                                warn!("TLS handshake failed for {}: {}", src, e);
+                                                debug!("TLS handshake failed for {}: {}", src, e);
                                             }
                                         }
                                     } else {
@@ -187,7 +187,7 @@ async fn handle_http_stream<S>(
     let mut h2 = match h2::server::handshake(stream).await {
         Ok(h2) => h2,
         Err(err) => {
-            warn!("HTTP/2 handshake error from {}: {}", src, err);
+            debug!("HTTP/2 handshake error from {}: {}", src, err);
             return;
         }
     };
@@ -267,13 +267,13 @@ async fn handle_http_stream<S>(
             let mut send_stream = match respond.send_response(h2_response, false) {
                 Ok(stream) => stream,
                 Err(e) => {
-                    warn!("Failed to send HTTP/2 response headers to {}: {}", src, e);
+                    debug!("Failed to send HTTP/2 response headers to {}: {}", src, e);
                     return;
                 }
             };
 
             if let Err(e) = send_stream.send_data(response_bytes, true) {
-                warn!("Failed to send HTTP/2 response body to {}: {}", src, e);
+                debug!("Failed to send HTTP/2 response body to {}: {}", src, e);
                 return;
             }
 

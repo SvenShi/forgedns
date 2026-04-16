@@ -135,7 +135,7 @@ async fn handle_h3_connection(
         match h3::server::Connection::new(h3_quinn::Connection::new(connection)).await {
             Ok(conn) => conn,
             Err(e) => {
-                warn!("HTTP/3 handshake error from {}: {}", src, e);
+                debug!("HTTP/3 handshake error from {}: {}", src, e);
                 return;
             }
         };
