@@ -48,7 +48,6 @@ impl HttpDispatcher {
         path: Arc<str>,
         handler: Box<dyn HttpHandler>,
     ) {
-        debug!("Registering route: {} {}", method, path);
         self.routes.insert((method, path), handler);
     }
 
