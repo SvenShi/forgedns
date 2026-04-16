@@ -674,7 +674,7 @@ impl UpstreamBuilder {
                     debug!("Creating UDP upstream for {}", connection_info.raw_addr);
                     let builder = UdpConnectionBuilder::new(&connection_info);
                     let main_pool = PipelinePool::new(
-                        1,
+                        0,
                         connection_info
                             .max_conns
                             .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
@@ -709,12 +709,12 @@ impl UpstreamBuilder {
                         connection_info.connection_type, connection_info.raw_addr
                     );
                     let builder = TcpConnectionBuilder::new(&connection_info);
-                    create_pipeline_or_reuse_pool(1, connection_info, Box::new(builder))
+                    create_pipeline_or_reuse_pool(0, connection_info, Box::new(builder))
                 }
                 ConnectionType::DoQ => {
                     debug!("Creating QUIC upstream for {}", connection_info.raw_addr);
                     let builder = QuicConnectionBuilder::new(&connection_info);
-                    create_pipeline_pool(1, connection_info, Box::new(builder))
+                    create_pipeline_pool(0, connection_info, Box::new(builder))
                 }
                 ConnectionType::DoH => {
                     debug!(
@@ -1022,7 +1022,6 @@ struct BootstrapUpstream<C: Connection> {
 impl<C: Connection> BootstrapUpstream<C> {
     /// Create a new domain upstream with the given connection info and optional bootstrap server
     fn new(connection_info: ConnectionInfo) -> Self {
-        // 创建一个空的连接池，将在第一次查询时初始�?
         let pool: Arc<dyn ConnectionPool<C>> =
             ReusePool::<C>::new(0, 1, 10, Box::new(DummyConnectionBuilder {}));
 

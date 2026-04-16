@@ -6,21 +6,42 @@
 //! Owned DNS resource records.
 
 use crate::proto::{DNSClass, Name, RData, RecordType};
+use std::fmt::{Debug, Display, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;
 
 /// Owned resource record.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Record {
     inner: Arc<RecordInner>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 struct RecordInner {
     name: Name,
     class: DNSClass,
     ttl: u32,
     data: Arc<RData>,
+}
+
+impl Debug for Record {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} {:?}",
+            self.inner.name, self.inner.class, self.inner.data
+        )
+    }
+}
+
+impl Display for Record {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} {:?}",
+            self.inner.name, self.inner.class, self.inner.data
+        )
+    }
 }
 
 impl Record {

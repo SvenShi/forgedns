@@ -288,7 +288,7 @@ impl TcpConnection {
                             }
                         }
                         Err(e) => {
-                            warn!(
+                            debug!(
                                 conn_id = self.id,
                                 error = ?e,
                                 "TCP read error or EOF, closing connection"

@@ -112,11 +112,12 @@ impl RequestHandle {
         // Log request details only when debug logging is enabled
         if event_enabled!(Level::DEBUG) {
             debug!(
-                "DNS request from {}, queries: {:?}, edns: {:?}, nameservers: {:?}",
+                "DNS request from {}, queries: {:?}, id: {}, edns: {:?}, nameservers: {:?}",
                 &src_addr,
-                context.request.question_count(),
-                context.request.edns().is_some(),
-                context.request.authorities().len()
+                context.request.questions(),
+                context.request.id(),
+                context.request.edns(),
+                context.request.authorities()
             );
         }
 
@@ -151,11 +152,13 @@ impl RequestHandle {
         // Log response details only when debug logging is enabled
         if event_enabled!(Level::DEBUG) {
             debug!(
-                "Sending response to {}, exit: {:?}, question_count: {}, id: {}",
+                "Sending response to {}, exit: {:?}, queries: {:?}, id: {}, edns: {:?}, answers: {:?}",
                 &src_addr,
                 exit,
-                context.request.question_count(),
-                context.request.id()
+                context.request.questions(),
+                response.id(),
+                response.edns(),
+                response.answers()
             );
         }
 
