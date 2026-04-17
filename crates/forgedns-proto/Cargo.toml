@@ -1,6 +1,6 @@
 [package]
 name = "forgedns-proto"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Sven Shi <isvenshi@gmail.com>"]
 description = "DNS message model and wire codec primitives used by ForgeDNS"
