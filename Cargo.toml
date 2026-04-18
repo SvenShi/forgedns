@@ -89,7 +89,6 @@ hotpath = ["hotpath/hotpath"]
 hotpath-alloc = ["hotpath/hotpath-alloc"]
 
 [dev-dependencies]
-hickory-proto = "0.25.2"
 criterion = "0.8.2"
 tempfile = "3.23.0"
 
