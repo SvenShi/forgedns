@@ -163,7 +163,7 @@ Downloads one or more `http/https` files into a local directory and overwrites t
 - `socks5` accepts `host:port` and `username:password@host:port`; bracket IPv6 addresses such as `"[::1]:1080"` are supported too.
 - `startup_if_missing` only fills missing files; it does not overwrite existing targets on every startup.
 - When used inside a normal `sequence`, the download time is paid directly by that request.
-- Overwriting a local file does not trigger config reload automatically. If the new file should take effect immediately, chain an explicit `reload` executor.
+- Overwriting a local file does not apply automatically. If you only need file-backed providers to pick up the new data, prefer chaining `reload_provider`; if `config.yaml`, dependency topology, or the plugin list changed too, use `reload`.
 
 ### Recommended Pairing
 
@@ -172,7 +172,7 @@ Downloads one or more `http/https` files into a local directory and overwrites t
   type: sequence
   args:
     - exec: "$rules_download"
-    - exec: "$reload_all"
+    - exec: "$reload_rules"
 
 - tag: rules_download
   type: download
@@ -181,13 +181,20 @@ Downloads one or more `http/https` files into a local directory and overwrites t
       - url: "https://example.com/geosite.dat"
         dir: "/etc/forgedns"
 
-- tag: reload_all
-  type: reload
+- tag: provider_geosite
+  type: geosite
+  args:
+    file: "/etc/forgedns/geosite.dat"
+
+- tag: reload_rules
+  type: reload_provider
+  args:
+    - "$provider_geosite"
 ```
 
 ### Subscription Refresh Example
 
-This example fits the common flow of “remote subscription -> scheduled download -> automatic reload”:
+This example fits the common flow of “remote subscription -> scheduled download -> targeted provider refresh”:
 
 ```yaml
 plugins:
@@ -202,12 +209,12 @@ plugins:
           executors:
             - "$subscription_refresh"
 
-  # 2. Chain download and full reload with a sequence
+  # 2. Chain download and targeted provider reload with a sequence
   - tag: subscription_refresh
     type: sequence
     args:
       - exec: "$subscription_download"
-      - exec: "$reload_all"
+      - exec: "$reload_rule_providers"
 
   # 3. Download remote subscription files
   - tag: subscription_download
@@ -223,9 +230,12 @@ plugins:
           dir: "/etc/forgedns/rules"
           filename: "geoip.dat"
 
-  # 4. Trigger a full reload after download completes
-  - tag: reload_all
-    type: reload
+  # 4. Reload only the affected providers after download completes
+  - tag: reload_rule_providers
+    type: reload_provider
+    args:
+      - "$provider_geosite"
+      - "$provider_geoip"
 
   # 5. These providers re-read the local files after reload
   - tag: provider_geosite
@@ -242,10 +252,66 @@ plugins:
 Notes:
 
 - `download` writes the subscription content to local files.
-- `reload` makes providers, matchers, and executors that depend on those files reinitialize.
+- `reload_provider` refreshes only the affected provider snapshots without rebuilding unrelated plugins.
 - `startup_if_missing: true` is useful for first-time deployment when files may not exist yet.
 - If the subscription source requires a proxy, set a SOCKS5 proxy on `subscription_download.args.socks5`.
 - If you do not want startup to overwrite existing files, keep the default behavior and only bootstrap missing files.
+- If the update also changes `config.yaml`, provider topology, or the plugin list, use a full `reload` instead.
+
+### Full Reload Still Fits Config Changes
+
+```yaml
+- tag: config_refresh
+  type: sequence
+  args:
+    - exec: "$subscription_download"
+    - exec: "$reload_all"
+
+- tag: reload_all
+  type: reload
+```
+
+---
+
+## `reload_provider`
+
+### Purpose
+
+Reloads one or more providers in place by tag, rebuilding their internal snapshots with the same startup configuration without triggering a full application reload.
+
+### Example Configuration
+
+```yaml
+- tag: reload_rule_providers
+  type: reload_provider
+  args:
+    - "$geosite_cn"
+    - "$geoip_cn"
+```
+
+### Quick Setup
+
+```yaml
+- exec: "reload_provider $geosite_cn"
+```
+
+### Behavior
+
+- Providers are reloaded sequentially in the order declared in `args`.
+- The semantics are the same as calling `POST /plugins/<provider_tag>/reload` for each referenced provider.
+- Once every provider reload succeeds, the executor returns `Next`.
+- Only provider-local data is refreshed; tags, dependencies, and other plugin configuration are unchanged.
+
+### Typical Uses
+
+- Refreshing only the affected `domain_set`, `ip_set`, `geosite`, `geoip`, or `adguard_rule` providers after `download`.
+- Reducing the blast radius and cost of a full application reload in background maintenance flows.
+
+### Notes
+
+- `args` only accepts provider references such as `"$geoip_cn"`; inline rules and file references are rejected.
+- If the update changes `config.yaml`, provider topology, the plugin list, or other non-provider structures, you still need `reload`.
+- Running this on a live request path may trigger file reads and recompilation, so it is usually a better fit for background `cron` or maintenance `sequence` flows.
 
 ---
 

@@ -17,7 +17,7 @@ The project is under active development.
 - 🔐 Server-side and upstream support for UDP, TCP, DoT, DoQ, and DoH
 - 🛟 Built-in cache, fallback, local answers, query/response rewriting, ECS, and dual-stack helpers
 - 🛰️ System-facing integrations including `ipset`, `nftset`, and MikroTik route sync
-- 📈 Health checks, hot reload, config validation, and Prometheus metrics support
+- 📈 Health checks, full and provider-scoped hot reload, config validation, and Prometheus metrics support
 
 ## Core Capabilities
 
@@ -25,7 +25,7 @@ The project is under active development.
 | --- | --- |
 | Protocols | UDP, TCP, DoT, DoQ, DoH |
 | Policy | `sequence`, `matcher`, `executor`, `provider` |
-| Executors | `forward`, `cache`, `fallback`, `hosts`, `arbitrary`, `redirect`, `ecs_handler`, `ttl`, `download`, `reload`, `script`, `http_request` |
+| Executors | `forward`, `cache`, `fallback`, `hosts`, `arbitrary`, `redirect`, `ecs_handler`, `ttl`, `download`, `reload`, `reload_provider`, `script`, `http_request` |
 | Matchers | `qname`, `question`, `qtype`, `qclass`, `client_ip`, `resp_ip`, `rcode`, `rate_limiter`, and more |
 | Data Sets | `domain_set`, `ip_set`, `geoip`, `geosite`, `adguard_rule` |
 | Integrations | `ipset`, `nftset`, `ros_address_list`, `reverse_lookup` |

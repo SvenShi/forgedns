@@ -258,6 +258,31 @@ API 路由分成三类：
 
 清空缓存。
 
+### provider
+
+#### `POST /plugins/<provider_tag>/reload`
+
+作用：
+
+* 使用 provider 启动时的同一份配置，定向刷新该 provider 的内部数据快照。
+* 不会重建其它插件，也不会修改 provider tag、依赖关系或配置拓扑。
+
+返回：
+
+* `200 OK`
+  * provider 已成功 reload。
+* `400 Bad Request`
+  * provider 不存在、不是运行中的 provider，或 reload 过程中返回错误。
+
+适用场景：
+
+* 规则文件下载完成后，只刷新受影响的 `domain_set`、`ip_set`、`geosite`、`geoip`、`adguard_rule` provider。
+* 需要避免应用级全量 `POST /reload` 对其它插件造成重建影响。
+
+注意：
+
+* 如果变更涉及 `config.yaml`、provider 依赖拓扑、插件列表或其它非 provider 结构，仍然需要使用 `POST /reload`。
+
 #### `GET /plugins/<cache_tag>/dump`
 
 导出缓存 dump。

@@ -60,6 +60,7 @@ pub mod nftset;
 pub mod query_summary;
 pub mod redirect;
 pub mod reload;
+pub mod reload_provider;
 pub mod reverse_lookup;
 pub mod ros_address_list;
 pub mod script;

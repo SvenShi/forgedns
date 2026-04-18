@@ -258,6 +258,31 @@ Good fit:
 
 Clears the cache.
 
+### provider
+
+#### `POST /plugins/<provider_tag>/reload`
+
+Purpose:
+
+* Reloads that provider's internal snapshot with the same configuration it used at startup.
+* Does not rebuild unrelated plugins and does not change provider tags, dependency topology, or config structure.
+
+Responses:
+
+* `200 OK`
+  * The provider reload succeeded.
+* `400 Bad Request`
+  * The provider does not exist, is not a live provider, or returned an error while reloading.
+
+Good fit:
+
+* Refreshing only the affected `domain_set`, `ip_set`, `geosite`, `geoip`, or `adguard_rule` provider after downloading new rule files.
+* Avoiding the blast radius of an application-wide `POST /reload`.
+
+Notes:
+
+* If the change also updates `config.yaml`, provider topology, the plugin list, or other non-provider structures, you still need `POST /reload`.
+
 #### `GET /plugins/<cache_tag>/dump`
 
 Exports a cache dump.

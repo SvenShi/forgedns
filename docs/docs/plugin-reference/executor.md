@@ -162,7 +162,7 @@ sidebar_position: 3
 - `socks5` 支持 `host:port` 和 `username:password@host:port`，IPv6 需写成 `"[::1]:1080"`。
 - `startup_if_missing` 只会补齐缺失文件，不会在每次启动时强制覆盖已有文件。
 - 放进普通 `sequence` 时会直接占用该次请求的执行时间。
-- 覆盖本地文件后不会自动触发配置 reload；如需让新文件立即生效，请显式串联一个 `reload` executor。
+- 覆盖本地文件后不会自动触发生效；如果只是让文件型 provider 立即读取新内容，优先串联 `reload_provider`；如果连 `config.yaml`、依赖拓扑或插件列表也一起变化，再使用 `reload`。
 
 ### 推荐搭配
 
@@ -171,7 +171,7 @@ sidebar_position: 3
   type: sequence
   args:
     - exec: "$rules_download"
-    - exec: "$reload_all"
+    - exec: "$reload_rules"
 
 - tag: rules_download
   type: download
@@ -180,13 +180,20 @@ sidebar_position: 3
       - url: "https://example.com/geosite.dat"
         dir: "/etc/forgedns"
 
-- tag: reload_all
-  type: reload
+- tag: provider_geosite
+  type: geosite
+  args:
+    file: "/etc/forgedns/geosite.dat"
+
+- tag: reload_rules
+  type: reload_provider
+  args:
+    - "$provider_geosite"
 ```
 
 ### 订阅更新示例
 
-下面这个例子适合“远程规则订阅 -> 定时拉取 -> 自动 reload 生效”的场景：
+下面这个例子适合“远程规则订阅 -> 定时拉取 -> 定向刷新 provider”的场景：
 
 ```yaml
 plugins:
@@ -201,12 +208,12 @@ plugins:
           executors:
             - "$subscription_refresh"
 
-  # 2. 用 sequence 串联下载和全量 reload
+  # 2. 用 sequence 串联下载和 provider 定向 reload
   - tag: subscription_refresh
     type: sequence
     args:
       - exec: "$subscription_download"
-      - exec: "$reload_all"
+      - exec: "$reload_rule_providers"
 
   # 3. 拉取远程订阅文件
   - tag: subscription_download
@@ -222,9 +229,12 @@ plugins:
           dir: "/etc/forgedns/rules"
           filename: "geoip.dat"
 
-  # 4. 下载完成后触发全量 reload
-  - tag: reload_all
-    type: reload
+  # 4. 下载完成后只刷新相关 provider
+  - tag: reload_rule_providers
+    type: reload_provider
+    args:
+      - "$provider_geosite"
+      - "$provider_geoip"
 
   # 5. 这些 provider 会在 reload 后重新读取本地文件
   - tag: provider_geosite
@@ -241,10 +251,66 @@ plugins:
 说明：
 
 - `download` 负责把订阅内容落到本地。
-- `reload` 负责让依赖这些文件的 provider / matcher / executor 重新初始化。
+- `reload_provider` 负责只刷新相关 provider 的内部快照，不会重建其它插件。
 - `startup_if_missing: true` 适合首次部署时自动补齐缺失文件。
 - 如果订阅源需要代理，可直接在 `subscription_download.args.socks5` 中配置 SOCKS5 代理。
 - 如果你不希望定时任务在启动后立刻覆盖已有文件，可以保留默认行为，仅在文件缺失时做启动补齐。
+- 如果这次更新还改动了 `config.yaml`、provider 依赖拓扑或插件列表，请改用全量 `reload`。
+
+### 配置变更场景仍使用全量 reload
+
+```yaml
+- tag: config_refresh
+  type: sequence
+  args:
+    - exec: "$subscription_download"
+    - exec: "$reload_all"
+
+- tag: reload_all
+  type: reload
+```
+
+---
+
+## `reload_provider`
+
+### 作用
+
+按 tag 定向刷新一个或多个 provider，使用它们启动时的同一份配置重建内部快照，而不会触发应用级全量重载。
+
+### 配置示例
+
+```yaml
+- tag: reload_rule_providers
+  type: reload_provider
+  args:
+    - "$geosite_cn"
+    - "$geoip_cn"
+```
+
+### Quick Setup
+
+```yaml
+- exec: "reload_provider $geosite_cn"
+```
+
+### 行为说明
+
+- 按 `args` 中声明顺序逐个执行 targeted provider reload。
+- 语义等同于分别调用这些 provider 的管理 API `POST /plugins/<provider_tag>/reload`。
+- 全部 provider reload 成功后，当前 executor 返回 `Next`。
+- 只刷新 provider 内部数据，不修改 tag、依赖关系或其它插件配置。
+
+### 典型用途
+
+- 在 `download` 后只刷新受影响的 `domain_set`、`ip_set`、`geosite`、`geoip`、`adguard_rule` provider。
+- 在后台维护链路里降低全量 `reload` 的开销和影响面。
+
+### 注意事项
+
+- `args` 只接受 provider 引用，例如 `"$geoip_cn"`；不接受内联规则或文件引用。
+- 如果更新涉及 `config.yaml`、provider 依赖拓扑、插件列表或其它非 provider 数据结构变化，仍然需要使用 `reload`。
+- 放进实时请求路径时，provider reload 可能触发文件读取和重新编译，通常更适合后台 `cron` / `sequence` 任务。
 
 ---
 

@@ -1452,7 +1452,7 @@ plugins:
 }
 
 #[tokio::test]
-async fn test_domain_set_provider_flattens_referenced_sets() -> Result<()> {
+async fn test_domain_set_provider_references_composed_providers() -> Result<()> {
     let yaml = r#"
 log:
   level: info
@@ -1491,6 +1491,63 @@ plugins:
 
     let mut missing_ctx = make_context(registry.clone(), "missing.example.");
     assert!(!matcher.is_match(&mut missing_ctx));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_domain_set_can_compose_adguard_rule_provider() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: ad_rules
+    type: adguard_rule
+    args:
+      rules:
+        - "||ads.example^"
+        - "@@||safe.ads.example^"
+        - "||ipv6-only.example^$dnstype=AAAA"
+  - tag: combined_domain
+    type: domain_set
+    args:
+      sets:
+        - ad_rules
+  - tag: qname_match
+    type: qname
+    args:
+      - "$combined_domain"
+  - tag: question_match
+    type: question
+    args:
+      - "$combined_domain"
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config, None).await?;
+
+    let qname_matcher = registry
+        .get_plugin("qname_match")
+        .expect("qname matcher should exist")
+        .to_matcher();
+    let question_matcher = registry
+        .get_plugin("question_match")
+        .expect("question matcher should exist")
+        .to_matcher();
+
+    let mut blocked_ctx = make_context(registry.clone(), "cdn.ads.example.");
+    assert!(qname_matcher.is_match(&mut blocked_ctx));
+
+    let mut exception_ctx = make_context(registry.clone(), "safe.ads.example.");
+    assert!(!qname_matcher.is_match(&mut exception_ctx));
+
+    let mut a_ctx = make_context_with_qtype(registry.clone(), "ipv6-only.example.", RecordType::A);
+    assert!(!question_matcher.is_match(&mut a_ctx));
+
+    let mut aaaa_ctx =
+        make_context_with_qtype(registry.clone(), "ipv6-only.example.", RecordType::AAAA);
+    assert!(question_matcher.is_match(&mut aaaa_ctx));
 
     registry.destory().await;
     Ok(())
@@ -1551,7 +1608,7 @@ plugins:
 }
 
 #[tokio::test]
-async fn test_ip_set_provider_flattens_referenced_sets() -> Result<()> {
+async fn test_ip_set_provider_references_composed_providers() -> Result<()> {
     let yaml = r#"
 log:
   level: info
@@ -1996,6 +2053,192 @@ plugins:
 
     let mut inline_domain_ctx = make_context(registry.clone(), "custom.example.");
     assert!(domain_matcher.is_match(&mut inline_domain_ctx));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_reload_provider_registry_refreshes_file_backed_domain_provider_without_full_reload()
+-> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let shared_file = temp_dir.path().join("shared-domain.txt");
+    std::fs::write(&shared_file, "old.example\n")?;
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: shared_domain
+    type: domain_set
+    args:
+      files:
+        - "{}"
+  - tag: combined_domain
+    type: domain_set
+    args:
+      exps:
+        - "full:static.example"
+      sets:
+        - "shared_domain"
+  - tag: match_qname
+    type: qname
+    args:
+      - "$combined_domain"
+"#,
+        yaml_path(&shared_file)
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let matcher = registry
+        .get_plugin("match_qname")
+        .expect("qname matcher should exist")
+        .to_matcher();
+
+    let mut old_ctx = make_context(registry.clone(), "old.example.");
+    assert!(matcher.is_match(&mut old_ctx));
+    let mut static_ctx = make_context(registry.clone(), "static.example.");
+    assert!(matcher.is_match(&mut static_ctx));
+    let mut new_ctx = make_context(registry.clone(), "new.example.");
+    assert!(!matcher.is_match(&mut new_ctx));
+
+    std::fs::write(&shared_file, "new.example\n")?;
+    registry.reload_provider("shared_domain").await?;
+
+    let mut old_ctx = make_context(registry.clone(), "old.example.");
+    assert!(!matcher.is_match(&mut old_ctx));
+    let mut static_ctx = make_context(registry.clone(), "static.example.");
+    assert!(matcher.is_match(&mut static_ctx));
+    let mut new_ctx = make_context(registry.clone(), "new.example.");
+    assert!(matcher.is_match(&mut new_ctx));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_reload_provider_registry_refreshes_file_backed_ip_provider_without_full_reload()
+-> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let shared_file = temp_dir.path().join("shared-ip.txt");
+    std::fs::write(&shared_file, "203.0.113.7\n")?;
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: shared_ip
+    type: ip_set
+    args:
+      files:
+        - "{}"
+  - tag: combined_ip
+    type: ip_set
+    args:
+      ips:
+        - "198.51.100.0/24"
+      sets:
+        - "shared_ip"
+  - tag: match_client
+    type: client_ip
+    args:
+      - "$combined_ip"
+"#,
+        yaml_path(&shared_file)
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let matcher = registry
+        .get_plugin("match_client")
+        .expect("client matcher should exist")
+        .to_matcher();
+
+    let mut old_ctx = make_context(registry.clone(), "example.com.");
+    old_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 7), 5300)));
+    assert!(matcher.is_match(&mut old_ctx));
+    let mut static_ctx = make_context(registry.clone(), "example.com.");
+    static_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(198, 51, 100, 7), 5300)));
+    assert!(matcher.is_match(&mut static_ctx));
+    let mut new_ctx = make_context(registry.clone(), "example.com.");
+    new_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 8), 5300)));
+    assert!(!matcher.is_match(&mut new_ctx));
+
+    std::fs::write(&shared_file, "203.0.113.8\n")?;
+    registry.reload_provider("shared_ip").await?;
+
+    let mut old_ctx = make_context(registry.clone(), "example.com.");
+    old_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 7), 5300)));
+    assert!(!matcher.is_match(&mut old_ctx));
+    let mut static_ctx = make_context(registry.clone(), "example.com.");
+    static_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(198, 51, 100, 7), 5300)));
+    assert!(matcher.is_match(&mut static_ctx));
+    let mut new_ctx = make_context(registry.clone(), "example.com.");
+    new_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 8), 5300)));
+    assert!(matcher.is_match(&mut new_ctx));
+
+    registry.destory().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_reload_provider_executor_refreshes_domain_provider() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let shared_file = temp_dir.path().join("reload-domain.txt");
+    std::fs::write(&shared_file, "old.example\n")?;
+
+    let yaml = format!(
+        r#"
+log:
+  level: info
+plugins:
+  - tag: shared_domain
+    type: domain_set
+    args:
+      files:
+        - "{}"
+  - tag: refresh_domain
+    type: reload_provider
+    args:
+      - "$shared_domain"
+  - tag: match_qname
+    type: qname
+    args:
+      - "$shared_domain"
+"#,
+        yaml_path(&shared_file)
+    );
+
+    let config = parse_config(&yaml)?;
+    let registry = plugin::init(config, None).await?;
+    let matcher = registry
+        .get_plugin("match_qname")
+        .expect("qname matcher should exist")
+        .to_matcher();
+    let executor = registry
+        .get_plugin("refresh_domain")
+        .expect("reload_provider executor should exist")
+        .to_executor();
+
+    let mut old_ctx = make_context(registry.clone(), "old.example.");
+    assert!(matcher.is_match(&mut old_ctx));
+    let mut new_ctx = make_context(registry.clone(), "new.example.");
+    assert!(!matcher.is_match(&mut new_ctx));
+
+    std::fs::write(&shared_file, "new.example\n")?;
+    let mut trigger_ctx = make_context(registry.clone(), "trigger.example.");
+    assert!(matches!(
+        executor.execute(&mut trigger_ctx).await?,
+        ExecStep::Next
+    ));
+
+    let mut old_ctx = make_context(registry.clone(), "old.example.");
+    assert!(!matcher.is_match(&mut old_ctx));
+    let mut new_ctx = make_context(registry.clone(), "new.example.");
+    assert!(matcher.is_match(&mut new_ctx));
 
     registry.destory().await;
     Ok(())

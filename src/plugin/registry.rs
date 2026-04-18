@@ -15,7 +15,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::dependency::DependencyKind;
 use crate::plugin::executor::Executor;
 use crate::plugin::matcher::Matcher;
-use crate::plugin::provider::Provider;
+use crate::plugin::provider::{Provider, register_reload_api_route};
 use crate::plugin::{PluginCreateContext, PluginDependent, PluginFactory, PluginInfo, PluginType};
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
@@ -250,6 +250,7 @@ impl PluginRegistry {
             let plugin_info = self
                 .create_plugin_info_and_init(plugin_config, factory.as_ref(), &create_context)
                 .await?;
+            let plugin_type = plugin_info.plugin_type;
 
             // DashMap allows insertion even with Arc<Self>
             if self
@@ -261,6 +262,13 @@ impl PluginRegistry {
                     "Duplicate runtime plugin tag '{}'",
                     plugin_config.tag
                 )));
+            }
+            if plugin_type == PluginType::Provider {
+                register_reload_api_route(
+                    self.api_register.as_ref(),
+                    self.clone(),
+                    &plugin_config.tag,
+                )?;
             }
             if let Ok(mut order) = self.init_order.lock() {
                 order.push(plugin_config.tag.clone());
@@ -328,6 +336,19 @@ impl PluginRegistry {
                 DnsError::plugin("application reload command channel is closed")
             }
         })
+    }
+
+    pub async fn reload_provider(&self, tag: &str) -> Result<()> {
+        let plugin = self
+            .get_plugin(tag)
+            .ok_or_else(|| DnsError::plugin(format!("provider '{}' is not loaded", tag)))?;
+        if plugin.plugin_type != PluginType::Provider {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' is not a provider (type '{}')",
+                tag, plugin.plugin_name
+            )));
+        }
+        plugin.to_provider().reload().await
     }
 
     fn plugin_kind_name(plugin_type: PluginType) -> &'static str {
@@ -667,6 +688,7 @@ mod tests {
     use std::collections::HashMap as StdHashMap;
     use std::io::{self, Write};
     use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tracing_subscriber::fmt::MakeWriter;
 
     #[test]
@@ -713,8 +735,8 @@ mod tests {
             false
         }
 
-        fn domain_rules(&self) -> Option<&[String]> {
-            Some(&self.rules)
+        fn supports_domain_matching(&self) -> bool {
+            !self.rules.is_empty()
         }
     }
 
@@ -1079,6 +1101,156 @@ mod tests {
         assert!(output.contains("capture_provider"));
         assert!(output.contains("no live dependents"));
         assert!(output.contains("skipped provider initialization"));
+
+        registry.destory().await;
+    }
+
+    #[derive(Debug)]
+    struct ReloadableProvider {
+        tag: String,
+        reload_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Plugin for ReloadableProvider {
+        fn tag(&self) -> &str {
+            &self.tag
+        }
+
+        async fn init(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn destroy(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Provider for ReloadableProvider {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn contains_name(&self, _name: &Name) -> bool {
+            false
+        }
+
+        async fn reload(&self) -> Result<()> {
+            self.reload_count.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn supports_domain_matching(&self) -> bool {
+            true
+        }
+    }
+
+    #[derive(Debug)]
+    struct ReloadableProviderFactory {
+        reload_count: Arc<AtomicUsize>,
+    }
+
+    impl PluginFactory for ReloadableProviderFactory {
+        fn create(
+            &self,
+            plugin_config: &PluginConfig,
+            _registry: Arc<PluginRegistry>,
+            _context: &PluginCreateContext,
+        ) -> Result<UninitializedPlugin> {
+            Ok(UninitializedPlugin::Provider(Box::new(
+                ReloadableProvider {
+                    tag: plugin_config.tag.clone(),
+                    reload_count: self.reload_count.clone(),
+                },
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reload_provider_calls_runtime_provider_reload() {
+        let reload_count = Arc::new(AtomicUsize::new(0));
+        let mut registry = PluginRegistry::new();
+        registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
+        registry.register_factory(
+            "reloadable_provider",
+            DependencyKind::Provider,
+            Box::new(ReloadableProviderFactory {
+                reload_count: reload_count.clone(),
+            }),
+        );
+        let registry = Arc::new(registry);
+
+        let configs = vec![
+            PluginConfig {
+                tag: "reloadable".to_string(),
+                plugin_type: "reloadable_provider".to_string(),
+                args: None,
+            },
+            PluginConfig {
+                tag: "match_qname".to_string(),
+                plugin_type: "qname".to_string(),
+                args: Some(serde_yaml_ng::from_str("- \"$reloadable\"").unwrap()),
+            },
+        ];
+
+        registry
+            .clone()
+            .init_plugins(configs)
+            .await
+            .expect("plugin init should succeed");
+
+        registry
+            .reload_provider("reloadable")
+            .await
+            .expect("provider reload should succeed");
+        assert_eq!(reload_count.load(Ordering::Relaxed), 1);
+
+        registry.destory().await;
+    }
+
+    #[tokio::test]
+    async fn test_reload_provider_rejects_non_provider_and_missing_tags() {
+        let reload_count = Arc::new(AtomicUsize::new(0));
+        let mut registry = PluginRegistry::new();
+        registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
+        registry.register_factory(
+            "reloadable_provider",
+            DependencyKind::Provider,
+            Box::new(ReloadableProviderFactory { reload_count }),
+        );
+        let registry = Arc::new(registry);
+
+        let configs = vec![
+            PluginConfig {
+                tag: "reloadable".to_string(),
+                plugin_type: "reloadable_provider".to_string(),
+                args: None,
+            },
+            PluginConfig {
+                tag: "match_qname".to_string(),
+                plugin_type: "qname".to_string(),
+                args: Some(serde_yaml_ng::from_str("- \"$reloadable\"").unwrap()),
+            },
+        ];
+
+        registry
+            .clone()
+            .init_plugins(configs)
+            .await
+            .expect("plugin init should succeed");
+
+        let err = registry
+            .reload_provider("match_qname")
+            .await
+            .expect_err("matcher tag should be rejected");
+        assert!(err.to_string().contains("not a provider"));
+
+        let err = registry
+            .reload_provider("missing")
+            .await
+            .expect_err("missing tag should be rejected");
+        assert!(err.to_string().contains("is not loaded"));
 
         registry.destory().await;
     }

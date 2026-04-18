@@ -22,7 +22,7 @@ mod model;
 mod parser;
 
 use self::compiler::build_rule_buckets;
-use self::model::CompiledRuleSet;
+use self::model::{AdGuardRuleConfig, CompiledRuleSet};
 use self::parser::parse_config;
 use crate::config::types::PluginConfig;
 use crate::core::error::Result as DnsResult;
@@ -30,6 +30,7 @@ use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use std::any::Any;
 use std::fmt::Debug;
@@ -37,12 +38,73 @@ use std::sync::Arc;
 use tracing::info;
 
 #[derive(Debug)]
-pub struct AdGuardRule {
-    tag: String,
+struct AdGuardRuleSnapshot {
     important_exceptions: CompiledRuleSet,
     important_blocks: CompiledRuleSet,
     exceptions: CompiledRuleSet,
     blocks: CompiledRuleSet,
+}
+
+#[derive(Debug)]
+pub struct AdGuardRule {
+    tag: String,
+    cfg: AdGuardRuleConfig,
+    snapshot: ArcSwap<AdGuardRuleSnapshot>,
+}
+
+impl AdGuardRule {
+    fn contains_name_only(&self, qname: &Name) -> bool {
+        let snapshot = self.snapshot.load();
+        if snapshot.important_exceptions.is_match_name_only(qname) {
+            return false;
+        }
+        if snapshot.important_blocks.is_match_name_only(qname) {
+            return true;
+        }
+        if snapshot.exceptions.is_match_name_only(qname) {
+            return false;
+        }
+        snapshot.blocks.is_match_name_only(qname)
+    }
+
+    fn contains_question_rule(&self, question: &Question) -> bool {
+        let snapshot = self.snapshot.load();
+        let qname = question.name();
+        let qtype = question.qtype();
+
+        if snapshot.important_exceptions.is_match(qname, qtype) {
+            return false;
+        }
+        if snapshot.important_blocks.is_match(qname, qtype) {
+            return true;
+        }
+        if snapshot.exceptions.is_match(qname, qtype) {
+            return false;
+        }
+        snapshot.blocks.is_match(qname, qtype)
+    }
+
+    fn build_snapshot(&self) -> DnsResult<AdGuardRuleSnapshot> {
+        let (important_exceptions, important_blocks, exceptions, blocks, stats) =
+            build_rule_buckets(self.tag.as_str(), &self.cfg)?;
+
+        info!(
+            tag = %self.tag,
+            total_rules = stats.total_rules,
+            supported_rules = stats.supported_rules,
+            skipped_rules = stats.skipped_rules,
+            exception_rules = stats.exception_rules,
+            important_rules = stats.important_rules,
+            "adguard_rule snapshot built"
+        );
+
+        Ok(AdGuardRuleSnapshot {
+            important_exceptions,
+            important_blocks,
+            exceptions,
+            blocks,
+        })
+    }
 }
 
 #[async_trait]
@@ -52,42 +114,11 @@ impl Plugin for AdGuardRule {
     }
 
     async fn init(&mut self) -> DnsResult<()> {
-        Ok(())
+        self.reload().await
     }
 
     async fn destroy(&self) -> DnsResult<()> {
         Ok(())
-    }
-}
-
-impl AdGuardRule {
-    fn contains_name_only(&self, qname: &Name) -> bool {
-        if self.important_exceptions.is_match_name_only(qname) {
-            return false;
-        }
-        if self.important_blocks.is_match_name_only(qname) {
-            return true;
-        }
-        if self.exceptions.is_match_name_only(qname) {
-            return false;
-        }
-        self.blocks.is_match_name_only(qname)
-    }
-
-    fn contains_question_rule(&self, question: &Question) -> bool {
-        let qname = question.name();
-        let qtype = question.qtype();
-
-        if self.important_exceptions.is_match(qname, qtype) {
-            return false;
-        }
-        if self.important_blocks.is_match(qname, qtype) {
-            return true;
-        }
-        if self.exceptions.is_match(qname, qtype) {
-            return false;
-        }
-        self.blocks.is_match(qname, qtype)
     }
 }
 
@@ -103,10 +134,9 @@ impl Provider for AdGuardRule {
     }
 
     fn supports_domain_matching(&self) -> bool {
-        // This provider can participate in name-based matchers through
-        // `contains_name`, but it cannot expose a flat reusable rule list
-        // because exception precedence and request-scoped modifiers are
-        // evaluated dynamically.
+        // This provider participates through runtime `contains_name` and
+        // `contains_question` evaluation. That keeps exception precedence and
+        // request-scoped modifiers intact when another provider composes it.
         true
     }
 
@@ -116,6 +146,12 @@ impl Provider for AdGuardRule {
 
     fn contains_question(&self, question: &Question) -> bool {
         self.contains_question_rule(question)
+    }
+
+    async fn reload(&self) -> DnsResult<()> {
+        let snapshot = self.build_snapshot()?;
+        self.snapshot.store(Arc::new(snapshot));
+        Ok(())
     }
 }
 
@@ -127,25 +163,16 @@ impl PluginFactory for AdGuardRuleFactory {
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
-        let (important_exceptions, important_blocks, exceptions, blocks, stats) =
-            build_rule_buckets(plugin_config.tag.as_str(), &cfg)?;
-
-        info!(
-            tag = %plugin_config.tag,
-            total_rules = stats.total_rules,
-            supported_rules = stats.supported_rules,
-            skipped_rules = stats.skipped_rules,
-            exception_rules = stats.exception_rules,
-            important_rules = stats.important_rules,
-            "adguard_rule initialized"
-        );
 
         Ok(UninitializedPlugin::Provider(Box::new(AdGuardRule {
             tag: plugin_config.tag.clone(),
-            important_exceptions,
-            important_blocks,
-            exceptions,
-            blocks,
+            cfg,
+            snapshot: ArcSwap::from_pointee(AdGuardRuleSnapshot {
+                important_exceptions: CompiledRuleSet::default(),
+                important_blocks: CompiledRuleSet::default(),
+                exceptions: CompiledRuleSet::default(),
+                blocks: CompiledRuleSet::default(),
+            }),
         })))
     }
 }
@@ -178,6 +205,21 @@ mod tests {
         RuleInput {
             raw: raw.to_string(),
             source: "test".to_string(),
+        }
+    }
+
+    fn make_provider(cfg: model::AdGuardRuleConfig) -> AdGuardRule {
+        let (important_exceptions, important_blocks, exceptions, blocks, _) =
+            build_rule_buckets("agh", &cfg).expect("rules should build");
+        AdGuardRule {
+            tag: "agh".to_string(),
+            cfg,
+            snapshot: ArcSwap::from_pointee(AdGuardRuleSnapshot {
+                important_exceptions,
+                important_blocks,
+                exceptions,
+                blocks,
+            }),
         }
     }
 
@@ -295,15 +337,7 @@ mod tests {
             ],
             files: Vec::new(),
         };
-        let (important_exceptions, important_blocks, exceptions, blocks, _) =
-            build_rule_buckets("agh", &cfg).expect("rules should build");
-        let provider = AdGuardRule {
-            tag: "agh".to_string(),
-            important_exceptions,
-            important_blocks,
-            exceptions,
-            blocks,
-        };
+        let provider = make_provider(cfg);
 
         let ads = make_context("ads.example.org.", RecordType::A);
         assert!(
@@ -334,15 +368,7 @@ mod tests {
             ],
             files: Vec::new(),
         };
-        let (important_exceptions, important_blocks, exceptions, blocks, _) =
-            build_rule_buckets("agh", &cfg).expect("rules should build");
-        let provider = AdGuardRule {
-            tag: "agh".to_string(),
-            important_exceptions,
-            important_blocks,
-            exceptions,
-            blocks,
-        };
+        let provider = make_provider(cfg);
 
         assert!(provider.contains_name(&Name::from_ascii("always.example.org.").unwrap()));
         assert!(!provider.contains_name(&Name::from_ascii("type-only.example.org.").unwrap()));

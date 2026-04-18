@@ -17,6 +17,7 @@ use crate::plugin::provider::v2ray_dat::{
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use prost::Message;
 use serde::Deserialize;
@@ -32,94 +33,42 @@ struct GeoSiteArgs {
     selectors: Vec<String>,
 }
 
-#[derive(Debug)]
-pub struct GeoSiteProvider {
-    tag: String,
-    rules: Vec<String>,
+#[derive(Debug, Default)]
+struct GeoSiteSnapshot {
     matcher: DomainRuleMatcher,
 }
 
-#[async_trait]
-impl Plugin for GeoSiteProvider {
-    fn tag(&self) -> &str {
-        &self.tag
-    }
-
-    async fn init(&mut self) -> DnsResult<()> {
-        Ok(())
-    }
-
-    async fn destroy(&self) -> DnsResult<()> {
-        Ok(())
-    }
+#[derive(Debug)]
+pub struct GeoSiteProvider {
+    tag: String,
+    args: GeoSiteArgs,
+    snapshot: ArcSwap<GeoSiteSnapshot>,
 }
 
-#[async_trait]
-impl Provider for GeoSiteProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn contains_name(&self, name: &Name) -> bool {
-        self.matcher.is_match_name(name)
-    }
-
-    fn contains_question(&self, question: &Question) -> bool {
-        self.contains_name(question.name())
-    }
-
-    fn domain_rules(&self) -> Option<&[String]> {
-        Some(&self.rules)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct GeoSiteFactory;
-
-register_plugin_factory!("geosite", GeoSiteFactory {});
-
-impl PluginFactory for GeoSiteFactory {
-    fn create(
-        &self,
-        plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
-        _context: &crate::plugin::PluginCreateContext,
-    ) -> DnsResult<UninitializedPlugin> {
+impl GeoSiteProvider {
+    fn build_snapshot(&self) -> DnsResult<GeoSiteSnapshot> {
         let start_ms = AppClock::elapsed_millis();
-        let args = plugin_config
-            .args
-            .clone()
-            .ok_or_else(|| DnsError::plugin("geosite provider requires args"))?;
-        let args = serde_yaml_ng::from_value::<GeoSiteArgs>(args)
-            .map_err(|e| DnsError::plugin(format!("failed to parse geosite config: {}", e)))?;
 
-        if args.file.trim().is_empty() {
-            return Err(DnsError::plugin(format!(
-                "plugin '{}' geosite args.file must not be empty",
-                plugin_config.tag
-            )));
-        }
-
-        let data = fs::read(&args.file).map_err(|e| {
+        let data = fs::read(&self.args.file).map_err(|e| {
             DnsError::plugin(format!(
                 "plugin '{}' failed to read geosite dat file '{}': {}",
-                plugin_config.tag, args.file, e
+                self.tag, self.args.file, e
             ))
         })?;
         let geosite = GeoSiteList::decode(data.as_slice()).map_err(|e| {
             DnsError::plugin(format!(
                 "plugin '{}' failed to decode geosite dat file '{}': {}",
-                plugin_config.tag, args.file, e
+                self.tag, self.args.file, e
             ))
         })?;
 
-        let selectors = parse_geosite_selectors(&args.selectors).map_err(|e| {
+        let selectors = parse_geosite_selectors(&self.args.selectors).map_err(|e| {
             DnsError::plugin(format!(
                 "plugin '{}' failed to parse geosite selectors: {}",
-                plugin_config.tag, e
+                self.tag, e
             ))
         })?;
-        let mut rules = Vec::new();
+
         let mut matcher = DomainRuleMatcher::default();
         let mut matched_entries = 0usize;
         let mut matched_domains = 0usize;
@@ -131,7 +80,7 @@ impl PluginFactory for GeoSiteFactory {
                     let exp = geosite_domain_expression(domain).map_err(|e| {
                         DnsError::plugin(format!(
                             "plugin '{}' geosite code '{}' {}",
-                            plugin_config.tag,
+                            self.tag,
                             geosite_code(entry),
                             e
                         ))
@@ -140,7 +89,6 @@ impl PluginFactory for GeoSiteFactory {
                     matcher
                         .add_expression(&exp, &source)
                         .map_err(DnsError::plugin)?;
-                    rules.push(exp);
                     matched_domains += 1;
                 }
                 continue;
@@ -158,7 +106,7 @@ impl PluginFactory for GeoSiteFactory {
                 let exp = geosite_domain_expression(domain).map_err(|e| {
                     DnsError::plugin(format!(
                         "plugin '{}' geosite code '{}' {}",
-                        plugin_config.tag,
+                        self.tag,
                         geosite_code(entry),
                         e
                     ))
@@ -167,7 +115,6 @@ impl PluginFactory for GeoSiteFactory {
                 matcher
                     .add_expression(&exp, &source)
                     .map_err(DnsError::plugin)?;
-                rules.push(exp);
                 matched_domains += 1;
             }
         }
@@ -175,18 +122,18 @@ impl PluginFactory for GeoSiteFactory {
         if matched_entries == 0 && !selectors.is_empty() {
             return Err(DnsError::plugin(format!(
                 "plugin '{}' found no geosite entries in '{}' for selectors {:?}",
-                plugin_config.tag, args.file, args.selectors
+                self.tag, self.args.file, self.args.selectors
             )));
         }
 
         if matched_domains == 0 && !selectors.is_empty() {
             return Err(DnsError::plugin(format!(
                 "plugin '{}' found no geosite rules in '{}' for selectors {:?}",
-                plugin_config.tag, args.file, args.selectors
+                self.tag, self.args.file, self.args.selectors
             )));
         }
 
-        matcher.finalize()?;
+        matcher.finalize().map_err(DnsError::plugin)?;
         let has_rules = matcher.full_rule_count()
             + matcher.trie_rule_count()
             + matcher.keyword_rule_count()
@@ -194,15 +141,15 @@ impl PluginFactory for GeoSiteFactory {
         if has_rules == 0 {
             return Err(DnsError::plugin(format!(
                 "plugin '{}' produced no domain rules from geosite dat '{}'",
-                plugin_config.tag, args.file
+                self.tag, self.args.file
             )));
         }
 
         let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
         info!(
-            tag = %plugin_config.tag,
-            file = %args.file,
-            selectors = ?args.selectors,
+            tag = %self.tag,
+            file = %self.args.file,
+            selectors = ?self.args.selectors,
             matched_entries,
             matched_domains,
             full_rules = matcher.full_rule_count(),
@@ -210,13 +157,83 @@ impl PluginFactory for GeoSiteFactory {
             keyword_rules = matcher.keyword_rule_count(),
             regex_rules = matcher.regexp_rule_count(),
             elapsed_ms,
-            "geosite initialized"
+            "geosite snapshot built"
         );
+
+        Ok(GeoSiteSnapshot { matcher })
+    }
+}
+
+#[async_trait]
+impl Plugin for GeoSiteProvider {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    async fn init(&mut self) -> DnsResult<()> {
+        self.reload().await
+    }
+
+    async fn destroy(&self) -> DnsResult<()> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Provider for GeoSiteProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn contains_name(&self, name: &Name) -> bool {
+        self.snapshot.load().matcher.is_match_name(name)
+    }
+
+    fn contains_question(&self, question: &Question) -> bool {
+        self.contains_name(question.name())
+    }
+
+    async fn reload(&self) -> DnsResult<()> {
+        let snapshot = self.build_snapshot()?;
+        self.snapshot.store(Arc::new(snapshot));
+        Ok(())
+    }
+
+    fn supports_domain_matching(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GeoSiteFactory;
+
+register_plugin_factory!("geosite", GeoSiteFactory {});
+
+impl PluginFactory for GeoSiteFactory {
+    fn create(
+        &self,
+        plugin_config: &PluginConfig,
+        _registry: Arc<PluginRegistry>,
+        _context: &crate::plugin::PluginCreateContext,
+    ) -> DnsResult<UninitializedPlugin> {
+        let args = plugin_config
+            .args
+            .clone()
+            .ok_or_else(|| DnsError::plugin("geosite provider requires args"))?;
+        let args = serde_yaml_ng::from_value::<GeoSiteArgs>(args)
+            .map_err(|e| DnsError::plugin(format!("failed to parse geosite config: {}", e)))?;
+
+        if args.file.trim().is_empty() {
+            return Err(DnsError::plugin(format!(
+                "plugin '{}' geosite args.file must not be empty",
+                plugin_config.tag
+            )));
+        }
 
         Ok(UninitializedPlugin::Provider(Box::new(GeoSiteProvider {
             tag: plugin_config.tag.clone(),
-            rules,
-            matcher,
+            args,
+            snapshot: ArcSwap::from_pointee(GeoSiteSnapshot::default()),
         })))
     }
 }

@@ -316,6 +316,17 @@ impl IpPrefixMatcher {
         self.v6 = compile_v6_matcher(&mut self.v6_rules);
     }
 
+    /// Compile and drop the source ranges once the matcher becomes immutable.
+    pub fn finalize_compact(&mut self) {
+        self.finalize();
+        // Compiled matchers own the compact query structures, so we can drop
+        // the source ranges after initialization to reduce steady-state memory.
+        self.v4_rules.clear();
+        self.v6_rules.clear();
+        self.v4_rules.shrink_to_fit();
+        self.v6_rules.shrink_to_fit();
+    }
+
     #[inline(always)]
     pub fn contains_ip(&self, ip: IpAddr) -> bool {
         match ip {

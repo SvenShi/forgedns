@@ -7,7 +7,7 @@
 //! Design goals:
 //! - Constant-time-ish membership checks on hot path.
 //! - Unified IPv4/IPv6 semantics.
-//! - Zero recursion in runtime matching when sets are composed.
+//! - Local matcher plus stable referenced providers for composed sets.
 //! - Precise parse errors for file-based rules.
 
 use crate::config::types::PluginConfig;
@@ -18,6 +18,7 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::any::Any;
@@ -39,16 +40,58 @@ struct IpSetArgs {
     files: Vec<String>,
 }
 
-#[derive(Debug)]
-pub struct IpSet {
-    tag: String,
-    /// Flattened original IP rules from self + referenced sets.
-    rules: Vec<String>,
-    /// Fully merged matcher compiled once at initialization.
+#[derive(Debug, Default)]
+struct IpSetSnapshot {
     matcher: IpPrefixMatcher,
     /// Family-level fast guards to avoid useless scans.
     has_v4_rules: bool,
     has_v6_rules: bool,
+}
+
+#[derive(Debug)]
+pub struct IpSet {
+    tag: String,
+    args: IpSetArgs,
+    registry: Arc<PluginRegistry>,
+    referenced_sets: Vec<Arc<dyn Provider>>,
+    snapshot: ArcSwap<IpSetSnapshot>,
+}
+
+impl IpSet {
+    fn build_local_snapshot(&self) -> DnsResult<IpSetSnapshot> {
+        let start_ms = AppClock::elapsed_millis();
+        let mut rules = self.args.ips.clone();
+        for file in &self.args.files {
+            append_rules_from_file(&mut rules, file)?;
+        }
+
+        let mut matcher = IpPrefixMatcher::default();
+        load_ip_rules(&mut matcher, &rules)?;
+        matcher.finalize_compact();
+
+        let has_v4_rules = matcher.has_v4_rules();
+        let has_v6_rules = matcher.has_v6_rules();
+        let total_v4_rules = matcher.v4_rule_count();
+        let total_v6_rules = matcher.v6_rule_count();
+        let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
+        info!(
+            tag = %self.tag,
+            local_rules = rules.len(),
+            referenced_sets = self.args.sets.len(),
+            v4_rules = total_v4_rules,
+            v6_rules = total_v6_rules,
+            has_v4_rules,
+            has_v6_rules,
+            elapsed_ms,
+            "ip_set snapshot built"
+        );
+
+        Ok(IpSetSnapshot {
+            matcher,
+            has_v4_rules,
+            has_v6_rules,
+        })
+    }
 }
 
 #[async_trait]
@@ -58,7 +101,27 @@ impl Plugin for IpSet {
     }
 
     async fn init(&mut self) -> DnsResult<()> {
-        Ok(())
+        let mut providers = Vec::with_capacity(self.args.sets.len());
+        for (set_idx, set_tag) in self.args.sets.iter().enumerate() {
+            let field = format!("args.sets[{}]", set_idx);
+            debug!(
+                tag = %self.tag,
+                referenced_set = %set_tag,
+                "resolving referenced ip provider"
+            );
+            let provider =
+                self.registry
+                    .get_provider_dependency(&self.tag, &field, set_tag.as_str())?;
+            if !provider.supports_ip_matching() {
+                return Err(DnsError::plugin(format!(
+                    "plugin '{}' field '{}' expects provider '{}' to support IP matching",
+                    self.tag, field, set_tag
+                )));
+            }
+            providers.push(provider);
+        }
+        self.referenced_sets = providers;
+        self.reload().await
     }
 
     async fn destroy(&self) -> DnsResult<()> {
@@ -72,21 +135,28 @@ impl Provider for IpSet {
         self
     }
 
-    fn ip_rules(&self) -> Option<&[String]> {
-        Some(&self.rules)
-    }
-
     #[inline]
     fn contains_ip(&self, ip: IpAddr) -> bool {
+        let snapshot = self.snapshot.load();
         let has_family_rules = match ip {
-            IpAddr::V4(_) => self.has_v4_rules,
-            IpAddr::V6(_) => self.has_v6_rules,
+            IpAddr::V4(_) => snapshot.has_v4_rules,
+            IpAddr::V6(_) => snapshot.has_v6_rules,
         };
-        if !has_family_rules {
-            return false;
+        if has_family_rules && snapshot.matcher.contains_ip(ip) {
+            return true;
         }
 
-        self.matcher.contains_ip(ip)
+        self.referenced_sets.iter().any(|set| set.contains_ip(ip))
+    }
+
+    async fn reload(&self) -> DnsResult<()> {
+        let snapshot = self.build_local_snapshot()?;
+        self.snapshot.store(Arc::new(snapshot));
+        Ok(())
+    }
+
+    fn supports_ip_matching(&self) -> bool {
+        true
     }
 }
 
@@ -117,8 +187,6 @@ impl PluginFactory for IpSetFactory {
         registry: Arc<PluginRegistry>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
-        // Plugin init duration only needs coarse monotonic timing from AppClock.
-        let start_ms = AppClock::elapsed_millis();
         let args = plugin_config
             .args
             .clone()
@@ -126,65 +194,20 @@ impl PluginFactory for IpSetFactory {
             .transpose()
             .map_err(|e| DnsError::plugin(format!("failed to parse ip_set config: {}", e)))?
             .unwrap_or_default();
-        let referenced_set_count = args.sets.len();
-        debug!(
+        info!(
             tag = %plugin_config.tag,
             ips = args.ips.len(),
             files = args.files.len(),
-            sets = referenced_set_count,
-            "initializing ip_set"
-        );
-
-        let mut rules = args.ips.clone();
-        for file in &args.files {
-            append_rules_from_file(&mut rules, file)?;
-        }
-
-        for (set_idx, set_tag) in args.sets.into_iter().enumerate() {
-            let field = format!("args.sets[{}]", set_idx);
-            debug!(
-                tag = %plugin_config.tag,
-                referenced_set = %set_tag,
-                "resolving referenced ip_set"
-            );
-            let provider =
-                registry.get_provider_dependency(&plugin_config.tag, &field, set_tag.as_str())?;
-            let provider_rules = provider.ip_rules().ok_or_else(|| {
-                DnsError::plugin(format!(
-                    "plugin '{}' field '{}' expects provider '{}' to support IP matching",
-                    plugin_config.tag, field, set_tag
-                ))
-            })?;
-            rules.extend(provider_rules.iter().cloned());
-        }
-
-        let mut matcher = IpPrefixMatcher::default();
-        load_ip_rules(&mut matcher, &rules)?;
-        matcher.finalize();
-
-        let has_v4_rules = matcher.has_v4_rules();
-        let has_v6_rules = matcher.has_v6_rules();
-        let total_v4_rules = matcher.v4_rule_count();
-        let total_v6_rules = matcher.v6_rule_count();
-        let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
-        info!(
-            tag = %plugin_config.tag,
-            merged_rules = rules.len(),
-            referenced_sets = referenced_set_count,
-            v4_rules = total_v4_rules,
-            v6_rules = total_v6_rules,
-            has_v4_rules,
-            has_v6_rules,
-            elapsed_ms,
-            "ip_set initialized"
+            sets = args.sets.len(),
+            "ip_set configured"
         );
 
         Ok(UninitializedPlugin::Provider(Box::new(IpSet {
             tag: plugin_config.tag.clone(),
-            rules,
-            matcher,
-            has_v4_rules,
-            has_v6_rules,
+            args,
+            registry,
+            referenced_sets: Vec::new(),
+            snapshot: ArcSwap::from_pointee(IpSetSnapshot::default()),
         })))
     }
 }

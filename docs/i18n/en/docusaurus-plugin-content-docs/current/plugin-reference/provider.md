@@ -5,7 +5,9 @@ sidebar_position: 5
 
 Providers turn rule sets from one-off literals into reusable data assets. In larger configurations they reduce duplication, centralize shared datasets, and keep policies maintainable.
 
-Providers with domain or IP match capability can be referenced directly by matchers through `"$tag"` and can also be aggregated by `domain_set` or `ip_set`. A small number of providers only support direct matcher use and cannot be flattened into `domain_set` or `ip_set`.
+Providers with domain or IP match capability can be referenced directly by matchers through `"$tag"` and can also be composed by `domain_set` or `ip_set`. Those composite providers compile only their own local rules and then consult referenced providers at runtime instead of copying downstream rule data into a merged matcher.
+
+Every live provider also registers `POST /plugins/<provider_tag>/reload`, and the `reload_provider` executor can refresh that provider's snapshot in place with the same startup configuration without rebuilding unrelated plugins.
 
 At runtime, ForgeDNS only initializes providers that are actually consumed. If a provider is not referenced directly or indirectly by any `server`, `executor`, or `matcher`, it is skipped during startup, does not appear in the runtime registry, and emits a warning log so the unused configuration is visible.
 
@@ -61,7 +63,7 @@ This provider exposes two semantics:
 ### Notes
 
 - Name-only matchers such as `qname` and `cname` use `contains_name`, so `dnstype`-only rules are ignored there.
-- `adguard_rule` cannot be flattened through `domain_set.sets` because exception precedence and request-scoped modifiers such as `dnstype` must still be evaluated at runtime.
+- `adguard_rule` can be referenced from `domain_set.sets`; because evaluation stays dynamic, exception precedence and request-scoped modifiers such as `dnstype` remain intact.
 
 ---
 
@@ -92,8 +94,9 @@ Provides a high-performance domain rule set that can be referenced by plugins su
       # Merge additional rules from files
       - "/etc/forgedns/domains.txt"
     sets:
-      # Reuse another domain_set provider
+      # Reuse another domain-capable provider
       - "shared_domains"
+      - "shared_geosite"
 ```
 
 ### Configuration Details
@@ -124,7 +127,7 @@ Provides a high-performance domain rule set that can be referenced by plugins su
   - One rule per line.
   - Empty lines and comment lines are ignored.
 - Runtime impact:
-  - File contents are loaded during initialization and merged into the current provider.
+  - File contents are re-read during initialization or `reload_provider` and compiled into the current provider's local matcher.
 
 #### `sets`
 
@@ -132,14 +135,16 @@ Provides a high-performance domain rule set that can be referenced by plugins su
 - Purpose: References other providers with domain match capability.
 - Example: `- "shared_domain_set"`
 - Constraints:
-  - `domain_set`, `geosite`, and other domain-capable providers are allowed.
+  - `domain_set`, `geosite`, `adguard_rule`, and other domain-capable providers are allowed.
 - Runtime impact:
-  - Referenced sets are flattened during initialization and merged into the current provider.
+  - The current provider keeps stable handles to referenced providers instead of copying their rules.
+  - After a downstream provider reloads, the current `domain_set` sees the new result without reloading itself.
 
 ### Behavior
 
-- `exps`, `files`, and referenced `sets` are flattened at initialization time.
-- No recursive provider calls happen on the hot path; runtime matching uses precompiled match structures.
+- Initialization and reload only compile local `exps` and `files`.
+- Runtime matching checks the local matcher first and then evaluates referenced providers in `sets` declaration order.
+- Referenced providers are no longer flattened into copied rule text or copied compiled state.
 
 ### Supported Rule Formats
 
@@ -152,11 +157,12 @@ Provides a high-performance domain rule set that can be referenced by plugins su
 ### Typical Uses
 
 - Share a core domain list across multiple policies.
-- Aggregate rules from several files into one reusable provider.
+- Combine local rules with shared providers behind one reusable entrypoint.
 
 ### Notes
 
 - `sets` may reference any provider with domain match capability.
+- Changing provider topology, tags, or config structure still requires a full `reload`; `reload_provider` only refreshes the current provider's existing config and external data files.
 
 ---
 
@@ -197,6 +203,7 @@ Loads reusable domain rules from v2ray-rules-dat `geosite.dat`.
 - `RootDomain` becomes `domain:`.
 - `Full` becomes `full:`.
 - Can be referenced directly by `qname`, `cname`, and `question`, or aggregated by `domain_set`.
+- Supports independent refresh through `reload_provider` or `POST /plugins/<tag>/reload`.
 - If you want to pre-export selected rules into text files before runtime, use `forgedns export-dat --kind geosite`.
 
 ---
@@ -227,8 +234,9 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
       # Merge more IP / CIDR entries from files
       - "/etc/forgedns/ips.txt"
     sets:
-      # Reuse another ip_set provider
+      # Reuse another IP-capable provider
       - "shared_ip_set"
+      - "shared_geoip"
 ```
 
 ### Configuration Details
@@ -258,7 +266,7 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
   - One IP or CIDR rule per line.
   - Empty lines and comment lines are ignored.
 - Runtime impact:
-  - File contents are loaded during initialization and merged into the current provider.
+  - File contents are re-read during initialization or `reload_provider` and compiled into the current provider's local matcher.
 
 #### `sets`
 
@@ -268,13 +276,14 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
 - Constraints:
   - `ip_set`, `geoip`, and other IP-capable providers are allowed.
 - Runtime impact:
-  - Referenced sets are flattened during initialization and merged into the current provider by address family.
+  - The current provider keeps stable handles to referenced providers instead of copying their rules.
+  - After a downstream provider reloads, the current `ip_set` sees the new result without reloading itself.
 
 ### Behavior
 
-- All sources are loaded and flattened during initialization.
+- Initialization and reload only compile local `ips` and `files`.
 - IPv4 and IPv6 rule indexes are maintained separately.
-- Runtime matching filters quickly by address family.
+- Runtime matching checks the local matcher first and then evaluates referenced providers in `sets` declaration order.
 
 ### Rule Formats
 
@@ -286,10 +295,12 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
 
 - Define LAN, WAN, overlay, or infrastructure address groups.
 - Build allowlists, bypass lists, or target network sets.
+- Combine local CIDRs with shared `geoip` or `ip_set` providers behind one reusable entrypoint.
 
 ### Notes
 
 - `sets` may reference any provider with IP match capability.
+- Changing provider topology, tags, or config structure still requires a full `reload`; `reload_provider` only refreshes the current provider's existing config and external data files.
 
 ---
 
@@ -324,5 +335,6 @@ Loads reusable IP and CIDR rules from v2ray-rules-dat `geoip.dat`.
 ### Behavior
 
 - Exposes IP-only membership checks.
-- Can be referenced directly by `client_ip`, `resp_ip`, and `ptr_ip`, or aggregated by `ip_set`.
+- Can be referenced directly by `client_ip`, `resp_ip`, and `ptr_ip`, or composed by `ip_set`.
+- Supports independent refresh through `reload_provider` or `POST /plugins/<tag>/reload`.
 - If you want to pre-export selected rules into text files before runtime, use `forgedns export-dat --kind geoip`.

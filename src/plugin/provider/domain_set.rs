@@ -7,13 +7,14 @@
 //!
 //! Responsibilities:
 //! - load domain expressions from inline config and files.
-//! - resolve referenced `domain_set` providers and flatten them.
+//! - resolve referenced domain-capable providers declared in `sets`.
 //! - provide hot-path membership checks for matcher plugins.
 //!
 //! Performance model:
-//! - expressions are compiled once at init time.
+//! - local expressions are compiled once per init/reload.
 //! - runtime lookup uses pre-normalized input and optional pre-split labels.
-//! - flattened matcher graph avoids recursive provider traversal.
+//! - runtime lookup checks the local matcher first, then referenced providers
+//!   through stable handles so child reloads become visible immediately.
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
@@ -24,6 +25,7 @@ use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::any::Any;
@@ -44,13 +46,53 @@ struct DomainSetArgs {
     files: Vec<String>,
 }
 
+#[derive(Debug, Default)]
+struct DomainSetSnapshot {
+    matcher: DomainRuleMatcher,
+}
+
 #[derive(Debug)]
 pub struct DomainSet {
     tag: String,
-    /// Flattened original domain expressions from self + referenced sets.
-    rules: Vec<String>,
-    /// Fully merged matcher compiled once at initialization.
-    matcher: DomainRuleMatcher,
+    args: DomainSetArgs,
+    registry: Arc<PluginRegistry>,
+    referenced_sets: Vec<Arc<dyn Provider>>,
+    snapshot: ArcSwap<DomainSetSnapshot>,
+}
+
+impl DomainSet {
+    fn build_local_snapshot(&self) -> DnsResult<DomainSetSnapshot> {
+        let start_ms = AppClock::elapsed_millis();
+        let mut rules = self.args.exps.clone();
+        for file in &self.args.files {
+            append_rules_from_file(&mut rules, file)?;
+        }
+
+        let mut matcher = DomainRuleMatcher::default();
+        load_domain_rules(&mut matcher, &rules)?;
+        matcher.finalize().map_err(DnsError::plugin)?;
+
+        let has_domain_rules = matcher.has_rules();
+        let total_full_rules = matcher.full_rule_count();
+        let total_domain_rules = matcher.trie_rule_count();
+        let total_keyword_rules = matcher.keyword_rule_count();
+        let total_regex_rules = matcher.regexp_rule_count();
+        let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
+        info!(
+            tag = %self.tag,
+            local_rules = rules.len(),
+            referenced_sets = self.args.sets.len(),
+            full_rules = total_full_rules,
+            domain_rules = total_domain_rules,
+            keyword_rules = total_keyword_rules,
+            regex_rules = total_regex_rules,
+            has_domain_rules,
+            elapsed_ms,
+            "domain_set snapshot built"
+        );
+
+        Ok(DomainSetSnapshot { matcher })
+    }
 }
 
 #[async_trait]
@@ -60,7 +102,27 @@ impl Plugin for DomainSet {
     }
 
     async fn init(&mut self) -> DnsResult<()> {
-        Ok(())
+        let mut providers = Vec::with_capacity(self.args.sets.len());
+        for (set_idx, set_tag) in self.args.sets.iter().enumerate() {
+            let field = format!("args.sets[{}]", set_idx);
+            debug!(
+                tag = %self.tag,
+                referenced_set = %set_tag,
+                "resolving referenced domain provider"
+            );
+            let provider =
+                self.registry
+                    .get_provider_dependency(&self.tag, &field, set_tag.as_str())?;
+            if !provider.supports_domain_matching() {
+                return Err(DnsError::plugin(format!(
+                    "plugin '{}' field '{}' expects provider '{}' to support domain matching",
+                    self.tag, field, set_tag
+                )));
+            }
+            providers.push(provider);
+        }
+        self.referenced_sets = providers;
+        self.reload().await
     }
 
     async fn destroy(&self) -> DnsResult<()> {
@@ -76,16 +138,32 @@ impl Provider for DomainSet {
 
     #[inline]
     fn contains_name(&self, name: &Name) -> bool {
-        self.matcher.is_match_name(name)
+        let snapshot = self.snapshot.load();
+        snapshot.matcher.is_match_name(name)
+            || self
+                .referenced_sets
+                .iter()
+                .any(|set| set.contains_name(name))
     }
 
     #[inline]
     fn contains_question(&self, question: &Question) -> bool {
-        self.contains_name(question.name())
+        let snapshot = self.snapshot.load();
+        snapshot.matcher.is_match_name(question.name())
+            || self
+                .referenced_sets
+                .iter()
+                .any(|set| set.contains_question(question) || set.contains_name(question.name()))
     }
 
-    fn domain_rules(&self) -> Option<&[String]> {
-        Some(&self.rules)
+    async fn reload(&self) -> DnsResult<()> {
+        let snapshot = self.build_local_snapshot()?;
+        self.snapshot.store(Arc::new(snapshot));
+        Ok(())
+    }
+
+    fn supports_domain_matching(&self) -> bool {
+        true
     }
 }
 
@@ -116,8 +194,6 @@ impl PluginFactory for DomainSetFactory {
         registry: Arc<PluginRegistry>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
-        // Provider init latency logging does not require high-precision syscall timing.
-        let start_ms = AppClock::elapsed_millis();
         let args = plugin_config
             .args
             .clone()
@@ -125,65 +201,20 @@ impl PluginFactory for DomainSetFactory {
             .transpose()
             .map_err(|e| DnsError::plugin(format!("failed to parse domain_set config: {}", e)))?
             .unwrap_or_default();
-        let referenced_set_count = args.sets.len();
-        debug!(
+        info!(
             tag = %plugin_config.tag,
             exps = args.exps.len(),
             files = args.files.len(),
-            sets = referenced_set_count,
-            "initializing domain_set"
-        );
-
-        let mut rules = args.exps.clone();
-        for file in &args.files {
-            append_rules_from_file(&mut rules, file)?;
-        }
-
-        for (set_idx, set_tag) in args.sets.into_iter().enumerate() {
-            let field = format!("args.sets[{}]", set_idx);
-            debug!(
-                tag = %plugin_config.tag,
-                referenced_set = %set_tag,
-                "resolving referenced domain_set"
-            );
-            let provider =
-                registry.get_provider_dependency(&plugin_config.tag, &field, set_tag.as_str())?;
-            let provider_rules = provider.domain_rules().ok_or_else(|| {
-                DnsError::plugin(format!(
-                    "plugin '{}' field '{}' expects provider '{}' to support domain matching",
-                    plugin_config.tag, field, set_tag
-                ))
-            })?;
-            rules.extend(provider_rules.iter().cloned());
-        }
-
-        let mut matcher = DomainRuleMatcher::default();
-        load_domain_rules(&mut matcher, &rules)?;
-        matcher.finalize().map_err(DnsError::plugin)?;
-
-        let has_domain_rules = matcher.has_rules();
-        let total_full_rules = matcher.full_rule_count();
-        let total_domain_rules = matcher.trie_rule_count();
-        let total_keyword_rules = matcher.keyword_rule_count();
-        let total_regex_rules = matcher.regexp_rule_count();
-        let elapsed_ms = AppClock::elapsed_millis().saturating_sub(start_ms);
-        info!(
-            tag = %plugin_config.tag,
-            merged_rules = rules.len(),
-            referenced_sets = referenced_set_count,
-            full_rules = total_full_rules,
-            domain_rules = total_domain_rules,
-            keyword_rules = total_keyword_rules,
-            regex_rules = total_regex_rules,
-            has_domain_rules,
-            elapsed_ms,
-            "domain_set initialized"
+            sets = args.sets.len(),
+            "domain_set configured"
         );
 
         Ok(UninitializedPlugin::Provider(Box::new(DomainSet {
             tag: plugin_config.tag.clone(),
-            rules,
-            matcher,
+            args,
+            registry,
+            referenced_sets: Vec::new(),
+            snapshot: ArcSwap::from_pointee(DomainSetSnapshot::default()),
         })))
     }
 }
@@ -326,11 +357,14 @@ mod tests {
 
         let ds = DomainSet {
             tag: "test".to_string(),
-            rules: vec!["local.example".to_string()],
-            matcher: local,
+            args: DomainSetArgs::default(),
+            registry: Arc::new(PluginRegistry::new()),
+            referenced_sets: vec![shared.clone()],
+            snapshot: ArcSwap::from_pointee(DomainSetSnapshot { matcher: local }),
         };
         assert!(ds.contains_name(&Name::from_ascii("local.example").unwrap()));
         assert!(!ds.contains_name(&Name::from_ascii("none.example").unwrap()));
         assert!(shared.contains_name(&Name::from_ascii("shared.example").unwrap()));
+        assert!(ds.contains_name(&Name::from_ascii("shared.example").unwrap()));
     }
 }
