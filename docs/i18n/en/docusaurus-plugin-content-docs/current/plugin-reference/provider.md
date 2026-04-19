@@ -13,60 +13,6 @@ At runtime, ForgeDNS only initializes providers that are actually consumed. If a
 
 ---
 
-## `adguard_rule`
-
-### Purpose
-
-Provides a reusable subset of AdGuard Home DNS rule evaluation as a provider.
-
-This provider exposes two semantics:
-
-- `contains_question`: full request-question evaluation, including `dnstype`
-- `contains_name`: a name-only projection that ignores all `dnstype` rules
-
-### Example Configuration
-
-```yaml
-- tag: ad_rules
-  type: adguard_rule
-  args:
-    rules:
-      # Basic blocking rule
-      - "||ads.example.com^"
-      # Exception rule
-      - "@@||safe.ads.example.com^"
-      # Complex inline rule with dnstype / important / denyallow
-      - "||cdn.example.com^$dnstype=A|AAAA,important,denyallow=cdn-safe.example.com"
-    files:
-      # External AdGuard-format rule files
-      - "/etc/forgedns/adguard.txt"
-```
-
-### Behavior
-
-- Supports: basic domain rules, `@@`, `important`, `badfilter`, `denyallow`,
-  and request-side `dnstype`
-- Unsupported but skipped with warnings: `/etc/hosts` style rules,
-  `dnsrewrite`, `$client`, `$ctag`, and unknown modifiers
-- Full precedence order:
-  - `important` exceptions
-  - `important` blocks
-  - normal exceptions
-  - normal blocks
-
-### Typical Uses
-
-- Use AdGuard rules through the `qname` matcher with name-only projection semantics.
-- Reuse AdGuard rule files through the `question` matcher.
-- Centralize complex AdGuard-style blocking semantics at the provider layer.
-
-### Notes
-
-- Name-only matchers such as `qname` and `cname` use `contains_name`, so `dnstype`-only rules are ignored there.
-- `adguard_rule` can be referenced from `domain_set.sets`; because evaluation stays dynamic, exception precedence and request-scoped modifiers such as `dnstype` remain intact.
-
----
-
 ## `domain_set`
 
 ### Purpose
@@ -205,6 +151,60 @@ Loads reusable domain rules from v2ray-rules-dat `geosite.dat`.
 - Can be referenced directly by `qname`, `cname`, and `question`, or aggregated by `domain_set`.
 - Supports independent refresh through `reload_provider` or `POST /plugins/<tag>/reload`.
 - If you want to pre-export selected rules into text files before runtime, use `forgedns export-dat --kind geosite`.
+
+---
+
+## `adguard_rule`
+
+### Purpose
+
+Provides a reusable subset of AdGuard Home DNS rule evaluation as a provider.
+
+This provider exposes two semantics:
+
+- `contains_question`: full request-question evaluation, including `dnstype`
+- `contains_name`: a name-only projection that ignores all `dnstype` rules
+
+### Example Configuration
+
+```yaml
+- tag: ad_rules
+  type: adguard_rule
+  args:
+    rules:
+      # Basic blocking rule
+      - "||ads.example.com^"
+      # Exception rule
+      - "@@||safe.ads.example.com^"
+      # Complex inline rule with dnstype / important / denyallow
+      - "||cdn.example.com^$dnstype=A|AAAA,important,denyallow=cdn-safe.example.com"
+    files:
+      # External AdGuard-format rule files
+      - "/etc/forgedns/adguard.txt"
+```
+
+### Behavior
+
+- Supports: basic domain rules, `@@`, `important`, `badfilter`, `denyallow`,
+  and request-side `dnstype`
+- Unsupported but skipped with warnings: `/etc/hosts` style rules,
+  `dnsrewrite`, `$client`, `$ctag`, and unknown modifiers
+- Full precedence order:
+  - `important` exceptions
+  - `important` blocks
+  - normal exceptions
+  - normal blocks
+
+### Typical Uses
+
+- Use AdGuard rules through the `qname` matcher with name-only projection semantics.
+- Reuse AdGuard rule files through the `question` matcher.
+- Centralize complex AdGuard-style blocking semantics at the provider layer.
+
+### Notes
+
+- Name-only matchers such as `qname` and `cname` use `contains_name`, so `dnstype`-only rules are ignored there.
+- `adguard_rule` can be referenced from `domain_set.sets`; because evaluation stays dynamic, exception precedence and request-scoped modifiers such as `dnstype` remain intact.
 
 ---
 

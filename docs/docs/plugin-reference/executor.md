@@ -12,593 +12,6 @@ sidebar_position: 3
 
 ---
 
-## `cron`
-
-### 作用
-
-后台调度一组 executor。它不会参与实时 DNS 请求链，而是在插件初始化后按 cron 或固定间隔触发任务。
-
-### 配置示例
-
-```yaml
-- tag: cron_jobs
-  type: cron
-  args:
-    timezone: "Asia/Shanghai"
-    jobs:
-      - name: refresh_sets
-        interval: 5m
-        executors:
-          - "$seq_refresh"
-          - "debug_print cron refresh"
-
-      - name: nightly_cleanup
-        schedule: "15 3 * * *"
-        executors:
-          - "sleep 2s"
-          - "$seq_cleanup"
-```
-
-### 配置项
-
-#### `args.jobs`
-
-- 类型：`array`；必填：是；默认值：无
-- 作用：定义一个或多个后台任务。
-- 运行影响：
-  - 数组不能为空。
-  - 每个任务独立维护自己的调度状态和重叠保护。
-
-#### `args.timezone`
-
-- 类型：`string`；必填：否；默认值：系统本地时区
-- 作用：为当前 `cron` 插件下的所有 `schedule` 任务指定时区。
-- 运行影响：
-  - 仅对 `schedule` 生效。
-  - 未配置时会使用系统本地时区；无法获取时退回 `UTC`。
-  - 应填写 IANA 时区名称，例如 `Asia/Shanghai`、`UTC`、`America/Los_Angeles`。
-
-#### `args.jobs[].name`
-
-- 类型：`string`；必填：是；默认值：无
-- 作用：任务名称，用于日志与运行时标识。
-- 运行影响：
-  - 在同一个 `cron` 插件内必须唯一。
-
-#### `args.jobs[].schedule`
-
-- 类型：`string`；必填：与 `interval` 二选一；默认值：无
-- 作用：使用标准 5 字段 cron 表达式调度任务。
-- 规则说明：
-  - 仅支持 `minute hour day month day-of-week`。
-  - 不支持秒级 cron。
-  - 按 `args.timezone` 或系统本地时区计算下一次触发时间。
-
-#### `args.jobs[].interval`
-
-- 类型：`string`；必填：与 `schedule` 二选一；默认值：无
-- 作用：用简单固定间隔调度任务。
-- 支持格式：
-  - `5m`
-  - `1h`
-  - `1d`
-- 运行影响：
-  - 最小粒度为 `1m`。
-  - 启动后会等待一个完整间隔再首次触发。
-
-#### `args.jobs[].executors`
-
-- 类型：`array`；必填：是；默认值：无
-- 作用：定义任务触发时顺序执行的 executor 列表。
-- 支持形式：
-  - `$tag`：显式引用已存在 executor
-  - `tag`：裸 tag 引用
-  - quick setup 表达式，例如 `debug_print cron refresh`
-- 运行影响：
-  - 数组不能为空。
-  - 即使某个 executor 返回 `Stop`、设置了响应、或执行报错，后续 executor 仍会继续执行。
-
-### 行为说明
-
-- `schedule` 和 `interval` 必须二选一。
-- 同一个 job 若上一轮仍在运行，本轮会被跳过，不补跑。
-- 任务使用空的 `DnsContext`，适合副作用类 executor 或后台编排的 `sequence`。
-- `cron` 本身不能放进普通请求 `sequence` 里执行。
-
-### 典型用途
-
-- 定时触发后台副作用逻辑。
-- 定时执行一个专门的 `sequence` 编排。
-- 为未来的 `reload` 之类后台动作提供统一调度入口。
-
-### 注意事项
-
-- 不允许引用另一个 `cron` executor。
-- 依赖真实 DNS 请求内容的 executor 在空上下文任务中通常没有意义。
-
----
-
-## `download`
-
-### 作用
-
-下载一个或多个 `http/https` 文件到本地目录，并在新内容完整写入后覆盖目标文件。
-
-### 配置示例
-
-```yaml
-- tag: rules_download
-  type: download
-  args:
-    timeout: 30s
-    socks5: "127.0.0.1:1080"
-    downloads:
-      - url: "https://example.com/geosite.dat"
-        dir: "/etc/forgedns"
-      - url: "https://example.com/geoip.dat"
-        dir: "/etc/forgedns"
-        filename: "geoip.dat"
-```
-
-### Quick Setup
-
-```yaml
-- exec: "download https://example.com/rules.txt /etc/forgedns"
-```
-
-### 行为说明
-
-- `downloads` 按声明顺序串行执行。
-- 单个下载失败只会写 warning 日志，不会阻止后续项继续下载。
-- 目标目录不存在时会自动创建。
-- 文件会先写入临时文件，再覆盖目标文件，避免半写入状态。
-- 配置 `socks5` 后，所有下载连接都会通过该 SOCKS5 代理发起，格式与 `upstream[].socks5` 一致。
-- 默认会在启动时检查目标文件；缺失项会在其它插件初始化前自动下载，失败会直接中止启动。
-- 如需关闭该行为，可显式配置 `startup_if_missing: false`。
-
-### 注意事项
-
-- 只支持 `http` / `https`。
-- `socks5` 支持 `host:port` 和 `username:password@host:port`，IPv6 需写成 `"[::1]:1080"`。
-- `startup_if_missing` 只会补齐缺失文件，不会在每次启动时强制覆盖已有文件。
-- 放进普通 `sequence` 时会直接占用该次请求的执行时间。
-- 覆盖本地文件后不会自动触发生效；如果只是让文件型 provider 立即读取新内容，优先串联 `reload_provider`；如果连 `config.yaml`、依赖拓扑或插件列表也一起变化，再使用 `reload`。
-
-### 推荐搭配
-
-```yaml
-- tag: rules_refresh
-  type: sequence
-  args:
-    - exec: "$rules_download"
-    - exec: "$reload_rules"
-
-- tag: rules_download
-  type: download
-  args:
-    downloads:
-      - url: "https://example.com/geosite.dat"
-        dir: "/etc/forgedns"
-
-- tag: provider_geosite
-  type: geosite
-  args:
-    file: "/etc/forgedns/geosite.dat"
-
-- tag: reload_rules
-  type: reload_provider
-  args:
-    - "$provider_geosite"
-```
-
-### 订阅更新示例
-
-下面这个例子适合“远程规则订阅 -> 定时拉取 -> 定向刷新 provider”的场景：
-
-```yaml
-plugins:
-  # 1. 周期性执行订阅更新流程
-  - tag: subscription_cron
-    type: cron
-    args:
-      timezone: "Asia/Shanghai"
-      jobs:
-        - name: refresh_rule_subscriptions
-          interval: 6h
-          executors:
-            - "$subscription_refresh"
-
-  # 2. 用 sequence 串联下载和 provider 定向 reload
-  - tag: subscription_refresh
-    type: sequence
-    args:
-      - exec: "$subscription_download"
-      - exec: "$reload_rule_providers"
-
-  # 3. 拉取远程订阅文件
-  - tag: subscription_download
-    type: download
-    args:
-      timeout: 60s
-      startup_if_missing: true
-      downloads:
-        - url: "https://example.com/geosite.dat"
-          dir: "/etc/forgedns/rules"
-          filename: "geosite.dat"
-        - url: "https://example.com/geoip.dat"
-          dir: "/etc/forgedns/rules"
-          filename: "geoip.dat"
-
-  # 4. 下载完成后只刷新相关 provider
-  - tag: reload_rule_providers
-    type: reload_provider
-    args:
-      - "$provider_geosite"
-      - "$provider_geoip"
-
-  # 5. 这些 provider 会在 reload 后重新读取本地文件
-  - tag: provider_geosite
-    type: geosite
-    args:
-      file: "/etc/forgedns/rules/geosite.dat"
-
-  - tag: provider_geoip
-    type: geoip
-    args:
-      file: "/etc/forgedns/rules/geoip.dat"
-```
-
-说明：
-
-- `download` 负责把订阅内容落到本地。
-- `reload_provider` 负责只刷新相关 provider 的内部快照，不会重建其它插件。
-- `startup_if_missing: true` 适合首次部署时自动补齐缺失文件。
-- 如果订阅源需要代理，可直接在 `subscription_download.args.socks5` 中配置 SOCKS5 代理。
-- 如果你不希望定时任务在启动后立刻覆盖已有文件，可以保留默认行为，仅在文件缺失时做启动补齐。
-- 如果这次更新还改动了 `config.yaml`、provider 依赖拓扑或插件列表，请改用全量 `reload`。
-
-### 配置变更场景仍使用全量 reload
-
-```yaml
-- tag: config_refresh
-  type: sequence
-  args:
-    - exec: "$subscription_download"
-    - exec: "$reload_all"
-
-- tag: reload_all
-  type: reload
-```
-
----
-
-## `reload_provider`
-
-### 作用
-
-按 tag 定向刷新一个或多个 provider，使用它们启动时的同一份配置重建内部快照，而不会触发应用级全量重载。
-
-### 配置示例
-
-```yaml
-- tag: reload_rule_providers
-  type: reload_provider
-  args:
-    - "$geosite_cn"
-    - "$geoip_cn"
-```
-
-### Quick Setup
-
-```yaml
-- exec: "reload_provider $geosite_cn"
-```
-
-### 行为说明
-
-- 按 `args` 中声明顺序逐个执行 targeted provider reload。
-- 语义等同于分别调用这些 provider 的管理 API `POST /plugins/<provider_tag>/reload`。
-- 全部 provider reload 成功后，当前 executor 返回 `Next`。
-- 只刷新 provider 内部数据，不修改 tag、依赖关系或其它插件配置。
-
-### 典型用途
-
-- 在 `download` 后只刷新受影响的 `domain_set`、`ip_set`、`geosite`、`geoip`、`adguard_rule` provider。
-- 在后台维护链路里降低全量 `reload` 的开销和影响面。
-
-### 注意事项
-
-- `args` 只接受 provider 引用，例如 `"$geoip_cn"`；不接受内联规则或文件引用。
-- 如果更新涉及 `config.yaml`、provider 依赖拓扑、插件列表或其它非 provider 数据结构变化，仍然需要使用 `reload`。
-- 放进实时请求路径时，provider reload 可能触发文件读取和重新编译，通常更适合后台 `cron` / `sequence` 任务。
-
----
-
-## `reload`
-
-### 作用
-
-触发一次与管理 API `POST /reload` 相同的应用级全量 reload，重新加载当前配置并重建所有插件。
-
-### 配置示例
-
-```yaml
-- tag: reload_all
-  type: reload
-```
-
-### Quick Setup
-
-```yaml
-- exec: "reload"
-```
-
-### 行为说明
-
-- 执行时会向应用控制层提交一次 reload 请求。
-- 语义等同于调用管理 API 的 `POST /reload`。
-- reload 请求被接受后当前 executor 返回 `Next`。
-- 这是全量应用 reload，不支持按指定 tag 只重载部分插件。
-
-### 典型用途
-
-- 在 `cron` 任务中配合 `download`，周期性刷新本地规则文件后立即让新配置生效。
-- 在后台维护 `sequence` 中统一触发一次全量配置重载。
-
-### 注意事项
-
-- 需要运行在带有应用控制上下文的正常 ForgeDNS 进程中。
-- 如果已有 reload 处于 `pending` 或 `in_progress`，本次执行会返回错误。
-- 放进普通请求 `sequence` 时会触发全量应用 reload，通常不建议在实时请求路径上使用。
-
----
-
-## `script`
-
-### 作用
-
-执行一个显式声明的外部命令，并把当前 `DnsContext` 中的一部分稳定字段注入为参数或环境变量。
-
-### 配置示例
-
-```yaml
-- tag: script_notify
-  type: script
-  args:
-    command: "bash"
-    args:
-      - "/opt/forgedns/notify.sh"
-      - "${qname}"
-      - "${client_ip}"
-    env:
-      FDNS_QNAME: "${qname}"
-      FDNS_CLIENT_IP: "${client_ip}"
-      FDNS_MARKS: "${marks}"
-    timeout: "5s"
-    error_mode: continue
-    max_output_bytes: 4096
-```
-
-### 配置项
-
-#### `args.command`
-
-- 类型：`string`；必填：是
-- 作用：要执行的命令路径或命令名。
-- 说明：该字段不支持模板替换，避免命令本身在运行期漂移。
-
-#### `args.args`
-
-- 类型：`array<string>`；必填：否；默认值：空
-- 作用：传给命令的参数数组。
-- 说明：每一项支持 `${key}` 占位符插值。
-
-#### `args.env`
-
-- 类型：`map<string,string>`；必填：否；默认值：空
-- 作用：追加到子进程环境变量中的键值对。
-- 说明：value 支持 `${key}` 占位符插值；不会清空父进程已有环境变量。
-
-#### `args.cwd`
-
-- 类型：`string`；必填：否；默认值：无
-- 作用：指定脚本运行时的工作目录。
-
-#### `args.timeout`
-
-- 类型：`string`；必填：否；默认值：`5s`
-- 作用：限制单次脚本执行时长。
-- 支持单位：`ms`、`s`、`m`、`h`、`d`
-
-#### `args.error_mode`
-
-- 类型：`string`；必填：否；默认值：`continue`
-- 可选值：
-  - `continue`：失败或超时仅记录日志，然后返回 `Next`
-  - `stop`：失败或超时后返回 `Stop`
-  - `fail`：失败或超时直接返回错误
-
-#### `args.max_output_bytes`
-
-- 类型：`usize`；必填：否；默认值：`4096`
-- 作用：限制 stdout / stderr 的捕获长度，超过部分只做截断标记。
-
-### 可注入占位符
-
-- 请求相关：`qname`、`qtype`、`qtype_name`、`qclass`、`qclass_name`
-- 来源相关：`client_ip`、`client_port`、`server_name`、`url_path`
-- 运行态相关：`marks`、`has_resp`
-- 响应相关：`rcode`、`rcode_name`、`resp_ip`
-- cron 元数据：`cron_plugin_tag`、`cron_job_name`、`cron_trigger_kind`、`cron_scheduled_at_unix_ms`
-
-### 行为说明
-
-- 插件本身不改 DNS 请求和响应。
-- 只执行显式配置的命令，不隐式包裹 `sh -c`、`cmd /c` 这类 shell。
-- 参数和环境变量在每次执行时基于当前 `DnsContext` 渲染。
-- 超时后会终止子进程，并按 `error_mode` 决定后续控制流。
-
-### 注意事项
-
-- v1 不支持 quick setup 语法。
-- `command` 不能为空。
-- `${key}` 中只允许使用文档列出的稳定内建字段；未知占位符会在初始化时报错。
-- 这是副作用执行器，不支持通过 stdout 回写 `attrs`、`marks` 或直接生成 DNS 响应。
-
----
-
-## `http_request`
-
-### 作用
-
-向外部 `http/https` 服务发送回调请求。它既可以在当前 DNS 链路进入下游 executor 之前触发，也可以在下游执行完成后触发，适合 webhook、审计、告警和外部联动。
-
-### 配置示例
-
-```yaml
-- tag: webhook_notify_after
-  type: http_request
-  args:
-    method: POST
-    url: "https://hooks.example.com/dns"
-    phase: after
-    async: true
-    timeout: 5s
-    headers:
-      X-Client-IP: "${client_ip}"
-      X-Qname: "${qname}"
-    query_params:
-      source: "forgedns"
-      qname: "${qname}"
-    json:
-      qname: "${qname}"
-      client_ip: "${client_ip}"
-      rcode: "${rcode_name}"
-      resp_ip: "${resp_ip}"
-```
-
-### 配置项
-
-#### `args.method`
-
-- 类型：`string`；必填：是
-- 作用：指定 HTTP 方法，例如 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`。
-
-#### `args.url`
-
-- 类型：`string`；必填：是
-- 作用：目标 URL。
-- 说明：支持 `${key}` 占位符插值；渲染后的 URL 只允许使用 `http` 或 `https`。
-
-#### `args.phase`
-
-- 类型：`string`；必填：否；默认值：`after`
-- 可选值：`before`、`after`
-- 作用：控制请求在下游 executor 之前发送，还是在下游执行完成后发送。
-
-#### `args.async`
-
-- 类型：`boolean`；必填：否；默认值：`true`
-- 作用：控制使用异步后台队列发送，还是在当前请求路径同步等待 HTTP 完成。
-
-#### `args.timeout`
-
-- 类型：`string`；必填：否；默认值：`5s`
-- 作用：限制单次 HTTP 调用的总超时时间。
-- 支持单位：`ms`、`s`、`m`、`h`、`d`
-
-#### `args.error_mode`
-
-- 类型：`string`；必填：否；默认值：`continue`
-- 可选值：
-  - `continue`：失败仅记录日志，然后继续后续链路
-  - `stop`：失败后返回 `Stop`
-  - `fail`：失败后直接返回 executor 错误
-
-#### `args.headers`
-
-- 类型：`map<string,string>`；必填：否；默认值：空
-- 作用：附加 HTTP 请求头。
-- 说明：header value 支持 `${key}` 占位符插值。
-
-#### `args.query_params`
-
-- 类型：`map<string,string>`；必填：否；默认值：空
-- 作用：把额外参数追加到 URL query 上。
-- 说明：value 支持 `${key}` 占位符插值；会与 URL 自带 query 一起发送。
-
-#### `args.body`
-
-- 类型：`string`；必填：否
-- 作用：原始字符串请求体。
-- 说明：支持 `${key}` 占位符插值；可选配 `args.content_type`。
-
-#### `args.json`
-
-- 类型：`object | array`；必填：否
-- 作用：以 JSON 方式发送请求体。
-- 说明：会自动设置 `Content-Type: application/json`；其中所有字符串叶子节点支持 `${key}` 占位符插值，非字符串值原样保留。
-
-#### `args.form`
-
-- 类型：`map<string,string>`；必填：否
-- 作用：以 `application/x-www-form-urlencoded` 方式发送表单。
-- 说明：value 支持 `${key}` 占位符插值；会自动设置对应的 `Content-Type`。
-
-#### `args.content_type`
-
-- 类型：`string`；必填：否
-- 作用：为原始 `args.body` 指定 `Content-Type`。
-- 说明：只能和 `args.body` 搭配，不能与 `args.json` 或 `args.form` 同时使用。
-
-#### `args.socks5`
-
-- 类型：`string`；必填：否
-- 作用：指定 SOCKS5 代理。
-- 说明：格式与 `upstream[].socks5` 一致，支持 `host:port`、`username:password@host:port` 和带中括号的 IPv6。
-
-#### `args.insecure_skip_verify`
-
-- 类型：`boolean`；必填：否；默认值：`false`
-- 作用：是否跳过 HTTPS 证书校验。
-
-#### `args.max_redirects`
-
-- 类型：`integer`；必填：否；默认值：`5`
-- 作用：限制最多跟随多少次重定向。
-
-#### `args.queue_size`
-
-- 类型：`integer`；必填：否；默认值：`256`
-- 作用：异步模式下后台发送队列的容量。
-
-### 可注入占位符
-
-- 与 `script` 插件相同：`qname`、`qtype`、`qtype_name`、`qclass`、`qclass_name`
-- 来源相关：`client_ip`、`client_port`、`server_name`、`url_path`
-- 运行态相关：`marks`、`has_resp`
-- 响应相关：`rcode`、`rcode_name`、`resp_ip`
-- cron 元数据：`cron_plugin_tag`、`cron_job_name`、`cron_trigger_kind`、`cron_scheduled_at_unix_ms`
-
-### 行为说明
-
-- `phase: before` 时，会先发 HTTP 请求，再进入下游 executor。
-- `phase: after` 时，会先执行下游 executor，再根据当前上下文发送 HTTP 请求。
-- `async: true` 使用有界后台队列；入队失败会按 `error_mode` 处理。
-- `async: false` 会在当前请求路径内等待 HTTP 请求完成。
-- 只有最终返回 `2xx` 才视为成功；`3xx` 会在 `max_redirects` 范围内继续跟随。
-- 插件会读取并丢弃 HTTP 响应体，以便连接复用，但不会把响应内容写回 `DnsContext`。
-- 如果请求头里已经显式设置 `Content-Type`，插件不会再覆盖它。
-
-### 注意事项
-
-- `args.body`、`args.json`、`args.form` 三者互斥。
-- 这是副作用执行器，v1 不支持根据 HTTP 返回结果改写 DNS 请求、响应、marks 或 attrs。
-- v1 不支持 multipart 上传，也不支持 quick setup 语法。
-- 如果你同时需要 `before` 和 `after` 两种时机，请配置两个独立的 `http_request` 插件实例。
-
----
-
 ## `sequence`
 
 ### 作用
@@ -1386,66 +799,6 @@ plugins:
 
 ---
 
-## `reverse_lookup`
-
-### 作用
-
-缓存应答中的 IP -> 域名关系，并可选地处理 PTR 查询。
-
-### 配置示例
-
-```yaml
-- tag: reverse_lookup_main
-  type: reverse_lookup
-  args:
-    # 反查缓存容量
-    size: 65535
-    # IP -> 域名映射保留时间
-    ttl: 7200
-    # 命中缓存时直接回答 PTR
-    handle_ptr: true
-```
-
-### 配置项
-
-#### `size`
-
-- 类型：`integer`；必填：否；默认值：`65535`
-- 作用：定义反查缓存容量上限。
-
-#### `handle_ptr`
-
-- 类型：`boolean`；必填：否；默认值：`false`
-- 作用：控制是否直接用反查缓存响应 PTR 请求。
-
-#### `ttl`
-
-- 类型：`integer`；必填：否；默认值：`7200`
-- 单位：秒
-- 作用：定义 IP 到域名映射的缓存 TTL。
-
-### 行为说明
-
-- 若 `handle_ptr: true` 且 PTR 命中缓存，会直接返回 PTR 响应并停止后续链路。
-- 正常回程阶段会扫描 `A` / `AAAA` answers，把 IP 与请求域名写入缓存。
-- 会把记录 TTL 限制在插件配置 TTL 上限内。
-
-### 插件 API
-
-- `GET /plugins/<tag>?ip=<ip>`
-  - 返回命中的完全限定域名。
-
-### 典型用途
-
-- 本地快速 IP 反查。
-- 策略排障、日志联动、资产可视化。
-
-### 注意事项
-
-- 推荐放置在 `cache` 之前，否则缓存命中可能绕过该插件，导致反查表不更新。
-
----
-
 ## `ecs_handler`
 
 ### 作用
@@ -1783,80 +1136,63 @@ plugins:
 
 ---
 
-## `sleep`
+## `reverse_lookup`
 
 ### 作用
 
-异步延迟，用于测试和策略实验。
+缓存应答中的 IP -> 域名关系，并可选地处理 PTR 查询。
 
 ### 配置示例
 
 ```yaml
-- tag: sleep_100ms
-  type: sleep
+- tag: reverse_lookup_main
+  type: reverse_lookup
   args:
-    # 额外异步延迟 100ms
-    duration: 100
+    # 反查缓存容量
+    size: 65535
+    # IP -> 域名映射保留时间
+    ttl: 7200
+    # 命中缓存时直接回答 PTR
+    handle_ptr: true
 ```
 
 ### 配置项
 
-#### `duration`
+#### `size`
 
-- 类型：`integer`；必填：否；默认值：`0`
-- 单位：毫秒
-- 作用：定义当前请求在该执行器上的额外异步等待时间。
+- 类型：`integer`；必填：否；默认值：`65535`
+- 作用：定义反查缓存容量上限。
 
-### quick setup
+#### `handle_ptr`
 
-```yaml
-- exec: "sleep 100"
-```
+- 类型：`boolean`；必填：否；默认值：`false`
+- 作用：控制是否直接用反查缓存响应 PTR 请求。
 
-### 典型用途
+#### `ttl`
 
-- 测试 `fallback` 阈值。
-- 人工制造慢路径验证观测链路。
+- 类型：`integer`；必填：否；默认值：`7200`
+- 单位：秒
+- 作用：定义 IP 到域名映射的缓存 TTL。
 
----
+### 行为说明
 
-## `debug_print`
+- 若 `handle_ptr: true` 且 PTR 命中缓存，会直接返回 PTR 响应并停止后续链路。
+- 正常回程阶段会扫描 `A` / `AAAA` answers，把 IP 与请求域名写入缓存。
+- 会把记录 TTL 限制在插件配置 TTL 上限内。
 
-### 作用
+### 插件 API
 
-打印请求与响应对象，便于调试。
-
-### 配置示例
-
-```yaml
-- tag: debug_main
-  type: debug_print
-  args:
-    # 日志标题；未配置时默认是 "debug print"
-    msg: "before forward"
-```
-
-- `msg`
-  - 可选日志标题。
-  - 默认 `"debug print"`。
-
-### 配置项
-
-#### `msg`
-
-- 类型：`string`；必填：否；默认值：`"debug print"`
-- 作用：定义日志输出标题。
-
-### quick setup
-
-```yaml
-- exec: "debug_print cache branch"
-```
+- `GET /plugins/<tag>?ip=<ip>`
+  - 返回命中的完全限定域名。
 
 ### 典型用途
 
-- 排查 sequence 分支。
-- 验证请求和响应在插件前后是否被改写。
+- 本地快速 IP 反查。
+- 策略排障、日志联动、资产可视化。
+
+### 注意事项
+
+- 推荐放置在 `cache` 之前，否则缓存命中可能绕过该插件，导致反查表不更新。
 
 ---
 
@@ -1955,6 +1291,329 @@ plugins:
 
 - 主链路观测。
 - 多条策略入口延时对比。
+
+---
+
+## `debug_print`
+
+### 作用
+
+打印请求与响应对象，便于调试。
+
+### 配置示例
+
+```yaml
+- tag: debug_main
+  type: debug_print
+  args:
+    # 日志标题；未配置时默认是 "debug print"
+    msg: "before forward"
+```
+
+- `msg`
+  - 可选日志标题。
+  - 默认 `"debug print"`。
+
+### 配置项
+
+#### `msg`
+
+- 类型：`string`；必填：否；默认值：`"debug print"`
+- 作用：定义日志输出标题。
+
+### quick setup
+
+```yaml
+- exec: "debug_print cache branch"
+```
+
+### 典型用途
+
+- 排查 sequence 分支。
+- 验证请求和响应在插件前后是否被改写。
+
+---
+
+## `sleep`
+
+### 作用
+
+异步延迟，用于测试和策略实验。
+
+### 配置示例
+
+```yaml
+- tag: sleep_100ms
+  type: sleep
+  args:
+    # 额外异步延迟 100ms
+    duration: 100
+```
+
+### 配置项
+
+#### `duration`
+
+- 类型：`integer`；必填：否；默认值：`0`
+- 单位：毫秒
+- 作用：定义当前请求在该执行器上的额外异步等待时间。
+
+### quick setup
+
+```yaml
+- exec: "sleep 100"
+```
+
+### 典型用途
+
+- 测试 `fallback` 阈值。
+- 人工制造慢路径验证观测链路。
+
+---
+
+## `http_request`
+
+### 作用
+
+向外部 `http/https` 服务发送回调请求。它既可以在当前 DNS 链路进入下游 executor 之前触发，也可以在下游执行完成后触发，适合 webhook、审计、告警和外部联动。
+
+### 配置示例
+
+```yaml
+- tag: webhook_notify_after
+  type: http_request
+  args:
+    method: POST
+    url: "https://hooks.example.com/dns"
+    phase: after
+    async: true
+    timeout: 5s
+    headers:
+      X-Client-IP: "${client_ip}"
+      X-Qname: "${qname}"
+    query_params:
+      source: "forgedns"
+      qname: "${qname}"
+    json:
+      qname: "${qname}"
+      client_ip: "${client_ip}"
+      rcode: "${rcode_name}"
+      resp_ip: "${resp_ip}"
+```
+
+### 配置项
+
+#### `args.method`
+
+- 类型：`string`；必填：是
+- 作用：指定 HTTP 方法，例如 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`。
+
+#### `args.url`
+
+- 类型：`string`；必填：是
+- 作用：目标 URL。
+- 说明：支持 `${key}` 占位符插值；渲染后的 URL 只允许使用 `http` 或 `https`。
+
+#### `args.phase`
+
+- 类型：`string`；必填：否；默认值：`after`
+- 可选值：`before`、`after`
+- 作用：控制请求在下游 executor 之前发送，还是在下游执行完成后发送。
+
+#### `args.async`
+
+- 类型：`boolean`；必填：否；默认值：`true`
+- 作用：控制使用异步后台队列发送，还是在当前请求路径同步等待 HTTP 完成。
+
+#### `args.timeout`
+
+- 类型：`string`；必填：否；默认值：`5s`
+- 作用：限制单次 HTTP 调用的总超时时间。
+- 支持单位：`ms`、`s`、`m`、`h`、`d`
+
+#### `args.error_mode`
+
+- 类型：`string`；必填：否；默认值：`continue`
+- 可选值：
+  - `continue`：失败仅记录日志，然后继续后续链路
+  - `stop`：失败后返回 `Stop`
+  - `fail`：失败后直接返回 executor 错误
+
+#### `args.headers`
+
+- 类型：`map<string,string>`；必填：否；默认值：空
+- 作用：附加 HTTP 请求头。
+- 说明：header value 支持 `${key}` 占位符插值。
+
+#### `args.query_params`
+
+- 类型：`map<string,string>`；必填：否；默认值：空
+- 作用：把额外参数追加到 URL query 上。
+- 说明：value 支持 `${key}` 占位符插值；会与 URL 自带 query 一起发送。
+
+#### `args.body`
+
+- 类型：`string`；必填：否
+- 作用：原始字符串请求体。
+- 说明：支持 `${key}` 占位符插值；可选配 `args.content_type`。
+
+#### `args.json`
+
+- 类型：`object | array`；必填：否
+- 作用：以 JSON 方式发送请求体。
+- 说明：会自动设置 `Content-Type: application/json`；其中所有字符串叶子节点支持 `${key}` 占位符插值，非字符串值原样保留。
+
+#### `args.form`
+
+- 类型：`map<string,string>`；必填：否
+- 作用：以 `application/x-www-form-urlencoded` 方式发送表单。
+- 说明：value 支持 `${key}` 占位符插值；会自动设置对应的 `Content-Type`。
+
+#### `args.content_type`
+
+- 类型：`string`；必填：否
+- 作用：为原始 `args.body` 指定 `Content-Type`。
+- 说明：只能和 `args.body` 搭配，不能与 `args.json` 或 `args.form` 同时使用。
+
+#### `args.socks5`
+
+- 类型：`string`；必填：否
+- 作用：指定 SOCKS5 代理。
+- 说明：格式与 `upstream[].socks5` 一致，支持 `host:port`、`username:password@host:port` 和带中括号的 IPv6。
+
+#### `args.insecure_skip_verify`
+
+- 类型：`boolean`；必填：否；默认值：`false`
+- 作用：是否跳过 HTTPS 证书校验。
+
+#### `args.max_redirects`
+
+- 类型：`integer`；必填：否；默认值：`5`
+- 作用：限制最多跟随多少次重定向。
+
+#### `args.queue_size`
+
+- 类型：`integer`；必填：否；默认值：`256`
+- 作用：异步模式下后台发送队列的容量。
+
+### 可注入占位符
+
+- 与 `script` 插件相同：`qname`、`qtype`、`qtype_name`、`qclass`、`qclass_name`
+- 来源相关：`client_ip`、`client_port`、`server_name`、`url_path`
+- 运行态相关：`marks`、`has_resp`
+- 响应相关：`rcode`、`rcode_name`、`resp_ip`
+- cron 元数据：`cron_plugin_tag`、`cron_job_name`、`cron_trigger_kind`、`cron_scheduled_at_unix_ms`
+
+### 行为说明
+
+- `phase: before` 时，会先发 HTTP 请求，再进入下游 executor。
+- `phase: after` 时，会先执行下游 executor，再根据当前上下文发送 HTTP 请求。
+- `async: true` 使用有界后台队列；入队失败会按 `error_mode` 处理。
+- `async: false` 会在当前请求路径内等待 HTTP 请求完成。
+- 只有最终返回 `2xx` 才视为成功；`3xx` 会在 `max_redirects` 范围内继续跟随。
+- 插件会读取并丢弃 HTTP 响应体，以便连接复用，但不会把响应内容写回 `DnsContext`。
+- 如果请求头里已经显式设置 `Content-Type`，插件不会再覆盖它。
+
+### 注意事项
+
+- `args.body`、`args.json`、`args.form` 三者互斥。
+- 这是副作用执行器，v1 不支持根据 HTTP 返回结果改写 DNS 请求、响应、marks 或 attrs。
+- v1 不支持 multipart 上传，也不支持 quick setup 语法。
+- 如果你同时需要 `before` 和 `after` 两种时机，请配置两个独立的 `http_request` 插件实例。
+
+---
+
+## `script`
+
+### 作用
+
+执行一个显式声明的外部命令，并把当前 `DnsContext` 中的一部分稳定字段注入为参数或环境变量。
+
+### 配置示例
+
+```yaml
+- tag: script_notify
+  type: script
+  args:
+    command: "bash"
+    args:
+      - "/opt/forgedns/notify.sh"
+      - "${qname}"
+      - "${client_ip}"
+    env:
+      FDNS_QNAME: "${qname}"
+      FDNS_CLIENT_IP: "${client_ip}"
+      FDNS_MARKS: "${marks}"
+    timeout: "5s"
+    error_mode: continue
+    max_output_bytes: 4096
+```
+
+### 配置项
+
+#### `args.command`
+
+- 类型：`string`；必填：是
+- 作用：要执行的命令路径或命令名。
+- 说明：该字段不支持模板替换，避免命令本身在运行期漂移。
+
+#### `args.args`
+
+- 类型：`array<string>`；必填：否；默认值：空
+- 作用：传给命令的参数数组。
+- 说明：每一项支持 `${key}` 占位符插值。
+
+#### `args.env`
+
+- 类型：`map<string,string>`；必填：否；默认值：空
+- 作用：追加到子进程环境变量中的键值对。
+- 说明：value 支持 `${key}` 占位符插值；不会清空父进程已有环境变量。
+
+#### `args.cwd`
+
+- 类型：`string`；必填：否；默认值：无
+- 作用：指定脚本运行时的工作目录。
+
+#### `args.timeout`
+
+- 类型：`string`；必填：否；默认值：`5s`
+- 作用：限制单次脚本执行时长。
+- 支持单位：`ms`、`s`、`m`、`h`、`d`
+
+#### `args.error_mode`
+
+- 类型：`string`；必填：否；默认值：`continue`
+- 可选值：
+  - `continue`：失败或超时仅记录日志，然后返回 `Next`
+  - `stop`：失败或超时后返回 `Stop`
+  - `fail`：失败或超时直接返回错误
+
+#### `args.max_output_bytes`
+
+- 类型：`usize`；必填：否；默认值：`4096`
+- 作用：限制 stdout / stderr 的捕获长度，超过部分只做截断标记。
+
+### 可注入占位符
+
+- 请求相关：`qname`、`qtype`、`qtype_name`、`qclass`、`qclass_name`
+- 来源相关：`client_ip`、`client_port`、`server_name`、`url_path`
+- 运行态相关：`marks`、`has_resp`
+- 响应相关：`rcode`、`rcode_name`、`resp_ip`
+- cron 元数据：`cron_plugin_tag`、`cron_job_name`、`cron_trigger_kind`、`cron_scheduled_at_unix_ms`
+
+### 行为说明
+
+- 插件本身不改 DNS 请求和响应。
+- 只执行显式配置的命令，不隐式包裹 `sh -c`、`cmd /c` 这类 shell。
+- 参数和环境变量在每次执行时基于当前 `DnsContext` 渲染。
+- 超时后会终止子进程，并按 `error_mode` 决定后续控制流。
+
+### 注意事项
+
+- v1 不支持 quick setup 语法。
+- `command` 不能为空。
+- `${key}` 中只允许使用文档列出的稳定内建字段；未知占位符会在初始化时报错。
+- 这是副作用执行器，不支持通过 stdout 回写 `attrs`、`marks` 或直接生成 DNS 响应。
 
 ---
 
@@ -2309,3 +1968,344 @@ plugins:
 - 至少需要 `address_list4` 或 `address_list6` 之一。
 - `comment_prefix` 与插件 `tag` 不能包含 `;` 或 `=`。
 - 同步模式不会改变 DNS 应答本身，即使 RouterOS 写入失败也会保留 DNS 结果。
+## `download`
+
+### 作用
+
+下载一个或多个 `http/https` 文件到本地目录，并在新内容完整写入后覆盖目标文件。
+
+### 配置示例
+
+```yaml
+- tag: rules_download
+  type: download
+  args:
+    timeout: 30s
+    socks5: "127.0.0.1:1080"
+    downloads:
+      - url: "https://example.com/geosite.dat"
+        dir: "/etc/forgedns"
+      - url: "https://example.com/geoip.dat"
+        dir: "/etc/forgedns"
+        filename: "geoip.dat"
+```
+
+### Quick Setup
+
+```yaml
+- exec: "download https://example.com/rules.txt /etc/forgedns"
+```
+
+### 行为说明
+
+- `downloads` 按声明顺序串行执行。
+- 单个下载失败只会写 warning 日志，不会阻止后续项继续下载。
+- 目标目录不存在时会自动创建。
+- 文件会先写入临时文件，再覆盖目标文件，避免半写入状态。
+- 配置 `socks5` 后，所有下载连接都会通过该 SOCKS5 代理发起，格式与 `upstream[].socks5` 一致。
+- 默认会在启动时检查目标文件；缺失项会在其它插件初始化前自动下载，失败会直接中止启动。
+- 如需关闭该行为，可显式配置 `startup_if_missing: false`。
+
+### 注意事项
+
+- 只支持 `http` / `https`。
+- `socks5` 支持 `host:port` 和 `username:password@host:port`，IPv6 需写成 `"[::1]:1080"`。
+- `startup_if_missing` 只会补齐缺失文件，不会在每次启动时强制覆盖已有文件。
+- 放进普通 `sequence` 时会直接占用该次请求的执行时间。
+- 覆盖本地文件后不会自动触发生效；如果只是让文件型 provider 立即读取新内容，优先串联 `reload_provider`；如果连 `config.yaml`、依赖拓扑或插件列表也一起变化，再使用 `reload`。
+
+### 推荐搭配
+
+```yaml
+- tag: rules_refresh
+  type: sequence
+  args:
+    - exec: "$rules_download"
+    - exec: "$reload_rules"
+
+- tag: rules_download
+  type: download
+  args:
+    downloads:
+      - url: "https://example.com/geosite.dat"
+        dir: "/etc/forgedns"
+
+- tag: provider_geosite
+  type: geosite
+  args:
+    file: "/etc/forgedns/geosite.dat"
+
+- tag: reload_rules
+  type: reload_provider
+  args:
+    - "$provider_geosite"
+```
+
+### 订阅更新示例
+
+下面这个例子适合“远程规则订阅 -> 定时拉取 -> 定向刷新 provider”的场景：
+
+```yaml
+plugins:
+  # 1. 周期性执行订阅更新流程
+  - tag: subscription_cron
+    type: cron
+    args:
+      timezone: "Asia/Shanghai"
+      jobs:
+        - name: refresh_rule_subscriptions
+          interval: 6h
+          executors:
+            - "$subscription_refresh"
+
+  # 2. 用 sequence 串联下载和 provider 定向 reload
+  - tag: subscription_refresh
+    type: sequence
+    args:
+      - exec: "$subscription_download"
+      - exec: "$reload_rule_providers"
+
+  # 3. 拉取远程订阅文件
+  - tag: subscription_download
+    type: download
+    args:
+      timeout: 60s
+      startup_if_missing: true
+      downloads:
+        - url: "https://example.com/geosite.dat"
+          dir: "/etc/forgedns/rules"
+          filename: "geosite.dat"
+        - url: "https://example.com/geoip.dat"
+          dir: "/etc/forgedns/rules"
+          filename: "geoip.dat"
+
+  # 4. 下载完成后只刷新相关 provider
+  - tag: reload_rule_providers
+    type: reload_provider
+    args:
+      - "$provider_geosite"
+      - "$provider_geoip"
+
+  # 5. 这些 provider 会在 reload 后重新读取本地文件
+  - tag: provider_geosite
+    type: geosite
+    args:
+      file: "/etc/forgedns/rules/geosite.dat"
+
+  - tag: provider_geoip
+    type: geoip
+    args:
+      file: "/etc/forgedns/rules/geoip.dat"
+```
+
+说明：
+
+- `download` 负责把订阅内容落到本地。
+- `reload_provider` 负责只刷新相关 provider 的内部快照，不会重建其它插件。
+- `startup_if_missing: true` 适合首次部署时自动补齐缺失文件。
+- 如果订阅源需要代理，可直接在 `subscription_download.args.socks5` 中配置 SOCKS5 代理。
+- 如果你不希望定时任务在启动后立刻覆盖已有文件，可以保留默认行为，仅在文件缺失时做启动补齐。
+- 如果这次更新还改动了 `config.yaml`、provider 依赖拓扑或插件列表，请改用全量 `reload`。
+
+### 配置变更场景仍使用全量 reload
+
+```yaml
+- tag: config_refresh
+  type: sequence
+  args:
+    - exec: "$subscription_download"
+    - exec: "$reload_all"
+
+- tag: reload_all
+  type: reload
+```
+
+---
+
+## `reload_provider`
+
+### 作用
+
+按 tag 定向刷新一个或多个 provider，使用它们启动时的同一份配置重建内部快照，而不会触发应用级全量重载。
+
+### 配置示例
+
+```yaml
+- tag: reload_rule_providers
+  type: reload_provider
+  args:
+    - "$geosite_cn"
+    - "$geoip_cn"
+```
+
+### Quick Setup
+
+```yaml
+- exec: "reload_provider $geosite_cn"
+```
+
+### 行为说明
+
+- 按 `args` 中声明顺序逐个执行 targeted provider reload。
+- 语义等同于分别调用这些 provider 的管理 API `POST /plugins/<provider_tag>/reload`。
+- 全部 provider reload 成功后，当前 executor 返回 `Next`。
+- 只刷新 provider 内部数据，不修改 tag、依赖关系或其它插件配置。
+
+### 典型用途
+
+- 在 `download` 后只刷新受影响的 `domain_set`、`ip_set`、`geosite`、`geoip`、`adguard_rule` provider。
+- 在后台维护链路里降低全量 `reload` 的开销和影响面。
+
+### 注意事项
+
+- `args` 只接受 provider 引用，例如 `"$geoip_cn"`；不接受内联规则或文件引用。
+- 如果更新涉及 `config.yaml`、provider 依赖拓扑、插件列表或其它非 provider 数据结构变化，仍然需要使用 `reload`。
+- 放进实时请求路径时，provider reload 可能触发文件读取和重新编译，通常更适合后台 `cron` / `sequence` 任务。
+
+---
+
+## `reload`
+
+### 作用
+
+触发一次与管理 API `POST /reload` 相同的应用级全量 reload，重新加载当前配置并重建所有插件。
+
+### 配置示例
+
+```yaml
+- tag: reload_all
+  type: reload
+```
+
+### Quick Setup
+
+```yaml
+- exec: "reload"
+```
+
+### 行为说明
+
+- 执行时会向应用控制层提交一次 reload 请求。
+- 语义等同于调用管理 API 的 `POST /reload`。
+- reload 请求被接受后当前 executor 返回 `Next`。
+- 这是全量应用 reload，不支持按指定 tag 只重载部分插件。
+
+### 典型用途
+
+- 在 `cron` 任务中配合 `download`，周期性刷新本地规则文件后立即让新配置生效。
+- 在后台维护 `sequence` 中统一触发一次全量配置重载。
+
+### 注意事项
+
+- 需要运行在带有应用控制上下文的正常 ForgeDNS 进程中。
+- 如果已有 reload 处于 `pending` 或 `in_progress`，本次执行会返回错误。
+- 放进普通请求 `sequence` 时会触发全量应用 reload，通常不建议在实时请求路径上使用。
+
+---
+
+## `cron`
+
+### 作用
+
+后台调度一组 executor。它不会参与实时 DNS 请求链，而是在插件初始化后按 cron 或固定间隔触发任务。
+
+### 配置示例
+
+```yaml
+- tag: cron_jobs
+  type: cron
+  args:
+    timezone: "Asia/Shanghai"
+    jobs:
+      - name: refresh_sets
+        interval: 5m
+        executors:
+          - "$seq_refresh"
+          - "debug_print cron refresh"
+
+      - name: nightly_cleanup
+        schedule: "15 3 * * *"
+        executors:
+          - "sleep 2s"
+          - "$seq_cleanup"
+```
+
+### 配置项
+
+#### `args.jobs`
+
+- 类型：`array`；必填：是；默认值：无
+- 作用：定义一个或多个后台任务。
+- 运行影响：
+  - 数组不能为空。
+  - 每个任务独立维护自己的调度状态和重叠保护。
+
+#### `args.timezone`
+
+- 类型：`string`；必填：否；默认值：系统本地时区
+- 作用：为当前 `cron` 插件下的所有 `schedule` 任务指定时区。
+- 运行影响：
+  - 仅对 `schedule` 生效。
+  - 未配置时会使用系统本地时区；无法获取时退回 `UTC`。
+  - 应填写 IANA 时区名称，例如 `Asia/Shanghai`、`UTC`、`America/Los_Angeles`。
+
+#### `args.jobs[].name`
+
+- 类型：`string`；必填：是；默认值：无
+- 作用：任务名称，用于日志与运行时标识。
+- 运行影响：
+  - 在同一个 `cron` 插件内必须唯一。
+
+#### `args.jobs[].schedule`
+
+- 类型：`string`；必填：与 `interval` 二选一；默认值：无
+- 作用：使用标准 5 字段 cron 表达式调度任务。
+- 规则说明：
+  - 仅支持 `minute hour day month day-of-week`。
+  - 不支持秒级 cron。
+  - 按 `args.timezone` 或系统本地时区计算下一次触发时间。
+
+#### `args.jobs[].interval`
+
+- 类型：`string`；必填：与 `schedule` 二选一；默认值：无
+- 作用：用简单固定间隔调度任务。
+- 支持格式：
+  - `5m`
+  - `1h`
+  - `1d`
+- 运行影响：
+  - 最小粒度为 `1m`。
+  - 启动后会等待一个完整间隔再首次触发。
+
+#### `args.jobs[].executors`
+
+- 类型：`array`；必填：是；默认值：无
+- 作用：定义任务触发时顺序执行的 executor 列表。
+- 支持形式：
+  - `$tag`：显式引用已存在 executor
+  - `tag`：裸 tag 引用
+  - quick setup 表达式，例如 `debug_print cron refresh`
+- 运行影响：
+  - 数组不能为空。
+  - 即使某个 executor 返回 `Stop`、设置了响应、或执行报错，后续 executor 仍会继续执行。
+
+### 行为说明
+
+- `schedule` 和 `interval` 必须二选一。
+- 同一个 job 若上一轮仍在运行，本轮会被跳过，不补跑。
+- 任务使用空的 `DnsContext`，适合副作用类 executor 或后台编排的 `sequence`。
+- `cron` 本身不能放进普通请求 `sequence` 里执行。
+
+### 典型用途
+
+- 定时触发后台副作用逻辑。
+- 定时执行一个专门的 `sequence` 编排。
+- 为未来的 `reload` 之类后台动作提供统一调度入口。
+
+### 注意事项
+
+- 不允许引用另一个 `cron` executor。
+- 依赖真实 DNS 请求内容的 executor 在空上下文任务中通常没有意义。
+
+---
+

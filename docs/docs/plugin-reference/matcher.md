@@ -34,57 +34,6 @@ sidebar_position: 4
 
 ---
 
-<span id="true"></span>
-
-## `_true`
-
-### 作用
-
-恒为真。
-
-### 配置示例
-
-```yaml
-- tag: always_true
-  type: _true
-```
-
-### 配置项
-
-无独立配置字段。
-
-### 典型用途
-
-- 作为保底命中条件。
-- 测试 sequence 分支顺序。
-
----
-
-<span id="false"></span>
-
-## `_false`
-
-### 作用
-
-恒为假。
-
-### 配置示例
-
-```yaml
-- tag: always_false
-  type: _false
-```
-
-### 配置项
-
-无独立配置字段。
-
-### 典型用途
-
-- 临时禁用某条规则。
-
----
-
 ## `qname`
 
 ### 作用
@@ -409,6 +358,106 @@ sidebar_position: 4
 
 ---
 
+## `rcode`
+
+### 作用
+
+匹配当前响应的 rcode。
+
+### 配置示例
+
+```yaml
+- tag: only_noerror
+  type: rcode
+  args:
+    - "2"
+```
+
+### 配置项
+
+`rcode` 的 `args` 为 rcode 列表。
+
+- 类型：`array`；必填：是；默认值：无
+- 作用：定义可命中的响应码集合。
+- 取值要求：
+  - 当前使用十进制整数表示。
+  - 例如：
+    - `0` = `NOERROR`
+    - `2` = `SERVFAIL`
+    - `3` = `NXDOMAIN`
+- 运行影响：
+  - 仅当上下文中已有响应且 rcode 命中配置集合时返回 `true`。
+
+### quick setup
+
+```yaml
+- matches: "rcode 2"
+```
+
+### 典型用途
+
+- 根据失败类型做二次处置。
+
+---
+
+## `has_resp`
+
+### 作用
+
+只要上下文中已有响应就命中。
+
+### 配置示例
+
+```yaml
+- tag: has_resp_flag
+  type: has_resp
+```
+
+### 配置项
+
+无独立配置字段。
+
+### quick setup
+
+```yaml
+- matches: "has_resp"
+```
+
+### 典型用途
+
+- 在 `cache`、`hosts`、`arbitrary` 后面判断是否已有结果。
+
+---
+
+## `has_wanted_ans`
+
+### 作用
+
+判断响应 answers 中是否包含与请求 qtype 对应的记录。
+
+### 配置示例
+
+```yaml
+- tag: has_wanted_answer
+  type: has_wanted_ans
+```
+
+### 配置项
+
+无独立配置字段。
+
+### quick setup
+
+```yaml
+- matches: "has_wanted_ans"
+```
+
+### 典型用途
+
+- 判断是否真正拿到了所需类型答案，而不仅仅是有个响应包。
+
+---
+
 ## `mark`
 
 ### 作用
@@ -608,106 +657,6 @@ args:
 
 ---
 
-## `rcode`
-
-### 作用
-
-匹配当前响应的 rcode。
-
-### 配置示例
-
-```yaml
-- tag: only_noerror
-  type: rcode
-  args:
-    - "2"
-```
-
-### 配置项
-
-`rcode` 的 `args` 为 rcode 列表。
-
-- 类型：`array`；必填：是；默认值：无
-- 作用：定义可命中的响应码集合。
-- 取值要求：
-  - 当前使用十进制整数表示。
-  - 例如：
-    - `0` = `NOERROR`
-    - `2` = `SERVFAIL`
-    - `3` = `NXDOMAIN`
-- 运行影响：
-  - 仅当上下文中已有响应且 rcode 命中配置集合时返回 `true`。
-
-### quick setup
-
-```yaml
-- matches: "rcode 2"
-```
-
-### 典型用途
-
-- 根据失败类型做二次处置。
-
----
-
-## `has_resp`
-
-### 作用
-
-只要上下文中已有响应就命中。
-
-### 配置示例
-
-```yaml
-- tag: has_resp_flag
-  type: has_resp
-```
-
-### 配置项
-
-无独立配置字段。
-
-### quick setup
-
-```yaml
-- matches: "has_resp"
-```
-
-### 典型用途
-
-- 在 `cache`、`hosts`、`arbitrary` 后面判断是否已有结果。
-
----
-
-## `has_wanted_ans`
-
-### 作用
-
-判断响应 answers 中是否包含与请求 qtype 对应的记录。
-
-### 配置示例
-
-```yaml
-- tag: has_wanted_answer
-  type: has_wanted_ans
-```
-
-### 配置项
-
-无独立配置字段。
-
-### quick setup
-
-```yaml
-- matches: "has_wanted_ans"
-```
-
-### 典型用途
-
-- 判断是否真正拿到了所需类型答案，而不仅仅是有个响应包。
-
----
-
 ## `string_exp`
 
 ### 作用
@@ -793,3 +742,54 @@ args:
 
 - 可使用专用 matcher 的场景，宜优先采用专用 matcher。
 - `string_exp` 提供更高灵活性，但表达式的可读性与可维护性通常低于专用插件。
+<span id="true"></span>
+
+## `_true`
+
+### 作用
+
+恒为真。
+
+### 配置示例
+
+```yaml
+- tag: always_true
+  type: _true
+```
+
+### 配置项
+
+无独立配置字段。
+
+### 典型用途
+
+- 作为保底命中条件。
+- 测试 sequence 分支顺序。
+
+---
+
+<span id="false"></span>
+
+## `_false`
+
+### 作用
+
+恒为假。
+
+### 配置示例
+
+```yaml
+- tag: always_false
+  type: _false
+```
+
+### 配置项
+
+无独立配置字段。
+
+### 典型用途
+
+- 临时禁用某条规则。
+
+---
+

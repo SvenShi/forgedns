@@ -204,91 +204,6 @@ sidebar_position: 2
 
 ---
 
-## `quic_server`
-
-### 作用
-
-提供 DNS over QUIC 服务。
-
-### 配置示例
-
-```yaml
-- tag: doq_in
-  type: quic_server
-  args:
-    # DoQ 请求进入的策略链
-    entry: "seq_main"
-    # DoQ 常见监听端口
-    listen: ":853"
-    # DoQ 必须配置 TLS 证书
-    cert: "/etc/forgedns/server.crt"
-    # DoQ 必须配置 TLS 私钥
-    key: "/etc/forgedns/server.key"
-    # QUIC transport 空闲超时，单位秒
-    idle_timeout: 30
-```
-
-### 配置项
-
-#### `entry`
-
-- 类型：`string`；必填：是；默认值：无
-- 作用：指定 DoQ 请求进入策略链时使用的入口执行器。
-- 示例：`entry: "seq_main"`
-- 配置要求：
-  - 必须引用已定义的执行器插件。
-
-#### `listen`
-
-- 类型：`string`；必填：是；默认值：无
-- 作用：指定 QUIC 监听地址。
-- 示例：`listen: ":853"`
-- 运行影响：
-  - 实际占用 UDP 端口。
-
-#### `cert`
-
-- 类型：`string`；必填：是；默认值：无
-- 作用：指定 DoQ 所需 TLS 证书文件。
-- 示例：`cert: "/etc/forgedns/server.crt"`
-- 运行影响：
-  - 证书无效时监听器无法启动。
-
-#### `key`
-
-- 类型：`string`；必填：是；默认值：无
-- 作用：指定 DoQ 所需 TLS 私钥文件。
-- 示例：`key: "/etc/forgedns/server.key"`
-- 运行影响：
-  - 私钥无效时监听器无法启动。
-
-#### `idle_timeout`
-
-- 类型：`integer`；必填：否；默认值：无
-- 单位：秒
-- 作用：指定 QUIC transport 的空闲超时。
-- 示例：`idle_timeout: 30`
-- 运行影响：
-  - 影响空闲 QUIC 连接的回收时机。
-
-### 行为说明
-
-- DoQ 强制要求 TLS，所以 `cert` 和 `key` 是必填项。
-- ALPN 固定为 `doq`。
-- 每个双向流代表一次独立 DNS 交换。
-
-### 适用策略
-
-- 低时延加密 DNS 入口。
-- 需要结合 QUIC 优势的现代客户端接入。
-
-### 注意事项
-
-- 监听端口底层仍然占用 UDP。
-- 与 `udp_server` 不应绑定同一地址端口。
-
----
-
 ## `http_server`
 
 ### 作用
@@ -412,3 +327,88 @@ sidebar_position: 2
 
 - `enable_http3: true` 时必须提供 `cert` 和 `key`。
 - 若后面有反代，请确认 `src_ip_header` 的可信边界，避免伪造来源 IP。
+## `quic_server`
+
+### 作用
+
+提供 DNS over QUIC 服务。
+
+### 配置示例
+
+```yaml
+- tag: doq_in
+  type: quic_server
+  args:
+    # DoQ 请求进入的策略链
+    entry: "seq_main"
+    # DoQ 常见监听端口
+    listen: ":853"
+    # DoQ 必须配置 TLS 证书
+    cert: "/etc/forgedns/server.crt"
+    # DoQ 必须配置 TLS 私钥
+    key: "/etc/forgedns/server.key"
+    # QUIC transport 空闲超时，单位秒
+    idle_timeout: 30
+```
+
+### 配置项
+
+#### `entry`
+
+- 类型：`string`；必填：是；默认值：无
+- 作用：指定 DoQ 请求进入策略链时使用的入口执行器。
+- 示例：`entry: "seq_main"`
+- 配置要求：
+  - 必须引用已定义的执行器插件。
+
+#### `listen`
+
+- 类型：`string`；必填：是；默认值：无
+- 作用：指定 QUIC 监听地址。
+- 示例：`listen: ":853"`
+- 运行影响：
+  - 实际占用 UDP 端口。
+
+#### `cert`
+
+- 类型：`string`；必填：是；默认值：无
+- 作用：指定 DoQ 所需 TLS 证书文件。
+- 示例：`cert: "/etc/forgedns/server.crt"`
+- 运行影响：
+  - 证书无效时监听器无法启动。
+
+#### `key`
+
+- 类型：`string`；必填：是；默认值：无
+- 作用：指定 DoQ 所需 TLS 私钥文件。
+- 示例：`key: "/etc/forgedns/server.key"`
+- 运行影响：
+  - 私钥无效时监听器无法启动。
+
+#### `idle_timeout`
+
+- 类型：`integer`；必填：否；默认值：无
+- 单位：秒
+- 作用：指定 QUIC transport 的空闲超时。
+- 示例：`idle_timeout: 30`
+- 运行影响：
+  - 影响空闲 QUIC 连接的回收时机。
+
+### 行为说明
+
+- DoQ 强制要求 TLS，所以 `cert` 和 `key` 是必填项。
+- ALPN 固定为 `doq`。
+- 每个双向流代表一次独立 DNS 交换。
+
+### 适用策略
+
+- 低时延加密 DNS 入口。
+- 需要结合 QUIC 优势的现代客户端接入。
+
+### 注意事项
+
+- 监听端口底层仍然占用 UDP。
+- 与 `udp_server` 不应绑定同一地址端口。
+
+---
+

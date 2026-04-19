@@ -12,594 +12,6 @@ When reading this chapter, keep two questions in mind:
 
 ---
 
-## `cron`
-
-### Purpose
-
-Schedules a list of executors in the background. It does not participate in the live DNS request path and starts running only after plugin initialization.
-
-### Example Configuration
-
-```yaml
-- tag: cron_jobs
-  type: cron
-  args:
-    timezone: "Asia/Shanghai"
-    jobs:
-      - name: refresh_sets
-        interval: 5m
-        executors:
-          - "$seq_refresh"
-          - "debug_print cron refresh"
-
-      - name: nightly_cleanup
-        schedule: "15 3 * * *"
-        executors:
-          - "sleep 2s"
-          - "$seq_cleanup"
-```
-
-### Configuration Details
-
-#### `args.jobs`
-
-- Type: `array`; Required: yes
-- Purpose: Defines one or more background jobs.
-- Runtime impact:
-  - The array cannot be empty.
-  - Each job maintains its own trigger state and overlap protection.
-
-#### `args.timezone`
-
-- Type: `string`; Required: no
-- Default: system local time zone
-- Purpose: Overrides the time zone used by all `schedule` jobs in this `cron` plugin.
-- Notes:
-  - Only affects `schedule`.
-  - When omitted, ForgeDNS uses the system local time zone and falls back to `UTC` if unavailable.
-  - Use IANA names such as `Asia/Shanghai`, `UTC`, or `America/Los_Angeles`.
-
-#### `args.jobs[].name`
-
-- Type: `string`; Required: yes
-- Purpose: Job name used in logs and runtime metadata.
-- Runtime impact:
-  - Must be unique within the same `cron` plugin.
-
-#### `args.jobs[].schedule`
-
-- Type: `string`; Required: exactly one of `schedule` or `interval`
-- Purpose: Schedule a job with a standard 5-field cron expression.
-- Notes:
-  - Only `minute hour day month day-of-week` is supported.
-  - Second-level cron expressions are not supported.
-  - Next runs are computed in `args.timezone` or the system local time zone.
-
-#### `args.jobs[].interval`
-
-- Type: `string`; Required: exactly one of `schedule` or `interval`
-- Purpose: Schedule a job with a fixed interval.
-- Supports:
-  - `5m`
-  - `1h`
-  - `1d`
-- Runtime impact:
-  - Minimum interval is `1m`.
-  - The first run happens after one full interval elapses.
-
-#### `args.jobs[].executors`
-
-- Type: `array`; Required: yes
-- Purpose: Ordered list of executors to run for the job.
-- Supports:
-  - `$tag` explicit executor references
-  - bare `tag` references
-  - quick-setup expressions such as `debug_print cron refresh`
-- Runtime impact:
-  - The array cannot be empty.
-  - Later executors still run even if an earlier executor returns `Stop`, produces a response, or fails.
-
-### Behavior
-
-- `schedule` and `interval` are mutually exclusive.
-- If a job is still running when the next trigger arrives, that trigger is skipped and not replayed later.
-- Jobs run with an empty `DnsContext`, so this plugin is best suited for side-effect executors or dedicated background `sequence` chains.
-- `cron` itself cannot be executed inside a normal request `sequence`.
-
-### Typical Uses
-
-- Periodic side-effect tasks.
-- Scheduling a dedicated background `sequence`.
-- Providing a common trigger surface for future executors such as `reload`.
-
-### Notes
-
-- A `cron` job cannot reference another `cron` executor.
-- Executors that require a real DNS request usually do not make sense in an empty background context.
-
----
-
-## `download`
-
-### Purpose
-
-Downloads one or more `http/https` files into a local directory and overwrites the target files only after the new content is fully written.
-
-### Example Configuration
-
-```yaml
-- tag: rules_download
-  type: download
-  args:
-    timeout: 30s
-    socks5: "127.0.0.1:1080"
-    downloads:
-      - url: "https://example.com/geosite.dat"
-        dir: "/etc/forgedns"
-      - url: "https://example.com/geoip.dat"
-        dir: "/etc/forgedns"
-        filename: "geoip.dat"
-```
-
-### Quick Setup
-
-```yaml
-- exec: "download https://example.com/rules.txt /etc/forgedns"
-```
-
-### Behavior
-
-- `downloads` run sequentially in declaration order.
-- A failed item only emits a warning log and does not stop later items.
-- Missing target directories are created automatically.
-- Files are written to a temporary path first and then moved into place.
-- When `socks5` is set, all download connections are routed through that SOCKS5 proxy using the same format as `upstream[].socks5`.
-- By default, ForgeDNS checks target files during startup and downloads any missing ones before other plugins initialize. A bootstrap failure aborts startup.
-- Set `startup_if_missing: false` to disable that bootstrap behavior.
-
-### Notes
-
-- Only `http` and `https` are supported.
-- `socks5` accepts `host:port` and `username:password@host:port`; bracket IPv6 addresses such as `"[::1]:1080"` are supported too.
-- `startup_if_missing` only fills missing files; it does not overwrite existing targets on every startup.
-- When used inside a normal `sequence`, the download time is paid directly by that request.
-- Overwriting a local file does not apply automatically. If you only need file-backed providers to pick up the new data, prefer chaining `reload_provider`; if `config.yaml`, dependency topology, or the plugin list changed too, use `reload`.
-
-### Recommended Pairing
-
-```yaml
-- tag: rules_refresh
-  type: sequence
-  args:
-    - exec: "$rules_download"
-    - exec: "$reload_rules"
-
-- tag: rules_download
-  type: download
-  args:
-    downloads:
-      - url: "https://example.com/geosite.dat"
-        dir: "/etc/forgedns"
-
-- tag: provider_geosite
-  type: geosite
-  args:
-    file: "/etc/forgedns/geosite.dat"
-
-- tag: reload_rules
-  type: reload_provider
-  args:
-    - "$provider_geosite"
-```
-
-### Subscription Refresh Example
-
-This example fits the common flow of “remote subscription -> scheduled download -> targeted provider refresh”:
-
-```yaml
-plugins:
-  # 1. Run the subscription refresh flow periodically
-  - tag: subscription_cron
-    type: cron
-    args:
-      timezone: "Asia/Shanghai"
-      jobs:
-        - name: refresh_rule_subscriptions
-          interval: 6h
-          executors:
-            - "$subscription_refresh"
-
-  # 2. Chain download and targeted provider reload with a sequence
-  - tag: subscription_refresh
-    type: sequence
-    args:
-      - exec: "$subscription_download"
-      - exec: "$reload_rule_providers"
-
-  # 3. Download remote subscription files
-  - tag: subscription_download
-    type: download
-    args:
-      timeout: 60s
-      startup_if_missing: true
-      downloads:
-        - url: "https://example.com/geosite.dat"
-          dir: "/etc/forgedns/rules"
-          filename: "geosite.dat"
-        - url: "https://example.com/geoip.dat"
-          dir: "/etc/forgedns/rules"
-          filename: "geoip.dat"
-
-  # 4. Reload only the affected providers after download completes
-  - tag: reload_rule_providers
-    type: reload_provider
-    args:
-      - "$provider_geosite"
-      - "$provider_geoip"
-
-  # 5. These providers re-read the local files after reload
-  - tag: provider_geosite
-    type: geosite
-    args:
-      file: "/etc/forgedns/rules/geosite.dat"
-
-  - tag: provider_geoip
-    type: geoip
-    args:
-      file: "/etc/forgedns/rules/geoip.dat"
-```
-
-Notes:
-
-- `download` writes the subscription content to local files.
-- `reload_provider` refreshes only the affected provider snapshots without rebuilding unrelated plugins.
-- `startup_if_missing: true` is useful for first-time deployment when files may not exist yet.
-- If the subscription source requires a proxy, set a SOCKS5 proxy on `subscription_download.args.socks5`.
-- If you do not want startup to overwrite existing files, keep the default behavior and only bootstrap missing files.
-- If the update also changes `config.yaml`, provider topology, or the plugin list, use a full `reload` instead.
-
-### Full Reload Still Fits Config Changes
-
-```yaml
-- tag: config_refresh
-  type: sequence
-  args:
-    - exec: "$subscription_download"
-    - exec: "$reload_all"
-
-- tag: reload_all
-  type: reload
-```
-
----
-
-## `reload_provider`
-
-### Purpose
-
-Reloads one or more providers in place by tag, rebuilding their internal snapshots with the same startup configuration without triggering a full application reload.
-
-### Example Configuration
-
-```yaml
-- tag: reload_rule_providers
-  type: reload_provider
-  args:
-    - "$geosite_cn"
-    - "$geoip_cn"
-```
-
-### Quick Setup
-
-```yaml
-- exec: "reload_provider $geosite_cn"
-```
-
-### Behavior
-
-- Providers are reloaded sequentially in the order declared in `args`.
-- The semantics are the same as calling `POST /plugins/<provider_tag>/reload` for each referenced provider.
-- Once every provider reload succeeds, the executor returns `Next`.
-- Only provider-local data is refreshed; tags, dependencies, and other plugin configuration are unchanged.
-
-### Typical Uses
-
-- Refreshing only the affected `domain_set`, `ip_set`, `geosite`, `geoip`, or `adguard_rule` providers after `download`.
-- Reducing the blast radius and cost of a full application reload in background maintenance flows.
-
-### Notes
-
-- `args` only accepts provider references such as `"$geoip_cn"`; inline rules and file references are rejected.
-- If the update changes `config.yaml`, provider topology, the plugin list, or other non-provider structures, you still need `reload`.
-- Running this on a live request path may trigger file reads and recompilation, so it is usually a better fit for background `cron` or maintenance `sequence` flows.
-
----
-
-## `reload`
-
-### Purpose
-
-Triggers the same application-level full reload as the management API `POST /reload`, reloading the active configuration and rebuilding all plugins.
-
-### Example Configuration
-
-```yaml
-- tag: reload_all
-  type: reload
-```
-
-### Quick Setup
-
-```yaml
-- exec: "reload"
-```
-
-### Behavior
-
-- Execution submits a reload request to the application control layer.
-- The semantics are the same as the management API `POST /reload`.
-- Once the reload request is accepted, the executor returns `Next`.
-- This is a full application reload. Reloading selected plugin tags is not supported.
-
-### Typical Uses
-
-- Pairing with `download` in a `cron` job so refreshed rule files take effect immediately.
-- Triggering a full configuration reload from a dedicated background `sequence`.
-
-### Notes
-
-- It must run inside a normal ForgeDNS process with application control context attached.
-- Execution fails when another reload is already `pending` or `in_progress`.
-- Using it in a live request `sequence` triggers a full application reload and is usually not appropriate for latency-sensitive request paths.
-
----
-
-## `script`
-
-### Purpose
-
-Runs an explicitly configured external command and injects a stable subset of the current `DnsContext` into command arguments or environment variables.
-
-### Example
-
-```yaml
-- tag: script_notify
-  type: script
-  args:
-    command: "bash"
-    args:
-      - "/opt/forgedns/notify.sh"
-      - "${qname}"
-      - "${client_ip}"
-    env:
-      FDNS_QNAME: "${qname}"
-      FDNS_CLIENT_IP: "${client_ip}"
-      FDNS_MARKS: "${marks}"
-    timeout: "5s"
-    error_mode: continue
-    max_output_bytes: 4096
-```
-
-### Config Fields
-
-#### `args.command`
-
-- Type: `string`; Required: yes
-- Purpose: Command path or program name to execute.
-- Notes: This field is never templated.
-
-#### `args.args`
-
-- Type: `array<string>`; Required: no; Default: empty
-- Purpose: Positional command arguments.
-- Notes: Each item supports `${key}` interpolation.
-
-#### `args.env`
-
-- Type: `map<string,string>`; Required: no; Default: empty
-- Purpose: Extra child-process environment variables.
-- Notes: Values support `${key}` interpolation and overlay the inherited process environment.
-
-#### `args.cwd`
-
-- Type: `string`; Required: no; Default: none
-- Purpose: Working directory for the child process.
-
-#### `args.timeout`
-
-- Type: `string`; Required: no; Default: `5s`
-- Purpose: Maximum execution time for one script run.
-- Supported units: `ms`, `s`, `m`, `h`, `d`
-
-#### `args.error_mode`
-
-- Type: `string`; Required: no; Default: `continue`
-- Allowed values:
-  - `continue`: log failure or timeout, then return `Next`
-  - `stop`: log failure or timeout, then return `Stop`
-  - `fail`: return an executor error immediately
-
-#### `args.max_output_bytes`
-
-- Type: `usize`; Required: no; Default: `4096`
-- Purpose: Maximum captured stdout/stderr length before truncation.
-
-### Available Placeholders
-
-- Request fields: `qname`, `qtype`, `qtype_name`, `qclass`, `qclass_name`
-- Source fields: `client_ip`, `client_port`, `server_name`, `url_path`
-- Runtime fields: `marks`, `has_resp`
-- Response fields: `rcode`, `rcode_name`, `resp_ip`
-- Cron metadata: `cron_plugin_tag`, `cron_job_name`, `cron_trigger_kind`, `cron_scheduled_at_unix_ms`
-
-### Behavior
-
-- The plugin does not mutate DNS requests or responses.
-- It runs only the explicit configured command and does not wrap it with `sh -c`, `cmd /c`, or similar shell shortcuts.
-- Arguments and environment variables are rendered from the current `DnsContext` on each execution.
-- On timeout the child process is terminated, then `error_mode` decides how the sequence continues.
-
-### Notes
-
-- v1 does not support quick setup syntax.
-- `command` must not be empty.
-- Only the documented built-in placeholders are accepted; unknown placeholders fail plugin initialization.
-- This is a side-effect executor. It does not support writing attrs, marks, or DNS responses back through stdout.
-
----
-
-## `http_request`
-
-### Purpose
-
-Sends callback requests to external `http/https` services. It can trigger before the current DNS flow enters downstream executors or after downstream execution completes, which makes it suitable for webhooks, audit pipelines, alerts, and external integrations.
-
-### Example Configuration
-
-```yaml
-- tag: webhook_notify_after
-  type: http_request
-  args:
-    method: POST
-    url: "https://hooks.example.com/dns"
-    phase: after
-    async: true
-    timeout: 5s
-    headers:
-      X-Client-IP: "${client_ip}"
-      X-Qname: "${qname}"
-    query_params:
-      source: "forgedns"
-      qname: "${qname}"
-    json:
-      qname: "${qname}"
-      client_ip: "${client_ip}"
-      rcode: "${rcode_name}"
-      resp_ip: "${resp_ip}"
-```
-
-### Config Fields
-
-#### `args.method`
-
-- Type: `string`; Required: yes
-- Purpose: Selects the HTTP method such as `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`.
-
-#### `args.url`
-
-- Type: `string`; Required: yes
-- Purpose: The target URL.
-- Notes: Supports `${key}` placeholder interpolation. The rendered URL must use either `http` or `https`.
-
-#### `args.phase`
-
-- Type: `string`; Required: no; Default: `after`
-- Allowed values: `before`, `after`
-- Purpose: Controls whether the request is sent before or after downstream executors run.
-
-#### `args.async`
-
-- Type: `boolean`; Required: no; Default: `true`
-- Purpose: Chooses bounded background dispatch or inline synchronous dispatch.
-
-#### `args.timeout`
-
-- Type: `string`; Required: no; Default: `5s`
-- Purpose: Caps the total time budget for one HTTP call.
-- Supported units: `ms`, `s`, `m`, `h`, `d`
-
-#### `args.error_mode`
-
-- Type: `string`; Required: no; Default: `continue`
-- Allowed values:
-  - `continue`: only log the failure and keep running
-  - `stop`: return `Stop` on failure
-  - `fail`: return an executor error immediately
-
-#### `args.headers`
-
-- Type: `map<string,string>`; Required: no; Default: empty
-- Purpose: Adds HTTP request headers.
-- Notes: Header values support `${key}` placeholder interpolation.
-
-#### `args.query_params`
-
-- Type: `map<string,string>`; Required: no; Default: empty
-- Purpose: Appends additional query parameters to the rendered URL.
-- Notes: Values support `${key}` placeholder interpolation and are combined with any query already present in `args.url`.
-
-#### `args.body`
-
-- Type: `string`; Required: no
-- Purpose: Sends a raw string body.
-- Notes: Supports `${key}` placeholder interpolation and can be paired with `args.content_type`.
-
-#### `args.json`
-
-- Type: `object | array`; Required: no
-- Purpose: Sends a JSON body.
-- Notes: Automatically sets `Content-Type: application/json`. Every string leaf supports `${key}` interpolation while non-string values are preserved as-is.
-
-#### `args.form`
-
-- Type: `map<string,string>`; Required: no
-- Purpose: Sends an `application/x-www-form-urlencoded` body.
-- Notes: Values support `${key}` interpolation and the plugin automatically sets the matching `Content-Type`.
-
-#### `args.content_type`
-
-- Type: `string`; Required: no
-- Purpose: Sets `Content-Type` for raw `args.body`.
-- Notes: This helper can only be used with `args.body`, not with `args.json` or `args.form`.
-
-#### `args.socks5`
-
-- Type: `string`; Required: no
-- Purpose: Routes requests through a SOCKS5 proxy.
-- Notes: Uses the same format as `upstream[].socks5`, including `host:port`, `username:password@host:port`, and bracketed IPv6.
-
-#### `args.insecure_skip_verify`
-
-- Type: `boolean`; Required: no; Default: `false`
-- Purpose: Skips HTTPS certificate validation.
-
-#### `args.max_redirects`
-
-- Type: `integer`; Required: no; Default: `5`
-- Purpose: Limits how many redirects are followed.
-
-#### `args.queue_size`
-
-- Type: `integer`; Required: no; Default: `256`
-- Purpose: Sets the bounded queue capacity used by async mode.
-
-### Available Placeholders
-
-- Same as `script`: `qname`, `qtype`, `qtype_name`, `qclass`, `qclass_name`
-- Source fields: `client_ip`, `client_port`, `server_name`, `url_path`
-- Runtime fields: `marks`, `has_resp`
-- Response fields: `rcode`, `rcode_name`, `resp_ip`
-- Cron metadata: `cron_plugin_tag`, `cron_job_name`, `cron_trigger_kind`, `cron_scheduled_at_unix_ms`
-
-### Behavior
-
-- With `phase: before`, the HTTP request is dispatched first and the downstream executor chain runs afterward.
-- With `phase: after`, the downstream executor chain runs first and the HTTP request is dispatched against the resulting context.
-- `async: true` uses a bounded background queue. Queue insertion failures are handled according to `error_mode`.
-- `async: false` waits for the HTTP call on the current request path.
-- Only terminal `2xx` responses are treated as success. `3xx` responses are followed up to `max_redirects`.
-- The plugin drains and discards the HTTP response body so connections remain reusable, but it does not write that body back into `DnsContext`.
-- If `Content-Type` is already set explicitly in `args.headers`, the plugin does not overwrite it.
-
-### Notes
-
-- `args.body`, `args.json`, and `args.form` are mutually exclusive.
-- This is a side-effect executor. In v1 it cannot rewrite DNS requests, responses, marks, or attrs based on the HTTP result.
-- v1 does not support multipart uploads or quick setup syntax.
-- If you need both trigger moments, configure two separate `http_request` plugin instances.
-
----
-
 ## `sequence`
 
 ### Purpose
@@ -1324,63 +736,6 @@ Rule format:
 
 ---
 
-## `reverse_lookup`
-
-### Purpose
-
-Maintains a reverse IP-to-name cache and optionally handles PTR requests.
-
-### Example Configuration
-
-```yaml
-- tag: reverse_lookup_main
-  type: reverse_lookup
-  args:
-    # Reverse-cache capacity
-    size: 65535
-    # Retention time for IP -> name mappings
-    ttl: 7200
-    # Answer PTR directly from the learned cache
-    handle_ptr: true
-```
-
-### Configuration Details
-
-#### `size`
-
-- Type: `integer`; Required: no
-- Purpose: Reverse cache capacity.
-
-#### `handle_ptr`
-
-- Type: `boolean`; Required: no; Default: `false`
-- Purpose: Answer PTR requests from the reverse cache.
-
-#### `ttl`
-
-- Type: `duration`; Required: no
-- Purpose: Reverse cache retention TTL.
-
-### Behavior
-
-- Learns from successful responses.
-- Can expose cached domain names for IP lookups and PTR handling.
-
-### Plugin API
-
-- `GET /plugins/<tag>?ip=<ip_addr>`
-
-### Typical Uses
-
-- Debugging resolved destinations
-- Supporting PTR-like introspection for learned answers
-
-### Notes
-
-- This is an auxiliary index, not a replacement for authoritative PTR data.
-
----
-
 ## `ecs_handler`
 
 ### Purpose
@@ -1693,75 +1048,60 @@ No standalone configuration fields.
 
 ---
 
-## `sleep`
+## `reverse_lookup`
 
 ### Purpose
 
-Sleeps for a bounded duration inside the chain.
+Maintains a reverse IP-to-name cache and optionally handles PTR requests.
 
 ### Example Configuration
 
 ```yaml
-- tag: sleep_100ms
-  type: sleep
+- tag: reverse_lookup_main
+  type: reverse_lookup
   args:
-    # Add 100 ms of async delay
-    duration: 100
+    # Reverse-cache capacity
+    size: 65535
+    # Retention time for IP -> name mappings
+    ttl: 7200
+    # Answer PTR directly from the learned cache
+    handle_ptr: true
 ```
 
 ### Configuration Details
 
-#### `duration`
+#### `size`
 
-- Type: `duration`; Required: yes
-- Purpose: Sleep duration.
+- Type: `integer`; Required: no
+- Purpose: Reverse cache capacity.
 
-### quick setup
+#### `handle_ptr`
 
-```yaml
-- exec: "sleep 100"
-```
+- Type: `boolean`; Required: no; Default: `false`
+- Purpose: Answer PTR requests from the reverse cache.
 
-### Typical Uses
+#### `ttl`
 
-- Testing
-- Timing experiments
+- Type: `duration`; Required: no
+- Purpose: Reverse cache retention TTL.
 
----
+### Behavior
 
-## `debug_print`
+- Learns from successful responses.
+- Can expose cached domain names for IP lookups and PTR handling.
 
-### Purpose
+### Plugin API
 
-Prints a debug message.
-
-### Example Configuration
-
-```yaml
-- tag: debug_main
-  type: debug_print
-  args:
-    # Log title; defaults to "debug print" when omitted
-    msg: "before forward"
-```
-
-### Configuration Details
-
-#### `msg`
-
-- Type: `string`; Required: yes
-- Purpose: Message content.
-
-### quick setup
-
-```yaml
-- exec: "debug_print cache branch"
-```
+- `GET /plugins/<tag>?ip=<ip_addr>`
 
 ### Typical Uses
 
-- Temporary debugging
-- Reading sequence branches during development
+- Debugging resolved destinations
+- Supporting PTR-like introspection for learned answers
+
+### Notes
+
+- This is an auxiliary index, not a replacement for authoritative PTR data.
 
 ---
 
@@ -1846,6 +1186,324 @@ Collects Prometheus metrics for query handling.
 
 - Prometheus integration
 - Observe multiple policy entry points separately
+
+---
+
+## `debug_print`
+
+### Purpose
+
+Prints a debug message.
+
+### Example Configuration
+
+```yaml
+- tag: debug_main
+  type: debug_print
+  args:
+    # Log title; defaults to "debug print" when omitted
+    msg: "before forward"
+```
+
+### Configuration Details
+
+#### `msg`
+
+- Type: `string`; Required: yes
+- Purpose: Message content.
+
+### quick setup
+
+```yaml
+- exec: "debug_print cache branch"
+```
+
+### Typical Uses
+
+- Temporary debugging
+- Reading sequence branches during development
+
+---
+
+## `sleep`
+
+### Purpose
+
+Sleeps for a bounded duration inside the chain.
+
+### Example Configuration
+
+```yaml
+- tag: sleep_100ms
+  type: sleep
+  args:
+    # Add 100 ms of async delay
+    duration: 100
+```
+
+### Configuration Details
+
+#### `duration`
+
+- Type: `duration`; Required: yes
+- Purpose: Sleep duration.
+
+### quick setup
+
+```yaml
+- exec: "sleep 100"
+```
+
+### Typical Uses
+
+- Testing
+- Timing experiments
+
+---
+
+## `http_request`
+
+### Purpose
+
+Sends callback requests to external `http/https` services. It can trigger before the current DNS flow enters downstream executors or after downstream execution completes, which makes it suitable for webhooks, audit pipelines, alerts, and external integrations.
+
+### Example Configuration
+
+```yaml
+- tag: webhook_notify_after
+  type: http_request
+  args:
+    method: POST
+    url: "https://hooks.example.com/dns"
+    phase: after
+    async: true
+    timeout: 5s
+    headers:
+      X-Client-IP: "${client_ip}"
+      X-Qname: "${qname}"
+    query_params:
+      source: "forgedns"
+      qname: "${qname}"
+    json:
+      qname: "${qname}"
+      client_ip: "${client_ip}"
+      rcode: "${rcode_name}"
+      resp_ip: "${resp_ip}"
+```
+
+### Config Fields
+
+#### `args.method`
+
+- Type: `string`; Required: yes
+- Purpose: Selects the HTTP method such as `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`.
+
+#### `args.url`
+
+- Type: `string`; Required: yes
+- Purpose: The target URL.
+- Notes: Supports `${key}` placeholder interpolation. The rendered URL must use either `http` or `https`.
+
+#### `args.phase`
+
+- Type: `string`; Required: no; Default: `after`
+- Allowed values: `before`, `after`
+- Purpose: Controls whether the request is sent before or after downstream executors run.
+
+#### `args.async`
+
+- Type: `boolean`; Required: no; Default: `true`
+- Purpose: Chooses bounded background dispatch or inline synchronous dispatch.
+
+#### `args.timeout`
+
+- Type: `string`; Required: no; Default: `5s`
+- Purpose: Caps the total time budget for one HTTP call.
+- Supported units: `ms`, `s`, `m`, `h`, `d`
+
+#### `args.error_mode`
+
+- Type: `string`; Required: no; Default: `continue`
+- Allowed values:
+  - `continue`: only log the failure and keep running
+  - `stop`: return `Stop` on failure
+  - `fail`: return an executor error immediately
+
+#### `args.headers`
+
+- Type: `map<string,string>`; Required: no; Default: empty
+- Purpose: Adds HTTP request headers.
+- Notes: Header values support `${key}` placeholder interpolation.
+
+#### `args.query_params`
+
+- Type: `map<string,string>`; Required: no; Default: empty
+- Purpose: Appends additional query parameters to the rendered URL.
+- Notes: Values support `${key}` placeholder interpolation and are combined with any query already present in `args.url`.
+
+#### `args.body`
+
+- Type: `string`; Required: no
+- Purpose: Sends a raw string body.
+- Notes: Supports `${key}` placeholder interpolation and can be paired with `args.content_type`.
+
+#### `args.json`
+
+- Type: `object | array`; Required: no
+- Purpose: Sends a JSON body.
+- Notes: Automatically sets `Content-Type: application/json`. Every string leaf supports `${key}` interpolation while non-string values are preserved as-is.
+
+#### `args.form`
+
+- Type: `map<string,string>`; Required: no
+- Purpose: Sends an `application/x-www-form-urlencoded` body.
+- Notes: Values support `${key}` interpolation and the plugin automatically sets the matching `Content-Type`.
+
+#### `args.content_type`
+
+- Type: `string`; Required: no
+- Purpose: Sets `Content-Type` for raw `args.body`.
+- Notes: This helper can only be used with `args.body`, not with `args.json` or `args.form`.
+
+#### `args.socks5`
+
+- Type: `string`; Required: no
+- Purpose: Routes requests through a SOCKS5 proxy.
+- Notes: Uses the same format as `upstream[].socks5`, including `host:port`, `username:password@host:port`, and bracketed IPv6.
+
+#### `args.insecure_skip_verify`
+
+- Type: `boolean`; Required: no; Default: `false`
+- Purpose: Skips HTTPS certificate validation.
+
+#### `args.max_redirects`
+
+- Type: `integer`; Required: no; Default: `5`
+- Purpose: Limits how many redirects are followed.
+
+#### `args.queue_size`
+
+- Type: `integer`; Required: no; Default: `256`
+- Purpose: Sets the bounded queue capacity used by async mode.
+
+### Available Placeholders
+
+- Same as `script`: `qname`, `qtype`, `qtype_name`, `qclass`, `qclass_name`
+- Source fields: `client_ip`, `client_port`, `server_name`, `url_path`
+- Runtime fields: `marks`, `has_resp`
+- Response fields: `rcode`, `rcode_name`, `resp_ip`
+- Cron metadata: `cron_plugin_tag`, `cron_job_name`, `cron_trigger_kind`, `cron_scheduled_at_unix_ms`
+
+### Behavior
+
+- With `phase: before`, the HTTP request is dispatched first and the downstream executor chain runs afterward.
+- With `phase: after`, the downstream executor chain runs first and the HTTP request is dispatched against the resulting context.
+- `async: true` uses a bounded background queue. Queue insertion failures are handled according to `error_mode`.
+- `async: false` waits for the HTTP call on the current request path.
+- Only terminal `2xx` responses are treated as success. `3xx` responses are followed up to `max_redirects`.
+- The plugin drains and discards the HTTP response body so connections remain reusable, but it does not write that body back into `DnsContext`.
+- If `Content-Type` is already set explicitly in `args.headers`, the plugin does not overwrite it.
+
+### Notes
+
+- `args.body`, `args.json`, and `args.form` are mutually exclusive.
+- This is a side-effect executor. In v1 it cannot rewrite DNS requests, responses, marks, or attrs based on the HTTP result.
+- v1 does not support multipart uploads or quick setup syntax.
+- If you need both trigger moments, configure two separate `http_request` plugin instances.
+
+---
+
+## `script`
+
+### Purpose
+
+Runs an explicitly configured external command and injects a stable subset of the current `DnsContext` into command arguments or environment variables.
+
+### Example
+
+```yaml
+- tag: script_notify
+  type: script
+  args:
+    command: "bash"
+    args:
+      - "/opt/forgedns/notify.sh"
+      - "${qname}"
+      - "${client_ip}"
+    env:
+      FDNS_QNAME: "${qname}"
+      FDNS_CLIENT_IP: "${client_ip}"
+      FDNS_MARKS: "${marks}"
+    timeout: "5s"
+    error_mode: continue
+    max_output_bytes: 4096
+```
+
+### Config Fields
+
+#### `args.command`
+
+- Type: `string`; Required: yes
+- Purpose: Command path or program name to execute.
+- Notes: This field is never templated.
+
+#### `args.args`
+
+- Type: `array<string>`; Required: no; Default: empty
+- Purpose: Positional command arguments.
+- Notes: Each item supports `${key}` interpolation.
+
+#### `args.env`
+
+- Type: `map<string,string>`; Required: no; Default: empty
+- Purpose: Extra child-process environment variables.
+- Notes: Values support `${key}` interpolation and overlay the inherited process environment.
+
+#### `args.cwd`
+
+- Type: `string`; Required: no; Default: none
+- Purpose: Working directory for the child process.
+
+#### `args.timeout`
+
+- Type: `string`; Required: no; Default: `5s`
+- Purpose: Maximum execution time for one script run.
+- Supported units: `ms`, `s`, `m`, `h`, `d`
+
+#### `args.error_mode`
+
+- Type: `string`; Required: no; Default: `continue`
+- Allowed values:
+  - `continue`: log failure or timeout, then return `Next`
+  - `stop`: log failure or timeout, then return `Stop`
+  - `fail`: return an executor error immediately
+
+#### `args.max_output_bytes`
+
+- Type: `usize`; Required: no; Default: `4096`
+- Purpose: Maximum captured stdout/stderr length before truncation.
+
+### Available Placeholders
+
+- Request fields: `qname`, `qtype`, `qtype_name`, `qclass`, `qclass_name`
+- Source fields: `client_ip`, `client_port`, `server_name`, `url_path`
+- Runtime fields: `marks`, `has_resp`
+- Response fields: `rcode`, `rcode_name`, `resp_ip`
+- Cron metadata: `cron_plugin_tag`, `cron_job_name`, `cron_trigger_kind`, `cron_scheduled_at_unix_ms`
+
+### Behavior
+
+- The plugin does not mutate DNS requests or responses.
+- It runs only the explicit configured command and does not wrap it with `sh -c`, `cmd /c`, or similar shell shortcuts.
+- Arguments and environment variables are rendered from the current `DnsContext` on each execution.
+- On timeout the child process is terminated, then `error_mode` decides how the sequence continues.
+
+### Notes
+
+- v1 does not support quick setup syntax.
+- `command` must not be empty.
+- Only the documented built-in placeholders are accepted; unknown placeholders fail plugin initialization.
+- This is a side-effect executor. It does not support writing attrs, marks, or DNS responses back through stdout.
 
 ---
 
@@ -2184,3 +1842,345 @@ Writes response IPs into MikroTik RouterOS address lists, with dynamic entries, 
 - At least one of `address_list4` or `address_list6` is required.
 - `comment_prefix` and the plugin `tag` must not contain `;` or `=`.
 - Synchronous mode does not change the DNS response itself. Even if the RouterOS write fails, the DNS result is still preserved.
+## `download`
+
+### Purpose
+
+Downloads one or more `http/https` files into a local directory and overwrites the target files only after the new content is fully written.
+
+### Example Configuration
+
+```yaml
+- tag: rules_download
+  type: download
+  args:
+    timeout: 30s
+    socks5: "127.0.0.1:1080"
+    downloads:
+      - url: "https://example.com/geosite.dat"
+        dir: "/etc/forgedns"
+      - url: "https://example.com/geoip.dat"
+        dir: "/etc/forgedns"
+        filename: "geoip.dat"
+```
+
+### Quick Setup
+
+```yaml
+- exec: "download https://example.com/rules.txt /etc/forgedns"
+```
+
+### Behavior
+
+- `downloads` run sequentially in declaration order.
+- A failed item only emits a warning log and does not stop later items.
+- Missing target directories are created automatically.
+- Files are written to a temporary path first and then moved into place.
+- When `socks5` is set, all download connections are routed through that SOCKS5 proxy using the same format as `upstream[].socks5`.
+- By default, ForgeDNS checks target files during startup and downloads any missing ones before other plugins initialize. A bootstrap failure aborts startup.
+- Set `startup_if_missing: false` to disable that bootstrap behavior.
+
+### Notes
+
+- Only `http` and `https` are supported.
+- `socks5` accepts `host:port` and `username:password@host:port`; bracket IPv6 addresses such as `"[::1]:1080"` are supported too.
+- `startup_if_missing` only fills missing files; it does not overwrite existing targets on every startup.
+- When used inside a normal `sequence`, the download time is paid directly by that request.
+- Overwriting a local file does not apply automatically. If you only need file-backed providers to pick up the new data, prefer chaining `reload_provider`; if `config.yaml`, dependency topology, or the plugin list changed too, use `reload`.
+
+### Recommended Pairing
+
+```yaml
+- tag: rules_refresh
+  type: sequence
+  args:
+    - exec: "$rules_download"
+    - exec: "$reload_rules"
+
+- tag: rules_download
+  type: download
+  args:
+    downloads:
+      - url: "https://example.com/geosite.dat"
+        dir: "/etc/forgedns"
+
+- tag: provider_geosite
+  type: geosite
+  args:
+    file: "/etc/forgedns/geosite.dat"
+
+- tag: reload_rules
+  type: reload_provider
+  args:
+    - "$provider_geosite"
+```
+
+### Subscription Refresh Example
+
+This example fits the common flow of “remote subscription -> scheduled download -> targeted provider refresh”:
+
+```yaml
+plugins:
+  # 1. Run the subscription refresh flow periodically
+  - tag: subscription_cron
+    type: cron
+    args:
+      timezone: "Asia/Shanghai"
+      jobs:
+        - name: refresh_rule_subscriptions
+          interval: 6h
+          executors:
+            - "$subscription_refresh"
+
+  # 2. Chain download and targeted provider reload with a sequence
+  - tag: subscription_refresh
+    type: sequence
+    args:
+      - exec: "$subscription_download"
+      - exec: "$reload_rule_providers"
+
+  # 3. Download remote subscription files
+  - tag: subscription_download
+    type: download
+    args:
+      timeout: 60s
+      startup_if_missing: true
+      downloads:
+        - url: "https://example.com/geosite.dat"
+          dir: "/etc/forgedns/rules"
+          filename: "geosite.dat"
+        - url: "https://example.com/geoip.dat"
+          dir: "/etc/forgedns/rules"
+          filename: "geoip.dat"
+
+  # 4. Reload only the affected providers after download completes
+  - tag: reload_rule_providers
+    type: reload_provider
+    args:
+      - "$provider_geosite"
+      - "$provider_geoip"
+
+  # 5. These providers re-read the local files after reload
+  - tag: provider_geosite
+    type: geosite
+    args:
+      file: "/etc/forgedns/rules/geosite.dat"
+
+  - tag: provider_geoip
+    type: geoip
+    args:
+      file: "/etc/forgedns/rules/geoip.dat"
+```
+
+Notes:
+
+- `download` writes the subscription content to local files.
+- `reload_provider` refreshes only the affected provider snapshots without rebuilding unrelated plugins.
+- `startup_if_missing: true` is useful for first-time deployment when files may not exist yet.
+- If the subscription source requires a proxy, set a SOCKS5 proxy on `subscription_download.args.socks5`.
+- If you do not want startup to overwrite existing files, keep the default behavior and only bootstrap missing files.
+- If the update also changes `config.yaml`, provider topology, or the plugin list, use a full `reload` instead.
+
+### Full Reload Still Fits Config Changes
+
+```yaml
+- tag: config_refresh
+  type: sequence
+  args:
+    - exec: "$subscription_download"
+    - exec: "$reload_all"
+
+- tag: reload_all
+  type: reload
+```
+
+---
+
+## `reload_provider`
+
+### Purpose
+
+Reloads one or more providers in place by tag, rebuilding their internal snapshots with the same startup configuration without triggering a full application reload.
+
+### Example Configuration
+
+```yaml
+- tag: reload_rule_providers
+  type: reload_provider
+  args:
+    - "$geosite_cn"
+    - "$geoip_cn"
+```
+
+### Quick Setup
+
+```yaml
+- exec: "reload_provider $geosite_cn"
+```
+
+### Behavior
+
+- Providers are reloaded sequentially in the order declared in `args`.
+- The semantics are the same as calling `POST /plugins/<provider_tag>/reload` for each referenced provider.
+- Once every provider reload succeeds, the executor returns `Next`.
+- Only provider-local data is refreshed; tags, dependencies, and other plugin configuration are unchanged.
+
+### Typical Uses
+
+- Refreshing only the affected `domain_set`, `ip_set`, `geosite`, `geoip`, or `adguard_rule` providers after `download`.
+- Reducing the blast radius and cost of a full application reload in background maintenance flows.
+
+### Notes
+
+- `args` only accepts provider references such as `"$geoip_cn"`; inline rules and file references are rejected.
+- If the update changes `config.yaml`, provider topology, the plugin list, or other non-provider structures, you still need `reload`.
+- Running this on a live request path may trigger file reads and recompilation, so it is usually a better fit for background `cron` or maintenance `sequence` flows.
+
+---
+
+## `reload`
+
+### Purpose
+
+Triggers the same application-level full reload as the management API `POST /reload`, reloading the active configuration and rebuilding all plugins.
+
+### Example Configuration
+
+```yaml
+- tag: reload_all
+  type: reload
+```
+
+### Quick Setup
+
+```yaml
+- exec: "reload"
+```
+
+### Behavior
+
+- Execution submits a reload request to the application control layer.
+- The semantics are the same as the management API `POST /reload`.
+- Once the reload request is accepted, the executor returns `Next`.
+- This is a full application reload. Reloading selected plugin tags is not supported.
+
+### Typical Uses
+
+- Pairing with `download` in a `cron` job so refreshed rule files take effect immediately.
+- Triggering a full configuration reload from a dedicated background `sequence`.
+
+### Notes
+
+- It must run inside a normal ForgeDNS process with application control context attached.
+- Execution fails when another reload is already `pending` or `in_progress`.
+- Using it in a live request `sequence` triggers a full application reload and is usually not appropriate for latency-sensitive request paths.
+
+---
+
+## `cron`
+
+### Purpose
+
+Schedules a list of executors in the background. It does not participate in the live DNS request path and starts running only after plugin initialization.
+
+### Example Configuration
+
+```yaml
+- tag: cron_jobs
+  type: cron
+  args:
+    timezone: "Asia/Shanghai"
+    jobs:
+      - name: refresh_sets
+        interval: 5m
+        executors:
+          - "$seq_refresh"
+          - "debug_print cron refresh"
+
+      - name: nightly_cleanup
+        schedule: "15 3 * * *"
+        executors:
+          - "sleep 2s"
+          - "$seq_cleanup"
+```
+
+### Configuration Details
+
+#### `args.jobs`
+
+- Type: `array`; Required: yes
+- Purpose: Defines one or more background jobs.
+- Runtime impact:
+  - The array cannot be empty.
+  - Each job maintains its own trigger state and overlap protection.
+
+#### `args.timezone`
+
+- Type: `string`; Required: no
+- Default: system local time zone
+- Purpose: Overrides the time zone used by all `schedule` jobs in this `cron` plugin.
+- Notes:
+  - Only affects `schedule`.
+  - When omitted, ForgeDNS uses the system local time zone and falls back to `UTC` if unavailable.
+  - Use IANA names such as `Asia/Shanghai`, `UTC`, or `America/Los_Angeles`.
+
+#### `args.jobs[].name`
+
+- Type: `string`; Required: yes
+- Purpose: Job name used in logs and runtime metadata.
+- Runtime impact:
+  - Must be unique within the same `cron` plugin.
+
+#### `args.jobs[].schedule`
+
+- Type: `string`; Required: exactly one of `schedule` or `interval`
+- Purpose: Schedule a job with a standard 5-field cron expression.
+- Notes:
+  - Only `minute hour day month day-of-week` is supported.
+  - Second-level cron expressions are not supported.
+  - Next runs are computed in `args.timezone` or the system local time zone.
+
+#### `args.jobs[].interval`
+
+- Type: `string`; Required: exactly one of `schedule` or `interval`
+- Purpose: Schedule a job with a fixed interval.
+- Supports:
+  - `5m`
+  - `1h`
+  - `1d`
+- Runtime impact:
+  - Minimum interval is `1m`.
+  - The first run happens after one full interval elapses.
+
+#### `args.jobs[].executors`
+
+- Type: `array`; Required: yes
+- Purpose: Ordered list of executors to run for the job.
+- Supports:
+  - `$tag` explicit executor references
+  - bare `tag` references
+  - quick-setup expressions such as `debug_print cron refresh`
+- Runtime impact:
+  - The array cannot be empty.
+  - Later executors still run even if an earlier executor returns `Stop`, produces a response, or fails.
+
+### Behavior
+
+- `schedule` and `interval` are mutually exclusive.
+- If a job is still running when the next trigger arrives, that trigger is skipped and not replayed later.
+- Jobs run with an empty `DnsContext`, so this plugin is best suited for side-effect executors or dedicated background `sequence` chains.
+- `cron` itself cannot be executed inside a normal request `sequence`.
+
+### Typical Uses
+
+- Periodic side-effect tasks.
+- Scheduling a dedicated background `sequence`.
+- Providing a common trigger surface for future executors such as `reload`.
+
+### Notes
+
+- A `cron` job cannot reference another `cron` executor.
+- Executors that require a real DNS request usually do not make sense in an empty background context.
+
+---
+

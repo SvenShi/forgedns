@@ -203,91 +203,6 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
 
 ---
 
-## `quic_server`
-
-### Purpose
-
-Provides DNS over QUIC.
-
-### Example Configuration
-
-```yaml
-- tag: doq_in
-  type: quic_server
-  args:
-    # Policy chain used by DoQ requests
-    entry: "seq_main"
-    # Common DoQ port
-    listen: ":853"
-    # TLS certificate is mandatory for DoQ
-    cert: "/etc/forgedns/server.crt"
-    # TLS private key is mandatory for DoQ
-    key: "/etc/forgedns/server.key"
-    # QUIC transport idle timeout in seconds
-    idle_timeout: 30
-```
-
-### Configuration Details
-
-#### `entry`
-
-- Type: `string`; Required: yes; Default: none
-- Purpose: Selects the executor used by DoQ requests.
-- Example: `entry: "seq_main"`
-- Requirements:
-  - Must reference an existing executor plugin.
-
-#### `listen`
-
-- Type: `string`; Required: yes; Default: none
-- Purpose: Defines the QUIC bind address.
-- Example: `listen: ":853"`
-- Runtime impact:
-  - Occupies a UDP port.
-
-#### `cert`
-
-- Type: `string`; Required: yes; Default: none
-- Purpose: Path to the TLS certificate required by DoQ.
-- Example: `cert: "/etc/forgedns/server.crt"`
-- Runtime impact:
-  - The listener cannot start if the certificate is invalid.
-
-#### `key`
-
-- Type: `string`; Required: yes; Default: none
-- Purpose: Path to the TLS private key required by DoQ.
-- Example: `key: "/etc/forgedns/server.key"`
-- Runtime impact:
-  - The listener cannot start if the private key is invalid.
-
-#### `idle_timeout`
-
-- Type: `integer`; Required: no; Default: none
-- Unit: seconds
-- Purpose: Controls QUIC transport idle timeout.
-- Example: `idle_timeout: 30`
-- Runtime impact:
-  - Affects when idle QUIC connections are reclaimed.
-
-### Behavior
-
-- DoQ always requires TLS, so `cert` and `key` are mandatory.
-- ALPN is fixed to `doq`.
-- Each bidirectional stream represents one independent DNS exchange.
-
-### Good Fits
-
-- Encrypted DNS ingress with low latency.
-- Modern clients that benefit from QUIC transport behavior.
-
-### Notes
-
-- The listener still consumes a UDP port underneath.
-- Do not bind the same address and port as `udp_server`.
-
----
-
 ## `http_server`
 
 ### Purpose
@@ -411,3 +326,88 @@ Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
 
 - `enable_http3: true` requires both `cert` and `key`.
 - If a reverse proxy is involved, define a trusted boundary for `src_ip_header` to avoid spoofed source IPs.
+## `quic_server`
+
+### Purpose
+
+Provides DNS over QUIC.
+
+### Example Configuration
+
+```yaml
+- tag: doq_in
+  type: quic_server
+  args:
+    # Policy chain used by DoQ requests
+    entry: "seq_main"
+    # Common DoQ port
+    listen: ":853"
+    # TLS certificate is mandatory for DoQ
+    cert: "/etc/forgedns/server.crt"
+    # TLS private key is mandatory for DoQ
+    key: "/etc/forgedns/server.key"
+    # QUIC transport idle timeout in seconds
+    idle_timeout: 30
+```
+
+### Configuration Details
+
+#### `entry`
+
+- Type: `string`; Required: yes; Default: none
+- Purpose: Selects the executor used by DoQ requests.
+- Example: `entry: "seq_main"`
+- Requirements:
+  - Must reference an existing executor plugin.
+
+#### `listen`
+
+- Type: `string`; Required: yes; Default: none
+- Purpose: Defines the QUIC bind address.
+- Example: `listen: ":853"`
+- Runtime impact:
+  - Occupies a UDP port.
+
+#### `cert`
+
+- Type: `string`; Required: yes; Default: none
+- Purpose: Path to the TLS certificate required by DoQ.
+- Example: `cert: "/etc/forgedns/server.crt"`
+- Runtime impact:
+  - The listener cannot start if the certificate is invalid.
+
+#### `key`
+
+- Type: `string`; Required: yes; Default: none
+- Purpose: Path to the TLS private key required by DoQ.
+- Example: `key: "/etc/forgedns/server.key"`
+- Runtime impact:
+  - The listener cannot start if the private key is invalid.
+
+#### `idle_timeout`
+
+- Type: `integer`; Required: no; Default: none
+- Unit: seconds
+- Purpose: Controls QUIC transport idle timeout.
+- Example: `idle_timeout: 30`
+- Runtime impact:
+  - Affects when idle QUIC connections are reclaimed.
+
+### Behavior
+
+- DoQ always requires TLS, so `cert` and `key` are mandatory.
+- ALPN is fixed to `doq`.
+- Each bidirectional stream represents one independent DNS exchange.
+
+### Good Fits
+
+- Encrypted DNS ingress with low latency.
+- Modern clients that benefit from QUIC transport behavior.
+
+### Notes
+
+- The listener still consumes a UDP port underneath.
+- Do not bind the same address and port as `udp_server`.
+
+---
+

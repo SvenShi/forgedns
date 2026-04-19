@@ -34,57 +34,6 @@ Negation:
 
 ---
 
-<span id="true"></span>
-
-## `_true`
-
-### Purpose
-
-Always returns true.
-
-### Example Configuration
-
-```yaml
-- tag: always_true
-  type: _true
-```
-
-### Configuration Details
-
-No standalone configuration fields.
-
-### Typical Uses
-
-- Fallback match condition.
-- Testing rule order in a `sequence`.
-
----
-
-<span id="false"></span>
-
-## `_false`
-
-### Purpose
-
-Always returns false.
-
-### Example Configuration
-
-```yaml
-- tag: always_false
-  type: _false
-```
-
-### Configuration Details
-
-No standalone configuration fields.
-
-### Typical Uses
-
-- Temporarily disable a branch.
-
----
-
 ## `qname`
 
 ### Purpose
@@ -395,6 +344,102 @@ Matches CNAME targets in the response.
 
 ---
 
+## `rcode`
+
+### Purpose
+
+Matches the current response code.
+
+### Example Configuration
+
+```yaml
+- tag: only_noerror
+  type: rcode
+  args:
+    - "2"
+```
+
+### Configuration Details
+
+- Type: `array`; Required: yes; Default: none
+- Supports decimal numeric rcodes only.
+- Common examples:
+  - `0` = `NOERROR`
+  - `2` = `SERVFAIL`
+  - `3` = `NXDOMAIN`
+- Runtime impact:
+  - Returns `true` when the response rcode matches the configured set.
+
+### quick setup
+
+```yaml
+- matches: "rcode 2"
+```
+
+### Typical Uses
+
+- Follow-up handling for upstream failures or negative responses.
+
+---
+
+## `has_resp`
+
+### Purpose
+
+Matches whether a response already exists in the context.
+
+### Example Configuration
+
+```yaml
+- tag: has_resp_flag
+  type: has_resp
+```
+
+### Configuration Details
+
+No standalone configuration fields.
+
+### quick setup
+
+```yaml
+- matches: "has_resp"
+```
+
+### Typical Uses
+
+- Guard forwarding so it only runs when no earlier plugin has answered.
+
+---
+
+## `has_wanted_ans`
+
+### Purpose
+
+Matches whether the response already contains wanted answers.
+
+### Example Configuration
+
+```yaml
+- tag: has_wanted_answer
+  type: has_wanted_ans
+```
+
+### Configuration Details
+
+No standalone configuration fields.
+
+### quick setup
+
+```yaml
+- matches: "has_wanted_ans"
+```
+
+### Typical Uses
+
+- Build follow-up logic only when a meaningful answer is already present.
+
+---
+
 ## `mark`
 
 ### Purpose
@@ -572,102 +617,6 @@ Prefer the full configuration so `qps`, `burst`, and `mask` stay explicit.
 
 ---
 
-## `rcode`
-
-### Purpose
-
-Matches the current response code.
-
-### Example Configuration
-
-```yaml
-- tag: only_noerror
-  type: rcode
-  args:
-    - "2"
-```
-
-### Configuration Details
-
-- Type: `array`; Required: yes; Default: none
-- Supports decimal numeric rcodes only.
-- Common examples:
-  - `0` = `NOERROR`
-  - `2` = `SERVFAIL`
-  - `3` = `NXDOMAIN`
-- Runtime impact:
-  - Returns `true` when the response rcode matches the configured set.
-
-### quick setup
-
-```yaml
-- matches: "rcode 2"
-```
-
-### Typical Uses
-
-- Follow-up handling for upstream failures or negative responses.
-
----
-
-## `has_resp`
-
-### Purpose
-
-Matches whether a response already exists in the context.
-
-### Example Configuration
-
-```yaml
-- tag: has_resp_flag
-  type: has_resp
-```
-
-### Configuration Details
-
-No standalone configuration fields.
-
-### quick setup
-
-```yaml
-- matches: "has_resp"
-```
-
-### Typical Uses
-
-- Guard forwarding so it only runs when no earlier plugin has answered.
-
----
-
-## `has_wanted_ans`
-
-### Purpose
-
-Matches whether the response already contains wanted answers.
-
-### Example Configuration
-
-```yaml
-- tag: has_wanted_answer
-  type: has_wanted_ans
-```
-
-### Configuration Details
-
-No standalone configuration fields.
-
-### quick setup
-
-```yaml
-- matches: "has_wanted_ans"
-```
-
-### Typical Uses
-
-- Build follow-up logic only when a meaningful answer is already present.
-
----
-
 ## `string_exp`
 
 ### Purpose
@@ -753,3 +702,54 @@ Notes:
 
 - In scenarios where a dedicated matcher can be used, prefer the dedicated matcher.
 - `string_exp` provides greater flexibility, but the readability and maintainability of the expression are usually lower than those of dedicated plugins.
+<span id="true"></span>
+
+## `_true`
+
+### Purpose
+
+Always returns true.
+
+### Example Configuration
+
+```yaml
+- tag: always_true
+  type: _true
+```
+
+### Configuration Details
+
+No standalone configuration fields.
+
+### Typical Uses
+
+- Fallback match condition.
+- Testing rule order in a `sequence`.
+
+---
+
+<span id="false"></span>
+
+## `_false`
+
+### Purpose
+
+Always returns false.
+
+### Example Configuration
+
+```yaml
+- tag: always_false
+  type: _false
+```
+
+### Configuration Details
+
+No standalone configuration fields.
+
+### Typical Uses
+
+- Temporarily disable a branch.
+
+---
+

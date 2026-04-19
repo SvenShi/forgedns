@@ -16,6 +16,8 @@ ForgeDNS plugins are organized into four layers:
 
 Recommended reading order:
 
+Within each category page, plugins are also ordered by request-path importance and common usage priority, with maintenance and side-effect oriented helpers placed later.
+
 1. Server plugins: understand how requests enter the system.
 2. Executor plugins: understand what actually happens to requests and responses.
 3. Matcher plugins: understand policy branching.
