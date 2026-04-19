@@ -16,6 +16,7 @@
 //! The goal is to keep process-level concerns here so the lower-level modules
 //! (`config`, `plugin`, `network`, `api`) stay focused on their own domains.
 
+mod banner;
 pub mod bootstrap;
 pub mod cli;
 pub mod export_dat;
@@ -40,6 +41,7 @@ use tracing::{error, info};
 pub fn run(start: StartOptions) -> Result<()> {
     AppClock::start();
     prepare_working_dir(start.working_dir.as_ref())?;
+    banner::print_startup_banner()?;
     let config = load_config(&start)?;
     init_runtime(start, config)
 }
