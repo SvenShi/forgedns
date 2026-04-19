@@ -10,7 +10,33 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.3.2" badge="Patch Release" date="2026-04-16" defaultOpen>
+  <ReleaseCard version="v0.4.0" badge="Minor Release" date="2026-04-19" defaultOpen>
+      **Highlights**
+
+      - 新增 `reload_provider` executor，以及 provider 级管理接口 `POST /plugins/<provider_tag>/reload`。现在下载或覆盖规则文件后，可以只刷新受影响的 provider，而不必触发应用级全量 `reload`。
+      - 重构 provider 组合模型：`domain_set` / `ip_set` 只编译自身本地规则，运行时继续查询 `sets` 中引用的 provider。下游 provider 单独 reload 后，上层聚合 provider 无需 reload 即可看到新结果，同时减少规则副本和内存占用。
+      - runtime 初始化现在会跳过没有 live dependents 的 provider，避免未被消费的规则集在启动阶段做无意义的文件读取、dat 解析和内存占用。
+
+      **Core And Runtime**
+
+      - quick setup 依赖分析扩展到了 `sequence` / `cron` 等运行时引用场景，插件依赖图与初始化顺序对 quick setup 表达式更准确，减少隐藏依赖导致的启动阶段歧义。
+      - provider 创建阶段现在可拿到 live dependents 上下文，为按需初始化与后续扩展更细粒度的 runtime 行为打下基础。
+      - 移除 `hickory-proto` 兼容性测试及相关 dev 依赖，并同步一轮依赖升级，缩小测试依赖面。
+
+      **Docs**
+
+      - docs 新增 targeted provider reload 的 API 与 `reload_provider` executor 说明，并补充下载后刷新 provider 的串联示例。
+      - `provider` 参考文档现在更明确地区分“本地规则编译”和“运行时 provider 组合”语义，也说明了 reload 边界和未被使用 provider 的初始化行为。
+      - plugin reference 文档顺序调整为更贴近请求路径，便于按 `server -> executor -> matcher -> provider` 理解配置。
+
+      **Upgrade Notes**
+
+      - 如果你已有“`download` 覆盖文件后再全量 `reload`”的流程，现在通常可以改为“`download -> reload_provider`”，降低对其它插件的重建影响。
+      - `reload_provider` 只适用于刷新 provider 的既有配置和外部数据文件；如果变更涉及 `config.yaml`、provider tag、`sets` 拓扑或插件列表，仍需要使用全量 `reload`。
+      - 未被任何 live 路径引用的 provider 将不会进入 runtime registry；如果你依赖其运行时 API 或行为，请确保它被 `server`、`executor`、`matcher` 直接或间接引用。
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.3.2" badge="Patch Release" date="2026-04-16">
       **Fixes**
 
       - 调整 UDP、TCP、DoT、DoQ 上游连接池的初始化策略，不再在启动时预创建空闲连接，减少部分上游主动关闭空闲连接时产生的误报 EOF / reset 日志。

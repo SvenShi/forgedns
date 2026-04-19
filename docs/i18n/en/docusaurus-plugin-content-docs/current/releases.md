@@ -10,7 +10,33 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.3.2" badge="Patch Release" date="2026-04-16" defaultOpen>
+  <ReleaseCard version="v0.4.0" badge="Minor Release" date="2026-04-19" defaultOpen>
+      **Highlights**
+
+      - Added the `reload_provider` executor plus the provider-scoped management API `POST /plugins/<provider_tag>/reload`. After downloading or overwriting rule files, ForgeDNS can now refresh only the affected providers instead of forcing a full application reload.
+      - Reworked provider composition so `domain_set` and `ip_set` compile only their own local rules and keep querying referenced providers from `sets` at runtime. When a downstream provider reloads, aggregated providers see the new result immediately without reloading themselves, while also reducing rule duplication and memory usage.
+      - Runtime initialization now skips providers that have no live dependents, so unused rule sets no longer spend startup time on file reads, dat parsing, or memory allocation.
+
+      **Core And Runtime**
+
+      - Expanded quick-setup dependency analysis into runtime reference paths such as `sequence` and `cron`, so plugin dependency graphs and init ordering are more accurate for quick-setup expressions.
+      - Provider factories now receive live-dependent context during creation, which lays the groundwork for more demand-aware initialization and future runtime optimizations.
+      - Removed the `hickory-proto` compatibility test and related dev dependency, and refreshed part of the dependency stack to reduce test-surface overhead.
+
+      **Docs**
+
+      - Added docs for targeted provider reload through both the API and the new `reload_provider` executor, including chained download-and-refresh examples.
+      - Updated the `provider` reference to separate local rule compilation from runtime provider composition, and clarified reload boundaries plus the new skipped-unused-provider behavior.
+      - Reordered the plugin reference docs to follow the request path more closely, which makes `server -> executor -> matcher -> provider` easier to navigate.
+
+      **Upgrade Notes**
+
+      - If your current workflow does `download` and then a full `reload`, you can usually switch that flow to `download -> reload_provider` to avoid rebuilding unrelated plugins.
+      - `reload_provider` only refreshes an existing provider's config snapshot and external data files. If `config.yaml`, provider tags, `sets` topology, or the plugin list changes, keep using the full `reload` path.
+      - Providers that are not reachable from any live runtime path are no longer inserted into the runtime registry. If you rely on a provider's runtime API surface or behavior, make sure it is referenced directly or indirectly by a live `server`, `executor`, or `matcher`.
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.3.2" badge="Patch Release" date="2026-04-16">
       **Fixes**
 
       - Adjusted UDP, TCP, DoT, and DoQ upstream pool initialization so ForgeDNS no longer pre-creates idle connections during startup, which reduces false EOF / reset warnings when upstreams close idle sockets on their own.
