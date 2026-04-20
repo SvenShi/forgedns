@@ -57,6 +57,7 @@ pub mod http_request;
 pub mod ipset;
 pub mod metrics_collector;
 pub mod nftset;
+pub mod query_recorder;
 pub mod query_summary;
 pub mod redirect;
 pub mod reload;

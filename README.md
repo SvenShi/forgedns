@@ -17,7 +17,7 @@ ForgeDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor
 - 🔐 同时支持 UDP、TCP、DoT、DoQ、DoH 的服务端与上游
 - 🛟 内置缓存、回退、本地应答、查询/响应重写、ECS、双栈偏好等常见能力
 - 🛰️ 支持 `ipset`、`nftset`、MikroTik 路由同步等系统联动
-- 📈 提供健康检查、全量/Provider 级热重载、配置校验和 Prometheus 指标
+- 📈 提供健康检查、全量/Provider 级热重载、配置校验、Prometheus 指标，以及结构化查询记录与实时日志流
 
 ## 核心能力
 
@@ -25,7 +25,7 @@ ForgeDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor
 | --- | --- |
 | 协议 | UDP、TCP、DoT、DoQ、DoH |
 | 策略 | `sequence`、`matcher`、`executor`、`provider` |
-| 执行器 | `forward`、`cache`、`fallback`、`hosts`、`arbitrary`、`redirect`、`ecs_handler`、`ttl`、`download`、`reload`、`reload_provider`、`script`、`http_request` |
+| 执行器 | `forward`、`cache`、`fallback`、`hosts`、`arbitrary`、`redirect`、`ecs_handler`、`ttl`、`download`、`reload`、`reload_provider`、`script`、`http_request`、`query_summary`、`query_recorder`、`metrics_collector` |
 | 匹配器 | `qname`、`question`、`qtype`、`qclass`、`client_ip`、`resp_ip`、`rcode`、`rate_limiter` 等 |
 | 数据集 | `domain_set`、`ip_set`、`geoip`、`geosite`、`adguard_rule` |
 | 系统联动 | `ipset`、`nftset`、`ros_address_list`、`reverse_lookup` |

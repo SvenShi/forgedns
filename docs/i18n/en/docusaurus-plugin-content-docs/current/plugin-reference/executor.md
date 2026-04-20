@@ -1145,6 +1145,149 @@ Records concise query summaries.
 
 ---
 
+## `query_recorder`
+
+### Purpose
+
+Persists the entry request, the post-`next` response, and `sequence` execution-path events into a recorder-owned SQLite database, then exposes history, aggregate stats, and an SSE stream.
+
+### Example Configuration
+
+```yaml
+- tag: query_recorder_main
+  type: query_recorder
+  args:
+    # SQLite path for this recorder. Different recorders should use different paths.
+    path: "./data/query-recorder-main.sqlite"
+    # Hot-path enqueue buffer size
+    queue_size: 8192
+    # Batch size per SQLite flush
+    batch_size: 256
+    # Background flush interval in milliseconds
+    flush_interval_ms: 200
+    # Number of recent records kept in memory for SSE tail replay
+    memory_tail: 1024
+    # Retention window in days; minimum 1
+    retention_days: 7
+    # Cleanup interval in hours; minimum 1
+    cleanup_interval_hours: 1
+```
+
+### Configuration Details
+
+#### `path`
+
+- Type: `string`; Required: yes
+- Purpose: SQLite path for this recorder.
+
+#### `queue_size`
+
+- Type: `integer`; Required: no; Default: `8192`
+- Purpose: Bounded queue size between the request path and the writer thread.
+
+#### `batch_size`
+
+- Type: `integer`; Required: no; Default: `256`
+- Purpose: Number of records flushed per SQLite batch.
+
+#### `flush_interval_ms`
+
+- Type: `integer`; Required: no; Default: `200`
+- Purpose: Maximum batch flush interval in milliseconds.
+
+#### `memory_tail`
+
+- Type: `integer`; Required: no; Default: `1024`
+- Purpose: Size of the in-memory tail used by `stream?tail=n`.
+
+#### `retention_days`
+
+- Type: `integer`; Required: no; Default: `7`; Minimum: `1`
+- Purpose: Record retention window. Expired rows are deleted by the cleanup task.
+
+#### `cleanup_interval_hours`
+
+- Type: `integer`; Required: no; Default: `1`; Minimum: `1`
+- Purpose: Cleanup task cadence.
+
+### Behavior
+
+- This is a pure executor observer and does not change server finalization logic.
+- It captures a structured snapshot of the entry request, enables `DnsContext.execution_path`, runs `next`, and commits immediately after `next` returns.
+- Successful runs store the current response. Failed runs store `error` and an empty response shape.
+- Request and response payloads are not stored as wire blobs. Question, RR, and EDNS fields are extracted into JSON text columns.
+- Each recorder uses exactly two tables:
+  - `qr_<safe_tag>_<fnv64hex>_v1_records`
+  - `qr_<safe_tag>_<fnv64hex>_v1_steps`
+- `records` contains only the fixed schema fields for structured snapshots. `steps` stores `sequence` path events for path analysis and hit-rate reporting.
+- Every recorder owns its own bounded queue, SQLite connection, writer thread, tail buffer, and SSE broadcaster.
+- v1 assumes different recorders use different `path` values. There is no cross-recorder writer sharing or path coordination.
+
+### Data Shape
+
+- `questions_json` is always a question array, for example:
+
+```json
+[
+  { "name": "www.example.com.", "qtype": "A", "qclass": "IN" }
+]
+```
+
+- `answers_json`, `authorities_json`, `additionals_json`, and `signature_json` are RR arrays, for example:
+
+```json
+[
+  {
+    "name": "www.example.com.",
+    "class": "IN",
+    "ttl": 300,
+    "rr_type": "A",
+    "payload_kind": "A",
+    "payload_text": "192.0.2.1",
+    "payload": { "ip": "192.0.2.1" }
+  }
+]
+```
+
+- `req_edns_json` and `resp_edns_json` are EDNS objects or `NULL`.
+- The `v1` suffix in the table name is the schema version. Future upgrades add new versioned tables rather than altering the existing ones in place.
+
+### API
+
+- `GET /plugins/<tag>/records`
+  - Returns record rows ordered by `created_at_ms` descending.
+  - Query parameters:
+    - `cursor=<created_at_ms>:<id>`
+    - `limit=<n>`, default `100`, max `500`
+    - `since_ms=<unix_ms>`
+    - `until_ms=<unix_ms>`
+- `GET /plugins/<tag>/records/<id>`
+  - Returns one full record plus `steps`.
+- `GET /plugins/<tag>/stats/overview`
+  - Returns totals, error count, dropped count, and average latency.
+  - Supports `since_ms` and `until_ms`.
+- `GET /plugins/<tag>/stats/plugins`
+  - Returns hit stats grouped by `matcher / executor / builtin`.
+  - Supports `since_ms`, `until_ms`, and `kind=matcher|executor|builtin|all`.
+- `GET /plugins/<tag>/stream`
+  - Streams newly written records over SSE.
+  - Supports `tail=<n>` to replay the in-memory tail.
+
+### Typical Uses
+
+- Persistent audit and troubleshooting trails
+- `sequence` path analysis and plugin hit-rate reporting
+- Real-time query log feeds for dashboards or control planes
+
+### Notes
+
+- Place the recorder close to the entry point if you want the full main-path trace.
+- If an earlier branch short-circuits before the recorder, that request will not be recorded.
+- If `next` fails and the server later emits a fallback response, the database still reflects the plugin's point of view: `error` plus an empty response.
+- If the management API is disabled, the recorder still writes SQLite data but does not expose query or SSE routes.
+
+---
+
 ## `metrics_collector`
 
 ### Purpose
@@ -2183,4 +2326,3 @@ Schedules a list of executors in the background. It does not participate in the 
 - Executors that require a real DNS request usually do not make sense in an empty background context.
 
 ---
-

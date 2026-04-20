@@ -32,7 +32,7 @@ use crate::proto::{Name, PTR, RData, Record, RecordType};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{Request, Response, StatusCode};
+use http::{Request, StatusCode};
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -259,7 +259,7 @@ struct ReverseLookupQueryHandler {
 
 #[async_trait]
 impl ApiHandler for ReverseLookupQueryHandler {
-    async fn handle(&self, request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, request: Request<Bytes>) -> crate::api::ApiResponse {
         let Some(raw_ip) = get_single_query_value(request.uri().query(), "ip") else {
             return simple_response(
                 StatusCode::BAD_REQUEST,
@@ -326,6 +326,7 @@ mod tests {
     use crate::proto::{Message, Question};
     use crate::proto::{Name, RData, Record};
     use http::Method;
+    use http_body_util::BodyExt;
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
@@ -454,7 +455,8 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.body(), &Bytes::from_static(b"dns.google."));
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, Bytes::from_static(b"dns.google."));
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{Request, Response, StatusCode};
+use http::{Request, StatusCode};
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -110,7 +110,7 @@ struct HealthzHandler {
 
 #[async_trait]
 impl ApiHandler for HealthzHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         if self.health.api_listening.load(Ordering::Relaxed) {
             simple_response(StatusCode::OK, Bytes::from("ok"))
         } else {
@@ -129,7 +129,7 @@ struct ReadyzHandler {
 
 #[async_trait]
 impl ApiHandler for ReadyzHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         let snapshot = self.health.snapshot();
         if snapshot.checks.plugin_init == "ok" && snapshot.checks.server_startup == "ok" {
             simple_response(StatusCode::OK, Bytes::from("ready"))
@@ -146,7 +146,7 @@ struct HealthHandler {
 
 #[async_trait]
 impl ApiHandler for HealthHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         let snapshot = self.health.snapshot();
         let status =
             if snapshot.checks.plugin_init == "ok" && snapshot.checks.server_startup == "ok" {
@@ -183,6 +183,7 @@ pub fn register_builtin_routes(register: &ApiRegister, health: Arc<HealthState>)
 mod tests {
     use super::*;
     use http::Method;
+    use http_body_util::BodyExt;
 
     fn test_request(path: &str) -> Request<Bytes> {
         let mut request = Request::builder()
@@ -217,7 +218,8 @@ mod tests {
         health.mark_api_listening();
         let response = healthz.handle(test_request("/healthz")).await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.body(), &Bytes::from_static(b"ok"));
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, Bytes::from_static(b"ok"));
 
         let response = readyz.handle(test_request("/readyz")).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -225,11 +227,13 @@ mod tests {
         health.mark_plugins_initialized(4, 1);
         let response = readyz.handle(test_request("/readyz")).await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.body(), &Bytes::from_static(b"ready"));
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, Bytes::from_static(b"ready"));
 
         let response = details.handle(test_request("/health")).await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = std::str::from_utf8(response.body()).expect("utf8 json");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&body).expect("utf8 json");
         assert!(body.contains("\"status\":\"ok\""));
         assert!(body.contains(&format!("\"version\":\"{}\"", VERSION)));
         assert!(body.contains("\"api\":\"ok\""));

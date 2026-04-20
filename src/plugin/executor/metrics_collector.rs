@@ -28,7 +28,7 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{Request, Response, StatusCode};
+use http::{Request, StatusCode};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 use std::fmt::Write as _;
@@ -229,7 +229,7 @@ struct MetricsHandler {
 
 #[async_trait]
 impl ApiHandler for MetricsHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         let body = render_prometheus_metrics(&self.exporter);
         let mut response = simple_response(StatusCode::OK, Bytes::from(body));
         response.headers_mut().insert(

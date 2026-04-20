@@ -36,7 +36,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
 use http::{HeaderMap, Method, Request, Response, StatusCode};
+use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full};
+use hyper::body::Frame;
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -51,9 +53,12 @@ use tokio::sync::{Mutex, oneshot, watch};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
 
+pub type ApiBody = UnsyncBoxBody<Bytes, Infallible>;
+pub type ApiResponse = Response<ApiBody>;
+
 #[async_trait]
 pub trait ApiHandler: Send + Sync + 'static {
-    async fn handle(&self, request: Request<Bytes>) -> Response<Bytes>;
+    async fn handle(&self, request: Request<Bytes>) -> ApiResponse;
 }
 
 #[derive(Clone)]
@@ -86,6 +91,34 @@ impl ApiRegister {
         self.register_route(Method::POST, path, handler)
     }
 
+    /// Register one handler using path-prefix matching under an absolute API path.
+    pub fn register_prefix_route(
+        &self,
+        method: Method,
+        path_prefix: &str,
+        handler: Arc<dyn ApiHandler>,
+    ) -> Result<()> {
+        self.hub.register_prefix_route(method, path_prefix, handler)
+    }
+
+    /// Register one GET handler using path-prefix matching under an absolute API path.
+    pub fn register_get_prefix(
+        &self,
+        path_prefix: &str,
+        handler: Arc<dyn ApiHandler>,
+    ) -> Result<()> {
+        self.register_prefix_route(Method::GET, path_prefix, handler)
+    }
+
+    /// Register one POST handler using path-prefix matching under an absolute API path.
+    pub fn register_post_prefix(
+        &self,
+        path_prefix: &str,
+        handler: Arc<dyn ApiHandler>,
+    ) -> Result<()> {
+        self.register_prefix_route(Method::POST, path_prefix, handler)
+    }
+
     /// Register one GET handler under `/plugins/<plugin_tag>/<subpath>`.
     pub fn register_plugin_get(
         &self,
@@ -107,6 +140,28 @@ impl ApiRegister {
         self.hub
             .register_plugin_route(plugin_tag, Method::POST, subpath, handler)
     }
+
+    /// Register one GET handler using path-prefix matching under `/plugins/<plugin_tag>/<subpath>`.
+    pub fn register_plugin_get_prefix(
+        &self,
+        plugin_tag: &str,
+        subpath: &str,
+        handler: Arc<dyn ApiHandler>,
+    ) -> Result<()> {
+        self.hub
+            .register_plugin_prefix_route(plugin_tag, Method::GET, subpath, handler)
+    }
+
+    /// Register one POST handler using path-prefix matching under `/plugins/<plugin_tag>/<subpath>`.
+    pub fn register_plugin_post_prefix(
+        &self,
+        plugin_tag: &str,
+        subpath: &str,
+        handler: Arc<dyn ApiHandler>,
+    ) -> Result<()> {
+        self.hub
+            .register_plugin_prefix_route(plugin_tag, Method::POST, subpath, handler)
+    }
 }
 
 impl Debug for ApiRegister {
@@ -118,6 +173,7 @@ impl Debug for ApiRegister {
 pub struct ApiHub {
     config: ResolvedApiHttpConfig,
     routes: StdMutex<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
+    prefix_routes: StdMutex<Vec<PrefixRoute>>,
     health: Arc<HealthState>,
     shutdown_tx: watch::Sender<bool>,
     task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -126,11 +182,17 @@ pub struct ApiHub {
 impl Debug for ApiHub {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let route_count = self.routes.lock().map(|routes| routes.len()).unwrap_or(0);
+        let prefix_route_count = self
+            .prefix_routes
+            .lock()
+            .map(|routes| routes.len())
+            .unwrap_or(0);
         f.debug_struct("ApiHub")
             .field("listen", &self.config.listen)
             .field("has_tls", &self.config.ssl.is_some())
             .field("has_auth", &self.config.auth.is_some())
             .field("route_count", &route_count)
+            .field("prefix_route_count", &prefix_route_count)
             .finish()
     }
 }
@@ -156,6 +218,7 @@ impl ApiHub {
                 auth: resolved.auth,
             },
             routes: StdMutex::new(AHashMap::new()),
+            prefix_routes: StdMutex::new(Vec::new()),
             health: Arc::new(HealthState::new()),
             shutdown_tx,
             task_handle: Mutex::new(None),
@@ -182,6 +245,17 @@ impl ApiHub {
         self.register_route(method, &route_path, handler)
     }
 
+    pub fn register_plugin_prefix_route(
+        &self,
+        plugin_tag: &str,
+        method: Method,
+        subpath: &str,
+        handler: Arc<dyn ApiHandler>,
+    ) -> Result<()> {
+        let route_path = build_plugin_route_path(plugin_tag, subpath)?;
+        self.register_prefix_route(method, &route_path, handler)
+    }
+
     pub fn register_route(
         &self,
         method: Method,
@@ -204,6 +278,36 @@ impl ApiHub {
         Ok(())
     }
 
+    pub fn register_prefix_route(
+        &self,
+        method: Method,
+        path_prefix: &str,
+        handler: Arc<dyn ApiHandler>,
+    ) -> Result<()> {
+        let route_path = normalize_route_path(path_prefix)?;
+        let mut routes = self
+            .prefix_routes
+            .lock()
+            .map_err(|_| DnsError::runtime("API route registry lock poisoned"))?;
+
+        if routes
+            .iter()
+            .any(|route| route.method == method && route.path_prefix == route_path)
+        {
+            return Err(DnsError::plugin(format!(
+                "duplicate API prefix route registered: {} {}",
+                method, route_path
+            )));
+        }
+
+        routes.push(PrefixRoute {
+            method,
+            path_prefix: route_path,
+            handler,
+        });
+        Ok(())
+    }
+
     pub async fn start(&self) -> Result<()> {
         let mut task_slot = self.task_handle.lock().await;
         if task_slot.is_some() {
@@ -216,6 +320,11 @@ impl ApiHub {
             .lock()
             .map_err(|_| DnsError::runtime("API route registry lock poisoned"))?
             .clone();
+        let prefix_routes = self
+            .prefix_routes
+            .lock()
+            .map_err(|_| DnsError::runtime("API route registry lock poisoned"))?
+            .clone();
         let tls_acceptor = build_tls_acceptor(&self.config)?;
         let auth = self.config.auth.clone();
         let health = self.health.clone();
@@ -225,6 +334,7 @@ impl ApiHub {
             run_api_server(
                 listen,
                 routes,
+                prefix_routes,
                 tls_acceptor,
                 auth,
                 health,
@@ -282,6 +392,13 @@ impl std::hash::Hash for RouteKey {
         self.method.hash(state);
         self.path.hash(state);
     }
+}
+
+#[derive(Clone)]
+struct PrefixRoute {
+    method: Method,
+    path_prefix: String,
+    handler: Arc<dyn ApiHandler>,
 }
 
 fn build_plugin_route_path(plugin_tag: &str, subpath: &str) -> Result<String> {
@@ -342,6 +459,7 @@ fn build_tls_acceptor(config: &ResolvedApiHttpConfig) -> Result<Option<Arc<TlsAc
 async fn run_api_server(
     listen: String,
     routes: AHashMap<RouteKey, Arc<dyn ApiHandler>>,
+    prefix_routes: Vec<PrefixRoute>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     auth: Option<ApiAuthConfig>,
     health: Arc<HealthState>,
@@ -365,10 +483,12 @@ async fn run_api_server(
         tls = %tls_acceptor.is_some(),
         auth = %auth.is_some(),
         routes = routes.len(),
+        prefix_routes = prefix_routes.len(),
         "Management API listening"
     );
 
     let routes = Arc::new(routes);
+    let prefix_routes = Arc::new(prefix_routes);
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -385,10 +505,11 @@ async fn run_api_server(
                     }
                 };
                 let routes = routes.clone();
+                let prefix_routes = prefix_routes.clone();
                 let tls_acceptor = tls_acceptor.clone();
                 let auth = auth.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = handle_connection(stream, remote_addr, routes, tls_acceptor, auth).await {
+                    if let Err(err) = handle_connection(stream, remote_addr, routes, prefix_routes, tls_acceptor, auth).await {
                         warn!(remote = %remote_addr, error = %err, "API connection failed");
                     }
                 });
@@ -401,6 +522,7 @@ async fn handle_connection(
     stream: TcpStream,
     remote_addr: SocketAddr,
     routes: Arc<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
+    prefix_routes: Arc<Vec<PrefixRoute>>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     auth: Option<ApiAuthConfig>,
 ) -> Result<()> {
@@ -410,9 +532,9 @@ async fn handle_connection(
                 .accept(stream)
                 .await
                 .map_err(|err| DnsError::runtime(format!("API TLS handshake failed: {err}")))?;
-            handle_hyper_stream(stream, remote_addr, routes, auth).await
+            handle_hyper_stream(stream, remote_addr, routes, prefix_routes, auth).await
         }
-        None => handle_hyper_stream(stream, remote_addr, routes, auth).await,
+        None => handle_hyper_stream(stream, remote_addr, routes, prefix_routes, auth).await,
     }
 }
 
@@ -420,6 +542,7 @@ async fn handle_hyper_stream<S>(
     stream: S,
     remote_addr: SocketAddr,
     routes: Arc<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
+    prefix_routes: Arc<Vec<PrefixRoute>>,
     auth: Option<ApiAuthConfig>,
 ) -> Result<()>
 where
@@ -427,8 +550,9 @@ where
 {
     let service = service_fn(move |request: Request<Incoming>| {
         let routes = routes.clone();
+        let prefix_routes = prefix_routes.clone();
         let auth = auth.clone();
-        async move { handle_hyper_request(request, remote_addr, routes, auth).await }
+        async move { handle_hyper_request(request, remote_addr, routes, prefix_routes, auth).await }
     });
 
     let io = TokioIo::new(stream);
@@ -442,11 +566,12 @@ async fn handle_hyper_request(
     request: Request<Incoming>,
     remote_addr: SocketAddr,
     routes: Arc<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
+    prefix_routes: Arc<Vec<PrefixRoute>>,
     auth: Option<ApiAuthConfig>,
-) -> std::result::Result<Response<Full<Bytes>>, Infallible> {
+) -> std::result::Result<ApiResponse, Infallible> {
     let request = match read_hyper_request(request).await {
         Ok(request) => request,
-        Err(status) => return Ok(response_to_hyper(simple_response(status, Bytes::new()))),
+        Err(status) => return Ok(simple_response(status, Bytes::new())),
     };
 
     debug!(
@@ -466,15 +591,37 @@ async fn handle_hyper_request(
         );
         response
     } else {
-        let key = RouteKey::new(request.method().clone(), request.uri().path().to_string());
-        if let Some(handler) = routes.get(&key) {
+        if let Some(handler) = lookup_handler(
+            request.method(),
+            request.uri().path(),
+            routes.as_ref(),
+            prefix_routes.as_ref(),
+        ) {
             handler.handle(request).await
         } else {
             simple_response(StatusCode::NOT_FOUND, Bytes::from("404 Not Found"))
         }
     };
 
-    Ok(response_to_hyper(response))
+    Ok(response)
+}
+
+fn lookup_handler<'a>(
+    method: &Method,
+    path: &str,
+    routes: &'a AHashMap<RouteKey, Arc<dyn ApiHandler>>,
+    prefix_routes: &'a [PrefixRoute],
+) -> Option<&'a Arc<dyn ApiHandler>> {
+    let key = RouteKey::new(method.clone(), path.to_string());
+    if let Some(handler) = routes.get(&key) {
+        return Some(handler);
+    }
+
+    prefix_routes
+        .iter()
+        .filter(|route| route.method == *method && path.starts_with(route.path_prefix.as_str()))
+        .max_by_key(|route| route.path_prefix.len())
+        .map(|route| &route.handler)
 }
 
 fn is_authorized(headers: &HeaderMap, auth: Option<&ApiAuthConfig>) -> bool {
@@ -519,19 +666,14 @@ async fn read_hyper_request(
     Ok(Request::from_parts(parts, Bytes::from(collected)))
 }
 
-fn response_to_hyper(response: Response<Bytes>) -> Response<Full<Bytes>> {
-    let (parts, body) = response.into_parts();
-    Response::from_parts(parts, Full::new(body))
-}
-
-pub fn simple_response(status: StatusCode, body: Bytes) -> Response<Bytes> {
+pub fn simple_response(status: StatusCode, body: Bytes) -> ApiResponse {
     Response::builder()
         .status(status)
-        .body(body)
+        .body(Full::new(body).boxed_unsync())
         .expect("failed to build simple API response")
 }
 
-pub fn json_response<T>(status: StatusCode, value: &T) -> Response<Bytes>
+pub fn json_response<T>(status: StatusCode, value: &T) -> ApiResponse
 where
     T: Serialize + ?Sized,
 {
@@ -551,7 +693,7 @@ where
     }
 }
 
-pub fn json_ok<T>(status: StatusCode, value: &T) -> Response<Bytes>
+pub fn json_ok<T>(status: StatusCode, value: &T) -> ApiResponse
 where
     T: Serialize + ?Sized,
 {
@@ -562,7 +704,7 @@ pub fn json_error(
     status: StatusCode,
     code: &'static str,
     message: impl Into<String>,
-) -> Response<Bytes> {
+) -> ApiResponse {
     #[derive(Serialize)]
     struct ErrorBody {
         ok: bool,
@@ -580,6 +722,16 @@ pub fn json_error(
     )
 }
 
+pub fn streaming_response<S>(status: StatusCode, stream: S) -> ApiResponse
+where
+    S: futures::Stream<Item = std::result::Result<Frame<Bytes>, Infallible>> + Send + 'static,
+{
+    Response::builder()
+        .status(status)
+        .body(http_body_util::StreamBody::new(stream).boxed_unsync())
+        .expect("failed to build streaming API response")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,7 +741,7 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use http::Uri;
     use http::header::{AUTHORIZATION, CONTENT_TYPE};
-    use http_body_util::Empty;
+    use http_body_util::{BodyExt, Empty};
     use hyper::Request as HyperRequest;
     use hyper::Version;
     use hyper_util::client::legacy::Client;
@@ -603,7 +755,7 @@ mod tests {
 
     #[async_trait]
     impl ApiHandler for TestEchoHandler {
-        async fn handle(&self, request: Request<Bytes>) -> Response<Bytes> {
+        async fn handle(&self, request: Request<Bytes>) -> ApiResponse {
             let payload = serde_json::json!({
                 "method": request.method().as_str(),
                 "path": request.uri().path(),
@@ -674,8 +826,8 @@ mod tests {
         assert!(is_authorized(&headers, Some(&auth)));
     }
 
-    #[test]
-    fn test_json_response_sets_content_type_and_body() {
+    #[tokio::test]
+    async fn test_json_response_sets_content_type_and_body() {
         #[derive(Serialize)]
         struct Payload {
             ok: bool,
@@ -689,14 +841,12 @@ mod tests {
             response.headers().get(http::header::CONTENT_TYPE),
             Some(&http::HeaderValue::from_static("application/json"))
         );
-        assert_eq!(
-            response.body(),
-            &Bytes::from_static(br#"{"ok":true,"count":2}"#)
-        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, Bytes::from_static(br#"{"ok":true,"count":2}"#));
     }
 
-    #[test]
-    fn test_json_error_sets_content_type_and_body() {
+    #[tokio::test]
+    async fn test_json_error_sets_content_type_and_body() {
         let response = json_error(StatusCode::BAD_REQUEST, "bad_request", "missing field");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -704,9 +854,10 @@ mod tests {
             response.headers().get(http::header::CONTENT_TYPE),
             Some(&http::HeaderValue::from_static("application/json"))
         );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(
-            response.body(),
-            &Bytes::from_static(br#"{"ok":false,"code":"bad_request","message":"missing field"}"#)
+            body,
+            Bytes::from_static(br#"{"ok":false,"code":"bad_request","message":"missing field"}"#)
         );
     }
 

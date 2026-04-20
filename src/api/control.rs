@@ -11,7 +11,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{Request, Response, StatusCode};
+use http::{Request, StatusCode};
 use serde::Serialize;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -216,7 +216,7 @@ struct ControlHandler {
 
 #[async_trait]
 impl ApiHandler for ControlHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         json_ok(StatusCode::OK, &self.controller.snapshot())
     }
 }
@@ -228,7 +228,7 @@ struct ShutdownHandler {
 
 #[async_trait]
 impl ApiHandler for ShutdownHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         match self.controller.request_shutdown() {
             Ok(()) => json_ok(
                 StatusCode::ACCEPTED,
@@ -254,7 +254,7 @@ struct ReloadHandler {
 
 #[async_trait]
 impl ApiHandler for ReloadHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         match self.controller.request_reload() {
             Ok(()) => json_ok(
                 StatusCode::ACCEPTED,
@@ -285,7 +285,7 @@ struct ReloadStatusHandler {
 
 #[async_trait]
 impl ApiHandler for ReloadStatusHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         json_ok(StatusCode::OK, &self.controller.reload_snapshot())
     }
 }
@@ -297,7 +297,7 @@ struct ConfigCheckHandler {
 
 #[async_trait]
 impl ApiHandler for ConfigCheckHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         match validate_config_file(self.controller.config_path()) {
             Ok(response) => json_ok(StatusCode::OK, &response),
             Err(err) => json_error(StatusCode::BAD_REQUEST, "config_check_failed", err),
@@ -310,7 +310,7 @@ struct ConfigValidateHandler;
 
 #[async_trait]
 impl ApiHandler for ConfigValidateHandler {
-    async fn handle(&self, request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, request: Request<Bytes>) -> crate::api::ApiResponse {
         let body = match std::str::from_utf8(request.body()) {
             Ok(body) if !body.trim().is_empty() => body,
             Ok(_) => {

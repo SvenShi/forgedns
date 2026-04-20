@@ -252,6 +252,10 @@ Good fit:
 /plugins/<plugin_tag>/<route>
 ```
 
+Notes:
+
+* A few plugins also expose prefix routes. For example, `query_recorder` uses `/plugins/<tag>/records/<id>`.
+
 ### cache
 
 #### `GET /plugins/<cache_tag>/flush`
@@ -308,6 +312,139 @@ Responses:
 * Hit: domain text, usually a fully-qualified domain name
 * Miss: empty response body
 * Invalid parameter: `400 Bad Request`
+
+### query_recorder
+
+#### `GET /plugins/<tag>/records`
+
+Returns recorder rows ordered by `created_at_ms` descending and does not include `steps`.
+
+Query parameters:
+
+* `cursor=<created_at_ms>:<id>`
+  * Continue pagination after the last row from the previous page.
+* `limit=<n>`
+  * Default `100`, maximum `500`.
+* `since_ms=<unix_ms>`
+  * Only return rows at or after this timestamp.
+* `until_ms=<unix_ms>`
+  * Only return rows at or before this timestamp.
+
+Responses:
+
+* `200 OK`
+  * JSON shaped like:
+
+```json
+{
+  "ok": true,
+  "next_cursor": "1713510000123:42",
+  "records": [
+    {
+      "id": 42,
+      "created_at_ms": 1713510000123,
+      "elapsed_ms": 12,
+      "request_id": 1234,
+      "client_ip": "192.0.2.10",
+      "questions_json": [
+        { "name": "www.example.com.", "qtype": "A", "qclass": "IN" }
+      ],
+      "req_rd": true,
+      "req_cd": false,
+      "req_ad": false,
+      "req_opcode": "Query",
+      "req_edns_json": null,
+      "error": null,
+      "has_response": true,
+      "rcode": "NoError",
+      "resp_aa": false,
+      "resp_tc": false,
+      "resp_ra": true,
+      "resp_ad": false,
+      "resp_cd": false,
+      "answer_count": 1,
+      "authority_count": 0,
+      "additional_count": 0,
+      "answers_json": [
+        {
+          "name": "www.example.com.",
+          "class": "IN",
+          "ttl": 300,
+          "rr_type": "A",
+          "payload_kind": "A",
+          "payload_text": "192.0.2.1",
+          "payload": { "ip": "192.0.2.1" }
+        }
+      ],
+      "authorities_json": [],
+      "additionals_json": [],
+      "signature_json": [],
+      "resp_edns_json": null
+    }
+  ]
+}
+```
+
+#### `GET /plugins/<tag>/records/<id>`
+
+Returns one full record plus its `steps` array.
+
+Responses:
+
+* `200 OK`
+  * JSON containing a `record` object. `record.record` holds the fixed main-table fields and `record.steps` holds path events.
+* `404 Not Found`
+  * The record does not exist.
+
+#### `GET /plugins/<tag>/stats/overview`
+
+Returns recorder overview statistics.
+
+Query parameters:
+
+* `since_ms=<unix_ms>`
+* `until_ms=<unix_ms>`
+
+Response fields:
+
+* `query_total`
+* `error_total`
+* `dropped_total`
+* `avg_elapsed_ms`
+
+#### `GET /plugins/<tag>/stats/plugins`
+
+Aggregates plugin hit information from recorded path events.
+
+Query parameters:
+
+* `since_ms=<unix_ms>`
+* `until_ms=<unix_ms>`
+* `kind=matcher|executor|builtin|all`
+
+Response fields:
+
+* `kind`
+* `tag`
+* `evaluated`
+* `matched`
+* `executed`
+* `query_total`
+* `query_share`
+
+#### `GET /plugins/<tag>/stream`
+
+Streams newly written records over SSE.
+
+Query parameters:
+
+* `tail=<n>`
+  * Replay the most recent `n` records from the in-memory tail first, then continue streaming.
+
+Notes:
+
+* `event: record` uses the full `RecordDetail` JSON as `data`.
+* Heartbeat comment frames are sent periodically to keep the connection alive.
 
 ## Prometheus Metrics
 

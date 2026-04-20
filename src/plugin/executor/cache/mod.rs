@@ -23,7 +23,7 @@ use crate::{continue_next, register_plugin_factory};
 use ahash::AHashSet;
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{Request, Response, StatusCode};
+use http::{Request, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value;
 use std::fmt::Debug;
@@ -988,7 +988,7 @@ struct CacheFlushResponse {
 
 #[async_trait]
 impl ApiHandler for CacheFlushHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         let cleared_entries = self.cache_map.len();
         self.cache_map.clear();
         info!("cache flushed, cleared entries {}", cleared_entries);
@@ -1010,7 +1010,7 @@ struct CacheDumpHandler {
 
 #[async_trait]
 impl ApiHandler for CacheDumpHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         match dump_cache_to_bytes(&self.cache_map) {
             Ok(bytes) => {
                 let mut response = simple_response(StatusCode::OK, Bytes::from(bytes));
@@ -1053,7 +1053,7 @@ struct CacheLoadDumpResponse {
 
 #[async_trait]
 impl ApiHandler for CacheLoadDumpHandler {
-    async fn handle(&self, request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, request: Request<Bytes>) -> crate::api::ApiResponse {
         match load_cache_from_bytes(&self.cache_map, request.body(), self.ecs_in_key, true) {
             Ok(loaded_entries) => json_ok(
                 StatusCode::OK,

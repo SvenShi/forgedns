@@ -25,7 +25,7 @@ use crate::api::{ApiHandler, ApiRegister, json_error, json_ok};
 use crate::core::error::{DnsError, Result as DnsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{Request, Response, StatusCode};
+use http::{Request, StatusCode};
 use serde::Serialize;
 
 use crate::plugin::Plugin;
@@ -98,7 +98,7 @@ struct ProviderReloadHandler {
 
 #[async_trait]
 impl ApiHandler for ProviderReloadHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         match self.registry.reload_provider(&self.tag).await {
             Ok(()) => json_ok(
                 StatusCode::OK,

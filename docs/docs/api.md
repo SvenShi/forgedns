@@ -252,6 +252,10 @@ API 路由分成三类：
 /plugins/<plugin_tag>/<route>
 ```
 
+说明：
+
+* 也有少量插件会把主资源绑定到前缀路由下，例如 `query_recorder` 的 `/plugins/<tag>/records/<id>`。
+
 ### cache
 
 #### `GET /plugins/<cache_tag>/flush`
@@ -308,6 +312,139 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 * 命中：域名文本，通常为 fully-qualified domain name。
 * 未命中：空响应体。
 * 参数错误：`400 Bad Request`。
+
+### query\_recorder
+
+#### `GET /plugins/<tag>/records`
+
+按 `created_at_ms` 倒序返回 recorder 主表中的记录列表，不包含 `steps`。
+
+查询参数：
+
+* `cursor=<created_at_ms>:<id>`
+  * 用于继续向后翻页。
+* `limit=<n>`
+  * 默认 `100`，最大 `500`。
+* `since_ms=<unix_ms>`
+  * 仅返回大于等于该时间的记录。
+* `until_ms=<unix_ms>`
+  * 仅返回小于等于该时间的记录。
+
+返回：
+
+* `200 OK`
+  * JSON，形如：
+
+```json
+{
+  "ok": true,
+  "next_cursor": "1713510000123:42",
+  "records": [
+    {
+      "id": 42,
+      "created_at_ms": 1713510000123,
+      "elapsed_ms": 12,
+      "request_id": 1234,
+      "client_ip": "192.0.2.10",
+      "questions_json": [
+        { "name": "www.example.com.", "qtype": "A", "qclass": "IN" }
+      ],
+      "req_rd": true,
+      "req_cd": false,
+      "req_ad": false,
+      "req_opcode": "Query",
+      "req_edns_json": null,
+      "error": null,
+      "has_response": true,
+      "rcode": "NoError",
+      "resp_aa": false,
+      "resp_tc": false,
+      "resp_ra": true,
+      "resp_ad": false,
+      "resp_cd": false,
+      "answer_count": 1,
+      "authority_count": 0,
+      "additional_count": 0,
+      "answers_json": [
+        {
+          "name": "www.example.com.",
+          "class": "IN",
+          "ttl": 300,
+          "rr_type": "A",
+          "payload_kind": "A",
+          "payload_text": "192.0.2.1",
+          "payload": { "ip": "192.0.2.1" }
+        }
+      ],
+      "authorities_json": [],
+      "additionals_json": [],
+      "signature_json": [],
+      "resp_edns_json": null
+    }
+  ]
+}
+```
+
+#### `GET /plugins/<tag>/records/<id>`
+
+返回单条完整记录，并附带 `steps` 路径事件数组。
+
+返回：
+
+* `200 OK`
+  * JSON，包含 `record` 对象；其中 `record.record` 为主表字段，`record.steps` 为路径事件。
+* `404 Not Found`
+  * 记录不存在。
+
+#### `GET /plugins/<tag>/stats/overview`
+
+返回 recorder 概览统计。
+
+查询参数：
+
+* `since_ms=<unix_ms>`
+* `until_ms=<unix_ms>`
+
+返回字段：
+
+* `query_total`
+* `error_total`
+* `dropped_total`
+* `avg_elapsed_ms`
+
+#### `GET /plugins/<tag>/stats/plugins`
+
+按路径事件聚合插件命中情况。
+
+查询参数：
+
+* `since_ms=<unix_ms>`
+* `until_ms=<unix_ms>`
+* `kind=matcher|executor|builtin|all`
+
+返回字段：
+
+* `kind`
+* `tag`
+* `evaluated`
+* `matched`
+* `executed`
+* `query_total`
+* `query_share`
+
+#### `GET /plugins/<tag>/stream`
+
+通过 SSE 推送新写入的完整记录。
+
+查询参数：
+
+* `tail=<n>`
+  * 先回放最近 `n` 条内存 tail，再持续推送新记录。
+
+说明：
+
+* `event: record` 的 `data` 为完整 `RecordDetail` JSON。
+* 会定期发送 heartbeat 注释帧以保持长连接。
 
 ## Prometheus 指标
 

@@ -1242,6 +1242,151 @@ sidebar_position: 3
 
 ---
 
+## `query_recorder`
+
+### 作用
+
+把入口 request、执行后 response 以及 `sequence` 路径事件持久化到 recorder 自己的 SQLite 数据库，并暴露历史查询、统计和 SSE 实时推送接口。
+
+### 配置示例
+
+```yaml
+- tag: query_recorder_main
+  type: query_recorder
+  args:
+    # SQLite 文件路径；不同 recorder 应使用不同 path
+    path: "./data/query-recorder-main.sqlite"
+    # 热路径入队缓冲大小
+    queue_size: 8192
+    # 后台批量写入条数
+    batch_size: 256
+    # 后台批量 flush 间隔，单位毫秒
+    flush_interval_ms: 200
+    # 内存中保留多少条最近记录，供 SSE tail 回放
+    memory_tail: 1024
+    # 日志保留天数；最小 1
+    retention_days: 7
+    # 定时清理周期，单位小时；最小 1
+    cleanup_interval_hours: 1
+```
+
+### 配置项
+
+#### `path`
+
+- 类型：`string`；必填：是
+- 作用：指定当前 recorder 的 SQLite 文件路径。
+
+#### `queue_size`
+
+- 类型：`integer`；必填：否；默认值：`8192`
+- 作用：定义热路径到后台写线程的有界队列大小。
+
+#### `batch_size`
+
+- 类型：`integer`；必填：否；默认值：`256`
+- 作用：定义后台批量写入 SQLite 的单批记录数。
+
+#### `flush_interval_ms`
+
+- 类型：`integer`；必填：否；默认值：`200`
+- 作用：定义后台写线程的批量 flush 间隔。
+
+#### `memory_tail`
+
+- 类型：`integer`；必填：否；默认值：`1024`
+- 作用：定义最近记录的内存 tail 长度，用于 `stream?tail=n` 回放。
+
+#### `retention_days`
+
+- 类型：`integer`；必填：否；默认值：`7`
+- 最小值：`1`
+- 作用：定义日志保留天数；过期数据会被定时实际删除。
+
+#### `cleanup_interval_hours`
+
+- 类型：`integer`；必填：否；默认值：`1`
+- 最小值：`1`
+- 作用：定义过期清理任务的执行周期。
+
+### 行为说明
+
+- 这是纯 executor 观察器，不会修改 `server` 收口逻辑。
+- 进入时抓取入口 request 的结构化快照，并启用 `DnsContext.execution_path`。
+- `next` 返回后立即提交记录；成功时记录当前 response，失败时记录 `error` 和空 response。
+- request / response 不保存 wire 数据，而是把问题区、RR、EDNS 等字段拆成 JSON 文本列。
+- 每个 recorder 只使用两张表：
+  - `qr_<safe_tag>_<fnv64hex>_v1_records`
+  - `qr_<safe_tag>_<fnv64hex>_v1_steps`
+- `records` 主表只保存固定字段集合；`steps` 表保存 `sequence` 路径事件，用于执行路径分析和命中率统计。
+- 每个 recorder 独占自己的有界队列、SQLite 连接、后台写线程、内存 tail 和 SSE 广播器。
+- 默认假定不同 recorder 使用不同 `path`；v1 不做跨 recorder 写线程复用或路径协调。
+
+### 数据结构约定
+
+- `questions_json` 固定为 question 数组，例如：
+
+```json
+[
+  { "name": "www.example.com.", "qtype": "A", "qclass": "IN" }
+]
+```
+
+- `answers_json`、`authorities_json`、`additionals_json`、`signature_json` 固定为 RR 数组，例如：
+
+```json
+[
+  {
+    "name": "www.example.com.",
+    "class": "IN",
+    "ttl": 300,
+    "rr_type": "A",
+    "payload_kind": "A",
+    "payload_text": "192.0.2.1",
+    "payload": { "ip": "192.0.2.1" }
+  }
+]
+```
+
+- `req_edns_json`、`resp_edns_json` 固定为 EDNS 对象或 `NULL`。
+- 表名中的 `v1` 是当前 schema 版本；后续升级会新增新版本表，不做原地改表。
+
+### API
+
+- `GET /plugins/<tag>/records`
+  - 按 `created_at_ms` 倒序分页返回主表记录。
+  - 查询参数：
+    - `cursor=<created_at_ms>:<id>`
+    - `limit=<n>`，默认 `100`，最大 `500`
+    - `since_ms=<unix_ms>`
+    - `until_ms=<unix_ms>`
+- `GET /plugins/<tag>/records/<id>`
+  - 返回单条完整记录，并附带 `steps`。
+- `GET /plugins/<tag>/stats/overview`
+  - 返回总量、错误量、丢弃量、平均耗时。
+  - 支持 `since_ms`、`until_ms` 过滤。
+- `GET /plugins/<tag>/stats/plugins`
+  - 返回按 `matcher / executor / builtin` 聚合的命中统计。
+  - 支持 `since_ms`、`until_ms`、`kind=matcher|executor|builtin|all`。
+- `GET /plugins/<tag>/stream`
+  - 以 SSE 实时推送新写入记录。
+  - 支持 `tail=<n>` 回放最近 `n` 条内存 tail。
+
+### 典型用途
+
+- 持久化审计和问题排查。
+- 分析 `sequence` 执行路径、插件命中率和异常分支。
+- 给控制面或外部面板提供实时查询日志流。
+
+### 注意事项
+
+- 想要拿到完整主链路路径，推荐把 recorder 放在入口附近。
+- 如果前置分支在 recorder 之前就短路返回，该请求不会被当前 recorder 记录。
+- 若 `next` 报错而 `server` 后续补发了兜底响应，数据库里仍只记录插件视角下的 `error` 和空 response。
+- 若未启用管理 API，recorder 仍会写库，但不会暴露查询与 SSE 路由。
+
+---
+
 ## `metrics_collector`
 
 ### 作用
@@ -2308,4 +2453,3 @@ plugins:
 - 依赖真实 DNS 请求内容的 executor 在空上下文任务中通常没有意义。
 
 ---
-

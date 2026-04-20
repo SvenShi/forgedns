@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2025 Sven Shi
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-use crate::core::context::DnsContext;
+use crate::core::context::{DnsContext, ExecutionPathEvent};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::UninitializedPlugin;
 use crate::plugin::executor::sequence::Rule;
@@ -56,6 +56,8 @@ enum InstructionOp {
 
 #[derive(Debug)]
 struct Instruction {
+    /// Original node index inside the owning sequence.
+    node_index: usize,
     /// All matchers that must pass before the op is executed.
     matchers: Vec<MatcherRef>,
     /// The operation to run once matchers pass.
@@ -64,6 +66,8 @@ struct Instruction {
 
 #[derive(Debug)]
 pub struct ChainProgram {
+    /// Owning sequence tag for execution-path attribution.
+    sequence_tag: String,
     /// Flattened instruction stream executed by a program counter.
     instructions: Vec<Instruction>,
 }
@@ -86,41 +90,179 @@ impl ChainProgram {
     ) -> Result<ExecStep> {
         while pc < self.instructions.len() {
             let instruction = &self.instructions[pc];
-            if !instruction.matches(context) {
+            if !self.matches_instruction(context, instruction) {
                 pc += 1;
                 continue;
             }
 
             match &instruction.op {
-                InstructionOp::Executor(executor) => match executor.execute(context).await? {
-                    ExecStep::Next => pc += 1,
-                    step @ (ExecStep::Stop | ExecStep::Return) => return Ok(step),
-                },
+                InstructionOp::Executor(executor) => {
+                    self.record_event(
+                        context,
+                        instruction.node_index,
+                        "executor",
+                        Some(executor.tag()),
+                        "entered",
+                    );
+                    match executor.execute(context).await {
+                        Ok(ExecStep::Next) => {
+                            self.record_event(
+                                context,
+                                instruction.node_index,
+                                "executor",
+                                Some(executor.tag()),
+                                "next",
+                            );
+                            pc += 1;
+                        }
+                        Ok(step @ (ExecStep::Stop | ExecStep::Return)) => {
+                            self.record_event(
+                                context,
+                                instruction.node_index,
+                                "executor",
+                                Some(executor.tag()),
+                                exec_step_outcome(step),
+                            );
+                            return Ok(step);
+                        }
+                        Err(err) => {
+                            self.record_event(
+                                context,
+                                instruction.node_index,
+                                "executor",
+                                Some(executor.tag()),
+                                "error",
+                            );
+                            return Err(err);
+                        }
+                    }
+                }
                 InstructionOp::ExecutorWithNext(executor) => {
+                    self.record_event(
+                        context,
+                        instruction.node_index,
+                        "executor",
+                        Some(executor.tag()),
+                        "entered",
+                    );
                     let next = ExecutorNext::new(self.clone(), pc + 1);
-                    return executor.execute_with_next(context, Some(next)).await;
+                    return match executor.execute_with_next(context, Some(next)).await {
+                        Ok(step) => {
+                            self.record_event(
+                                context,
+                                instruction.node_index,
+                                "executor",
+                                Some(executor.tag()),
+                                exec_step_outcome(step),
+                            );
+                            Ok(step)
+                        }
+                        Err(err) => {
+                            self.record_event(
+                                context,
+                                instruction.node_index,
+                                "executor",
+                                Some(executor.tag()),
+                                "error",
+                            );
+                            Err(err)
+                        }
+                    };
                 }
                 InstructionOp::Builtin(op) => match op {
-                    BuiltinOp::Accept => return Ok(ExecStep::Stop),
-                    BuiltinOp::Return => return Ok(ExecStep::Return),
+                    BuiltinOp::Accept => {
+                        self.record_event(
+                            context,
+                            instruction.node_index,
+                            "builtin",
+                            Some("accept"),
+                            "stop",
+                        );
+                        return Ok(ExecStep::Stop);
+                    }
+                    BuiltinOp::Return => {
+                        self.record_event(
+                            context,
+                            instruction.node_index,
+                            "builtin",
+                            Some("return"),
+                            "return",
+                        );
+                        return Ok(ExecStep::Return);
+                    }
                     BuiltinOp::Reject(rcode) => {
                         context.set_response(context.request().response(*rcode));
+                        self.record_event(
+                            context,
+                            instruction.node_index,
+                            "builtin",
+                            Some("reject"),
+                            "stop",
+                        );
                         return Ok(ExecStep::Stop);
                     }
                     BuiltinOp::Jump(executor) => {
-                        let step = executor.execute_with_next(context, None).await?;
-                        match step {
-                            ExecStep::Stop => return Ok(ExecStep::Stop),
-                            ExecStep::Next | ExecStep::Return => {
-                                pc += 1;
+                        match executor.execute_with_next(context, None).await {
+                            Ok(step) => {
+                                self.record_event(
+                                    context,
+                                    instruction.node_index,
+                                    "builtin",
+                                    Some("jump"),
+                                    exec_step_outcome(step),
+                                );
+                                match step {
+                                    ExecStep::Stop => return Ok(ExecStep::Stop),
+                                    ExecStep::Next | ExecStep::Return => {
+                                        pc += 1;
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                self.record_event(
+                                    context,
+                                    instruction.node_index,
+                                    "builtin",
+                                    Some("jump"),
+                                    "error",
+                                );
+                                return Err(err);
                             }
                         }
                     }
                     BuiltinOp::Goto(executor) => {
-                        return executor.execute_with_next(context, None).await;
+                        return match executor.execute_with_next(context, None).await {
+                            Ok(step) => {
+                                self.record_event(
+                                    context,
+                                    instruction.node_index,
+                                    "builtin",
+                                    Some("goto"),
+                                    exec_step_outcome(step),
+                                );
+                                Ok(step)
+                            }
+                            Err(err) => {
+                                self.record_event(
+                                    context,
+                                    instruction.node_index,
+                                    "builtin",
+                                    Some("goto"),
+                                    "error",
+                                );
+                                Err(err)
+                            }
+                        };
                     }
                     BuiltinOp::Mark(marks) => {
                         context.marks_mut().extend(marks.iter().cloned());
+                        self.record_event(
+                            context,
+                            instruction.node_index,
+                            "builtin",
+                            Some("mark"),
+                            "next",
+                        );
                         pc += 1;
                     }
                 },
@@ -128,6 +270,60 @@ impl ChainProgram {
         }
 
         Ok(ExecStep::Next)
+    }
+
+    fn matches_instruction(&self, context: &mut DnsContext, instruction: &Instruction) -> bool {
+        for matcher_ref in &instruction.matchers {
+            let matched = matcher_ref.matcher.is_match(context);
+            let matched = if matcher_ref.reverse {
+                !matched
+            } else {
+                matched
+            };
+            self.record_event(
+                context,
+                instruction.node_index,
+                "matcher",
+                Some(matcher_ref.matcher.tag()),
+                if matched { "matched" } else { "not_matched" },
+            );
+            if !matched {
+                debug!(
+                    "instruction skipped, matcher: {}",
+                    matcher_ref.matcher.tag()
+                );
+                return false;
+            }
+        }
+        true
+    }
+
+    fn record_event(
+        &self,
+        context: &mut DnsContext,
+        node_index: usize,
+        kind: &str,
+        tag: Option<&str>,
+        outcome: &str,
+    ) {
+        if !context.execution_path_enabled() {
+            return;
+        }
+        context.push_execution_path_event(ExecutionPathEvent::new(
+            self.sequence_tag.as_str(),
+            Some(node_index),
+            kind,
+            tag,
+            outcome,
+        ));
+    }
+}
+
+fn exec_step_outcome(step: ExecStep) -> &'static str {
+    match step {
+        ExecStep::Next => "next",
+        ExecStep::Stop => "stop",
+        ExecStep::Return => "return",
     }
 }
 
@@ -158,33 +354,13 @@ impl ExecutorNext {
 impl ChainProgram {
     pub(crate) fn single_with_next_executor_for_test(executor: Arc<dyn Executor>) -> Arc<Self> {
         Arc::new(Self {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![Instruction {
+                node_index: 0,
                 matchers: Vec::new(),
                 op: InstructionOp::ExecutorWithNext(executor),
             }],
         })
-    }
-}
-
-impl Instruction {
-    /// Return true only when all matchers pass after applying reverse flags.
-    fn matches(&self, context: &mut DnsContext) -> bool {
-        for matcher_ref in &self.matchers {
-            let matched = matcher_ref.matcher.is_match(context);
-            let matched = if matcher_ref.reverse {
-                !matched
-            } else {
-                matched
-            };
-            if !matched {
-                debug!(
-                    "instruction skipped, matcher: {}",
-                    matcher_ref.matcher.tag()
-                );
-                return false;
-            }
-        }
-        true
     }
 }
 
@@ -233,6 +409,7 @@ impl ChainBuilder {
     pub fn build(self) -> BuildArtifacts {
         (
             Arc::new(ChainProgram {
+                sequence_tag: self.sequence_tag,
                 instructions: self.instructions,
             }),
             self.quick_setup_executors,
@@ -272,7 +449,11 @@ impl ChainBuilder {
             }
         };
 
-        Ok(Instruction { matchers, op })
+        Ok(Instruction {
+            node_index,
+            matchers,
+            op,
+        })
     }
 
     async fn parse_builtin(&mut self, expr: &str, node_index: usize) -> Result<Option<BuiltinOp>> {
@@ -582,6 +763,7 @@ mod tests {
             InstructionOp::Executor(executor)
         };
         Instruction {
+            node_index: 0,
             matchers: Vec::new(),
             op,
         }
@@ -589,6 +771,7 @@ mod tests {
 
     fn builtin_instruction(op: BuiltinOp) -> Instruction {
         Instruction {
+            node_index: 0,
             matchers: Vec::new(),
             op: InstructionOp::Builtin(op),
         }
@@ -613,6 +796,7 @@ mod tests {
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![executor_instruction(first), executor_instruction(second)],
         });
         let mut context = make_context();
@@ -646,6 +830,7 @@ mod tests {
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![
                 executor_instruction(deferred),
                 executor_instruction(failing),
@@ -673,6 +858,7 @@ mod tests {
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![
                 builtin_instruction(BuiltinOp::Reject(Rcode::ServFail)),
                 executor_instruction(skipped),
@@ -717,6 +903,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_reject_builds_response_from_request_message() {
         let program = Arc::new(ChainProgram {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![builtin_instruction(BuiltinOp::Reject(Rcode::ServFail))],
         });
         let mut context = make_context();
@@ -753,6 +940,7 @@ mod tests {
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![
                 builtin_instruction(BuiltinOp::Accept),
                 executor_instruction(skipped),
@@ -780,6 +968,7 @@ mod tests {
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![
                 builtin_instruction(BuiltinOp::Return),
                 executor_instruction(skipped),
@@ -808,6 +997,7 @@ mod tests {
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![
                 builtin_instruction(BuiltinOp::Jump(Arc::new(StubExecutor::new(
                     "jumped",
@@ -842,6 +1032,7 @@ mod tests {
             log.clone(),
         ));
         let program = Arc::new(ChainProgram {
+            sequence_tag: "test_sequence".to_string(),
             instructions: vec![
                 builtin_instruction(BuiltinOp::Goto(Arc::new(StubExecutor::new(
                     "goto_child",

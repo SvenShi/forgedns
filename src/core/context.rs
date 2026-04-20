@@ -135,11 +135,87 @@ impl RuntimeContext {
     }
 }
 
+/// One structured execution-path event captured from the sequence runtime.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ExecutionPathEvent {
+    pub sequence_tag: String,
+    pub node_index: Option<usize>,
+    pub kind: String,
+    pub tag: Option<String>,
+    pub outcome: String,
+}
+
+impl ExecutionPathEvent {
+    #[inline]
+    pub fn new(
+        sequence_tag: impl Into<String>,
+        node_index: Option<usize>,
+        kind: impl Into<String>,
+        tag: Option<impl Into<String>>,
+        outcome: impl Into<String>,
+    ) -> Self {
+        Self {
+            sequence_tag: sequence_tag.into(),
+            node_index,
+            kind: kind.into(),
+            tag: tag.map(Into::into),
+            outcome: outcome.into(),
+        }
+    }
+}
+
+/// Request-local execution path recording state.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct ExecutionPath {
+    enabled: bool,
+    events: Vec<ExecutionPathEvent>,
+}
+
+impl ExecutionPath {
+    #[inline]
+    pub fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    #[inline]
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    #[inline]
+    pub fn push(&mut self, event: ExecutionPathEvent) {
+        if self.enabled {
+            self.events.push(event);
+        }
+    }
+
+    #[inline]
+    pub fn events(&self) -> &[ExecutionPathEvent] {
+        &self.events
+    }
+
+    #[inline]
+    pub fn events_from(&self, start: usize) -> &[ExecutionPathEvent] {
+        self.events.get(start..).unwrap_or(&[])
+    }
+}
+
 /// Context object for a DNS request/response lifecycle.
 pub struct DnsContext {
     pub ingress: IngressContext,
     pub request: Message,
     pub response: Option<Message>,
+    pub execution_path: ExecutionPath,
     pub runtime: RuntimeContext,
     pub registry: Arc<PluginRegistry>,
 }
@@ -157,6 +233,7 @@ impl DnsContext {
             ingress: IngressContext::new(peer_addr),
             request,
             response: None,
+            execution_path: ExecutionPath::default(),
             runtime: RuntimeContext::default(),
             registry,
         }
@@ -271,11 +348,42 @@ impl DnsContext {
         self.runtime.remove_attr(name)
     }
 
+    #[inline]
+    pub fn enable_execution_path(&mut self) {
+        self.execution_path.enable();
+    }
+
+    #[inline]
+    pub fn execution_path_enabled(&self) -> bool {
+        self.execution_path.enabled()
+    }
+
+    #[inline]
+    pub fn execution_path_len(&self) -> usize {
+        self.execution_path.len()
+    }
+
+    #[inline]
+    pub fn execution_path_events(&self) -> &[ExecutionPathEvent] {
+        self.execution_path.events()
+    }
+
+    #[inline]
+    pub fn execution_path_events_from(&self, start: usize) -> &[ExecutionPathEvent] {
+        self.execution_path.events_from(start)
+    }
+
+    #[inline]
+    pub fn push_execution_path_event(&mut self, event: ExecutionPathEvent) {
+        self.execution_path.push(event);
+    }
+
     pub fn copy_for_subquery(&self) -> DnsContext {
         DnsContext {
             ingress: self.ingress.clone(),
             request: self.request.clone(),
             response: self.response.clone(),
+            execution_path: self.execution_path.clone(),
             runtime: RuntimeContext {
                 marks: self.runtime.marks.clone(),
                 extensions: AHashMap::new(),
@@ -288,6 +396,7 @@ impl DnsContext {
         self.ingress = sub_ctx.ingress;
         self.request = sub_ctx.request;
         self.response = sub_ctx.response;
+        self.execution_path = sub_ctx.execution_path;
         self.runtime.marks = sub_ctx.runtime.marks;
         self.runtime.extensions = sub_ctx.runtime.extensions;
     }
@@ -381,6 +490,58 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .has_answer_ip(|ip| ip == IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2)))
+        );
+    }
+
+    #[test]
+    fn test_execution_path_is_opt_in() {
+        let mut ctx = make_context();
+        ctx.push_execution_path_event(ExecutionPathEvent::new(
+            "main",
+            Some(0),
+            "matcher",
+            Some("qname"),
+            "matched",
+        ));
+        assert!(ctx.execution_path_events().is_empty());
+
+        ctx.enable_execution_path();
+        ctx.push_execution_path_event(ExecutionPathEvent::new(
+            "main",
+            Some(0),
+            "matcher",
+            Some("qname"),
+            "matched",
+        ));
+        assert_eq!(ctx.execution_path_len(), 1);
+    }
+
+    #[test]
+    fn test_execution_path_subquery_copy_and_apply() {
+        let mut ctx = make_context();
+        ctx.enable_execution_path();
+        ctx.push_execution_path_event(ExecutionPathEvent::new(
+            "main",
+            Some(0),
+            "executor",
+            Some("cache"),
+            "entered",
+        ));
+
+        let mut sub_ctx = ctx.copy_for_subquery();
+        sub_ctx.push_execution_path_event(ExecutionPathEvent::new(
+            "main",
+            Some(1),
+            "executor",
+            Some("forward"),
+            "next",
+        ));
+        ctx.apply_subquery_result(sub_ctx);
+
+        assert_eq!(ctx.execution_path_len(), 2);
+        assert_eq!(
+            ctx.execution_path_events_from(1)[0].tag.as_deref(),
+            Some("forward")
         );
     }
 }
