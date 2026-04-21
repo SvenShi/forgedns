@@ -1,0 +1,64 @@
+name: Bug Report
+description: Report a bug in ForgeDNS
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the following information.
+
+  - type: input
+    id: version
+    attributes:
+      label: ForgeDNS Version
+      placeholder: e.g. v0.1.0 / commit hash
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Paste your config (remove sensitive info if needed)
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Start server with ...
+        2. Send query ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant logs / panic / debug output
+      render: shell
+
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: OS / Arch / Network (IPv4/IPv6/DoH etc.)
