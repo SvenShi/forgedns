@@ -72,6 +72,7 @@ impl Plugin for HasRespMatcher {
 }
 
 impl Matcher for HasRespMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context.response().is_some()
     }

@@ -84,6 +84,7 @@ impl AdGuardRule {
         snapshot.blocks.is_match(qname, qtype)
     }
 
+    #[hotpath::measure]
     fn build_snapshot(&self) -> DnsResult<AdGuardRuleSnapshot> {
         let (important_exceptions, important_blocks, exceptions, blocks, stats) =
             build_rule_buckets(self.tag.as_str(), &self.cfg)?;
@@ -140,14 +141,17 @@ impl Provider for AdGuardRule {
         true
     }
 
+    #[hotpath::measure]
     fn contains_name(&self, name: &Name) -> bool {
         self.contains_name_only(name)
     }
 
+    #[hotpath::measure]
     fn contains_question(&self, question: &Question) -> bool {
         self.contains_question_rule(question)
     }
 
+    #[hotpath::measure]
     async fn reload(&self) -> DnsResult<()> {
         let snapshot = self.build_snapshot()?;
         self.snapshot.store(Arc::new(snapshot));

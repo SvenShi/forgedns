@@ -109,6 +109,7 @@ impl Plugin for DownloadExecutor {
 
 #[async_trait]
 impl Executor for DownloadExecutor {
+    #[hotpath::measure]
     async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
         let mut success_count = 0usize;
         let mut failure_count = 0usize;

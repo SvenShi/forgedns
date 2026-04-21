@@ -100,6 +100,7 @@ impl Plugin for IpSetExecutor {
 
 #[async_trait]
 impl Executor for IpSetExecutor {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if !self.enabled.load(Ordering::Relaxed) {
             return Ok(ExecStep::Next);

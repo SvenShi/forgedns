@@ -47,6 +47,7 @@ pub struct GeoIpProvider {
 }
 
 impl GeoIpProvider {
+    #[hotpath::measure]
     fn build_snapshot(&self) -> DnsResult<GeoIpSnapshot> {
         let start_ms = AppClock::elapsed_millis();
 
@@ -145,6 +146,7 @@ impl Provider for GeoIpProvider {
         self
     }
 
+    #[hotpath::measure]
     fn contains_ip(&self, ip: IpAddr) -> bool {
         let snapshot = self.snapshot.load();
         let has_family_rules = match ip {
@@ -157,6 +159,7 @@ impl Provider for GeoIpProvider {
         snapshot.matcher.contains_ip(ip)
     }
 
+    #[hotpath::measure]
     async fn reload(&self) -> DnsResult<()> {
         let snapshot = self.build_snapshot()?;
         self.snapshot.store(Arc::new(snapshot));

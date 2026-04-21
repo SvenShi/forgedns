@@ -143,6 +143,7 @@ impl Server for UdpServer {
 /// Creates a UDP stream, listens for incoming DNS queries, and spawns
 /// handler tasks for each request. Uses a task tracker to manage request
 /// lifetimes without polling completed tasks from the hot path.
+#[hotpath::measure]
 async fn run_server(
     addr: String,
     handler: Arc<RequestHandle>,

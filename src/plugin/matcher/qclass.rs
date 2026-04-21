@@ -81,6 +81,7 @@ impl Plugin for QclassMatcher {
 }
 
 impl Matcher for QclassMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context
             .request

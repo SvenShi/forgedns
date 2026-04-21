@@ -61,6 +61,7 @@ pub struct DomainSet {
 }
 
 impl DomainSet {
+    #[hotpath::measure]
     fn build_local_snapshot(&self) -> DnsResult<DomainSetSnapshot> {
         let start_ms = AppClock::elapsed_millis();
         let mut rules = self.args.exps.clone();
@@ -137,6 +138,7 @@ impl Provider for DomainSet {
     }
 
     #[inline]
+    #[hotpath::measure]
     fn contains_name(&self, name: &Name) -> bool {
         let snapshot = self.snapshot.load();
         snapshot.matcher.is_match_name(name)
@@ -147,6 +149,7 @@ impl Provider for DomainSet {
     }
 
     #[inline]
+    #[hotpath::measure]
     fn contains_question(&self, question: &Question) -> bool {
         let snapshot = self.snapshot.load();
         snapshot.matcher.is_match_name(question.name())
@@ -156,6 +159,7 @@ impl Provider for DomainSet {
                 .any(|set| set.contains_question(question) || set.contains_name(question.name()))
     }
 
+    #[hotpath::measure]
     async fn reload(&self) -> DnsResult<()> {
         let snapshot = self.build_local_snapshot()?;
         self.snapshot.store(Arc::new(snapshot));

@@ -105,6 +105,7 @@ impl Plugin for EnvMatcher {
 }
 
 impl Matcher for EnvMatcher {
+    #[hotpath::measure]
     fn is_match(&self, _context: &mut DnsContext) -> bool {
         if !self.cached_exists {
             return false;

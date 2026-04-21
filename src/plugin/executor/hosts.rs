@@ -175,6 +175,7 @@ impl Plugin for HostsExecutor {
 
 #[async_trait]
 impl Executor for HostsExecutor {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if context.request.questions().len() != 1 {
             return Ok(ExecStep::Next);

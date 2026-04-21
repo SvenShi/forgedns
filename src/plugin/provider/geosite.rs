@@ -46,6 +46,7 @@ pub struct GeoSiteProvider {
 }
 
 impl GeoSiteProvider {
+    #[hotpath::measure]
     fn build_snapshot(&self) -> DnsResult<GeoSiteSnapshot> {
         let start_ms = AppClock::elapsed_millis();
 
@@ -185,14 +186,17 @@ impl Provider for GeoSiteProvider {
         self
     }
 
+    #[hotpath::measure]
     fn contains_name(&self, name: &Name) -> bool {
         self.snapshot.load().matcher.is_match_name(name)
     }
 
+    #[hotpath::measure]
     fn contains_question(&self, question: &Question) -> bool {
         self.contains_name(question.name())
     }
 
+    #[hotpath::measure]
     async fn reload(&self) -> DnsResult<()> {
         let snapshot = self.build_snapshot()?;
         self.snapshot.store(Arc::new(snapshot));

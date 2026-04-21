@@ -128,6 +128,7 @@ impl TaskCenter {
     }
 }
 
+#[hotpath::measure]
 async fn run_scheduler(mut rx: mpsc::UnboundedReceiver<Command>) {
     let mut tasks: HashMap<u64, ScheduledTask> = HashMap::new();
     let mut deadlines: BinaryHeap<Reverse<(Instant, u64)>> = BinaryHeap::new();
@@ -218,6 +219,7 @@ async fn handle_command(
     }
 }
 
+#[hotpath::measure]
 async fn run_due_tasks(
     tasks: &mut HashMap<u64, ScheduledTask>,
     deadlines: &mut BinaryHeap<Reverse<(Instant, u64)>>,

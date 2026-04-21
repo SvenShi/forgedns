@@ -72,6 +72,7 @@ impl Plugin for FalseMatcher {
 }
 
 impl Matcher for FalseMatcher {
+    #[hotpath::measure]
     fn is_match(&self, _context: &mut DnsContext) -> bool {
         false
     }

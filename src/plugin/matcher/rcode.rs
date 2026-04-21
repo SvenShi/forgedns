@@ -84,6 +84,7 @@ impl Plugin for RcodeMatcher {
 }
 
 impl Matcher for RcodeMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         let Some(rcode) = context.response().map(|response| response.rcode()) else {
             return false;

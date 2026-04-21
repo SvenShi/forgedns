@@ -127,6 +127,7 @@ impl Plugin for CnameMatcher {
 }
 
 impl Matcher for CnameMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context.response().is_some_and(|response| {
             response.cnames().into_iter().any(|cname| {

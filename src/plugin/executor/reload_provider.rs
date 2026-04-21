@@ -46,6 +46,7 @@ impl Plugin for ReloadProviderExecutor {
 
 #[async_trait]
 impl Executor for ReloadProviderExecutor {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         for provider_tag in &self.provider_tags {
             info!(

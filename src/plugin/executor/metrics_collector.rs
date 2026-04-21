@@ -116,10 +116,12 @@ impl Executor for MetricsCollector {
         true
     }
 
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         self.execute_with_next(context, None).await
     }
 
+    #[hotpath::measure]
     async fn execute_with_next(
         &self,
         context: &mut DnsContext,

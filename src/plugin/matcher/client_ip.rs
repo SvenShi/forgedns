@@ -119,6 +119,7 @@ impl Plugin for ClientIpMatcher {
 }
 
 impl Matcher for ClientIpMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         let client_ip = context.peer_addr().ip();
         self.client_ip_rules.contains_ip(client_ip)

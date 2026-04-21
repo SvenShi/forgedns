@@ -83,6 +83,7 @@ impl Plugin for Arbitrary {
 
 #[async_trait]
 impl Executor for Arbitrary {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         let response = {
             let request = context.request();

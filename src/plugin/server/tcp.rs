@@ -185,6 +185,7 @@ impl Server for TcpServer {
 /// handler tasks for each request. Uses a task tracker and cancellation token
 /// to manage active connections without polling completed tasks from the
 /// accept loop.
+#[hotpath::measure]
 async fn run_server(
     addr: String,
     handler: Arc<RequestHandle>,
@@ -285,6 +286,7 @@ async fn run_server(
 }
 
 /// Handle DNS messages over a TCP stream (works for both TLS and plain TCP)
+#[hotpath::measure]
 async fn handle_dns_stream<S>(
     stream: S,
     src: SocketAddr,

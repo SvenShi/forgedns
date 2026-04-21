@@ -55,6 +55,7 @@ impl HttpDispatcher {
     ///
     /// Dispatches the request to the appropriate handler based on method and path.
     /// Returns a 404 response if no matching route is found.
+    #[hotpath::measure]
     pub async fn handle_request(
         &self,
         method: Method,

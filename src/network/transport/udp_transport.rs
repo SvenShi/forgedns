@@ -82,6 +82,7 @@ impl UdpTransport {
     }
 
     #[inline]
+    #[hotpath::measure]
     pub async fn write_message_to(
         &self,
         msg: &Message,

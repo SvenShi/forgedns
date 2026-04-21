@@ -153,6 +153,7 @@ impl Plugin for StringExpMatcher {
 }
 
 impl Matcher for StringExpMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         let value: Cow<'_, str> = match &self.expression.source {
             StringSource::Env(_) => Cow::Borrowed(self.env_cache.as_deref().unwrap_or("")),

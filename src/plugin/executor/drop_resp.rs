@@ -42,6 +42,7 @@ impl Plugin for DropResp {
 
 #[async_trait]
 impl Executor for DropResp {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         context.clear_response();
         Ok(ExecStep::Next)

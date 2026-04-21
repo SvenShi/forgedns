@@ -66,6 +66,7 @@ impl Plugin for BlackHole {
 
 #[async_trait]
 impl Executor for BlackHole {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         let Some(question) = context.request.first_question() else {
             return Ok(ExecStep::Next);

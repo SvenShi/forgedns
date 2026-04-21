@@ -51,6 +51,7 @@ impl Plugin for DebugPrint {
 
 #[async_trait]
 impl Executor for DebugPrint {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         info!(
             plugin = %self.tag,

@@ -122,6 +122,7 @@ impl Plugin for QnameMatcher {
 }
 
 impl Matcher for QnameMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context.request().questions().iter().any(|q| {
             self.domains.is_match_name(q.name())

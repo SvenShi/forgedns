@@ -38,6 +38,7 @@ use tracing::{debug, error, info, warn};
 /// - `server_config`: Optional TLS server config for HTTPS
 /// - `idle_timeout`: Connection idle timeout in seconds
 /// - `src_ip_header`: HTTP header name to extract real client IP
+#[hotpath::measure]
 pub async fn run_server(
     addr: String,
     dispatcher: Arc<HttpDispatcher>,
@@ -174,6 +175,7 @@ pub async fn run_server(
 ///
 /// # Type Parameters
 /// - `S`: Stream type implementing AsyncRead + AsyncWrite (e.g., TcpStream, TlsStream)
+#[hotpath::measure]
 async fn handle_http_stream<S>(
     stream: S,
     src: SocketAddr,

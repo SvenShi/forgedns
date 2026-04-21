@@ -54,6 +54,7 @@ impl Plugin for SleepExecutor {
 
 #[async_trait]
 impl Executor for SleepExecutor {
+    #[hotpath::measure]
     async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
         if !self.duration.is_zero() {
             tokio::time::sleep(self.duration).await;

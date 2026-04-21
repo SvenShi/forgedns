@@ -101,6 +101,7 @@ impl Plugin for QuestionMatcher {
 }
 
 impl Matcher for QuestionMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut crate::core::context::DnsContext) -> bool {
         context.request().questions().iter().any(|question| {
             self.providers

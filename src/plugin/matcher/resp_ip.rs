@@ -119,6 +119,7 @@ impl Plugin for RespIpMatcher {
 }
 
 impl Matcher for RespIpMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context.response().is_some_and(|response| {
             response.has_answer_ip(|ip| {

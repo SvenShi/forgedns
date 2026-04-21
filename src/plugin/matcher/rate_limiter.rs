@@ -169,6 +169,7 @@ impl Plugin for RateLimiter {
 }
 
 impl Matcher for RateLimiter {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         let masked = mask_ip(context.peer_addr().ip(), self.mask4, self.mask6);
         let Some(masked) = masked else {

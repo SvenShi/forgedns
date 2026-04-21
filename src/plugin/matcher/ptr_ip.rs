@@ -120,6 +120,7 @@ impl Plugin for PtrIpMatcher {
 }
 
 impl Matcher for PtrIpMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context.request.questions().iter().any(|query| {
             if query.qtype() != RecordType::PTR {

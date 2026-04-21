@@ -338,6 +338,7 @@ impl PluginRegistry {
         })
     }
 
+    #[hotpath::measure]
     pub async fn reload_provider(&self, tag: &str) -> Result<()> {
         let plugin = self
             .get_plugin(tag)

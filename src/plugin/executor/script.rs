@@ -112,6 +112,7 @@ impl Plugin for ScriptExecutor {
 
 #[async_trait]
 impl Executor for ScriptExecutor {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         let rendered_args = self
             .args

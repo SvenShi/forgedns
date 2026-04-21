@@ -37,6 +37,7 @@ const MAX_HTTP3_BODY_SIZE: usize = 64 * 1024;
 /// - `server_config`: TLS server config (required for HTTP/3)
 /// - `idle_timeout`: Connection idle timeout in seconds (transport-level)
 /// - `src_ip_header`: HTTP header name to extract real client IP
+#[hotpath::measure]
 pub async fn run_server(
     addr: String,
     dispatcher: Arc<HttpDispatcher>,
@@ -112,6 +113,7 @@ pub async fn run_server(
 }
 
 /// Handle a single QUIC connection and all its HTTP/3 request streams
+#[hotpath::measure]
 async fn handle_h3_connection(
     connecting: quinn::Incoming,
     dispatcher: Arc<HttpDispatcher>,

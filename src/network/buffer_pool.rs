@@ -22,7 +22,7 @@ use crossbeam_queue::ArrayQueue;
 use std::ops::{Deref, DerefMut};
 use std::sync::LazyLock;
 
-const DEFAULT_WIRE_BUFFER_CAPACITY: usize = 8191;
+const DEFAULT_WIRE_BUFFER_CAPACITY: usize = 8196;
 const DEFAULT_WIRE_BUFFER_POOL_SIZE: usize = 256;
 
 /// Global wire buffer pool used by short-lived network encoding paths.

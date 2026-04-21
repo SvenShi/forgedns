@@ -41,6 +41,7 @@ impl Plugin for ReloadExecutor {
 
 #[async_trait]
 impl Executor for ReloadExecutor {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         info!(plugin = %self.tag, "reload executor triggered full application reload");
         context.registry.request_app_reload()?;

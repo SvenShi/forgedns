@@ -79,6 +79,7 @@ impl Plugin for HasWantedAnsMatcher {
 }
 
 impl Matcher for HasWantedAnsMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         if let Some(qtype) = context.request.first_qtype() {
             return context

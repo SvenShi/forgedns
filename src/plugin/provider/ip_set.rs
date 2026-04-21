@@ -58,6 +58,7 @@ pub struct IpSet {
 }
 
 impl IpSet {
+    #[hotpath::measure]
     fn build_local_snapshot(&self) -> DnsResult<IpSetSnapshot> {
         let start_ms = AppClock::elapsed_millis();
         let mut rules = self.args.ips.clone();
@@ -136,6 +137,7 @@ impl Provider for IpSet {
     }
 
     #[inline]
+    #[hotpath::measure]
     fn contains_ip(&self, ip: IpAddr) -> bool {
         let snapshot = self.snapshot.load();
         let has_family_rules = match ip {
@@ -149,6 +151,7 @@ impl Provider for IpSet {
         self.referenced_sets.iter().any(|set| set.contains_ip(ip))
     }
 
+    #[hotpath::measure]
     async fn reload(&self) -> DnsResult<()> {
         let snapshot = self.build_local_snapshot()?;
         self.snapshot.store(Arc::new(snapshot));

@@ -67,6 +67,8 @@ impl Plugin for SingleDnsForwarder {
 
 #[async_trait]
 impl Executor for SingleDnsForwarder {
+    #[hotpath::measure]
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if context.contains_attr(DnsContext::ATTR_FORWARD_PROBE_REQUEST) {
             return if let Some(probe) = context
@@ -93,6 +95,7 @@ impl SingleDnsForwarder {
     }
 
     #[inline]
+    #[hotpath::measure]
     async fn execute_standard(&self, context: &mut DnsContext) -> Result<ExecStep> {
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
@@ -115,6 +118,7 @@ impl SingleDnsForwarder {
         Ok(self.completion_step())
     }
 
+    #[hotpath::measure]
     async fn execute_with_probe(
         &self,
         context: &mut DnsContext,
@@ -245,6 +249,7 @@ impl Plugin for ConcurrentForwarder {
 
 #[async_trait]
 impl Executor for ConcurrentForwarder {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if context.contains_attr(DnsContext::ATTR_FORWARD_PROBE_REQUEST) {
             return if let Some(probe) = context

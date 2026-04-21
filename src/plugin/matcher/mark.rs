@@ -100,6 +100,7 @@ impl Plugin for MarkMatcher {
 }
 
 impl Matcher for MarkMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         !context.marks().is_disjoint(&self.marks)
     }

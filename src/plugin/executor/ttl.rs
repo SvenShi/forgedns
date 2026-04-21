@@ -87,6 +87,7 @@ impl Plugin for TtlExecutor {
 
 #[async_trait]
 impl Executor for TtlExecutor {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if let Some(response) = context.response_mut() {
             for record in response.answers_mut() {

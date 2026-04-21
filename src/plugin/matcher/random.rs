@@ -95,6 +95,7 @@ impl Plugin for RandomMatcher {
 }
 
 impl Matcher for RandomMatcher {
+    #[hotpath::measure]
     fn is_match(&self, _context: &mut DnsContext) -> bool {
         if self.probability <= 0.0 {
             return false;

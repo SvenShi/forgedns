@@ -93,6 +93,7 @@ impl Plugin for FallbackExecutor {
 
 #[async_trait]
 impl Executor for FallbackExecutor {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         let mut join_set = JoinSet::new();
         let (primary_state_tx, primary_state_rx) = watch::channel(PrimaryState::Running);

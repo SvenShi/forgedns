@@ -223,6 +223,7 @@ impl Plugin for CronExecutor {
 
 #[async_trait]
 impl Executor for CronExecutor {
+    #[hotpath::measure]
     async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
         Err(DnsError::plugin(
             "cron can only run as a background scheduled executor",

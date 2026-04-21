@@ -456,6 +456,7 @@ fn build_tls_acceptor(config: &ResolvedApiHttpConfig) -> Result<Option<Arc<TlsAc
     }))
 }
 
+#[hotpath::measure]
 async fn run_api_server(
     listen: String,
     routes: AHashMap<RouteKey, Arc<dyn ApiHandler>>,
@@ -562,6 +563,7 @@ where
         .map_err(|err| DnsError::runtime(format!("API hyper connection failed: {err}")))
 }
 
+#[hotpath::measure]
 async fn handle_hyper_request(
     request: Request<Incoming>,
     remote_addr: SocketAddr,

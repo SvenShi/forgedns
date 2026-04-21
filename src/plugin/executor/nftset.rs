@@ -139,6 +139,7 @@ impl Plugin for NftSetExecutor {
 
 #[async_trait]
 impl Executor for NftSetExecutor {
+    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if !self.enabled.load(Ordering::Relaxed) {
             return Ok(ExecStep::Next);

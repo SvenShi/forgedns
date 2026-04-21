@@ -81,6 +81,7 @@ impl Plugin for QtypeMatcher {
 }
 
 impl Matcher for QtypeMatcher {
+    #[hotpath::measure]
     fn is_match(&self, context: &mut DnsContext) -> bool {
         context
             .request

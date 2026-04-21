@@ -167,6 +167,7 @@ impl Server for QuicServer {
     }
 }
 
+#[hotpath::measure]
 async fn run_server(
     addr: String,
     handler: Arc<RequestHandle>,
@@ -239,6 +240,7 @@ async fn run_server(
 
 /// Accept a QUIC connection and handle all bidirectional streams (DNS over QUIC).
 /// Each bi-directional stream represents a single DNS query/response exchange.
+#[hotpath::measure]
 async fn handle_quic_connection(connecting: quinn::Incoming, handler: Arc<RequestHandle>) {
     let remote_addr = connecting.remote_address();
     let connection = match connecting.await {
