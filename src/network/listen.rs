@@ -39,7 +39,3 @@ pub fn parse_listen_addr(listen: &str) -> Result<SocketAddr> {
         ),
     )))
 }
-
-pub fn normalize_listen_addr(listen: &str) -> Result<String> {
-    Ok(parse_listen_addr(listen)?.to_string())
-}

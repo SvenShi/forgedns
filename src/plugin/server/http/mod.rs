@@ -24,7 +24,7 @@ use crate::core::error::{DnsError, Result};
 use crate::network::tls_config::load_tls_config;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
-use crate::plugin::server::{RequestHandle, Server, normalize_listen_addr};
+use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
@@ -112,7 +112,7 @@ pub struct HttpServer {
     /// Route configurations mapping paths to executors
     entries: Vec<Entry>,
     /// Listen address (e.g., "0.0.0.0:443")
-    listen: String,
+    listen: SocketAddr,
     /// HTTP header name to extract real client IP from reverse proxy
     src_ip_header: Option<String>,
     /// HTTP request dispatcher for routing
@@ -164,7 +164,7 @@ impl HttpServer {
             return Ok(());
         }
 
-        let listen = self.listen.clone();
+        let listen = self.listen;
         let tls_mode = self.server_config.is_some();
         debug!(
             listen = %listen,
@@ -174,7 +174,7 @@ impl HttpServer {
         );
 
         task_handles.push(tokio::spawn(http2_server::run_server(
-            listen.clone(),
+            listen,
             self.dispatcher.clone(),
             self.server_config.clone(),
             self.idle_timeout,
@@ -187,7 +187,7 @@ impl HttpServer {
             match self.server_config.clone() {
                 Some(cfg) => {
                     task_handles.push(tokio::spawn(http3_server::run_server(
-                        listen.clone(),
+                        listen,
                         self.dispatcher.clone(),
                         cfg,
                         self.idle_timeout,
@@ -322,7 +322,7 @@ impl PluginFactory for HttpServerFactory {
                 .ok_or_else(|| DnsError::plugin("HTTP Server requires configuration arguments"))?,
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse HTTP Server config: {}", e)))?;
-        let listen = normalize_listen_addr(&http_config.listen).map_err(|e| {
+        let listen = parse_listen_addr(&http_config.listen).map_err(|e| {
             DnsError::plugin(format!(
                 "Invalid HTTP listen address '{}': {}",
                 http_config.listen, e

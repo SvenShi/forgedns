@@ -39,7 +39,7 @@ const MAX_HTTP3_BODY_SIZE: usize = 64 * 1024;
 /// - `src_ip_header`: HTTP header name to extract real client IP
 #[hotpath::measure]
 pub async fn run_server(
-    addr: String,
+    addr: SocketAddr,
     dispatcher: Arc<HttpDispatcher>,
     mut server_config: ServerConfig,
     idle_timeout: Option<u64>,
@@ -50,7 +50,7 @@ pub async fn run_server(
     let mut startup_tx = startup_tx;
     server_config.alpn_protocols = vec![b"h3".to_vec()];
 
-    let endpoint = match quic::build_quic_endpoint(&addr, server_config, idle_timeout) {
+    let endpoint = match quic::build_quic_endpoint(addr, server_config, idle_timeout) {
         Ok(value) => value,
         Err(e) => {
             if let Some(tx) = startup_tx.take() {
@@ -344,29 +344,5 @@ mod tests {
         ServerConfig::builder()
             .with_no_client_auth()
             .with_cert_resolver(Arc::new(RejectingResolver))
-    }
-
-    #[tokio::test]
-    async fn test_run_server_reports_startup_error_for_invalid_address() {
-        let dispatcher = Arc::new(HttpDispatcher::new());
-        let server_config = dummy_server_config();
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (startup_tx, startup_rx) = oneshot::channel();
-
-        run_server(
-            "invalid-addr".to_string(),
-            dispatcher,
-            server_config,
-            None,
-            None,
-            shutdown_rx,
-            Some(startup_tx),
-        )
-        .await;
-
-        let startup = startup_rx
-            .await
-            .expect("startup sender should not be dropped");
-        assert!(startup.is_err());
     }
 }

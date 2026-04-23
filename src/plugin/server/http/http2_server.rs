@@ -40,7 +40,7 @@ use tracing::{debug, error, info, warn};
 /// - `src_ip_header`: HTTP header name to extract real client IP
 #[hotpath::measure]
 pub async fn run_server(
-    addr: String,
+    addr: SocketAddr,
     dispatcher: Arc<HttpDispatcher>,
     server_config: Option<ServerConfig>,
     idle_timeout: Option<u64>,
@@ -51,7 +51,7 @@ pub async fn run_server(
     let mut startup_tx = startup_tx;
     let timeout = Duration::from_secs(idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT));
 
-    let listener = match tcp::build_tcp_listener(&addr, timeout) {
+    let listener = match tcp::build_tcp_listener(addr, timeout) {
         Ok(s) => s,
         Err(e) => {
             if let Some(tx) = startup_tx.take() {
@@ -369,7 +369,6 @@ mod tests {
     use http::Request;
     use std::sync::{Arc, Mutex};
     use tokio::io::duplex;
-    use tokio::time::{Duration, timeout};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ObservedRequest {
@@ -513,30 +512,5 @@ mod tests {
         drop(sender);
         client_task.abort();
         server_task.abort();
-    }
-
-    #[tokio::test]
-    async fn test_run_server_reports_startup_error_for_invalid_address() {
-        let dispatcher = Arc::new(HttpDispatcher::new());
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (startup_tx, startup_rx) = oneshot::channel();
-
-        run_server(
-            "invalid-addr".to_string(),
-            dispatcher,
-            None,
-            None,
-            None,
-            shutdown_rx,
-            Some(startup_tx),
-        )
-        .await;
-
-        let startup = timeout(Duration::from_secs(1), startup_rx)
-            .await
-            .expect("startup channel should resolve")
-            .expect("startup sender should not be dropped");
-
-        assert!(startup.is_err());
     }
 }

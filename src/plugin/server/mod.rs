@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{Level, debug, event_enabled, warn};
 
-pub(crate) use crate::network::listen::{normalize_listen_addr, parse_listen_addr};
+pub(crate) use crate::network::listen::parse_listen_addr;
 
 pub mod http;
 pub mod quic;
@@ -209,13 +209,6 @@ mod tests {
         let addr = parse_listen_addr(":5337").expect("port-only shorthand should parse");
 
         assert_eq!(addr, SocketAddr::from(([0, 0, 0, 0], 5337)));
-    }
-
-    #[test]
-    fn test_normalize_listen_addr_expands_port_only_shorthand() {
-        let addr = normalize_listen_addr(":5337").expect("port-only shorthand should normalize");
-
-        assert_eq!(addr, "0.0.0.0:5337");
     }
 
     #[test]

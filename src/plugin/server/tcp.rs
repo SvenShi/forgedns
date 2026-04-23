@@ -21,7 +21,7 @@ use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{
-    ConnectionGuard, RequestHandle, RequestMeta, Server, normalize_listen_addr, parse_listen_addr,
+    ConnectionGuard, RequestHandle, RequestMeta, Server, parse_listen_addr,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::proto::Message;
@@ -83,7 +83,7 @@ pub struct TcpServerConfig {
 #[allow(unused)]
 pub struct TcpServer {
     tag: String,
-    listen: String,
+    listen: SocketAddr,
     request_handle: Arc<RequestHandle>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     idle_timeout: Option<u64>,
@@ -119,7 +119,7 @@ impl TcpServer {
             return Ok(());
         }
 
-        let addr = self.listen.clone();
+        let addr = self.listen;
         let handler = self.request_handle.clone();
         let tls_acceptor = self.tls_acceptor.clone();
         let idle_timeout = self.idle_timeout;
@@ -187,7 +187,7 @@ impl Server for TcpServer {
 /// accept loop.
 #[hotpath::measure]
 async fn run_server(
-    addr: String,
+    addr: SocketAddr,
     handler: Arc<RequestHandle>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     idle_timeout: Option<u64>,
@@ -196,7 +196,7 @@ async fn run_server(
 ) {
     let mut startup_tx = startup_tx;
     let timeout = Duration::from_secs(idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT));
-    let listener = match build_tcp_listener(&addr, timeout) {
+    let listener = match build_tcp_listener(addr, timeout) {
         Ok(s) => s,
         Err(e) => {
             if let Some(tx) = startup_tx.take() {
@@ -344,9 +344,7 @@ async fn handle_dns_stream<S>(
 /// Build a TCP socket with reuse_address and reuse_port options when available
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
-pub fn build_tcp_listener(addr: &str, idle_timeout: Duration) -> Result<TcpListener> {
-    let addr = parse_listen_addr(addr)?;
-
+pub fn build_tcp_listener(addr: SocketAddr, idle_timeout: Duration) -> Result<TcpListener> {
     let sock = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
 
     let _ = sock.set_nonblocking(true);
@@ -403,7 +401,7 @@ impl PluginFactory for TcpServerFactory {
                 .ok_or_else(|| DnsError::plugin("TCP Server requires configuration arguments"))?,
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse TCP Server config: {}", e)))?;
-        let listen = normalize_listen_addr(&tcp_config.listen).map_err(|e| {
+        let listen = parse_listen_addr(&tcp_config.listen).map_err(|e| {
             DnsError::plugin(format!(
                 "Invalid TCP listen address '{}': {}",
                 tcp_config.listen, e
@@ -463,16 +461,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_build_tcp_listener_rejects_invalid_address() {
-        let listener = build_tcp_listener("not-an-address", Duration::from_secs(5));
-
-        assert!(listener.is_err());
-    }
-
     #[tokio::test]
     async fn test_build_tcp_listener_accepts_port_only_shorthand() {
-        let listener = build_tcp_listener(":0", Duration::from_secs(5))
+        let listener = build_tcp_listener(parse_listen_addr(":0").unwrap(), Duration::from_secs(5))
             .expect("port-only shorthand should bind");
         let addr = listener
             .local_addr()

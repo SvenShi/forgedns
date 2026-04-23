@@ -14,13 +14,13 @@ use crate::core::context::RequestMeta;
 use crate::core::error::{DnsError, Result};
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::server::{RequestHandle, Server, normalize_listen_addr, parse_listen_addr};
+use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use serde::Deserialize;
 use socket2::{Domain, Protocol, Socket, Type};
-use std::net::UdpSocket as StdUdpSocket;
+use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::net::UdpSocket;
@@ -52,7 +52,7 @@ pub struct UdpServerConfig {
 #[allow(unused)]
 pub struct UdpServer {
     tag: String,
-    listen: String,
+    listen: SocketAddr,
     request_handle: Arc<RequestHandle>,
     shutdown_tx: watch::Sender<bool>,
     task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -84,7 +84,7 @@ impl UdpServer {
             return Ok(());
         }
 
-        let addr = self.listen.clone();
+        let addr = self.listen;
         let handler = self.request_handle.clone();
         let shutdown_rx = self.shutdown_tx.subscribe();
         *task_slot = Some(tokio::spawn(run_server(
@@ -145,13 +145,13 @@ impl Server for UdpServer {
 /// lifetimes without polling completed tasks from the hot path.
 #[hotpath::measure]
 async fn run_server(
-    addr: String,
+    addr: SocketAddr,
     handler: Arc<RequestHandle>,
     mut shutdown_rx: watch::Receiver<bool>,
     startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
 ) {
     let mut startup_tx = startup_tx;
-    let socket = match build_udp_socket(&addr) {
+    let socket = match build_udp_socket(addr) {
         Ok(s) => UdpSocket::from_std(s).unwrap(),
         Err(e) => {
             if let Some(tx) = startup_tx.take() {
@@ -211,9 +211,7 @@ async fn run_server(
 /// Build a UDP socket with reuse_address and reuse_port options when available
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
-pub fn build_udp_socket(addr: &str) -> Result<StdUdpSocket> {
-    let addr = parse_listen_addr(addr)?;
-
+pub fn build_udp_socket(addr: SocketAddr) -> Result<StdUdpSocket> {
     let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
 
     let _ = sock.set_nonblocking(true);
@@ -266,7 +264,7 @@ impl PluginFactory for UdpServerFactory {
                 .ok_or_else(|| DnsError::plugin("UDP Server requires configuration arguments"))?,
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse UDP Server config: {}", e)))?;
-        let listen = normalize_listen_addr(&udp_config.listen).map_err(|e| {
+        let listen = parse_listen_addr(&udp_config.listen).map_err(|e| {
             DnsError::plugin(format!(
                 "Invalid UDP listen address '{}': {}",
                 udp_config.listen, e
@@ -314,7 +312,8 @@ mod tests {
 
     #[test]
     fn test_build_udp_socket_accepts_port_only_shorthand() {
-        let socket = build_udp_socket(":0").expect("port-only shorthand should bind");
+        let socket = build_udp_socket(parse_listen_addr(":0").unwrap())
+            .expect("port-only shorthand should bind");
         let addr = socket
             .local_addr()
             .expect("socket should expose local address");

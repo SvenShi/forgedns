@@ -11,20 +11,20 @@
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::network::listen::parse_listen_addr;
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::quic_transport::{
     QuicTransport, QuicTransportReader, QuicTransportWriter,
 };
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::server::{
-    ConnectionGuard, RequestHandle, RequestMeta, Server, normalize_listen_addr, udp,
-};
+use crate::plugin::server::{ConnectionGuard, RequestHandle, RequestMeta, Server, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
 use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
 use rustls::ServerConfig;
 use serde::Deserialize;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -70,7 +70,7 @@ pub struct QuicServerConfig {
 #[allow(unused)]
 pub struct QuicServer {
     tag: String,
-    listen: String,
+    listen: SocketAddr,
     /// TLS acceptor for HTTPS support (None for plain HTTP)
     server_config: ServerConfig,
     idle_timeout: Option<u64>,
@@ -107,7 +107,7 @@ impl QuicServer {
             return Ok(());
         }
 
-        let addr = self.listen.clone();
+        let addr = self.listen;
         let handler = self.request_handle.clone();
         let server_config = self.server_config.clone();
         let idle_timeout = self.idle_timeout;
@@ -169,7 +169,7 @@ impl Server for QuicServer {
 
 #[hotpath::measure]
 async fn run_server(
-    addr: String,
+    addr: SocketAddr,
     handler: Arc<RequestHandle>,
     server_config: ServerConfig,
     idle_timeout: Option<u64>,
@@ -177,7 +177,7 @@ async fn run_server(
     startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
 ) {
     let mut startup_tx = startup_tx;
-    let endpoint = match build_quic_endpoint(&addr, server_config, idle_timeout) {
+    let endpoint = match build_quic_endpoint(addr, server_config, idle_timeout) {
         Ok(s) => s,
         Err(e) => {
             if let Some(tx) = startup_tx.take() {
@@ -329,7 +329,7 @@ fn extract_tls_server_name(connection: &quinn::Connection) -> Option<String> {
 }
 
 pub fn build_quic_endpoint(
-    addr: &str,
+    addr: SocketAddr,
     server_config: ServerConfig,
     timeout: Option<u64>,
 ) -> Result<Endpoint> {
@@ -384,7 +384,7 @@ impl PluginFactory for QuicServerFactory {
                 .ok_or_else(|| DnsError::plugin("QUIC Server requires configuration arguments"))?,
         )
         .map_err(|e| DnsError::plugin(format!("Failed to parse QUIC Server config: {}", e)))?;
-        let listen = normalize_listen_addr(&quic_config.listen).map_err(|e| {
+        let listen = parse_listen_addr(&quic_config.listen).map_err(|e| {
             DnsError::plugin(format!(
                 "Invalid QUIC listen address '{}': {}",
                 quic_config.listen, e
