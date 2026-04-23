@@ -7,16 +7,6 @@ log:
   level: info
 
 plugins:
-  # Optional structured query recorder.
-  # Enable it near the sequence entry if you want full-path records and SSE/API access.
-  #
-  # - tag: query_recorder_main
-  #   type: query_recorder
-  #   args:
-  #     path: "./data/query-recorder-main.sqlite"
-  #     retention_days: 7
-  #     cleanup_interval_hours: 1
-
   # Forward to upstream DNS servers
   - tag: forward
     type: forward
@@ -47,8 +37,3 @@ plugins:
     args:
       entry: main_sequence
       listen: ":5335"
-
-# Optional management API. Required if you want to query query_recorder data over HTTP/SSE.
-#
-# api:
-#   http: "127.0.0.1:9088"
