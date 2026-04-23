@@ -10,7 +10,7 @@
 //! - POST method: DNS query passed in request body (binary format)
 
 use crate::plugin::server::{RequestHandle, RequestMeta};
-use crate::proto::Message;
+use crate::proto::{Message, Rcode};
 use ahash::AHashMap;
 use async_trait::async_trait;
 use base64::Engine;
@@ -55,6 +55,7 @@ impl HttpDispatcher {
     ///
     /// Dispatches the request to the appropriate handler based on method and path.
     /// Returns a 404 response if no matching route is found.
+    #[hotpath::measure]
     pub async fn handle_request(
         &self,
         method: Method,
@@ -283,11 +284,18 @@ fn msg_response(dns_response: Message) -> Response<Bytes> {
     // Serialize DNS response to binary format
     match dns_response.to_bytes() {
         Ok(response_bytes) => {
-            debug!("DNS response size: {} bytes", response_bytes.len());
-            Response::builder()
+            let size = response_bytes.len();
+            debug!("DNS response size: {} bytes", size);
+            let mut builder = Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/dns-message")
-                .header("Cache-Control", "max-age=300")
+                .header("Content-Length", size.to_string());
+
+            if let Some(ttl) = http_cache_ttl(&dns_response) {
+                builder = builder.header("Cache-Control", format!("max-age={ttl}"));
+            }
+
+            builder
                 .body(Bytes::from(response_bytes))
                 .expect("Failed to build DNS response")
         }
@@ -299,6 +307,24 @@ fn msg_response(dns_response: Message) -> Response<Bytes> {
                 .body(Bytes::from("500 Internal Server Error"))
                 .expect("Failed to build error response")
         }
+    }
+}
+
+#[inline]
+fn http_cache_ttl(response: &Message) -> Option<u32> {
+    match response.rcode() {
+        Rcode::NoError => response
+            .min_answer_ttl()
+            .filter(|ttl| *ttl > 0)
+            .or_else(|| {
+                if response.answers().is_empty() {
+                    response.negative_ttl_from_soa().filter(|ttl| *ttl > 0)
+                } else {
+                    None
+                }
+            }),
+        Rcode::NXDomain => response.negative_ttl_from_soa().filter(|ttl| *ttl > 0),
+        _ => None,
     }
 }
 
@@ -491,7 +517,15 @@ mod tests {
             response.headers()["Content-Type"],
             "application/dns-message"
         );
-        assert_eq!(response.headers()["Cache-Control"], "max-age=300");
+        assert_eq!(
+            response.headers()["Content-Length"],
+            dns_response
+                .to_bytes()
+                .expect("DNS response should serialize")
+                .len()
+                .to_string()
+        );
+        assert!(!response.headers().contains_key("Cache-Control"));
         assert_eq!(dns_response.id(), 31);
         assert_eq!(dns_response.rcode(), Rcode::Refused);
         assert_eq!(
@@ -600,6 +634,15 @@ mod tests {
 
         let dns_response = decode_response(&response);
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["Content-Length"],
+            dns_response
+                .to_bytes()
+                .expect("DNS response should serialize")
+                .len()
+                .to_string()
+        );
+        assert!(!response.headers().contains_key("Cache-Control"));
         assert_eq!(dns_response.id(), 41);
         assert_eq!(dns_response.rcode(), Rcode::NXDomain);
         assert_eq!(
@@ -614,5 +657,77 @@ mod tests {
                 url_path: Some("/dns-query".to_string()),
             })
         );
+    }
+
+    #[test]
+    fn test_http_cache_ttl_prefers_min_answer_ttl_for_positive_response() {
+        let mut response = Message::new();
+        response.set_message_type(crate::proto::MessageType::Response);
+        response.set_rcode(Rcode::NoError);
+        response.add_answer(crate::proto::Record::from_rdata(
+            Name::from_ascii("example.com.").expect("name should parse"),
+            120,
+            crate::proto::RData::A(crate::proto::rdata::A(std::net::Ipv4Addr::new(1, 1, 1, 1))),
+        ));
+        response.add_answer(crate::proto::Record::from_rdata(
+            Name::from_ascii("example.com.").expect("name should parse"),
+            30,
+            crate::proto::RData::A(crate::proto::rdata::A(std::net::Ipv4Addr::new(1, 0, 0, 1))),
+        ));
+
+        assert_eq!(http_cache_ttl(&response), Some(30));
+    }
+
+    #[test]
+    fn test_http_cache_ttl_uses_soa_for_nxdomain() {
+        let mut response = Message::new();
+        response.set_message_type(crate::proto::MessageType::Response);
+        response.set_rcode(Rcode::NXDomain);
+        response.add_authority(crate::proto::Record::from_rdata(
+            Name::from_ascii("example.com.").expect("name should parse"),
+            180,
+            crate::proto::RData::SOA(crate::proto::rdata::SOA::new(
+                Name::from_ascii("ns1.example.com.").expect("mname should parse"),
+                Name::from_ascii("hostmaster.example.com.").expect("rname should parse"),
+                1,
+                7200,
+                1800,
+                86400,
+                60,
+            )),
+        ));
+
+        assert_eq!(http_cache_ttl(&response), Some(60));
+    }
+
+    #[test]
+    fn test_http_cache_ttl_uses_soa_for_nodata() {
+        let mut response = Message::new();
+        response.set_message_type(crate::proto::MessageType::Response);
+        response.set_rcode(Rcode::NoError);
+        response.add_authority(crate::proto::Record::from_rdata(
+            Name::from_ascii("example.com.").expect("name should parse"),
+            90,
+            crate::proto::RData::SOA(crate::proto::rdata::SOA::new(
+                Name::from_ascii("ns1.example.com.").expect("mname should parse"),
+                Name::from_ascii("hostmaster.example.com.").expect("rname should parse"),
+                1,
+                7200,
+                1800,
+                86400,
+                120,
+            )),
+        ));
+
+        assert_eq!(http_cache_ttl(&response), Some(90));
+    }
+
+    #[test]
+    fn test_http_cache_ttl_omits_header_when_no_safe_ttl_exists() {
+        let mut response = Message::new();
+        response.set_message_type(crate::proto::MessageType::Response);
+        response.set_rcode(Rcode::NXDomain);
+
+        assert_eq!(http_cache_ttl(&response), None);
     }
 }
