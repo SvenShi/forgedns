@@ -10,7 +10,27 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.4.0" badge="Minor Release" date="2026-04-19" defaultOpen>
+  <ReleaseCard version="v0.4.1" badge="Patch Release" date="2026-04-23" defaultOpen>
+      **Fixes**
+
+      - Fixed an upstream `request_map` memory leak during connection close, request timeout, and abnormal cleanup paths, preventing pending query waiters and senders from being retained over time.
+      - Reworked `request_map` into a fixed-capacity sparse table so each connection no longer reserves the full `u16` DNS ID space, further reducing the resident memory footprint of TCP/DoT/DoQ/DoH upstream connections.
+      - Fixed DoH response header generation so `application/dns-message` replies now carry the correct `Content-Length`, and `Cache-Control: max-age=...` is derived from the actual DNS TTL for better compatibility with `dig`, browsers, and proxies.
+
+      **Behavior Notes**
+
+      - Common `NoError`, `NXDOMAIN`, and `NODATA` DoH responses now derive HTTP cache lifetime from answer TTLs or SOA negative TTLs.
+      - Responses without a safe cache lifetime, such as refusal-style replies, no longer advertise a misleading HTTP cache header.
+      - Tombstones are reset when the table becomes empty, keeping probe chains stable under ID wraparound and heavy reuse.
+
+      **Upgrade Notes**
+
+      - This release does not add any new configuration fields. Existing `v0.4.0` configs can be upgraded directly to `v0.4.1`.
+      - This release fixes an upstream `request_map` memory leak, so upgrading to `v0.4.1` is recommended for all users, especially long-running deployments with many persistent or concurrent upstream connections.
+      - If you access DoH through `dig +https://...`, browsers, reverse proxies, or HTTP caches, the upgrade also improves HTTP response compatibility.
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.4.0" badge="Minor Release" date="2026-04-19">
       **Highlights**
 
       - Added the `reload_provider` executor plus the provider-scoped management API `POST /plugins/<provider_tag>/reload`. After downloading or overwriting rule files, ForgeDNS can now refresh only the affected providers instead of forcing a full application reload.

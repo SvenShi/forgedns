@@ -46,6 +46,9 @@ pub struct UdpConnection {
     closed: AtomicBool,
 }
 
+#[cfg(test)]
+const DEFAULT_REQUEST_MAP_CAPACITY: u16 = 64;
+
 /// Retry delay for initial DNS query attempts
 const RETRY_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -88,7 +91,7 @@ impl Connection for UdpConnection {
 
         for attempt in 0..2 {
             let (tx, rx) = oneshot::channel();
-            let query_id = self.request_map.store(tx);
+            let query_id = self.request_map.store(tx)?;
 
             trace!(
                 conn_id = self.id,
@@ -172,12 +175,17 @@ impl UdpConnection {
     /// * `conn_id` - Unique connection identifier for logging
     /// * `socket` - Pre-configured UDP socket connected to remote server
     /// * `timeout` - Query timeout duration
-    fn new(conn_id: u16, socket: UdpSocket, timeout: Duration) -> UdpConnection {
+    fn new(
+        conn_id: u16,
+        socket: UdpSocket,
+        timeout: Duration,
+        request_map_capacity: u16,
+    ) -> UdpConnection {
         Self {
             id: conn_id,
             transport: UdpTransport::new(socket),
             close_notify: Notify::new(),
-            request_map: RequestMap::new(),
+            request_map: RequestMap::with_capacity(request_map_capacity),
             timeout,
             last_used: AtomicU64::new(AppClock::elapsed_millis()),
             closed: AtomicBool::new(false), // Initially open
@@ -254,18 +262,20 @@ pub struct UdpConnectionBuilder {
     server_name: String,
     /// Query timeout duration.
     timeout: Duration,
+    request_map_capacity: u16,
     so_mark: Option<u32>,
     bind_to_device: Option<String>,
 }
 
 impl UdpConnectionBuilder {
     /// Initialize a new builder using upstream connection info.
-    pub fn new(connection_info: &ConnectionInfo) -> Self {
+    pub fn new(connection_info: &ConnectionInfo, request_map_capacity: u16) -> Self {
         Self {
             remote_ip: connection_info.remote_ip,
             port: connection_info.port,
             server_name: connection_info.server_name.clone(),
             timeout: connection_info.timeout,
+            request_map_capacity,
             so_mark: connection_info.so_mark,
             bind_to_device: connection_info.bind_to_device.clone(),
         }
@@ -300,7 +310,12 @@ impl ConnectionBuilder<UdpConnection> for UdpConnectionBuilder {
             "Established UDP connection to DNS server"
         );
 
-        let connection = UdpConnection::new(conn_id, UdpSocket::from_std(socket)?, self.timeout);
+        let connection = UdpConnection::new(
+            conn_id,
+            UdpSocket::from_std(socket)?,
+            self.timeout,
+            self.request_map_capacity,
+        );
         let arc = Arc::new(connection);
 
         // Spawn background task for listening responses
@@ -323,12 +338,13 @@ mod tests {
         connection_info.so_mark = Some(100);
         connection_info.bind_to_device = Some("en0".to_string());
 
-        let builder = UdpConnectionBuilder::new(&connection_info);
+        let builder = UdpConnectionBuilder::new(&connection_info, DEFAULT_REQUEST_MAP_CAPACITY);
 
         assert_eq!(connection_info.connection_type, ConnectionType::UDP);
         assert_eq!(builder.remote_ip, connection_info.remote_ip);
         assert_eq!(builder.port, 5300);
         assert_eq!(builder.timeout, Duration::from_secs(7));
+        assert_eq!(builder.request_map_capacity, DEFAULT_REQUEST_MAP_CAPACITY);
         assert_eq!(builder.server_name, "1.1.1.1");
         assert_eq!(builder.so_mark, Some(100));
         assert_eq!(builder.bind_to_device.as_deref(), Some("en0"));

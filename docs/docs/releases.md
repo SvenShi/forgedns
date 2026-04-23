@@ -10,7 +10,27 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.4.0" badge="Minor Release" date="2026-04-19" defaultOpen>
+  <ReleaseCard version="v0.4.1" badge="Patch Release" date="2026-04-23" defaultOpen>
+      **Fixes**
+
+      - 修复 upstream `request_map` 在连接关闭、请求超时和异常回收场景下的内存泄漏问题，避免 pending query waiter 与 sender 残留，减少长连接运行时的隐性内存增长。
+      - 重写 `request_map` 为固定容量的稀疏表实现，不再为每条连接预留完整 `u16` DNS ID 空间，进一步降低 TCP/DoT/DoQ/DoH 上游连接的常驻内存占用。
+      - 修复 DoH 响应头生成逻辑：现在会为 `application/dns-message` 响应写入正确的 `Content-Length`，并按实际 DNS TTL 生成 `Cache-Control: max-age=...`，提升 `dig`、浏览器和代理链路下的兼容性。
+
+      **Behavior Notes**
+
+      - `NoError`、`NXDOMAIN`、`NODATA` 等常见 DoH 响应现在会分别从 answer TTL 或 SOA negative TTL 推导 HTTP 缓存时间。
+      - 对没有安全 TTL 可用的拒绝类响应，不再强行附带缓存头，避免客户端拿到误导性的 HTTP 缓存指令。
+      - `request_map` 在空表时会主动清理 tombstone，ID 回绕和高频复用场景下的探测链长度更稳定。
+
+      **Upgrade Notes**
+
+      - 这次发布不引入新的配置字段，`v0.4.0` 配置可直接升级到 `v0.4.1`。
+      - 由于修复的是 upstream `request_map` 的内存泄漏问题，建议所有用户升级到 `v0.4.1`，尤其是长期运行、长连接较多或上游并发较高的部署。
+      - 如果你通过 `dig +https://...`、浏览器、反向代理或网关缓存访问 DoH，升级后也会获得更稳定的 HTTP 响应兼容性。
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.4.0" badge="Minor Release" date="2026-04-19">
       **Highlights**
 
       - 新增 `reload_provider` executor，以及 provider 级管理接口 `POST /plugins/<provider_tag>/reload`。现在下载或覆盖规则文件后，可以只刷新受影响的 provider，而不必触发应用级全量 `reload`。
