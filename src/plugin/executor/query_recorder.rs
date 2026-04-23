@@ -118,8 +118,20 @@ struct RecorderRuntime {
 
 #[derive(Debug, Clone)]
 enum WriterCommand {
-    Insert(PendingRecord),
+    Insert(Box<PendingRecord>),
     Cleanup { cutoff_ms: u64 },
+}
+
+#[derive(Debug)]
+struct WriterThreadContext {
+    path: PathBuf,
+    tables: TableNames,
+    stop_requested: Arc<AtomicBool>,
+    tail: Arc<Mutex<VecDeque<RecordDetail>>>,
+    memory_tail: usize,
+    broadcaster: broadcast::Sender<RecordDetail>,
+    batch_size: usize,
+    flush_interval: Duration,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -463,15 +475,17 @@ impl RecorderRuntime {
             .name(format!("query-recorder-{}", tag))
             .spawn(move || {
                 if let Err(err) = run_writer_thread(
-                    writer_path,
-                    writer_tables,
+                    WriterThreadContext {
+                        path: writer_path,
+                        tables: writer_tables,
+                        stop_requested: writer_stop,
+                        tail: writer_tail,
+                        memory_tail,
+                        broadcaster: writer_broadcaster,
+                        batch_size,
+                        flush_interval,
+                    },
                     queue_rx,
-                    writer_stop,
-                    writer_tail,
-                    memory_tail,
-                    writer_broadcaster,
-                    batch_size,
-                    flush_interval,
                 ) {
                     error!("query_recorder writer stopped: {}", err);
                 }
@@ -495,7 +509,10 @@ impl RecorderRuntime {
     }
 
     fn enqueue(&self, pending: PendingRecord) {
-        if let Err(err) = self.queue_tx.try_send(WriterCommand::Insert(pending)) {
+        if let Err(err) = self
+            .queue_tx
+            .try_send(WriterCommand::Insert(Box::new(pending)))
+        {
             self.dropped_total.fetch_add(1, Ordering::Relaxed);
             warn!("query_recorder dropped record: {}", err);
         }
@@ -995,16 +1012,20 @@ fn create_schema(conn: &mut Connection, tables: &TableNames) -> rusqlite::Result
 }
 
 fn run_writer_thread(
-    path: PathBuf,
-    tables: TableNames,
+    context: WriterThreadContext,
     rx: Receiver<WriterCommand>,
-    stop_requested: Arc<AtomicBool>,
-    tail: Arc<Mutex<VecDeque<RecordDetail>>>,
-    memory_tail: usize,
-    broadcaster: broadcast::Sender<RecordDetail>,
-    batch_size: usize,
-    flush_interval: Duration,
 ) -> std::result::Result<(), String> {
+    let WriterThreadContext {
+        path,
+        tables,
+        stop_requested,
+        tail,
+        memory_tail,
+        broadcaster,
+        batch_size,
+        flush_interval,
+    } = context;
+
     let mut conn = open_database(&path)
         .map_err(|err| format!("failed to open database '{}': {}", path.display(), err))?;
     create_schema(&mut conn, &tables).map_err(|err| format!("failed to create schema: {err}"))?;
@@ -1013,7 +1034,7 @@ fn run_writer_thread(
     loop {
         match rx.recv_timeout(flush_interval) {
             Ok(WriterCommand::Insert(record)) => {
-                pending.push(record);
+                pending.push(*record);
                 if pending.len() >= batch_size {
                     flush_pending(
                         &mut conn,

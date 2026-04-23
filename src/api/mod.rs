@@ -332,12 +332,14 @@ impl ApiHub {
         let (startup_tx, startup_rx) = oneshot::channel();
         *task_slot = Some(tokio::spawn(async move {
             run_api_server(
-                listen,
-                routes,
-                prefix_routes,
-                tls_acceptor,
-                auth,
-                health,
+                ApiServerContext {
+                    listen,
+                    routes,
+                    prefix_routes,
+                    tls_acceptor,
+                    auth,
+                    health,
+                },
                 &mut shutdown_rx,
                 startup_tx,
             )
@@ -456,17 +458,30 @@ fn build_tls_acceptor(config: &ResolvedApiHttpConfig) -> Result<Option<Arc<TlsAc
     }))
 }
 
-#[hotpath::measure]
-async fn run_api_server(
+struct ApiServerContext {
     listen: String,
     routes: AHashMap<RouteKey, Arc<dyn ApiHandler>>,
     prefix_routes: Vec<PrefixRoute>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     auth: Option<ApiAuthConfig>,
     health: Arc<HealthState>,
+}
+
+#[hotpath::measure]
+async fn run_api_server(
+    context: ApiServerContext,
     shutdown_rx: &mut watch::Receiver<bool>,
     startup_tx: oneshot::Sender<std::result::Result<(), String>>,
 ) {
+    let ApiServerContext {
+        listen,
+        routes,
+        prefix_routes,
+        tls_acceptor,
+        auth,
+        health,
+    } = context;
+
     let listener = match TcpListener::bind(&listen).await {
         Ok(listener) => listener,
         Err(err) => {
