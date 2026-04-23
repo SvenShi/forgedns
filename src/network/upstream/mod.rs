@@ -672,7 +672,10 @@ impl UpstreamBuilder {
             match connection_info.connection_type {
                 ConnectionType::UDP => {
                     debug!("Creating UDP upstream for {}", connection_info.raw_addr);
-                    let builder = UdpConnectionBuilder::new(&connection_info);
+                    let builder = UdpConnectionBuilder::new(
+                        &connection_info,
+                        pipeline_request_map_capacity(),
+                    );
                     let main_pool = PipelinePool::new(
                         0,
                         connection_info
@@ -685,7 +688,8 @@ impl UpstreamBuilder {
                         Box::new(builder),
                     );
 
-                    let tcp_builder = TcpConnectionBuilder::new(&connection_info);
+                    let tcp_builder =
+                        TcpConnectionBuilder::new(&connection_info, reuse_request_map_capacity());
                     let fallback_pool = ReusePool::new(
                         0,
                         connection_info
@@ -708,8 +712,19 @@ impl UpstreamBuilder {
                         "Creating {:?} upstream for {}",
                         connection_info.connection_type, connection_info.raw_addr
                     );
-                    let builder = TcpConnectionBuilder::new(&connection_info);
-                    create_pipeline_or_reuse_pool(0, connection_info, Box::new(builder))
+                    if connection_info.enable_pipeline.unwrap_or(false) {
+                        let builder = TcpConnectionBuilder::new(
+                            &connection_info,
+                            pipeline_request_map_capacity(),
+                        );
+                        create_pipeline_pool(0, connection_info, Box::new(builder))
+                    } else {
+                        let builder = TcpConnectionBuilder::new(
+                            &connection_info,
+                            reuse_request_map_capacity(),
+                        );
+                        create_reuse_pool(0, connection_info, Box::new(builder))
+                    }
                 }
                 ConnectionType::DoQ => {
                     debug!("Creating QUIC upstream for {}", connection_info.raw_addr);
@@ -775,6 +790,16 @@ impl UpstreamBuilder {
     }
 }
 
+#[inline]
+const fn pipeline_request_map_capacity() -> u16 {
+    ConnectionInfo::DEFAULT_MAX_CONNS_LOAD
+}
+
+#[inline]
+const fn reuse_request_map_capacity() -> u16 {
+    1
+}
+
 fn create_pipeline_pool<C: Connection>(
     min_size: usize,
     connection_info: ConnectionInfo,
@@ -814,18 +839,6 @@ fn create_reuse_pool<C: Connection>(
         ),
         connection_info,
     })
-}
-
-fn create_pipeline_or_reuse_pool<C: Connection>(
-    min_size: usize,
-    connection_info: ConnectionInfo,
-    builder: Box<dyn ConnectionBuilder<C>>,
-) -> Box<dyn Upstream> {
-    if connection_info.enable_pipeline.unwrap_or(false) {
-        create_pipeline_pool(min_size, connection_info, builder)
-    } else {
-        create_reuse_pool(min_size, connection_info, builder)
-    }
 }
 
 /// Pooled upstream resolver implementation
@@ -929,13 +942,17 @@ impl ConnectionBuilderFactory {
     ///
     /// The type invariant is established in `UpstreamBuilder::with_upstream_config()`
     /// where `DomainUpstream<C>` is created with the matching `C` for each ConnectionType.
-    pub fn build<C: Connection>(&self, ip: IpAddr) -> Box<dyn ConnectionBuilder<C>> {
+    pub fn build<C: Connection>(
+        &self,
+        ip: IpAddr,
+        request_map_capacity: u16,
+    ) -> Box<dyn ConnectionBuilder<C>> {
         let mut info = self.connection_info.clone();
         info.remote_ip = Some(ip);
         match info.connection_type {
             ConnectionType::UDP => {
                 let src: Box<dyn ConnectionBuilder<UdpConnection>> =
-                    Box::new(UdpConnectionBuilder::new(&info));
+                    Box::new(UdpConnectionBuilder::new(&info, request_map_capacity));
                 unsafe {
                     std::mem::transmute::<
                         Box<dyn ConnectionBuilder<UdpConnection>>,
@@ -945,7 +962,7 @@ impl ConnectionBuilderFactory {
             }
             ConnectionType::TCP | ConnectionType::DoT => {
                 let src: Box<dyn ConnectionBuilder<TcpConnection>> =
-                    Box::new(TcpConnectionBuilder::new(&info));
+                    Box::new(TcpConnectionBuilder::new(&info, request_map_capacity));
                 unsafe {
                     std::mem::transmute::<
                         Box<dyn ConnectionBuilder<TcpConnection>>,
@@ -1082,18 +1099,36 @@ impl<C: Connection> BootstrapUpstream<C> {
         }
 
         // Create new connection builder with the resolved IP
-        let builder: Box<dyn ConnectionBuilder<C>> = self.builder_factory.build(ip);
+        let request_map_capacity = match self.connection_info.connection_type {
+            ConnectionType::UDP => pipeline_request_map_capacity(),
+            ConnectionType::TCP | ConnectionType::DoT => {
+                if self.connection_info.enable_pipeline.unwrap_or(false) {
+                    pipeline_request_map_capacity()
+                } else {
+                    reuse_request_map_capacity()
+                }
+            }
+            ConnectionType::DoQ | ConnectionType::DoH => reuse_request_map_capacity(),
+        };
+
+        let builder: Box<dyn ConnectionBuilder<C>> =
+            self.builder_factory.build(ip, request_map_capacity);
 
         // Create appropriate pool type based on protocol
         let new_pool: Arc<dyn ConnectionPool<C>> = match self.connection_info.connection_type {
-            ConnectionType::UDP | ConnectionType::TCP | ConnectionType::DoT => {
+            ConnectionType::UDP => {
+                PipelinePool::new(0, 1, ConnectionInfo::DEFAULT_MAX_CONNS_LOAD, 10, builder)
+            }
+            ConnectionType::TCP | ConnectionType::DoT => {
                 if self.connection_info.enable_pipeline.unwrap_or(false) {
-                    PipelinePool::new(0, 1, 64, 10, builder)
+                    PipelinePool::new(0, 1, ConnectionInfo::DEFAULT_MAX_CONNS_LOAD, 10, builder)
                 } else {
                     ReusePool::new(0, 1, 10, builder)
                 }
             }
-            ConnectionType::DoQ | ConnectionType::DoH => PipelinePool::new(0, 1, 64, 10, builder),
+            ConnectionType::DoQ | ConnectionType::DoH => {
+                PipelinePool::new(0, 1, ConnectionInfo::DEFAULT_MAX_CONNS_LOAD, 10, builder)
+            }
         };
 
         // Atomically swap to new pool (lock-free, readers see old or new pool consistently)

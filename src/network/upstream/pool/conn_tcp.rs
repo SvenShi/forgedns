@@ -51,6 +51,9 @@ pub struct TcpConnection {
     last_used: AtomicU64,
 }
 
+#[cfg(test)]
+const DEFAULT_REQUEST_MAP_CAPACITY: u16 = 64;
+
 #[derive(Debug)]
 struct QueuedQuery {
     message: Message,
@@ -95,7 +98,7 @@ impl Connection for TcpConnection {
 
         // Register query and get unique ID for request/response matching
         let (tx, rx) = oneshot::channel();
-        let query_id = self.request_map.store(tx);
+        let query_id = self.request_map.store(tx)?;
 
         trace!(
             conn_id = self.id,
@@ -172,7 +175,12 @@ impl TcpConnection {
     /// * `conn_id` - Unique connection identifier for logging and debugging
     /// * `sender` - Unbounded channel for queuing outbound DNS messages
     /// * `timeout` - Maximum time to wait for a DNS response
-    fn new(conn_id: u16, sender: UnboundedSender<QueuedQuery>, timeout: Duration) -> Self {
+    fn new(
+        conn_id: u16,
+        sender: UnboundedSender<QueuedQuery>,
+        timeout: Duration,
+        request_map_capacity: u16,
+    ) -> Self {
         debug!(
             conn_id,
             "Initialized TCP connection wrapper with async I/O tasks"
@@ -181,7 +189,7 @@ impl TcpConnection {
             id: conn_id,
             sender,
             close_notify: Notify::new(),
-            request_map: RequestMap::new(),
+            request_map: RequestMap::with_capacity(request_map_capacity),
             timeout,
             closed: AtomicBool::new(false),
             writeable: AtomicBool::new(true),
@@ -324,13 +332,14 @@ pub struct TcpConnectionBuilder {
     server_name: String,
     insecure_skip_verify: bool,
     connection_type: ConnectionType,
+    request_map_capacity: u16,
     so_mark: Option<u32>,
     bind_to_device: Option<String>,
     socks5: Option<Socks5Opt>,
 }
 
 impl TcpConnectionBuilder {
-    pub fn new(connection_info: &ConnectionInfo) -> Self {
+    pub fn new(connection_info: &ConnectionInfo, request_map_capacity: u16) -> Self {
         Self {
             remote_ip: connection_info.remote_ip,
             port: connection_info.port,
@@ -339,6 +348,7 @@ impl TcpConnectionBuilder {
             server_name: connection_info.server_name.clone(),
             insecure_skip_verify: connection_info.insecure_skip_verify,
             connection_type: connection_info.connection_type,
+            request_map_capacity,
             so_mark: connection_info.so_mark,
             bind_to_device: connection_info.bind_to_device.clone(),
             socks5: connection_info.socks5.clone(),
@@ -377,7 +387,8 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
         );
 
         let (sender, receiver) = unbounded_channel();
-        let connection = TcpConnection::new(conn_id, sender, self.timeout);
+        let connection =
+            TcpConnection::new(conn_id, sender, self.timeout, self.request_map_capacity);
         let arc = Arc::new(connection);
 
         if self.tls_enabled {
@@ -425,12 +436,13 @@ mod tests {
         connection_info.timeout = Duration::from_secs(9);
         connection_info.insecure_skip_verify = true;
 
-        let builder = TcpConnectionBuilder::new(&connection_info);
+        let builder = TcpConnectionBuilder::new(&connection_info, DEFAULT_REQUEST_MAP_CAPACITY);
 
         assert_eq!(connection_info.connection_type, ConnectionType::DoT);
         assert!(builder.tls_enabled);
         assert_eq!(builder.port, 853);
         assert_eq!(builder.timeout, Duration::from_secs(9));
+        assert_eq!(builder.request_map_capacity, DEFAULT_REQUEST_MAP_CAPACITY);
         assert_eq!(builder.server_name, "dns.example.com");
         assert!(builder.insecure_skip_verify);
     }
@@ -438,7 +450,12 @@ mod tests {
     #[tokio::test]
     async fn test_query_returns_error_when_connection_is_closed() {
         let (sender, _receiver) = unbounded_channel();
-        let connection = TcpConnection::new(7, sender, Duration::from_millis(10));
+        let connection = TcpConnection::new(
+            7,
+            sender,
+            Duration::from_millis(10),
+            DEFAULT_REQUEST_MAP_CAPACITY,
+        );
         connection.close();
 
         let result = connection.query(Message::new()).await;
