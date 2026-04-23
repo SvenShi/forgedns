@@ -309,12 +309,14 @@ Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
   - `cert` and `key` must both be configured.
 - Runtime impact:
   - Starts an additional QUIC-based DoH listener task.
+  - HTTP/2 responses include `Alt-Svc: h3=":<listen-port>"; ma=86400` so clients can discover HTTP/3 on the same port.
 
 ### Behavior
 
 - Each `path` can route to a different `exec`, which is useful for multi-entry policies.
 - Registers both GET and POST DoH access methods commonly used for RFC 8484.
 - When HTTP/3 is enabled, an extra QUIC listener is started.
+- When HTTP/3 is enabled, HTTP/2 responses advertise the same listen port through the `Alt-Svc` header.
 
 ### Good Fits
 
@@ -410,4 +412,3 @@ Provides DNS over QUIC.
 - Do not bind the same address and port as `udp_server`.
 
 ---
-

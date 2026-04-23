@@ -7,6 +7,7 @@ use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
 use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
 use crate::plugin::server::quic;
 use bytes::{BufMut, Bytes, BytesMut};
+use http::header::CONTENT_LENGTH;
 use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -48,7 +49,7 @@ pub async fn run_server(
     startup_tx: Option<oneshot::Sender<Result<(), String>>>,
 ) {
     let mut startup_tx = startup_tx;
-    server_config.alpn_protocols = vec![b"h3".to_vec()];
+    server_config = http3_server_config(server_config);
 
     let endpoint = match quic::build_quic_endpoint(addr, server_config, idle_timeout) {
         Ok(value) => value,
@@ -280,7 +281,7 @@ async fn send_h3_error_response(
 ) -> Result<(), ()> {
     let response = match http::Response::builder()
         .status(status)
-        .header(http::header::CONTENT_LENGTH, "0")
+        .header(CONTENT_LENGTH, 0)
         .body(())
     {
         Ok(resp) => resp,
@@ -318,6 +319,11 @@ fn extract_tls_server_name(connection: &quinn::Connection) -> Option<String> {
         .map(|name| name.to_ascii_lowercase())
 }
 
+fn http3_server_config(mut server_config: ServerConfig) -> ServerConfig {
+    server_config.alpn_protocols = vec![b"h3".to_vec()];
+    server_config
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,8 +347,16 @@ mod tests {
     }
 
     fn dummy_server_config() -> ServerConfig {
+        crate::network::tls_config::install_default_provider();
         ServerConfig::builder()
             .with_no_client_auth()
             .with_cert_resolver(Arc::new(RejectingResolver))
+    }
+
+    #[test]
+    fn test_http3_server_config_sets_h3_alpn() {
+        let server_config = http3_server_config(dummy_server_config());
+
+        assert_eq!(server_config.alpn_protocols, vec![b"h3".to_vec()]);
     }
 }

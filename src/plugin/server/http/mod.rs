@@ -28,7 +28,7 @@ use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use http::Method;
+use http::{HeaderValue, Method};
 use rustls::ServerConfig;
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -123,6 +123,8 @@ pub struct HttpServer {
     idle_timeout: Option<u64>,
     /// Enable HTTP/3 for DoH connections
     enable_http3: Option<bool>,
+    /// Prebuilt Alt-Svc header for HTTP/2 responses when HTTP/3 is enabled
+    http2_alt_svc: Option<HeaderValue>,
     /// Shared shutdown signal for HTTP/2 and HTTP/3 tasks
     shutdown_tx: watch::Sender<bool>,
     /// Spawned top-level server task handles
@@ -177,6 +179,7 @@ impl HttpServer {
             listen,
             self.dispatcher.clone(),
             self.server_config.clone(),
+            self.http2_alt_svc.clone(),
             self.idle_timeout,
             self.src_ip_header.clone(),
             self.shutdown_tx.subscribe(),
@@ -385,11 +388,28 @@ impl PluginFactory for HttpServerFactory {
                 server_config,
                 idle_timeout: http_config.idle_timeout,
                 enable_http3: http_config.enable_http3,
+                http2_alt_svc: http2_alt_svc_for_config(http_config.enable_http3, listen)?,
                 shutdown_tx: watch::channel(false).0,
                 task_handles: Mutex::new(Vec::new()),
             },
         )))
     }
+}
+
+fn http2_alt_svc_for_config(
+    enable_http3: Option<bool>,
+    listen: SocketAddr,
+) -> Result<Option<HeaderValue>> {
+    enable_http3
+        .unwrap_or(false)
+        .then(|| http3_alt_svc_header(listen))
+        .transpose()
+}
+
+fn http3_alt_svc_header(listen: SocketAddr) -> Result<HeaderValue> {
+    let value = format!("h3=\":{}\"; ma=86400", listen.port());
+    HeaderValue::from_str(&value)
+        .map_err(|e| DnsError::plugin(format!("Failed to build HTTP/3 Alt-Svc header: {}", e)))
 }
 
 /// Extract real client IP address from HTTP headers
@@ -504,6 +524,23 @@ listen: 127.0.0.1:443
         let client = extract_client_ip(&headers, &Some(Arc::from("x-real-ip")), src);
 
         assert_eq!(client, SocketAddr::from(([198, 51, 100, 10], 8443)));
+    }
+
+    #[test]
+    fn test_http2_alt_svc_is_initialized_when_http3_is_enabled() {
+        let value = http2_alt_svc_for_config(Some(true), SocketAddr::from(([127, 0, 0, 1], 9443)))
+            .expect("Alt-Svc header should build")
+            .expect("HTTP/3 enabled should create Alt-Svc");
+
+        assert_eq!(value, "h3=\":9443\"; ma=86400");
+    }
+
+    #[test]
+    fn test_http2_alt_svc_is_absent_when_http3_is_disabled() {
+        let value = http2_alt_svc_for_config(Some(false), SocketAddr::from(([127, 0, 0, 1], 9443)))
+            .expect("Alt-Svc initialization should succeed");
+
+        assert!(value.is_none());
     }
 
     #[test]

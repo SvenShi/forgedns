@@ -8,6 +8,7 @@ use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
 use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
 use crate::plugin::server::tcp;
 use bytes::{BufMut, Bytes, BytesMut};
+use http::header::{ALT_SVC, CONTENT_LENGTH};
 use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,10 +40,12 @@ use tracing::{debug, error, info, warn};
 /// - `idle_timeout`: Connection idle timeout in seconds
 /// - `src_ip_header`: HTTP header name to extract real client IP
 #[hotpath::measure]
+#[allow(clippy::too_many_arguments)]
 pub async fn run_server(
     addr: SocketAddr,
     dispatcher: Arc<HttpDispatcher>,
     server_config: Option<ServerConfig>,
+    alt_svc: Option<http::HeaderValue>,
     idle_timeout: Option<u64>,
     src_ip_header: Option<String>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -73,11 +76,13 @@ pub async fn run_server(
         listen = %addr,
         idle_timeout_secs = timeout.as_secs(),
         has_tls = %server_config.is_some(),
+        alt_svc = alt_svc.as_ref().and_then(|value| value.to_str().ok()),
         "HTTP/2 server listening"
     );
 
     // Wrap header name in Arc to avoid cloning Strings per request
     let src_ip_header = src_ip_header.map(Arc::from);
+    let alt_svc = alt_svc.map(Arc::new);
 
     let tasks = TaskTracker::new();
     let shutdown_token = CancellationToken::new();
@@ -102,6 +107,7 @@ pub async fn run_server(
                     Ok((stream, src)) => {
                         let dispatcher = dispatcher.clone();
                         let src_ip_header = src_ip_header.clone();
+                        let alt_svc = alt_svc.clone();
                         let tls_acceptor = tls_acceptor.clone();
                         let task_shutdown = shutdown_token.clone();
                         let active_connections = active_connections.clone();
@@ -131,6 +137,7 @@ pub async fn run_server(
                                                     dispatcher,
                                                     src_ip_header,
                                                     server_name,
+                                                    alt_svc,
                                                 )
                                                 .await;
                                             }
@@ -141,7 +148,7 @@ pub async fn run_server(
                                     } else {
                                         // Plain HTTP connection
                                         debug!("HTTP server connected to client {}", src);
-                                        handle_http_stream(stream, src, dispatcher, src_ip_header, None)
+                                        handle_http_stream(stream, src, dispatcher, src_ip_header, None, alt_svc)
                                             .await;
                                     }
                                 } => {}
@@ -182,6 +189,7 @@ async fn handle_http_stream<S>(
     dispatcher: Arc<HttpDispatcher>,
     src_ip_header: Option<Arc<str>>,
     tls_server_name: Option<Arc<str>>,
+    alt_svc: Option<Arc<http::HeaderValue>>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
@@ -213,6 +221,7 @@ async fn handle_http_stream<S>(
         let dispatcher = dispatcher.clone();
         let src_ip_header = src_ip_header.clone();
         let server_name = tls_server_name.clone();
+        let alt_svc = alt_svc.clone();
         // Spawn a task to handle this request (non-blocking)
         // Each request is processed in its own task for maximum concurrency
         tokio::spawn(async move {
@@ -235,7 +244,7 @@ async fn handle_http_stream<S>(
             let body = match read_h2_body(request.into_body(), src).await {
                 Ok(body) => body,
                 Err(status) => {
-                    let _ = send_h2_error_response(&mut respond, status, src);
+                    let _ = send_h2_error_response(&mut respond, status, src, alt_svc.as_deref());
                     return;
                 }
             };
@@ -244,7 +253,8 @@ async fn handle_http_stream<S>(
                 .handle_request(method, path, query, body, client_addr, server_name)
                 .await;
 
-            let (parts, response_bytes) = response.into_parts();
+            let (mut parts, response_bytes) = response.into_parts();
+            insert_alt_svc_header(&mut parts.headers, alt_svc.as_deref());
 
             let h2_response = match http::Response::builder()
                 .status(parts.status)
@@ -261,6 +271,7 @@ async fn handle_http_stream<S>(
                         &mut respond,
                         http::StatusCode::INTERNAL_SERVER_ERROR,
                         src,
+                        alt_svc.as_deref(),
                     );
                     return;
                 }
@@ -331,10 +342,11 @@ fn send_h2_error_response(
     respond: &mut h2::server::SendResponse<Bytes>,
     status: http::StatusCode,
     src: SocketAddr,
+    alt_svc: Option<&http::HeaderValue>,
 ) -> Result<(), ()> {
     let response = match http::Response::builder()
         .status(status)
-        .header(http::header::CONTENT_LENGTH, "0")
+        .header(CONTENT_LENGTH, 0)
         .body(())
     {
         Ok(resp) => resp,
@@ -343,6 +355,8 @@ fn send_h2_error_response(
             return Err(());
         }
     };
+    let mut response = response;
+    insert_alt_svc_header(response.headers_mut(), alt_svc);
 
     if let Err(e) = respond.send_response(response, true) {
         warn!("Failed to send HTTP/2 error response to {}: {}", src, e);
@@ -350,6 +364,13 @@ fn send_h2_error_response(
     }
 
     Ok(())
+}
+
+#[inline]
+fn insert_alt_svc_header(headers: &mut http::HeaderMap, alt_svc: Option<&http::HeaderValue>) {
+    if let Some(alt_svc) = alt_svc {
+        headers.insert(ALT_SVC, alt_svc.clone());
+    }
 }
 
 #[cfg(test)]
@@ -450,6 +471,9 @@ mod tests {
             dispatcher,
             Some(Arc::from("x-real-ip")),
             Some(Arc::from("resolver.example")),
+            Some(Arc::new(http::HeaderValue::from_static(
+                "h3=\":443\"; ma=86400",
+            ))),
         ));
 
         let (mut sender, connection) = h2::client::handshake(client)
@@ -482,6 +506,7 @@ mod tests {
         let response = response_future
             .await
             .expect("response future should resolve");
+        assert_eq!(response.headers()["alt-svc"], "h3=\":443\"; ma=86400");
 
         let mut body = response.into_body();
         let mut response_bytes = Vec::new();

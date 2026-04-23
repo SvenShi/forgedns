@@ -310,12 +310,14 @@ sidebar_position: 2
   - 需要同时配置 `cert` 与 `key`。
 - 运行影响：
   - 启用后会额外启动基于 QUIC 的 DoH 监听任务。
+  - HTTP/2 响应会返回 `Alt-Svc: h3=":<listen-port>"; ma=86400`，提示客户端可升级到同端口 HTTP/3。
 
 ### 行为说明
 
 - 每个 `path` 可以路由到不同 `exec`，适合做多入口策略。
 - 自动注册 GET 与 POST 两种 RFC 8484 常见 DoH 访问方式。
 - 开启 HTTP/3 时，会额外启动基于 QUIC 的监听任务。
+- 开启 HTTP/3 时，HTTP/2 响应会携带 `Alt-Svc` 头宣告同监听端口的 HTTP/3 服务。
 
 ### 适用策略
 
@@ -411,4 +413,3 @@ sidebar_position: 2
 - 与 `udp_server` 不应绑定同一地址端口。
 
 ---
-

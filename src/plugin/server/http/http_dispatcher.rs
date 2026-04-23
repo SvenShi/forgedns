@@ -16,10 +16,14 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
-use http::{Method, Response, StatusCode};
+use http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
+use http::{HeaderValue, Method, Response, StatusCode};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{debug, warn};
+
+const CONTENT_TYPE_DNS_MESSAGE: HeaderValue = HeaderValue::from_static("application/dns-message");
+const CONTENT_TYPE_TEXT_PLAIN: HeaderValue = HeaderValue::from_static("text/plain");
 
 /// HTTP Dispatcher - Manages routes and handlers
 ///
@@ -77,8 +81,8 @@ impl HttpDispatcher {
             warn!("Route not found: {} {}", method, path);
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .header("Content-Type", "text/plain")
-                .body(Bytes::from("404 Not Found"))
+                .header(CONTENT_TYPE, CONTENT_TYPE_TEXT_PLAIN)
+                .body(Bytes::from_static(b"404 Not Found"))
                 .expect("Failed to build 404 response")
         }
     }
@@ -180,8 +184,8 @@ impl HttpHandler for DnsGetHandler {
             None => {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .header("Content-Type", "text/plain")
-                    .body(Bytes::from("400 Bad Request: Invalid DNS query"))
+                    .header(CONTENT_TYPE, CONTENT_TYPE_TEXT_PLAIN)
+                    .body(Bytes::from_static(b"400 Bad Request: Invalid DNS query"))
                     .expect("Failed to build error response");
             }
         };
@@ -238,8 +242,8 @@ impl HttpHandler for DnsPostHandler {
             );
             return Response::builder()
                 .status(StatusCode::PAYLOAD_TOO_LARGE)
-                .header("Content-Type", "text/plain")
-                .body(Bytes::from("413 Payload Too Large"))
+                .header(CONTENT_TYPE, CONTENT_TYPE_TEXT_PLAIN)
+                .body(Bytes::from_static(b"413 Payload Too Large"))
                 .expect("Failed to build error response");
         }
 
@@ -257,8 +261,8 @@ impl HttpHandler for DnsPostHandler {
                 warn!("Failed to parse DNS message: {}", e);
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .header("Content-Type", "text/plain")
-                    .body(Bytes::from("400 Bad Request: Invalid DNS message"))
+                    .header(CONTENT_TYPE, CONTENT_TYPE_TEXT_PLAIN)
+                    .body(Bytes::from_static(b"400 Bad Request: Invalid DNS message"))
                     .expect("Failed to build error response");
             }
         };
@@ -288,11 +292,11 @@ fn msg_response(dns_response: Message) -> Response<Bytes> {
             debug!("DNS response size: {} bytes", size);
             let mut builder = Response::builder()
                 .status(StatusCode::OK)
-                .header("Content-Type", "application/dns-message")
-                .header("Content-Length", size.to_string());
+                .header(CONTENT_TYPE, CONTENT_TYPE_DNS_MESSAGE)
+                .header(CONTENT_LENGTH, size);
 
             if let Some(ttl) = http_cache_ttl(&dns_response) {
-                builder = builder.header("Cache-Control", format!("max-age={ttl}"));
+                builder = builder.header(CACHE_CONTROL, format!("private, max-age={ttl}"));
             }
 
             builder
@@ -303,8 +307,8 @@ fn msg_response(dns_response: Message) -> Response<Bytes> {
             warn!("Failed to serialize DNS response: {}", e);
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("Content-Type", "text/plain")
-                .body(Bytes::from("500 Internal Server Error"))
+                .header(CONTENT_TYPE, CONTENT_TYPE_TEXT_PLAIN)
+                .body(Bytes::from_static(b"500 Internal Server Error"))
                 .expect("Failed to build error response")
         }
     }
