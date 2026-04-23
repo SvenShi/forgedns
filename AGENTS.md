@@ -1,11 +1,13 @@
 # Repository Guidelines
 
 ## Project Focus
+
 - ForgeDNS is a high-performance, plugin-driven DNS server written in Rust.
 - The current project already includes UDP/TCP/DoT/DoQ/DoH server and upstream support, sequence-based policy orchestration, TTL-aware cache with negative caching, fallback chains, local and synthetic answers, query/response rewriting, ECS handling, dual-stack selection, provider-backed domain/IP rule sets, management APIs, health endpoints, metrics, and system integrations such as `ipset`, `nftset`, and MikroTik route sync.
 - Prefer designs that preserve the core request path: `server -> DnsContext -> matcher/executor/provider pipeline -> upstream or side effects -> response`.
 
 ## Project Structure & Module Organization
+
 - `src/main.rs` boots the Tokio runtime, parses CLI options, loads config, initializes logging, starts the application, and handles graceful shutdown.
 - `src/lib.rs` exposes the library surface used by tests and embedding scenarios, including `api`, `app`, `config`, `core`, `message`, `network`, `plugin`, and `service`.
 - `src/app/` contains bootstrap and logging setup for wiring the runtime from config to live services.
@@ -26,6 +28,7 @@
 - `README.md` and `README_EN.md` describe the architecture and capability set; keep them aligned with behavior changes.
 
 ## Build, Test, and Development Commands
+
 - `cargo check` is the fastest default sanity check during iteration.
 - `cargo build --release` builds the optimized binary used for realistic performance testing.
 - `cargo run -- -c config.yaml` runs ForgeDNS with the default config.
@@ -37,6 +40,7 @@
 - `cargo clippy --all-targets --all-features` is recommended when changing shared infrastructure or hot-path logic.
 
 ## Coding Style & Naming Conventions
+
 - Rust 2024 edition; format with `cargo fmt`.
 - Use `snake_case` for functions and fields, `CamelCase` for types, and `SCREAMING_SNAKE_CASE` for constants.
 - Keep modules cohesive and place helpers close to the feature they serve.
@@ -47,6 +51,7 @@
 - Keep platform-specific integrations clearly guarded, especially Linux-only netlink, `ipset`, and `nftset` behavior.
 
 ## Performance & Architecture Principles
+
 - Treat the request hot path as a first-class design constraint. Avoid unnecessary allocation, cloning, parsing, locking, or blocking I/O in per-request code.
 - Prefer work that can be done once at startup or plugin initialization over work repeated for every query.
 - Reuse connections and transport state through the existing upstream pool design instead of creating one-off connections on the fast path.
@@ -56,6 +61,7 @@
 - Watch lock contention and shared-state growth; any `Arc`, `DashMap`, queue, or background task added to the core path needs a clear justification.
 
 ## Testing Guidelines
+
 - Use Rust's built-in test framework and keep focused unit tests close to logic-heavy modules.
 - Use `tests/plugin_integration.rs` for wiring-level behavior: config parsing, dependency resolution, sequence quick-setup, and server integration.
 - For changes in servers, upstreams, cache, or plugin orchestration, cover both success paths and failure paths.
@@ -63,13 +69,14 @@
 - Run at least `cargo test` for behavior changes. Also run `cargo test --test plugin_integration` when changing plugin registration, config parsing, sequence behavior, or server startup paths.
 
 ## Configuration & Documentation
-- Keep `config.yaml` valid and runnable; it should demonstrate recommended assembly patterns, not every possible option.
-- If a change adds or renames plugin types, config fields, default behaviors, supported protocols, or user-visible capabilities, update `config.yaml`, `README.md`, and `README_EN.md` in the same change when applicable.
+
+- If a change adds or renames plugin types, config fields, default behaviors, supported protocols, or user-visible capabilities, update `README.md`, and `README_EN.md` in the same change when applicable.
 - If a change adds, removes, or modifies a plugin, also sync the dedicated documentation in `docs/` for both Chinese and English. Treat plugin code changes and plugin docs updates as part of the same change whenever the behavior, config shape, dependencies, lifecycle, side effects, or examples are affected.
 - Prefer descriptive plugin tags such as `forward_main`, `cache_main`, `udp_server`, or `seq_main`.
 - Keep `sequence` examples readable; use tagged reusable plugins once logic becomes non-trivial.
 
 ## Commit & Pull Request Guidelines
+
 - Use Conventional Commits, for example `feat(cache): add negative cache persistence`.
 - Keep commit messages short, action-oriented, and scoped to the subsystem when possible.
 - PRs should describe behavior changes, protocol or platform scope, config impact, and the test commands that were run.
