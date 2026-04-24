@@ -30,6 +30,7 @@
 //! - [`upstream`]: outbound DNS resolver construction, bootstrap resolution,
 //!   and connection pooling across supported upstream protocols.
 pub mod buffer_pool;
+pub mod http_client;
 pub mod listen;
 pub mod tls_config;
 pub mod transport;
