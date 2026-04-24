@@ -13,7 +13,7 @@ use crate::app::cli::{ServiceCommand, ServiceInstallOptions, ServiceOptions};
 use crate::core::error::{DnsError, Result};
 use service_manager::{
     RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx,
-    ServiceStopCtx, ServiceUninstallCtx, native_service_manager,
+    ServiceStatus, ServiceStatusCtx, ServiceStopCtx, ServiceUninstallCtx, native_service_manager,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,19 @@ pub fn run(options: ServiceOptions) -> Result<()> {
         ServiceCommand::Stop => stop_service(),
         ServiceCommand::Uninstall => uninstall_service(),
     }
+}
+
+pub fn status() -> Result<ServiceStatus> {
+    let service_manage = service_manager()?;
+    let status = service_manage.status(ServiceStatusCtx {
+        label: service_label()?,
+    })?;
+    Ok(status)
+}
+
+pub fn restart_installed_service() -> Result<()> {
+    stop_service()?;
+    start_service()
 }
 
 fn install_service(options: ServiceInstallOptions) -> Result<()> {

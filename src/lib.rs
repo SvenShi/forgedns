@@ -31,5 +31,6 @@ pub mod core;
 pub mod network;
 pub mod plugin;
 pub mod service;
+pub mod upgrade;
 
 pub use forgedns_proto as proto;

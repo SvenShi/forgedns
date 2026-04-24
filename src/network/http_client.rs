@@ -14,7 +14,7 @@ use crate::network::tls_config::{insecure_client_config, secure_client_config};
 use crate::network::upstream::{Socks5Opt, connect_tcp_stream};
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use http::header::{HeaderName, HeaderValue, LOCATION};
+use http::header::{CONTENT_LENGTH, HeaderName, HeaderValue, LOCATION};
 use http::{HeaderMap, Method, Request, StatusCode, Uri};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -81,6 +81,12 @@ pub struct HttpResponse {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: Bytes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -150,6 +156,18 @@ impl HttpClient {
     }
 
     pub async fn download(&self, options: HttpRequestOptions, path: &Path) -> Result<()> {
+        self.download_with_progress(options, path, |_| {}).await
+    }
+
+    pub async fn download_with_progress<F>(
+        &self,
+        options: HttpRequestOptions,
+        path: &Path,
+        progress: F,
+    ) -> Result<()>
+    where
+        F: FnMut(DownloadProgress),
+    {
         let options = HttpRequestOptions {
             body: Bytes::new(),
             ..options
@@ -157,7 +175,8 @@ impl HttpClient {
         let response = self
             .request_following_redirects(Method::GET, options)
             .await?;
-        write_target_file(path, response.into_body()).await
+        let total = content_length(response.headers());
+        write_target_file(path, response.into_body(), total, progress).await
     }
 
     async fn request_following_redirects(
@@ -308,7 +327,15 @@ pub async fn drain_response_body(mut body: Incoming) -> Result<()> {
     Ok(())
 }
 
-async fn write_target_file(path: &Path, mut body: Incoming) -> Result<()> {
+async fn write_target_file<F>(
+    path: &Path,
+    mut body: Incoming,
+    total: Option<u64>,
+    mut progress: F,
+) -> Result<()>
+where
+    F: FnMut(DownloadProgress),
+{
     let dir = path.parent().ok_or_else(|| {
         DnsError::plugin(format!(
             "target path '{}' has no parent directory",
@@ -331,6 +358,8 @@ async fn write_target_file(path: &Path, mut body: Incoming) -> Result<()> {
             err
         ))
     })?;
+    let mut downloaded = 0u64;
+    progress(DownloadProgress { downloaded, total });
     while let Some(frame_result) = body.frame().await {
         let frame = match frame_result {
             Ok(frame) => frame,
@@ -341,15 +370,17 @@ async fn write_target_file(path: &Path, mut body: Incoming) -> Result<()> {
                 )));
             }
         };
-        if let Ok(data) = frame.into_data()
-            && let Err(err) = file.write_all(&data).await
-        {
-            let _ = fs::remove_file(&tmp_path).await;
-            return Err(DnsError::plugin(format!(
-                "failed to write temp file '{}': {}",
-                tmp_path.display(),
-                err
-            )));
+        if let Ok(data) = frame.into_data() {
+            if let Err(err) = file.write_all(&data).await {
+                let _ = fs::remove_file(&tmp_path).await;
+                return Err(DnsError::plugin(format!(
+                    "failed to write temp file '{}': {}",
+                    tmp_path.display(),
+                    err
+                )));
+            }
+            downloaded = downloaded.saturating_add(data.len() as u64);
+            progress(DownloadProgress { downloaded, total });
         }
     }
     file.sync_all().await.map_err(|err| {
@@ -395,6 +426,13 @@ async fn write_target_file(path: &Path, mut body: Incoming) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
 }
 
 fn temp_path_for(path: &Path) -> PathBuf {

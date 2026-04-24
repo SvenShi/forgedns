@@ -13,6 +13,7 @@ Available top-level commands:
 - `check`
 - `export-dat`
 - `service`
+- `upgrade`
 
 ## Help
 
@@ -29,6 +30,7 @@ forgedns start --help
 forgedns check --help
 forgedns export-dat --help
 forgedns service --help
+forgedns upgrade --help
 ```
 
 ## `start`
@@ -243,6 +245,66 @@ Removes the installed system service.
 ```bash
 sudo forgedns service uninstall
 ```
+
+## `upgrade`
+
+Checks, downloads, or applies ForgeDNS upgrades from GitHub Releases.
+
+Supported subcommands:
+
+- `upgrade check`
+- `upgrade download`
+- `upgrade apply`
+
+Common usage:
+
+```bash
+forgedns upgrade
+forgedns upgrade --force
+forgedns upgrade check
+forgedns upgrade download --target latest
+sudo forgedns upgrade apply --restart service
+```
+
+Common arguments:
+
+- `--target <TAG|latest>`
+  - Release tag or `latest`.
+  - Default: `latest`
+- `--repository <OWNER/REPO>`
+  - GitHub repository.
+  - Default: `SvenShi/forgedns`
+- `--asset <NAME|auto>`
+  - Release asset name. `auto` selects the current platform archive.
+  - Default: `auto`
+- `--cache-dir <DIR>`
+  - Directory for cached upgrade files.
+  - Default: `./upgrade/cache`
+- `--backup-dir <DIR>`
+  - Directory for binary backups before `apply`.
+  - Default: `./upgrade/backups`
+- `--restart <none|service>`
+  - Restart strategy after a successful `apply`.
+  - Default: `none`
+- `--allow-prerelease`
+  - Allows prerelease releases.
+- `--force`
+  - For `apply`, continue downloading, verifying, and replacing even when the selected release is not newer than the current version.
+- `--timeout <DURATION>`
+  - HTTP timeout such as `30s` or `2m`.
+- `--socks5 <ADDR>`
+  - Optional SOCKS5 proxy.
+- `--insecure-skip-verify`
+  - Disables TLS certificate verification.
+
+Behavior:
+
+- `check` only queries the release and compares versions.
+- `download` downloads the archive and verifies SHA256 with the GitHub release asset `digest` field.
+- Omitting the subcommand defaults to `apply`.
+- `apply` updates only when a newer version is available by default. `--force` forces the update.
+- On Unix, `apply` unpacks the `.tar.gz`, backs up the current binary, and replaces it. Windows currently supports only `check` and `download`.
+- After a successful `apply`, the CLI asks whether to clean the cache and backup directories. The default answer is `Y`.
 
 ## Current Scope
 

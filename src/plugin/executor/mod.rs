@@ -68,6 +68,7 @@ pub mod sequence;
 pub mod sleep;
 pub(crate) mod template;
 pub mod ttl;
+pub mod upgrade;
 
 // Helper macro to continue to next chain node if present
 #[macro_export]

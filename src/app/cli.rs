@@ -6,7 +6,9 @@
 //! Application CLI definition and startup options.
 
 use clap::{Args, Parser, Subcommand};
+use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Top-level CLI definition.
 #[derive(Parser, Clone, Debug)]
@@ -27,6 +29,8 @@ pub enum Command {
     ExportDat(ExportDatOptions),
     /// Manage the operating system service.
     Service(ServiceOptions),
+    /// Check, download, or apply ForgeDNS release upgrades.
+    Upgrade(UpgradeOptions),
 }
 
 /// Foreground start options.
@@ -106,6 +110,81 @@ pub enum DatKind {
 pub enum ExportFormat {
     Forgedns,
     Original,
+}
+
+/// Upgrade command options.
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeOptions {
+    #[command(subcommand)]
+    pub action: Option<UpgradeAction>,
+
+    /// Release tag to use, or latest.
+    #[arg(long = "target", default_value = "latest", global = true)]
+    pub target: String,
+
+    /// GitHub repository in owner/name form.
+    #[arg(long = "repository", default_value = "SvenShi/forgedns", global = true)]
+    pub repository: String,
+
+    /// Release asset name, or auto for the current platform archive.
+    #[arg(long = "asset", default_value = "auto", global = true)]
+    pub asset: String,
+
+    /// Directory used to cache downloaded release files.
+    #[arg(long = "cache-dir", default_value = "./upgrade/cache", global = true)]
+    pub cache_dir: PathBuf,
+
+    /// Directory used to store binary backups before apply.
+    #[arg(
+        long = "backup-dir",
+        default_value = "./upgrade/backups",
+        global = true
+    )]
+    pub backup_dir: PathBuf,
+
+    /// Restart strategy after a successful apply.
+    #[arg(long = "restart", value_enum, default_value_t = RestartMode::None, global = true)]
+    pub restart: RestartMode,
+
+    /// Allow prerelease GitHub releases.
+    #[arg(long = "allow-prerelease", default_value_t = false, global = true)]
+    pub allow_prerelease: bool,
+
+    /// Apply even when the selected release is not newer than the current version.
+    #[arg(long = "force", default_value_t = false, global = true)]
+    pub force: bool,
+
+    /// Request timeout such as 30s, 2m, or 500ms.
+    #[arg(long = "timeout", value_parser = parse_cli_duration, default_value = "30s", global = true)]
+    pub timeout: Duration,
+
+    /// Optional SOCKS5 proxy address.
+    #[arg(long = "socks5", global = true)]
+    pub socks5: Option<String>,
+
+    /// Disable TLS certificate verification for upgrade downloads.
+    #[arg(long = "insecure-skip-verify", default_value_t = false, global = true)]
+    pub insecure_skip_verify: bool,
+}
+
+/// Upgrade subcommands.
+#[derive(Subcommand, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpgradeAction {
+    Check,
+    Download,
+    Apply,
+}
+
+/// Restart behavior after applying an upgrade.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestartMode {
+    None,
+    Service,
+}
+
+fn parse_cli_duration(raw: &str) -> std::result::Result<Duration, String> {
+    crate::core::system_utils::parse_simple_duration(raw)
 }
 
 /// Service command options.
@@ -237,6 +316,76 @@ mod tests {
                 config: PathBuf::from("custom.yaml"),
                 working_dir: Some(PathBuf::from("/tmp/forgedns")),
                 graph: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_upgrade_apply_with_options() {
+        let args = [
+            "forgedns",
+            "upgrade",
+            "apply",
+            "--target",
+            "v0.4.2",
+            "--repository",
+            "SvenShi/forgedns",
+            "--asset",
+            "forgedns-x86_64-unknown-linux-gnu.tar.gz",
+            "--cache-dir",
+            "./cache",
+            "--backup-dir",
+            "./backups",
+            "--restart",
+            "service",
+            "--allow-prerelease",
+            "--timeout",
+            "2m",
+            "--socks5",
+            "127.0.0.1:1080",
+            "--insecure-skip-verify",
+        ];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Upgrade(UpgradeOptions {
+                action: Some(UpgradeAction::Apply),
+                target: "v0.4.2".to_string(),
+                repository: "SvenShi/forgedns".to_string(),
+                asset: "forgedns-x86_64-unknown-linux-gnu.tar.gz".to_string(),
+                cache_dir: PathBuf::from("./cache"),
+                backup_dir: PathBuf::from("./backups"),
+                restart: RestartMode::Service,
+                allow_prerelease: true,
+                force: false,
+                timeout: Duration::from_secs(120),
+                socks5: Some("127.0.0.1:1080".to_string()),
+                insecure_skip_verify: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_upgrade_defaults_to_apply_and_accepts_force() {
+        let args = ["forgedns", "upgrade", "--force"];
+
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            cli.command,
+            Command::Upgrade(UpgradeOptions {
+                action: None,
+                target: "latest".to_string(),
+                repository: "SvenShi/forgedns".to_string(),
+                asset: "auto".to_string(),
+                cache_dir: PathBuf::from("./upgrade/cache"),
+                backup_dir: PathBuf::from("./upgrade/backups"),
+                restart: RestartMode::None,
+                allow_prerelease: false,
+                force: true,
+                timeout: Duration::from_secs(30),
+                socks5: None,
+                insecure_skip_verify: false,
             })
         );
     }
