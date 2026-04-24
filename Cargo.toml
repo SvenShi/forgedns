@@ -3,7 +3,7 @@ members = [".", "crates/ripset", "crates/forgedns-proto", "crates/zoneparser"]
 
 [package]
 name = "forgedns"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 authors = ["Sven Shi <isvenshi@gmail.com>"]
 description = "A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability."
@@ -43,6 +43,12 @@ lazy_static = "1.5"
 libc = "0.2"
 rand = "0.10.1"
 url = "2.5"
+fs2 = "0.4"
+hex = "0.4"
+semver = "1.0"
+sha2 = "0.11.0"
+flate2 = "1.1"
+tar = "0.4"
 wincode = { version = "0.5", features = ["derive"] }
 forgedns-proto = { version = "0.1.1", path = "crates/forgedns-proto" }
 hotpath = "0.15"

@@ -17,34 +17,24 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
-use crate::network::tls_config::{insecure_client_config, secure_client_config};
-use crate::network::upstream::{Socks5Opt, connect_tcp_stream, parse_socks5_opt};
+use crate::network::http_client::{HttpClient, HttpClientOptions, HttpRequestOptions};
+use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
 use crate::plugin::executor::template::{JsonTemplateValue, Template};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use http::header::{CONTENT_TYPE, HeaderName, HeaderValue, LOCATION};
-use http::{Method, Request, StatusCode, Uri};
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper_rustls::HttpsConnectorBuilder;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use http::Method;
+use http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use tower_service::Service;
 use tracing::{debug, warn};
 use url::Url;
 
@@ -52,8 +42,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_ASYNC_MODE: bool = true;
 const DEFAULT_MAX_REDIRECTS: usize = 5;
 const DEFAULT_QUEUE_SIZE: usize = 256;
-
-type HttpRequestClient = Client<hyper_rustls::HttpsConnector<HttpRequestConnector>, Full<Bytes>>;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -152,15 +140,10 @@ impl RenderedHttpRequest {
 struct HttpRequestExecutor {
     tag: String,
     config: HttpRequestRuntimeConfig,
-    client: HttpRequestClient,
+    client: HttpClient,
     async_tx: Option<mpsc::Sender<RenderedHttpRequest>>,
     stop_tx: Mutex<Option<oneshot::Sender<()>>>,
     worker_handle: Mutex<Option<JoinHandle<()>>>,
-}
-
-#[derive(Clone, Debug)]
-struct HttpRequestConnector {
-    socks5: Option<Socks5Opt>,
 }
 
 #[derive(Debug, Clone)]
@@ -441,41 +424,6 @@ impl BodyTemplate {
     }
 }
 
-impl Service<Uri> for HttpRequestConnector {
-    type Response = TokioIo<TcpStream>;
-    type Error = DnsError;
-    type Future = BoxFuture<'static, std::result::Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, dst: Uri) -> Self::Future {
-        let socks5 = self.socks5.clone();
-        Box::pin(async move {
-            let host = dst.host().ok_or_else(|| {
-                DnsError::plugin(format!("http request uri '{}' is missing host", dst))
-            })?;
-            let port = dst
-                .port_u16()
-                .or_else(|| match dst.scheme_str() {
-                    Some("http") => Some(80),
-                    Some("https") => Some(443),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    DnsError::plugin(format!(
-                        "http request uri '{}' uses unsupported or missing scheme",
-                        dst
-                    ))
-                })?;
-            let remote_ip = host.parse::<IpAddr>().ok();
-            let stream = connect_tcp_stream(remote_ip, host.to_string(), port, socks5).await?;
-            Ok(TokioIo::new(stream))
-        })
-    }
-}
-
 impl PluginFactory for HttpRequestFactory {
     fn create(
         &self,
@@ -735,26 +683,16 @@ fn parse_body_template(
     }
 }
 
-fn build_http_client(insecure_skip_verify: bool, socks5: Option<Socks5Opt>) -> HttpRequestClient {
-    let tls_config = if insecure_skip_verify {
-        insecure_client_config()
-    } else {
-        secure_client_config()
-    };
-
-    let connector = HttpsConnectorBuilder::new()
-        .with_tls_config(tls_config)
-        .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .wrap_connector(HttpRequestConnector { socks5 });
-
-    Client::builder(TokioExecutor::new()).build(connector)
+fn build_http_client(insecure_skip_verify: bool, socks5: Option<Socks5Opt>) -> HttpClient {
+    HttpClient::new(HttpClientOptions {
+        insecure_skip_verify,
+        socks5,
+    })
 }
 
 async fn run_async_worker(
     plugin_tag: String,
-    client: HttpRequestClient,
+    client: HttpClient,
     timeout_duration: Duration,
     max_redirects: usize,
     mut rx: mpsc::Receiver<RenderedHttpRequest>,
@@ -780,7 +718,7 @@ async fn run_async_worker(
 }
 
 async fn dispatch_rendered_request(
-    client: &HttpRequestClient,
+    client: &HttpClient,
     timeout_duration: Duration,
     max_redirects: usize,
     request: RenderedHttpRequest,
@@ -801,125 +739,24 @@ async fn dispatch_rendered_request(
 }
 
 async fn dispatch_rendered_request_inner(
-    client: &HttpRequestClient,
+    client: &HttpClient,
     max_redirects: usize,
-    mut request: RenderedHttpRequest,
+    request: RenderedHttpRequest,
 ) -> Result<()> {
-    for redirect_count in 0..=max_redirects {
-        let hyper_request = build_hyper_request(&request)?;
-        let response = client.request(hyper_request).await.map_err(|err| {
-            DnsError::plugin(format!("request failed for '{}': {}", request.label(), err))
-        })?;
-
-        let status = response.status();
-        let location = response
-            .headers()
-            .get(LOCATION)
-            .map(HeaderValue::as_bytes)
-            .map(String::from_utf8_lossy)
-            .map(|value| value.into_owned());
-
-        if status.is_success() {
-            drain_response_body(response.into_body()).await?;
-            debug!(request = %request.label(), "http_request completed");
-            return Ok(());
-        }
-
-        if status.is_redirection() {
-            if redirect_count == max_redirects {
-                drain_response_body(response.into_body()).await?;
-                return Err(DnsError::plugin(format!(
-                    "request failed for '{}': too many redirects",
-                    request.label()
-                )));
-            }
-
-            let location = location.ok_or_else(|| {
-                DnsError::plugin(format!(
-                    "request failed for '{}': redirect {} missing Location header",
-                    request.label(),
-                    format_status(status)
-                ))
-            })?;
-            drain_response_body(response.into_body()).await?;
-            request.url = resolve_redirect_url(request.url.as_str(), location.as_str())?;
-            continue;
-        }
-
-        drain_response_body(response.into_body()).await?;
-        return Err(DnsError::plugin(format!(
-            "request failed for '{}': unexpected status {}",
-            request.label(),
-            format_status(status)
-        )));
+    let method = request.method.clone();
+    let options = HttpRequestOptions::from_url(request.url.clone())
+        .with_headers(request.headers.clone())
+        .with_body(request.body.clone())
+        .with_max_redirects(max_redirects);
+    if method == Method::GET {
+        client.get_request(options).await?;
+    } else if method == Method::POST {
+        client.post_request(options).await?;
+    } else {
+        client.request(method, options).await?;
     }
-
-    Err(DnsError::plugin(format!(
-        "request failed for '{}': too many redirects",
-        request.label()
-    )))
-}
-
-fn build_hyper_request(request: &RenderedHttpRequest) -> Result<Request<Full<Bytes>>> {
-    let uri = request.url.parse::<Uri>().map_err(|err| {
-        DnsError::plugin(format!(
-            "failed to build http request for '{}': invalid uri: {}",
-            request.label(),
-            err
-        ))
-    })?;
-    let mut builder = Request::builder().method(request.method.clone()).uri(uri);
-    let headers = builder.headers_mut().ok_or_else(|| {
-        DnsError::plugin(format!(
-            "failed to build http request for '{}': headers unavailable",
-            request.label()
-        ))
-    })?;
-    for (name, value) in &request.headers {
-        headers.append(name.clone(), value.clone());
-    }
-    builder
-        .body(Full::new(request.body.clone()))
-        .map_err(|err| {
-            DnsError::plugin(format!(
-                "failed to build http request for '{}': {}",
-                request.label(),
-                err
-            ))
-        })
-}
-
-async fn drain_response_body(mut body: Incoming) -> Result<()> {
-    while let Some(frame) = body.frame().await {
-        frame.map_err(|err| {
-            DnsError::plugin(format!("failed to read http response body: {}", err))
-        })?;
-    }
+    debug!(request = %request.label(), "http_request completed");
     Ok(())
-}
-
-fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String> {
-    let base = Url::parse(current_url).map_err(|err| {
-        DnsError::plugin(format!(
-            "failed to parse redirect base url '{}': {}",
-            current_url, err
-        ))
-    })?;
-    base.join(location)
-        .map(|url| url.to_string())
-        .map_err(|err| {
-            DnsError::plugin(format!(
-                "failed to resolve redirect '{}' against '{}': {}",
-                location, current_url, err
-            ))
-        })
-}
-
-fn format_status(status: StatusCode) -> String {
-    status
-        .canonical_reason()
-        .map(|reason| format!("{} {}", status.as_u16(), reason))
-        .unwrap_or_else(|| status.as_u16().to_string())
 }
 
 #[cfg(test)]

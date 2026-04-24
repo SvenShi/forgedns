@@ -62,7 +62,7 @@ impl<C: Connection> ConnectionPool<C> for PipelinePool<C> {
         for conn in conns.iter() {
             if conn.available() {
                 let idle = now - conn.last_used();
-                if idle < self.max_idle.as_millis() as u64 {
+                if idle < self.max_idle.as_millis() as u64 || conn.using_count() > 0 {
                     new_vec.push(conn.clone());
                 } else {
                     drop_vec.push(conn.clone());
@@ -477,6 +477,17 @@ mod tests {
     async fn test_maintain_reuses_idle_connection_to_preserve_min_size() {
         let conn = Arc::new(MockConnection::new(true, 0, 0));
         let pool = make_pool(1, 1, 4, 0, MockBuilder::new(vec![]), vec![conn.clone()]);
+
+        pool.maintain().await;
+
+        assert_eq!(conn.close_calls(), 0);
+        assert_eq!(pool.connections.load().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_maintain_keeps_idle_connection_with_inflight_queries() {
+        let conn = Arc::new(MockConnection::new(true, 1, 0));
+        let pool = make_pool(0, 1, 4, 0, MockBuilder::new(vec![]), vec![conn.clone()]);
 
         pool.maintain().await;
 

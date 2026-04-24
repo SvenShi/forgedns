@@ -1985,6 +1985,72 @@ Writes response IPs into MikroTik RouterOS address lists, with dynamic entries, 
 - At least one of `address_list4` or `address_list6` is required.
 - `comment_prefix` and the plugin `tag` must not contain `;` or `=`.
 - Synchronous mode does not change the DNS response itself. Even if the RouterOS write fails, the DNS result is still preserved.
+
+## `upgrade`
+
+### Purpose
+
+Runs the ForgeDNS upgrade flow from the executor pipeline. It is suitable for maintenance tasks triggered by `cron`, `sequence`, or another executor.
+
+### Example Configuration
+
+```yaml
+- tag: upgrade_auto
+  type: upgrade
+  args:
+      repository: SvenShi/forgedns
+      asset: auto
+      cache_dir: ./upgrade/cache
+      backup_dir: ./upgrade/backups
+      restart: service
+      force: false
+      cleanup: true
+      timeout: 30s
+      socks5: 127.0.0.1:1080
+      insecure_skip_verify: false
+```
+
+### Options
+
+- `force`
+    - Boolean. Default: `false`.
+    - Continue downloading, verifying, and replacing even when the selected release is not newer than the current version.
+- `cleanup`
+    - Boolean. Default: `true`.
+    - Cleans `cache_dir` and `backup_dir` after a successful upgrade.
+- `repository`
+    - GitHub repository. Default: `SvenShi/forgedns`.
+- `asset`
+    - Release asset name. `auto` selects the current platform archive.
+- `cache_dir` / `backup_dir`
+    - Download cache and pre-replacement backup directories.
+- `restart`
+    - Supported values are `none` and `service`. When set to `service`, the application exits with a non-zero status code after the binary is successfully replaced, allowing systemd to restart it automatically. Therefore, the corresponding service must set `Restart` to `always` or `on-failure`.
+- `timeout`, `socks5`, `insecure_skip_verify`
+    - Same meaning as the CLI `upgrade` flags.
+
+### Behavior
+
+- The executor always returns `ExecStep::Next`.
+- The plugin only runs the `apply` action. It does not provide `check` or `download` modes.
+- By default it updates only when a newer version is available. `force: true` forces the update.
+- By default it cleans cache and backup files after a successful upgrade. Set `cleanup: false` to keep rollback files.
+- The upgrade downloads the archive and verifies SHA256 with the GitHub release asset `digest` field.
+- On Unix it unpacks `.tar.gz`, backs up the current binary, and replaces it. Windows currently does not support plugin upgrades.
+
+### quick setup
+
+```yaml
+- exec: upgrade
+- exec: upgrade force
+- exec: upgrade force=false
+```
+
+- Empty arguments run apply with the default configuration.
+- Only `force` and `force=true|false` are supported.
+- Other settings use defaults. Use full `args` configuration to override the repository, directories, restart mode, or proxy.
+- `mode` is not supported; the plugin always applies upgrades.
+
 ## `download`
 
 ### Purpose

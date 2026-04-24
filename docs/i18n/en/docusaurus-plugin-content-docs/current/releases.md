@@ -10,6 +10,14 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
+  <ReleaseCard version="v0.4.2" badge="Patch Release" date="2026-04-24" defaultOpen>
+      **Highlights**
+
+      - Fixed an issue where some connections were not properly released in upstream race scenarios, such as when multiple concurrent upstreams were configured or fallback was enabled.
+      - Added the `upgrade` CLI tool and plugin to support automatic updates and binary replacement. When the application is running as a Linux service, it can also restart automatically after the update.
+
+  </ReleaseCard>
+
   <ReleaseCard version="v0.4.1" badge="Patch Release" date="2026-04-23" defaultOpen>
       **Fixes**
 

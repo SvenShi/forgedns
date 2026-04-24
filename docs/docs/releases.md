@@ -10,7 +10,16 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.4.1" badge="Patch Release" date="2026-04-23" defaultOpen>
+
+  <ReleaseCard version="v0.4.2" badge="Patch Release" date="2026-04-24" defaultOpen>
+      **Highlights**
+
+      - 修复在配置多个并发 upstream、启用 fallback 等存在上游竞争的场景下，部分连接未被正确释放的问题。
+      - 新增 `upgrade` CLI 工具及插件，支持自动更新并替换二进制文件；当应用以 Linux Service 方式运行时，还支持更新后自动重启应用。
+
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.4.1" badge="Patch Release" date="2026-04-23">
       **Fixes**
 
       - 修复 upstream `request_map` 在连接关闭、请求超时和异常回收场景下的内存泄漏问题，避免 pending query waiter 与 sender 残留，减少长连接运行时的隐性内存增长。

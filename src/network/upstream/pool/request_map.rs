@@ -103,6 +103,42 @@ impl Slot {
 // slot in RESERVED state may read, write, or drop the inline sender storage.
 unsafe impl Sync for Slot {}
 
+#[derive(Debug)]
+pub struct RequestGuard<'a> {
+    request_map: &'a RequestMap,
+    query_id: u16,
+    armed: bool,
+}
+
+impl RequestGuard<'_> {
+    #[inline]
+    pub fn query_id(&self) -> u16 {
+        self.query_id
+    }
+
+    #[inline]
+    pub fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    #[inline]
+    pub fn remove(&mut self) -> bool {
+        if !self.armed {
+            return false;
+        }
+        self.armed = false;
+        self.request_map.remove(self.query_id)
+    }
+}
+
+impl Drop for RequestGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.request_map.remove(self.query_id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StoreResult {
     Stored(u16),
@@ -144,14 +180,20 @@ impl RequestMap {
     }
 
     #[inline(always)]
-    pub fn store(&self, tx: Sender<Message>) -> Result<u16> {
+    pub fn store(&self, tx: Sender<Message>) -> Result<RequestGuard<'_>> {
         let start = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut tx = Some(tx);
 
         for offset in 0..ID_SPACE_SIZE {
             let id = start.wrapping_add(offset as u16);
             match self.try_store_candidate(id, &mut tx) {
-                StoreResult::Stored(id) => return Ok(id),
+                StoreResult::Stored(id) => {
+                    return Ok(RequestGuard {
+                        request_map: self,
+                        query_id: id,
+                        armed: true,
+                    });
+                }
                 StoreResult::Retry => continue,
                 StoreResult::Exhausted => break,
             }
@@ -421,10 +463,12 @@ mod tests {
         let map = RequestMap::with_capacity(8);
         let (tx, rx) = oneshot::channel();
 
-        let id = map.store(tx).expect("store should succeed");
+        let mut guard = map.store(tx).expect("store should succeed");
+        let id = guard.query_id();
 
         assert_eq!(map.size(), 1);
         let sender = map.take(id).expect("stored sender should be retrievable");
+        guard.disarm();
         assert_eq!(map.size(), 0);
         assert!(sender.send(make_message(7)).is_ok());
         let received = rx.blocking_recv().expect("receiver should get the message");
@@ -444,9 +488,11 @@ mod tests {
     fn test_take_twice_only_returns_sender_once() {
         let map = RequestMap::with_capacity(8);
         let (tx, _rx) = oneshot::channel();
-        let id = map.store(tx).expect("store should succeed");
+        let mut guard = map.store(tx).expect("store should succeed");
+        let id = guard.query_id();
 
         assert!(map.take(id).is_some());
+        guard.disarm();
         assert!(map.take(id).is_none());
         assert!(map.is_empty());
     }
@@ -455,12 +501,16 @@ mod tests {
     fn test_store_after_take_keeps_map_usable() {
         let map = RequestMap::with_capacity(8);
         let (tx1, _rx1) = oneshot::channel();
-        let id1 = map.store(tx1).expect("store should succeed");
+        let mut guard1 = map.store(tx1).expect("store should succeed");
+        let id1 = guard1.query_id();
         let _ = map.take(id1);
+        guard1.disarm();
 
         let (tx2, rx2) = oneshot::channel();
-        let id2 = map.store(tx2).expect("store should succeed");
+        let mut guard2 = map.store(tx2).expect("store should succeed");
+        let id2 = guard2.query_id();
         let sender = map.take(id2).expect("second sender should be retrievable");
+        guard2.disarm();
 
         assert!(sender.send(make_message(9)).is_ok());
         assert_eq!(
@@ -475,9 +525,10 @@ mod tests {
     fn test_remove_drops_sender_and_updates_size() {
         let map = RequestMap::with_capacity(8);
         let (tx, rx) = oneshot::channel::<Message>();
-        let id = map.store(tx).expect("store should succeed");
+        let mut guard = map.store(tx).expect("store should succeed");
+        let id = guard.query_id();
 
-        assert!(map.remove(id));
+        assert!(guard.remove());
         assert_eq!(map.size(), 0);
         assert!(map.is_empty());
         assert!(map.take(id).is_none());
@@ -488,7 +539,8 @@ mod tests {
     fn test_drop_releases_pending_senders() {
         let (tx, rx) = oneshot::channel::<Message>();
         let map = RequestMap::with_capacity(8);
-        let _id = map.store(tx).expect("store should succeed");
+        let guard = map.store(tx).expect("store should succeed");
+        std::mem::forget(guard);
 
         drop(map);
 
@@ -499,7 +551,7 @@ mod tests {
     fn test_remove_missing_id_returns_false_without_changing_size() {
         let map = RequestMap::with_capacity(8);
         let (tx, _rx) = oneshot::channel();
-        let _id = map.store(tx).expect("store should succeed");
+        let _guard = map.store(tx).expect("store should succeed");
 
         assert!(!map.remove(42));
         assert_eq!(map.size(), 1);
@@ -510,12 +562,14 @@ mod tests {
         let map = RequestMap::with_capacity(8);
         let (tx1, rx1) = oneshot::channel::<Message>();
         let (tx2, rx2) = oneshot::channel::<Message>();
-        let _ = map.store(tx1).expect("store should succeed");
-        let _ = map.store(tx2).expect("store should succeed");
+        let guard1 = map.store(tx1).expect("store should succeed");
+        let guard2 = map.store(tx2).expect("store should succeed");
 
         assert_eq!(map.clear(), 2);
         assert_eq!(map.size(), 0);
         assert!(map.is_empty());
+        drop(guard1);
+        drop(guard2);
         assert!(rx1.blocking_recv().is_err());
         assert!(rx2.blocking_recv().is_err());
     }
@@ -526,27 +580,27 @@ mod tests {
         map.next_id.store(u16::MAX - 1, Ordering::Relaxed);
 
         let (tx1, _rx1) = oneshot::channel();
-        let first = map.store(tx1).expect("store should succeed");
+        let mut first = map.store(tx1).expect("store should succeed");
         let (tx2, _rx2) = oneshot::channel();
-        let second = map.store(tx2).expect("store should succeed");
+        let mut second = map.store(tx2).expect("store should succeed");
         let (tx3, _rx3) = oneshot::channel();
-        let third = map.store(tx3).expect("store should succeed");
+        let mut third = map.store(tx3).expect("store should succeed");
 
-        assert_eq!(first, u16::MAX - 1);
-        assert_eq!(second, u16::MAX);
-        assert_eq!(third, 0);
-        assert!(map.remove(first));
-        assert!(map.remove(second));
-        assert!(map.remove(third));
+        assert_eq!(first.query_id(), u16::MAX - 1);
+        assert_eq!(second.query_id(), u16::MAX);
+        assert_eq!(third.query_id(), 0);
+        assert!(first.remove());
+        assert!(second.remove());
+        assert!(third.remove());
     }
 
     #[test]
     fn test_tombstones_reset_when_map_becomes_empty() {
         let map = RequestMap::with_capacity(1);
         let (tx, _rx) = oneshot::channel();
-        let id = map.store(tx).expect("store should succeed");
+        let mut guard = map.store(tx).expect("store should succeed");
 
-        assert!(map.remove(id));
+        assert!(guard.remove());
         assert!(map.is_empty());
         assert!(
             map.slots
@@ -558,11 +612,13 @@ mod tests {
     #[test]
     fn test_store_returns_error_when_table_is_full() {
         let map = RequestMap::with_capacity(1);
+        let mut guards = Vec::new();
         for _ in 0..map.slots.len() {
             let (tx, _rx) = oneshot::channel::<Message>();
-            let _ = map
+            let guard = map
                 .store(tx)
                 .expect("store should succeed while capacity remains");
+            guards.push(guard);
         }
 
         let (tx, _rx) = oneshot::channel::<Message>();
@@ -571,5 +627,18 @@ mod tests {
             .expect_err("store should fail after table is full");
 
         assert!(err.to_string().contains("request map exhausted"));
+        drop(guards);
+    }
+
+    #[test]
+    fn test_request_guard_drop_removes_pending_request() {
+        let map = RequestMap::with_capacity(1);
+        let (tx, _rx) = oneshot::channel::<Message>();
+        let guard = map.store(tx).expect("store should succeed");
+
+        assert_eq!(map.size(), 1);
+        drop(guard);
+        assert_eq!(map.size(), 0);
+        assert!(map.is_empty());
     }
 }

@@ -10,7 +10,7 @@
 
 use forgedns::app::cli::{self, Command};
 use forgedns::core::error::Result;
-use forgedns::{app, service};
+use forgedns::{app, service, upgrade};
 
 fn main() -> Result<()> {
     match cli::parse_cli().command {
@@ -18,5 +18,12 @@ fn main() -> Result<()> {
         Command::Check(check) => app::check(check),
         Command::ExportDat(export) => app::export_dat::run(export),
         Command::Service(service_opts) => service::run(service_opts),
+        Command::Upgrade(upgrade_opts) => {
+            let action = upgrade_opts
+                .action
+                .unwrap_or(forgedns::app::cli::UpgradeAction::Apply);
+            let config = upgrade::UpgradeConfig::from_cli(&upgrade_opts);
+            upgrade::run_cli(action, config)
+        }
     }
 }

@@ -13,6 +13,7 @@ sidebar_position: 3
 - `check`
 - `export-dat`
 - `service`
+- `upgrade`
 
 ## 查看帮助
 
@@ -29,6 +30,7 @@ forgedns start --help
 forgedns check --help
 forgedns export-dat --help
 forgedns service --help
+forgedns upgrade --help
 ```
 
 ## `start`
@@ -243,6 +245,66 @@ sudo forgedns service stop
 ```bash
 sudo forgedns service uninstall
 ```
+
+## `upgrade`
+
+检查、下载或应用 GitHub Release 中的 ForgeDNS 升级包。
+
+当前支持以下子命令：
+
+- `upgrade check`
+- `upgrade download`
+- `upgrade apply`
+
+典型用法：
+
+```bash
+forgedns upgrade
+forgedns upgrade --force
+forgedns upgrade check
+forgedns upgrade download --target latest
+sudo forgedns upgrade apply --restart service
+```
+
+通用参数：
+
+- `--target <TAG|latest>`
+  - Release tag 或 `latest`。
+  - 默认值：`latest`
+- `--repository <OWNER/REPO>`
+  - GitHub 仓库。
+  - 默认值：`SvenShi/forgedns`
+- `--asset <NAME|auto>`
+  - Release asset 名称；`auto` 会按当前平台选择 archive。
+  - 默认值：`auto`
+- `--cache-dir <DIR>`
+  - 升级文件缓存目录。
+  - 默认值：`./upgrade/cache`
+- `--backup-dir <DIR>`
+  - `apply` 替换前的二进制备份目录。
+  - 默认值：`./upgrade/backups`
+- `--restart <none|service>`
+  - `apply` 成功后的重启策略。
+  - 默认值：`none`
+- `--allow-prerelease`
+  - 允许使用 prerelease。
+- `--force`
+  - `apply` 时即使目标 release 不比当前版本更新，也继续下载、校验并替换。
+- `--timeout <DURATION>`
+  - HTTP 请求超时，例如 `30s`、`2m`。
+- `--socks5 <ADDR>`
+  - 可选 SOCKS5 代理。
+- `--insecure-skip-verify`
+  - 跳过 TLS 证书校验。
+
+行为说明：
+
+- `check` 只查询 release 并判断版本是否更新。
+- `download` 下载 archive，并使用 GitHub release asset 的 `digest` 字段校验 SHA256。
+- 不写子命令时默认执行 `apply`。
+- `apply` 默认只有检测到新版本才会更新；`--force` 会强制更新。
+- `apply` 在 Unix 平台会解包 `.tar.gz`、备份当前二进制并替换；Windows 当前只支持 `check` 和 `download`。
+- `apply` 成功后会询问是否清理缓存目录和备份目录，默认选择 `Y`。
 
 ## 当前范围
 

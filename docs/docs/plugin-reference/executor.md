@@ -2113,6 +2113,74 @@ sidebar_position: 3
 - 至少需要 `address_list4` 或 `address_list6` 之一。
 - `comment_prefix` 与插件 `tag` 不能包含 `;` 或 `=`。
 - 同步模式不会改变 DNS 应答本身，即使 RouterOS 写入失败也会保留 DNS 结果。
+
+## `upgrade`
+
+### 作用
+
+执行 ForgeDNS 升级流程，可用于 `cron`、`sequence` 或其它执行器触发的维护任务。
+
+### 配置示例
+
+```yaml
+- tag: upgrade_auto
+  type: upgrade
+  args:
+      repository: SvenShi/forgedns
+      asset: auto
+      cache_dir: ./upgrade/cache
+      backup_dir: ./upgrade/backups
+      restart: service
+      force: false
+      cleanup: true
+      timeout: 30s
+      socks5: 127.0.0.1:1080
+      insecure_skip_verify: false
+```
+
+### 配置项
+
+- `force`
+    - 类型：`bool`
+    - 默认值：`false`
+    - 即使目标 release 不比当前版本更新，也继续下载、校验并替换。
+- `cleanup`
+    - 类型：`bool`
+    - 默认值：`true`
+    - 升级成功后清理 `cache_dir` 和 `backup_dir`。
+- `repository`
+    - GitHub 仓库，默认 `SvenShi/forgedns`。
+- `asset`
+    - Release asset 名称；`auto` 会按当前平台选择 archive。
+- `cache_dir` / `backup_dir`
+    - 下载缓存目录和替换前备份目录。
+- `restart`
+    - 可选值为 `none` 或 `service`。设置为 `service` 时，升级成功替换二进制文件后，应用会主动退出并返回错误码，以便 systemd 自动重启。因此，对应的 service 必须将 `Restart` 设置为 `always` 或 `on-failure`。
+- `timeout`、`socks5`、`insecure_skip_verify`
+    - 与 CLI `upgrade` 参数含义一致。
+
+### 行为说明
+
+- 执行器总是返回 `ExecStep::Next`。
+- 插件只执行 `apply` 动作，不提供 `check` 或 `download` 模式。
+- 默认只有检测到新版本才会更新；`force: true` 会强制更新。
+- 默认升级成功后会清理缓存和备份；如需保留回滚文件，设置 `cleanup: false`。
+- 升级时会下载 archive，并使用 GitHub release asset 的 `digest` 字段校验 SHA256。
+- Unix 平台解包 `.tar.gz`、备份当前二进制并替换；Windows 当前不支持插件升级。
+
+### quick setup
+
+```yaml
+- exec: upgrade
+- exec: upgrade force
+- exec: upgrade force=false
+```
+
+- 空参数使用默认配置执行 apply。
+- 只支持 `force` 或 `force=true|false`。
+- 其它参数使用默认值；需要覆盖仓库、目录、重启方式或代理时，请使用完整 `args` 配置。
+- 不支持 `mode`；插件固定执行 apply。
+
 ## `download`
 
 ### 作用

@@ -80,7 +80,7 @@ impl<C: Connection> ConnectionPool<C> for ReusePool<C> {
             if let Some(conn) = self.connections.pop() {
                 if conn.available() {
                     let idle = now - conn.last_used();
-                    if idle < self.max_idle.as_millis() as u64 {
+                    if idle < self.max_idle.as_millis() as u64 || conn.using_count() > 0 {
                         // still valid
                         if let Err(conn) = self.connections.push(conn) {
                             drop_vec.push(conn);
@@ -491,6 +491,22 @@ mod tests {
     async fn test_maintain_reuses_idle_connection_to_preserve_min_size() {
         let pool = make_pool(1, 1, 0, MockBuilder::new(vec![]));
         let conn = Arc::new(MockConnection::new(true, 0, 0));
+        pool.connections
+            .push(conn.clone())
+            .expect("queue should accept connection");
+        pool.active_count.store(1, Ordering::Relaxed);
+
+        pool.maintain().await;
+
+        assert_eq!(conn.close_calls(), 0);
+        assert_eq!(pool.connections.len(), 1);
+        assert_eq!(pool.active_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_maintain_keeps_idle_connection_with_inflight_queries() {
+        let pool = make_pool(0, 1, 0, MockBuilder::new(vec![]));
+        let conn = Arc::new(MockConnection::new(true, 1, 0));
         pool.connections
             .push(conn.clone())
             .expect("queue should accept connection");

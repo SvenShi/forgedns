@@ -18,43 +18,24 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
-use crate::network::tls_config::{insecure_client_config, secure_client_config};
-use crate::network::upstream::{Socks5Opt, connect_tcp_stream, parse_socks5_opt};
+use crate::network::http_client::{HttpClient, HttpClientOptions, HttpRequestOptions};
+use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::future::BoxFuture;
-use http::Uri;
-use http::header::LOCATION;
-use http_body_util::{BodyExt, Empty};
-use hyper::body::Incoming;
-use hyper::{Request, StatusCode};
-use hyper_rustls::HttpsConnectorBuilder;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 use std::collections::HashSet;
-use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::fs;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tower_service::Service;
 use tracing::{info, warn};
 use url::Url;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_REDIRECTS: usize = 5;
-
-type DownloadClient = Client<hyper_rustls::HttpsConnector<DownloadHttpConnector>, Empty<Bytes>>;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -85,7 +66,7 @@ struct DownloadTarget {
 #[derive(Debug)]
 struct DownloadExecutor {
     tag: String,
-    client: DownloadClient,
+    client: HttpClient,
     timeout: Duration,
     downloads: Vec<DownloadTarget>,
     insecure_skip_verify: bool,
@@ -165,111 +146,17 @@ impl Executor for DownloadExecutor {
 
 impl DownloadExecutor {
     async fn download_one(&self, item: &DownloadTarget) -> Result<()> {
-        let mut current_url = item.url.clone();
-
-        for redirect_count in 0..=MAX_REDIRECTS {
-            let uri = current_url.parse::<Uri>().map_err(|e| {
-                DnsError::plugin(format!("invalid download url '{}': {}", current_url, e))
-            })?;
-
-            let request = Request::get(uri)
-                .body(Empty::<Bytes>::new())
-                .map_err(|e| DnsError::plugin(format!("failed to build request: {}", e)))?;
-
-            let response = self.client.request(request).await.map_err(|e| {
-                DnsError::plugin(format!("request failed for '{}': {}", current_url, e))
-            })?;
-            let status = response.status();
-            if status.is_success() {
-                return write_target_file(item.path.as_path(), response.into_body()).await;
-            }
-
-            if status.is_redirection() {
-                if redirect_count == MAX_REDIRECTS {
-                    return Err(DnsError::plugin(format!(
-                        "request failed for '{}': too many redirects",
-                        item.url
-                    )));
-                }
-
-                let location = response
-                    .headers()
-                    .get(LOCATION)
-                    .ok_or_else(|| {
-                        DnsError::plugin(format!(
-                            "request failed for '{}': redirect {} missing Location header",
-                            current_url,
-                            format_status(status)
-                        ))
-                    })?
-                    .to_str()
-                    .map_err(|e| {
-                        DnsError::plugin(format!(
-                            "request failed for '{}': invalid redirect Location header: {}",
-                            current_url, e
-                        ))
-                    })?;
-
-                current_url = resolve_redirect_url(current_url.as_str(), location)?;
-                continue;
-            }
-
-            return Err(DnsError::plugin(format!(
-                "request failed for '{}': unexpected status {}",
-                current_url,
-                format_status(status)
-            )));
-        }
-
-        Err(DnsError::plugin(format!(
-            "request failed for '{}': too many redirects",
-            item.url
-        )))
+        self.client
+            .download(
+                HttpRequestOptions::from_url(item.url.as_str()),
+                item.path.as_path(),
+            )
+            .await
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct DownloadFactory;
-
-#[derive(Clone, Debug)]
-struct DownloadHttpConnector {
-    socks5: Option<Socks5Opt>,
-}
-
-impl Service<Uri> for DownloadHttpConnector {
-    type Response = TokioIo<TcpStream>;
-    type Error = DnsError;
-    type Future = BoxFuture<'static, std::result::Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, dst: Uri) -> Self::Future {
-        let socks5 = self.socks5.clone();
-        Box::pin(async move {
-            let host = dst.host().ok_or_else(|| {
-                DnsError::plugin(format!("download request uri '{}' is missing host", dst))
-            })?;
-            let port = dst
-                .port_u16()
-                .or_else(|| match dst.scheme_str() {
-                    Some("http") => Some(80),
-                    Some("https") => Some(443),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    DnsError::plugin(format!(
-                        "download request uri '{}' uses unsupported or missing scheme",
-                        dst
-                    ))
-                })?;
-            let remote_ip = host.parse::<IpAddr>().ok();
-            let stream = connect_tcp_stream(remote_ip, host.to_string(), port, socks5).await?;
-            Ok(TokioIo::new(stream))
-        })
-    }
-}
 
 register_plugin_factory!("download", DownloadFactory {});
 
@@ -303,7 +190,7 @@ impl PluginFactory for DownloadFactory {
 
             let executor = DownloadExecutor {
                 tag: plugin_tag.clone(),
-                client: build_client(runtime.insecure_skip_verify, runtime.parsed_socks5),
+                client: build_http_client(runtime.insecure_skip_verify, runtime.parsed_socks5),
                 timeout: runtime.timeout,
                 downloads: runtime.downloads.clone(),
                 insecure_skip_verify: runtime.insecure_skip_verify,
@@ -360,7 +247,7 @@ impl PluginFactory for DownloadFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(DownloadExecutor {
             tag: plugin_config.tag.clone(),
-            client: build_client(runtime.insecure_skip_verify, runtime.parsed_socks5),
+            client: build_http_client(runtime.insecure_skip_verify, runtime.parsed_socks5),
             timeout: runtime.timeout,
             downloads: runtime.downloads,
             insecure_skip_verify: runtime.insecure_skip_verify,
@@ -389,7 +276,7 @@ impl PluginFactory for DownloadFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(DownloadExecutor {
             tag: tag.to_string(),
-            client: build_client(false, None),
+            client: build_http_client(false, None),
             timeout: DEFAULT_TIMEOUT,
             downloads,
             insecure_skip_verify: false,
@@ -535,35 +422,10 @@ fn filename_from_url(url: &Url) -> Option<String> {
         .map(str::to_string)
 }
 
-fn build_client(insecure_skip_verify: bool, socks5: Option<Socks5Opt>) -> DownloadClient {
-    let tls_config = if insecure_skip_verify {
-        insecure_client_config()
-    } else {
-        secure_client_config()
-    };
-
-    let connector = HttpsConnectorBuilder::new()
-        .with_tls_config(tls_config)
-        .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .wrap_connector(DownloadHttpConnector { socks5 });
-
-    Client::builder(TokioExecutor::new()).build(connector)
-}
-
-fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String> {
-    let base = Url::parse(current_url).map_err(|e| {
-        DnsError::plugin(format!(
-            "failed to parse redirect base url '{}': {}",
-            current_url, e
-        ))
-    })?;
-    base.join(location).map(|url| url.to_string()).map_err(|e| {
-        DnsError::plugin(format!(
-            "failed to resolve redirect location '{}' against '{}': {}",
-            location, current_url, e
-        ))
+fn build_http_client(insecure_skip_verify: bool, socks5: Option<Socks5Opt>) -> HttpClient {
+    HttpClient::new(HttpClientOptions {
+        insecure_skip_verify,
+        socks5,
     })
 }
 
@@ -574,117 +436,6 @@ fn parse_socks5(raw: Option<&str>) -> Result<Option<Socks5Opt>> {
     parse_socks5_opt(raw)
         .map(Some)
         .ok_or_else(|| DnsError::plugin(format!("invalid download socks5 proxy '{}'", raw)))
-}
-
-async fn write_target_file(path: &Path, mut body: Incoming) -> Result<()> {
-    let dir = path.parent().ok_or_else(|| {
-        DnsError::plugin(format!(
-            "target path '{}' has no parent directory",
-            path.display()
-        ))
-    })?;
-    fs::create_dir_all(dir).await.map_err(|e| {
-        DnsError::plugin(format!(
-            "failed to create target directory '{}': {}",
-            dir.display(),
-            e
-        ))
-    })?;
-
-    let tmp_path = temp_path_for(path);
-    let mut file = File::create(&tmp_path).await.map_err(|e| {
-        DnsError::plugin(format!(
-            "failed to create temp file '{}': {}",
-            tmp_path.display(),
-            e
-        ))
-    })?;
-    while let Some(frame_result) = body.frame().await {
-        let frame = match frame_result {
-            Ok(frame) => frame,
-            Err(e) => {
-                let _ = fs::remove_file(&tmp_path).await;
-                return Err(DnsError::plugin(format!(
-                    "failed to read response body: {}",
-                    e
-                )));
-            }
-        };
-        if let Ok(data) = frame.into_data()
-            && let Err(e) = file.write_all(&data).await
-        {
-            let _ = fs::remove_file(&tmp_path).await;
-            return Err(DnsError::plugin(format!(
-                "failed to write temp file '{}': {}",
-                tmp_path.display(),
-                e
-            )));
-        }
-    }
-    file.sync_all().await.map_err(|e| {
-        DnsError::plugin(format!(
-            "failed to sync temp file '{}': {}",
-            tmp_path.display(),
-            e
-        ))
-    })?;
-    drop(file);
-
-    if let Err(err) = fs::rename(&tmp_path, path).await {
-        let rename_fallback = matches!(
-            err.kind(),
-            std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied
-        );
-        if !rename_fallback {
-            let _ = fs::remove_file(&tmp_path).await;
-            return Err(DnsError::plugin(format!(
-                "failed to replace target file '{}': {}",
-                path.display(),
-                err
-            )));
-        }
-
-        if fs::try_exists(path).await.unwrap_or(false)
-            && let Err(e) = fs::remove_file(path).await
-        {
-            let _ = fs::remove_file(&tmp_path).await;
-            return Err(DnsError::plugin(format!(
-                "failed to remove existing target file '{}': {}",
-                path.display(),
-                e
-            )));
-        }
-        fs::rename(&tmp_path, path).await.map_err(|e| {
-            DnsError::plugin(format!(
-                "failed to replace target file '{}' after fallback: {}",
-                path.display(),
-                e
-            ))
-        })?;
-    }
-
-    Ok(())
-}
-
-fn temp_path_for(path: &Path) -> PathBuf {
-    let mut tmp = path.to_path_buf();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|v| v.as_nanos())
-        .unwrap_or(0);
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("download");
-    tmp.set_file_name(format!(".{file_name}.{}.tmp", nanos));
-    tmp
-}
-
-fn format_status(status: StatusCode) -> String {
-    status
-        .canonical_reason()
-        .map(|reason| format!("{} {}", status.as_u16(), reason))
-        .unwrap_or_else(|| status.as_u16().to_string())
 }
 
 #[cfg(test)]
@@ -772,21 +523,11 @@ mod tests {
         assert!(err.to_string().contains("invalid download socks5 proxy"));
     }
 
-    #[test]
-    fn test_resolve_redirect_url_supports_relative_location() {
-        let resolved = resolve_redirect_url(
-            "https://example.com/releases/latest/download/file.dat",
-            "/assets/file.dat",
-        )
-        .expect("relative redirect should resolve");
-        assert_eq!(resolved, "https://example.com/assets/file.dat");
-    }
-
     #[tokio::test]
     async fn test_download_executor_returns_next_for_empty_runtime_errors() {
         let plugin = DownloadExecutor {
             tag: "download".to_string(),
-            client: build_client(false, None),
+            client: build_http_client(false, None),
             timeout: Duration::from_millis(10),
             downloads: vec![DownloadTarget {
                 url: "http://127.0.0.1:9/missing.txt".to_string(),
