@@ -1882,7 +1882,7 @@ Runs the ForgeDNS upgrade flow from the executor pipeline. It is suitable for ma
 - `cache_dir` / `backup_dir`
     - Download cache and pre-replacement backup directories.
 - `restart`
-    - `none` or `service`. `service` restarts the installed service through service-manager after a successful replacement.
+    - Supported values are `none` and `service`. When set to `service`, the application exits with a non-zero status code after the binary is successfully replaced, allowing systemd to restart it automatically. Therefore, the corresponding service must set `Restart` to `always` or `on-failure`.
 - `timeout`, `socks5`, `insecure_skip_verify`
     - Same meaning as the CLI `upgrade` flags.
 

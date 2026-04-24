@@ -2010,7 +2010,7 @@ sidebar_position: 3
 - `cache_dir` / `backup_dir`
     - 下载缓存目录和替换前备份目录。
 - `restart`
-    - `none` 或 `service`；`service` 会在替换成功后通过 service-manager 重启服务。
+    - 可选值为 `none` 或 `service`。设置为 `service` 时，升级成功替换二进制文件后，应用会主动退出并返回错误码，以便 systemd 自动重启。因此，对应的 service 必须将 `Restart` 设置为 `always` 或 `on-failure`。
 - `timeout`、`socks5`、`insecure_skip_verify`
     - 与 CLI `upgrade` 参数含义一致。
 
