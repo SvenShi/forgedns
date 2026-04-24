@@ -70,8 +70,12 @@ impl Connection for TcpConnection {
         if self.closed.swap(true, Ordering::Relaxed) {
             return; // Already closed, no-op
         }
+        // Cancel pending requests first so the reader task can terminate without
+        // waiting for per-query timeouts, and all callers are unblocked promptly.
+        let cleared = self.request_map.clear();
         debug!(
             conn_id = self.id,
+            canceled_queries = cleared,
             "Initiating TCP connection close sequence"
         );
         self.close_notify.notify_waiters();
@@ -98,7 +102,8 @@ impl Connection for TcpConnection {
 
         // Register query and get unique ID for request/response matching
         let (tx, rx) = oneshot::channel();
-        let query_id = self.request_map.store(tx)?;
+        let mut query_guard = self.request_map.store(tx)?;
+        let query_id = query_guard.query_id();
 
         trace!(
             conn_id = self.id,
@@ -114,7 +119,7 @@ impl Connection for TcpConnection {
             message: request,
             query_id,
         }) {
-            self.request_map.remove(query_id);
+            let _ = query_guard.remove();
             error!(
                 conn_id = self.id,
                 query_id,
@@ -127,6 +132,7 @@ impl Connection for TcpConnection {
         // Await response or timeout
         match timeout(self.timeout, rx).await {
             Ok(Ok(mut res)) => {
+                query_guard.disarm();
                 res.set_id(raw_id); // Restore original query ID
                 trace!(
                     conn_id = self.id,
@@ -135,7 +141,6 @@ impl Connection for TcpConnection {
                 Ok(res)
             }
             Ok(Err(_)) => {
-                self.request_map.remove(query_id);
                 warn!(
                     conn_id = self.id,
                     query_id, "DNS query canceled (response channel dropped)"
@@ -143,7 +148,6 @@ impl Connection for TcpConnection {
                 Err(DnsError::protocol("request canceled"))
             }
             Err(_) => {
-                self.request_map.remove(query_id);
                 warn!(
                     conn_id = self.id,
                     query_id,

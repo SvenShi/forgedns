@@ -23,7 +23,7 @@ use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, trace, warn};
 
-const UDP_RECV_BUFFER_SIZE: usize = 65_535;
+const UDP_RECV_BUFFER_SIZE: usize = 8_196;
 
 /// Represents a single UDP connection used in DNS upstream queries.
 /// Each connection manages its own socket and maintains a mapping
@@ -63,8 +63,13 @@ impl Connection for UdpConnection {
         if self.closed.swap(true, Ordering::SeqCst) {
             return; // Already closed, no-op
         }
+        // Cancel every pending query before waking the listener so the background
+        // task can observe an empty request map and drop the socket immediately
+        // instead of waiting for per-query timeouts to age out.
+        let cleared = self.request_map.clear();
         debug!(
             conn_id = self.id,
+            canceled_queries = cleared,
             "Closing UDP connection and signaling listener task"
         );
         self.close_notify.notify_waiters();
@@ -91,7 +96,8 @@ impl Connection for UdpConnection {
 
         for attempt in 0..2 {
             let (tx, rx) = oneshot::channel();
-            let query_id = self.request_map.store(tx)?;
+            let mut query_guard = self.request_map.store(tx)?;
+            let query_id = query_guard.query_id();
 
             trace!(
                 conn_id = self.id,
@@ -109,7 +115,6 @@ impl Connection for UdpConnection {
             {
                 Ok(()) => {}
                 Err(e) => {
-                    self.request_map.remove(query_id);
                     error!(conn_id = self.id, err = %e, "Failed to send UDP query");
                     return Err(e);
                 }
@@ -119,12 +124,12 @@ impl Connection for UdpConnection {
             match timeout(current_timeout, rx).await {
                 Ok(res) => match res {
                     Ok(mut response) => {
+                        query_guard.disarm();
                         response.set_id(raw_id);
                         trace!(conn_id = self.id, query_id, raw_id, "Received UDP response");
                         return Ok(response);
                     }
                     Err(_canceled) => {
-                        self.request_map.remove(query_id);
                         trace!(
                             conn_id = self.id,
                             query_id, "Listener dropped channel, retrying"
@@ -134,7 +139,6 @@ impl Connection for UdpConnection {
                     }
                 },
                 Err(_elapsed) => {
-                    self.request_map.remove(query_id);
                     trace!(
                         conn_id = self.id,
                         query_id,
