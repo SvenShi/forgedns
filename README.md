@@ -30,14 +30,7 @@ ForgeDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor
 | 数据集 | `domain_set`、`ip_set`、`geoip`、`geosite`、`adguard_rule` |
 | 系统联动 | `ipset`、`nftset`、`ros_address_list`、`reverse_lookup` |
 
-## 快速开始
-
-```bash
-cargo build --release
-cargo run -- -c config.yaml
-cargo run -- -c config.yaml -l debug
-cargo test
-```
+## 下载
 
 如果你准备直接下载 GitHub Releases，可按系统选择：
 

@@ -252,7 +252,7 @@ docker compose logs -f forgedns
 
 - 想最快验证功能：下载对应 release 压缩包
 - 想以系统服务长期运行：优先使用 Debian 包
-- 想在容器平台部署：使用 GHCR Docker 镜像
+- 想在容器平台部署：使用 GHCR Docker 或 Docker Hub 镜像
 - 想参与开发或自行裁剪：从源码构建
 
 ## 6. 启动后下一步

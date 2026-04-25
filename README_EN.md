@@ -30,14 +30,7 @@ The project is under active development.
 | Data Sets | `domain_set`, `ip_set`, `geoip`, `geosite`, `adguard_rule` |
 | Integrations | `ipset`, `nftset`, `ros_address_list`, `reverse_lookup` |
 
-## Quick Start
-
-```bash
-cargo build --release
-cargo run -- -c config.yaml
-cargo run -- -c config.yaml -l debug
-cargo test
-```
+## Download
 
 If you want to download a GitHub release directly, use this platform guide:
 

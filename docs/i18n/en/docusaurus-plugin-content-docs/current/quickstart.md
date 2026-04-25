@@ -252,7 +252,7 @@ docker compose logs -f forgedns
 
 - Fastest evaluation path: download a release archive
 - Long-running Linux service: prefer the Debian package
-- Container platforms: use the GHCR Docker image
+- Container platforms: use the GHCR Docker or Docker Hub image
 - Development or custom builds: compile from source
 
 ## 6. Next Reading
