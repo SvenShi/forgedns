@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `ecs_handler` executor plugin.
 //!
@@ -17,19 +15,20 @@
 //! - when ECS was not forwarded from client, response ECS is stripped to avoid
 //!   leaking internally generated subnet metadata back to downstream clients.
 
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::proto::Message;
-use crate::proto::{ClientSubnet, DNSClass, Edns, EdnsCode, EdnsOption};
+use crate::proto::{ClientSubnet, DNSClass, Edns, EdnsCode, EdnsOption, Message};
 use crate::{continue_next, register_plugin_factory};
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::net::IpAddr;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct EcsHandlerConfig {
@@ -256,12 +255,12 @@ fn unmap_ip(ip: IpAddr) -> IpAddr {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::test_utils::test_registry;
-    use crate::proto::{Message, Question};
-    use crate::proto::{Name, RecordType};
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use crate::proto::{Message, Name, Question, RecordType};
 
     #[test]
     fn test_parse_handler_from_value_validation() {

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `metrics_collector` executor plugin.
 //!
@@ -12,11 +10,23 @@
 //! only observes and annotates request lifecycle without changing resolver
 //! routing decisions:
 //! - `execute`: increments total/inflight counters and stores start timestamp.
-//! - continuation post-stage: decrements inflight, records success/error and latency.
+//! - continuation post-stage: decrements inflight, records success/error and
+//!   latency.
 //! - snapshot logging: emits aggregated metrics every 1024 requests.
 //!
 //! Design goal is low overhead on hot paths: atomics with relaxed ordering and
 //! no allocation in steady-state execution.
+
+use std::fmt::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::{Request, StatusCode};
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+use tracing::debug;
 
 use crate::api::{ApiHandler, ApiRegister, simple_response};
 use crate::config::types::PluginConfig;
@@ -26,17 +36,6 @@ use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, StatusCode};
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::fmt::Write as _;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::debug;
 
 const DEFAULT_NAME: &str = "default";
 
@@ -334,9 +333,10 @@ fn parse_name(args: Option<Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use super::*;
     use crate::plugin::test_utils::test_context;
-    use std::sync::atomic::Ordering;
 
     #[test]
     fn test_parse_name_trims_and_filters_empty() {

@@ -1,12 +1,16 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `question` matcher plugin.
 //!
 //! Matches request questions against provider plugins that implement
 //! [`Provider::contains_question`].
+
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_yaml_ng::Value;
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result as DnsResult};
@@ -19,10 +23,6 @@ use crate::plugin::matcher::matcher_utils::{
 use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde_yaml_ng::Value;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct QuestionFactory;
@@ -132,12 +132,13 @@ fn parse_provider_tags(raw_rules: Vec<String>) -> DnsResult<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::net::{Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::plugin::matcher::Matcher;
     use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Message, Name, Question, RecordType};
-    use std::any::Any;
-    use std::net::{Ipv4Addr, SocketAddr};
 
     #[derive(Debug)]
     struct StubQuestionProvider;

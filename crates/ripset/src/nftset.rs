@@ -1336,7 +1336,8 @@ mod tests {
     #[test]
     #[ignore]
     fn test_nftset_with_timeout() {
-        // Requires: sudo nft add set inet filter test_set_timeout { type ipv4_addr\; timeout 5m\; }
+        // Requires: sudo nft add set inet filter test_set_timeout { type ipv4_addr\;
+        // timeout 5m\; }
         let addr: IpAddr = "10.0.0.2".parse().unwrap();
         let entry = IpEntry::with_timeout(addr, 60);
         nftset_add("inet", "filter", "test_set_timeout", entry)

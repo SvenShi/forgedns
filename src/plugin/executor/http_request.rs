@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `http_request` executor plugin.
 //!
@@ -13,6 +11,22 @@
 //! - follows redirects up to a configured limit; and
 //! - does not write HTTP responses back into DNS context in v1.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::Method;
+use http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
+use serde::Deserialize;
+use serde_json::Value as JsonValue;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
+use tracing::{debug, warn};
+use url::Url;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -23,20 +37,6 @@ use crate::plugin::executor::template::{JsonTemplateValue, Template};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::Method;
-use http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
-use serde::Deserialize;
-use serde_json::Value as JsonValue;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
-use tracing::{debug, warn};
-use url::Url;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_ASYNC_MODE: bool = true;
@@ -761,9 +761,10 @@ async fn dispatch_rendered_request_inner(
 
 #[cfg(test)]
 mod tests {
+    use serde_yaml_ng::{Value, from_str};
+
     use super::*;
     use crate::plugin::test_utils::{plugin_config, test_registry};
-    use serde_yaml_ng::{Value, from_str};
 
     fn make_config(yaml: &str) -> PluginConfig {
         plugin_config(

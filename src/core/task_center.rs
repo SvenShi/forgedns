@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Global periodic task center.
 //!
@@ -9,16 +7,15 @@
 //! all periodic jobs. This reduces long-lived task overhead and keeps lifecycle
 //! control centralized in runtime.
 
-use futures::stream::{FuturesUnordered, StreamExt};
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep_until};
@@ -382,10 +379,12 @@ pub async fn stop_all() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     use tokio::sync::{Notify, oneshot};
+
+    use super::*;
 
     async fn wait_until(label: &str, condition: impl Fn() -> bool) {
         for _ in 0..128 {

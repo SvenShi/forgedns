@@ -1,12 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use tracing::info;
 
 use super::model::{AdGuardRuleConfig, BuildStats, CompiledRule, CompiledRuleSet, ParsedRule};
 use super::parser::{load_rule_inputs, parse_rule};
 use crate::core::error::{DnsError, Result as DnsResult};
-use tracing::info;
 
 pub(super) fn build_rule_buckets(
     tag: &str,

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Application monotonic clock.
 //!
@@ -14,6 +12,7 @@
 
 use std::sync::OnceLock;
 use std::time::Duration;
+
 use tokio::time::Instant;
 
 /// Application start time (set once during initialization)

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `download` executor plugin.
 //!
@@ -14,6 +12,19 @@
 //! - the executor always returns [`ExecStep::Next`]; and
 //! - the DNS request/response itself is never mutated.
 
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use futures::future::BoxFuture;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+use tokio::time::timeout;
+use tracing::{info, warn};
+use url::Url;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -23,17 +34,6 @@ use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use futures::future::BoxFuture;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::timeout;
-use tracing::{info, warn};
-use url::Url;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -440,10 +440,11 @@ fn parse_socks5(raw: Option<&str>) -> Result<Option<Socks5Opt>> {
 
 #[cfg(test)]
 mod tests {
+    use serde_yaml_ng::Value;
+
     use super::*;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
-    use serde_yaml_ng::Value;
 
     #[test]
     fn test_parse_quick_setup_requires_url_and_dir() {

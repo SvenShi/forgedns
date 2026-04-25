@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Upstream DNS resolver infrastructure.
 //!
@@ -33,6 +31,19 @@
 //! network concerns isolated from policy composition while remaining explicit
 //! about connection reuse, timeout boundaries, and protocol semantics.
 
+use std::fmt::Debug;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
+use serde::Deserialize;
+use tokio::net::TcpStream;
+use tracing::{debug, info, warn};
+use url::Url;
+
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::bootstrap::Bootstrap;
 use crate::network::upstream::pool::conn_h2::{H2Connection, H2ConnectionBuilder};
@@ -45,17 +56,6 @@ use crate::network::upstream::pool::pool_reuse::ReusePool;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder, ConnectionPool};
 use crate::network::upstream::utils::try_lookup_server_name;
 use crate::proto::Message;
-use arc_swap::ArcSwap;
-use async_trait::async_trait;
-use serde::Deserialize;
-use std::fmt::Debug;
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::net::TcpStream;
-use tracing::{debug, info, warn};
-use url::Url;
 
 mod bootstrap;
 mod pool;
@@ -99,7 +99,8 @@ impl ConnectionType {
 /// Configuration for building an upstream DNS server connection
 ///
 /// This structure is typically deserialized from YAML/JSON configuration files
-/// and contains all parameters needed to establish a connection to an upstream DNS server.
+/// and contains all parameters needed to establish a connection to an upstream
+/// DNS server.
 ///
 /// # Examples
 ///
@@ -132,7 +133,8 @@ pub struct UpstreamConfig {
     /// Direct IP address to use for connection (bypasses DNS resolution)
     ///
     /// Useful when you want to connect to a specific IP but use SNI for TLS.
-    /// If provided, this IP is used instead of resolving the hostname from `addr`.
+    /// If provided, this IP is used instead of resolving the hostname from
+    /// `addr`.
     pub dial_addr: Option<IpAddr>,
 
     /// Override the server port (if not specified in `addr`)
@@ -199,22 +201,23 @@ pub struct UpstreamConfig {
 
     /// Skip TLS certificate verification (**INSECURE**, testing only!)
     ///
-    /// When `true`, disables certificate validation for TLS/QUIC/DoH connections.
-    /// **Security Warning**: This makes connections vulnerable to MITM attacks.
-    /// Only use for testing or with self-signed certificates you trust.
+    /// When `true`, disables certificate validation for TLS/QUIC/DoH
+    /// connections. **Security Warning**: This makes connections vulnerable
+    /// to MITM attacks. Only use for testing or with self-signed
+    /// certificates you trust.
     pub insecure_skip_verify: Option<bool>,
 
     /// DNS query timeout duration
     ///
-    /// Maximum time to wait for a DNS response before considering the query failed.
-    /// Defaults to 5 seconds if not specified.
+    /// Maximum time to wait for a DNS response before considering the query
+    /// failed. Defaults to 5 seconds if not specified.
     pub timeout: Option<Duration>,
 
     /// Enable request pipelining for TCP/DoT connections
     ///
-    /// When `true`, allows multiple concurrent queries over a single TCP connection.
-    /// When `false`, uses connection pooling with one query per connection.
-    /// Only applicable to TCP and DoT protocols.
+    /// When `true`, allows multiple concurrent queries over a single TCP
+    /// connection. When `false`, uses connection pooling with one query per
+    /// connection. Only applicable to TCP and DoT protocols.
     pub enable_pipeline: Option<bool>,
 
     /// Enable HTTP/3 for DoH connections
@@ -232,8 +235,8 @@ pub struct UpstreamConfig {
 
     /// Linux SO_BINDTODEVICE - bind socket to specific network interface
     ///
-    /// Forces the socket to use a specific network interface (e.g., "eth0", "wlan0").
-    /// Useful for multi-homed systems or VPN scenarios.
+    /// Forces the socket to use a specific network interface (e.g., "eth0",
+    /// "wlan0"). Useful for multi-homed systems or VPN scenarios.
     /// **Linux only** - ignored on other platforms.
     pub bind_to_device: Option<String>,
 }
@@ -244,7 +247,8 @@ pub trait Upstream: Send + Sync + Debug {
     /// **Internal API - Do not call directly!**
     ///
     /// Send a DNS query without timeout protection.
-    /// This method is called internally by `query()` which adds timeout handling.
+    /// This method is called internally by `query()` which adds timeout
+    /// handling.
     ///
     /// # For Implementors
     /// Implement this method to provide the actual DNS query logic.
@@ -286,7 +290,8 @@ pub trait Upstream: Send + Sync + Debug {
     /// # Performance Notes
     /// - Message is moved (not cloned) to avoid allocation overhead
     /// - Timeout error logging uses structured fields for zero-copy
-    /// - Only logs on timeout, not on successful queries (hot path optimization)
+    /// - Only logs on timeout, not on successful queries (hot path
+    ///   optimization)
     ///
     /// # Errors
     /// - Returns `DnsError::plugin` on timeout
@@ -347,7 +352,8 @@ pub struct Socks5Opt {
 /// Runtime connection information for upstream DNS servers
 ///
 /// Parsed and processed configuration ready for connection establishment.
-/// Created from `UpstreamConfig` via `From` trait, passed to connection builders.
+/// Created from `UpstreamConfig` via `From` trait, passed to connection
+/// builders.
 ///
 /// Thread-safe (`Clone`) for sharing across multiple connection instances.
 #[derive(Debug, Clone)]
@@ -362,7 +368,8 @@ pub struct ConnectionInfo {
     /// Original address string from configuration (for logging)
     pub raw_addr: String,
 
-    /// Resolved or configured IP address (`None` if it needs runtime resolution via bootstrap)
+    /// Resolved or configured IP address (`None` if it needs runtime resolution
+    /// via bootstrap)
     pub remote_ip: Option<IpAddr>,
 
     /// Server port (protocol default or explicitly configured)
@@ -406,10 +413,11 @@ pub struct ConnectionInfo {
 }
 
 impl ConnectionInfo {
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
-    const DEFAULT_MAX_CONNS_SIZE: usize = 64;
-    const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
     const DEFAULT_IDLE_TIME: u64 = 10;
+    const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
+    const DEFAULT_MAX_CONNS_SIZE: usize = 64;
+    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
     pub fn with_addr(addr: &str) -> Result<Self> {
         let (connection_type, host, port, path, _) = detect_connection_type(addr)?;
         let port = port.unwrap_or(connection_type.default_port());
@@ -546,7 +554,8 @@ impl TryFrom<UpstreamConfig> for ConnectionInfo {
 /// # Arguments
 /// - `host`: The hostname or IP address string
 /// - `dial_addr`: Optional pre-configured IP address to use directly
-/// - `has_bootstrap`: Whether a bootstrap server is configured (skip resolution if true)
+/// - `has_bootstrap`: Whether a bootstrap server is configured (skip resolution
+///   if true)
 ///
 /// # Returns
 /// `Some(IpAddr)` if successfully resolved or provided, `None` otherwise
@@ -843,9 +852,9 @@ fn create_reuse_pool<C: Connection>(
 
 /// Pooled upstream resolver implementation
 ///
-/// Uses connection pooling to efficiently reuse connections for multiple queries.
-/// The pool type (pipeline or reuse) is determined during creation based on
-/// protocol capabilities and configuration.
+/// Uses connection pooling to efficiently reuse connections for multiple
+/// queries. The pool type (pipeline or reuse) is determined during creation
+/// based on protocol capabilities and configuration.
 #[allow(unused)]
 #[derive(Debug)]
 struct PooledUpstream<C: Connection> {
@@ -859,8 +868,9 @@ struct PooledUpstream<C: Connection> {
 impl<C: Connection> Upstream for PooledUpstream<C> {
     /// Execute DNS query through the connection pool
     ///
-    /// The pool handles connection selection, creation, and lifecycle management.
-    /// No additional logging here as the pool layer already logs connection events.
+    /// The pool handles connection selection, creation, and lifecycle
+    /// management. No additional logging here as the pool layer already
+    /// logs connection events.
     async fn inner_query(&self, request: Message) -> Result<Message> {
         self.pool.query(request).await
     }
@@ -929,19 +939,25 @@ impl ConnectionBuilderFactory {
     ///
     /// # Safety
     ///
-    /// This method uses `unsafe transmute` to convert concrete ConnectionBuilder types
-    /// to the generic type `C`. This is SAFE because:
+    /// This method uses `unsafe transmute` to convert concrete
+    /// ConnectionBuilder types to the generic type `C`. This is SAFE
+    /// because:
     ///
-    /// 1. The generic parameter `C` in `DomainUpstream<C>` is determined at creation time
-    ///    based on `connection_info.connection_type`
-    /// 2. `connection_info.connection_type` is immutable and never changes at runtime
-    /// 3. The match ensures we always transmute the correct concrete type to `C`:
-    ///    - `ConnectionType::UDP` is always used with `DomainUpstream<UdpConnection>`
-    ///    - `ConnectionType::TCP` is always used with `DomainUpstream<TcpConnection>`
+    /// 1. The generic parameter `C` in `DomainUpstream<C>` is determined at
+    ///    creation time based on `connection_info.connection_type`
+    /// 2. `connection_info.connection_type` is immutable and never changes at
+    ///    runtime
+    /// 3. The match ensures we always transmute the correct concrete type to
+    ///    `C`:
+    ///    - `ConnectionType::UDP` is always used with
+    ///      `DomainUpstream<UdpConnection>`
+    ///    - `ConnectionType::TCP` is always used with
+    ///      `DomainUpstream<TcpConnection>`
     ///    - etc.
     ///
-    /// The type invariant is established in `UpstreamBuilder::with_upstream_config()`
-    /// where `DomainUpstream<C>` is created with the matching `C` for each ConnectionType.
+    /// The type invariant is established in
+    /// `UpstreamBuilder::with_upstream_config()` where `DomainUpstream<C>`
+    /// is created with the matching `C` for each ConnectionType.
     pub fn build<C: Connection>(
         &self,
         ip: IpAddr,
@@ -1007,9 +1023,10 @@ impl ConnectionBuilderFactory {
 
 /// Domain-based upstream resolver that uses bootstrap to resolve domain names
 ///
-/// When the upstream server is specified as a domain name (e.g., dns.google.com)
-/// instead of an IP address, we need to resolve it first. This creates a
-/// chicken-and-egg problem: we need DNS to resolve the DNS server's address!
+/// When the upstream server is specified as a domain name (e.g.,
+/// dns.google.com) instead of an IP address, we need to resolve it first. This
+/// creates a chicken-and-egg problem: we need DNS to resolve the DNS server's
+/// address!
 ///
 /// This upstream solves it by using a bootstrap resolver:
 /// 1. Bootstrap resolver (configured with IP) resolves the domain name
@@ -1037,7 +1054,8 @@ struct BootstrapUpstream<C: Connection> {
 }
 
 impl<C: Connection> BootstrapUpstream<C> {
-    /// Create a new domain upstream with the given connection info and optional bootstrap server
+    /// Create a new domain upstream with the given connection info and optional
+    /// bootstrap server
     fn new(connection_info: ConnectionInfo) -> Self {
         let pool: Arc<dyn ConnectionPool<C>> =
             ReusePool::<C>::new(0, 1, 10, Box::new(DummyConnectionBuilder {}));
@@ -1131,7 +1149,8 @@ impl<C: Connection> BootstrapUpstream<C> {
             }
         };
 
-        // Atomically swap to new pool (lock-free, readers see old or new pool consistently)
+        // Atomically swap to new pool (lock-free, readers see old or new pool
+        // consistently)
         self.pool.swap(Arc::from((Some(ip), new_pool)));
 
         Ok(())

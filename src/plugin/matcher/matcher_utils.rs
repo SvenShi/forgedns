@@ -1,9 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared helpers for matcher plugins.
+
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::str::FromStr;
+use std::sync::Arc;
+
+use ahash::AHashSet;
+use serde_yaml_ng::Value;
 
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
@@ -11,12 +17,6 @@ use crate::plugin::PluginRegistry;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::proto::{DNSClass, Rcode, RecordType};
-use ahash::AHashSet;
-use serde_yaml_ng::Value;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::str::FromStr;
-use std::sync::Arc;
 
 pub(crate) fn parse_rules_from_value(args: Option<Value>) -> DnsResult<Vec<String>> {
     let args = args.ok_or_else(|| DnsError::plugin("matcher requires args"))?;

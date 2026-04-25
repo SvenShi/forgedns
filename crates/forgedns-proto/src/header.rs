@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! DNS message header flags and identity fields.
 
@@ -133,7 +131,7 @@ impl Header {
             } else {
                 MessageType::Query
             },
-            opcode: Opcode::from(((flags >> 11) & 0x0f) as u8),
+            opcode: Opcode::from(((flags >> 11) & 0x0F) as u8),
             authoritative: (flags & 0x0400) != 0,
             truncated: (flags & 0x0200) != 0,
             recursion_desired: (flags & 0x0100) != 0,

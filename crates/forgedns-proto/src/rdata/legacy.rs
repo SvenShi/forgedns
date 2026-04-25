@@ -1,11 +1,10 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::net::Ipv4Addr;
 
 use crate::proto::Name;
 use crate::proto::rdata::basic::TXT;
-use std::net::Ipv4Addr;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MD(pub Name);
@@ -30,6 +29,7 @@ impl NULL {
     pub fn new(data: Box<[u8]>) -> Self {
         Self { data }
     }
+
     pub fn data(&self) -> &[u8] {
         &self.data
     }
@@ -44,9 +44,11 @@ impl HINFO {
     pub fn new(cpu: Box<[u8]>, os: Box<[u8]>) -> Self {
         Self { cpu, os }
     }
+
     pub fn cpu(&self) -> &[u8] {
         &self.cpu
     }
+
     pub fn os(&self) -> &[u8] {
         &self.os
     }
@@ -61,9 +63,11 @@ impl MINFO {
     pub fn new(rmail: Name, email: Name) -> Self {
         Self { rmail, email }
     }
+
     pub fn rmail(&self) -> &Name {
         &self.rmail
     }
+
     pub fn email(&self) -> &Name {
         &self.email
     }
@@ -78,9 +82,11 @@ impl RP {
     pub fn new(mbox: Name, txt: Name) -> Self {
         Self { mbox, txt }
     }
+
     pub fn mbox(&self) -> &Name {
         &self.mbox
     }
+
     pub fn txt(&self) -> &Name {
         &self.txt
     }
@@ -95,9 +101,11 @@ impl AFSDB {
     pub fn new(subtype: u16, hostname: Name) -> Self {
         Self { subtype, hostname }
     }
+
     pub fn subtype(&self) -> u16 {
         self.subtype
     }
+
     pub fn hostname(&self) -> &Name {
         &self.hostname
     }
@@ -111,6 +119,7 @@ impl X25 {
     pub fn new(psdn_address: Box<[u8]>) -> Self {
         Self { psdn_address }
     }
+
     pub fn psdn_address(&self) -> &[u8] {
         &self.psdn_address
     }
@@ -130,12 +139,15 @@ impl WKS {
             bitmap,
         }
     }
+
     pub fn address(&self) -> Ipv4Addr {
         self.address
     }
+
     pub fn protocol(&self) -> u8 {
         self.protocol
     }
+
     pub fn bitmap(&self) -> &[u8] {
         &self.bitmap
     }
@@ -160,9 +172,11 @@ impl ISDN {
             sub_address,
         }
     }
+
     pub fn address(&self) -> &[u8] {
         &self.address
     }
+
     pub fn sub_address(&self) -> Option<&[u8]> {
         self.sub_address.as_deref()
     }
@@ -177,9 +191,11 @@ impl RT {
     pub fn new(preference: u16, host: Name) -> Self {
         Self { preference, host }
     }
+
     pub fn preference(&self) -> u16 {
         self.preference
     }
+
     pub fn host(&self) -> &Name {
         &self.host
     }
@@ -199,12 +215,15 @@ impl PX {
             mapx400,
         }
     }
+
     pub fn preference(&self) -> u16 {
         self.preference
     }
+
     pub fn map822(&self) -> &Name {
         &self.map822
     }
+
     pub fn mapx400(&self) -> &Name {
         &self.mapx400
     }
@@ -227,12 +246,15 @@ impl GPOS {
             altitude,
         }
     }
+
     pub fn longitude(&self) -> &[u8] {
         &self.longitude
     }
+
     pub fn latitude(&self) -> &[u8] {
         &self.latitude
     }
+
     pub fn altitude(&self) -> &[u8] {
         &self.altitude
     }
@@ -268,24 +290,31 @@ impl LOC {
             altitude,
         }
     }
+
     pub fn version(&self) -> u8 {
         self.version
     }
+
     pub fn size(&self) -> u8 {
         self.size
     }
+
     pub fn horiz_pre(&self) -> u8 {
         self.horiz_pre
     }
+
     pub fn vert_pre(&self) -> u8 {
         self.vert_pre
     }
+
     pub fn latitude(&self) -> u32 {
         self.latitude
     }
+
     pub fn longitude(&self) -> u32 {
         self.longitude
     }
+
     pub fn altitude(&self) -> u32 {
         self.altitude
     }
@@ -307,15 +336,19 @@ impl AplPrefix {
             afd_part,
         }
     }
+
     pub fn family(&self) -> u16 {
         self.family
     }
+
     pub fn prefix(&self) -> u8 {
         self.prefix
     }
+
     pub fn negation(&self) -> bool {
         self.negation
     }
+
     pub fn afd_part(&self) -> &[u8] {
         &self.afd_part
     }
@@ -329,6 +362,7 @@ impl APL {
     pub fn new(prefixes: Vec<AplPrefix>) -> Self {
         Self { prefixes }
     }
+
     pub fn prefixes(&self) -> &[AplPrefix] {
         &self.prefixes
     }
@@ -351,12 +385,15 @@ impl A6 {
             prefix_name,
         }
     }
+
     pub fn prefix_len(&self) -> u8 {
         self.prefix_len
     }
+
     pub fn suffix(&self) -> &[u8] {
         &self.suffix
     }
+
     pub fn prefix_name(&self) -> Option<&Name> {
         self.prefix_name.as_ref()
     }
@@ -376,12 +413,15 @@ impl SINK {
             data,
         }
     }
+
     pub fn coding(&self) -> u8 {
         self.coding
     }
+
     pub fn subcoding(&self) -> u8 {
         self.subcoding
     }
+
     pub fn data(&self) -> &[u8] {
         &self.data
     }

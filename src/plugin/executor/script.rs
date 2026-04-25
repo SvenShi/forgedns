@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `script` executor plugin.
 //!
@@ -14,6 +12,19 @@
 //! - execution is bounded by timeout and output capture limits; and
 //! - v1 is side-effect only: scripts do not mutate DNS responses or attrs.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Command;
+use tokio::time::timeout;
+use tracing::{info, warn};
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -22,17 +33,6 @@ use crate::plugin::executor::template::Template;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde::Deserialize;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::process::Stdio;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::Command;
-use tokio::time::timeout;
-use tracing::{info, warn};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 4096;
@@ -403,14 +403,16 @@ fn build_executor(tag: &str, config: ScriptConfig) -> Result<ScriptExecutor> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
+    use serde_yaml_ng::Value;
+
     use super::*;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::executor::template::resolve_builtin;
     use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
     use crate::proto::rdata::A;
     use crate::proto::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
-    use serde_yaml_ng::Value;
-    use std::net::Ipv4Addr;
 
     fn context_with_question() -> DnsContext {
         let mut ctx = test_context();

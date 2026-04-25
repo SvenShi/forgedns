@@ -3,15 +3,12 @@
 //! This crate provides functions to add, check, and remove IP addresses
 //! from Linux ipset and nftables sets using the netlink protocol.
 //!
-//! On non-Linux platforms, all operations return `Err(IpSetError::UnsupportedPlatform)`.
+//! On non-Linux platforms, all operations return
+//! `Err(IpSetError::UnsupportedPlatform)`.
 
-#[cfg(target_os = "linux")]
-mod netlink;
-
-#[cfg(target_os = "linux")]
-pub mod ipset;
-#[cfg(target_os = "linux")]
-pub mod nftset;
+use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
 #[cfg(target_os = "linux")]
 pub use ipset::{
@@ -24,19 +21,21 @@ pub use nftset::{
     nftset_del, nftset_delete_set, nftset_delete_table, nftset_list, nftset_list_tables,
     nftset_test,
 };
+#[cfg(not(target_os = "linux"))]
+pub use stub::*;
+use thiserror::Error;
+
+#[cfg(target_os = "linux")]
+mod netlink;
+
+#[cfg(target_os = "linux")]
+pub mod ipset;
+#[cfg(target_os = "linux")]
+pub mod nftset;
 
 // Stub implementations for non-Linux platforms
 #[cfg(not(target_os = "linux"))]
 mod stub;
-#[cfg(not(target_os = "linux"))]
-pub use stub::*;
-
-use std::{
-    fmt,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    str::FromStr,
-};
-use thiserror::Error;
 
 /// Error type for ipset/nftset operations.
 #[derive(Error, Debug)]

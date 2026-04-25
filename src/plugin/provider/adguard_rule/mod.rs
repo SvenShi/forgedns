@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `adguard_rule` provider plugin.
 //!
@@ -17,9 +15,13 @@
 //! still load, while invalid syntax inside the supported subset remains a hard
 //! error.
 
-mod compiler;
-mod model;
-mod parser;
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
+use tracing::info;
 
 use self::compiler::build_rule_buckets;
 use self::model::{AdGuardRuleConfig, CompiledRuleSet};
@@ -30,12 +32,10 @@ use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
-use arc_swap::ArcSwap;
-use async_trait::async_trait;
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
-use tracing::info;
+
+mod compiler;
+mod model;
+mod parser;
 
 #[derive(Debug)]
 struct AdGuardRuleSnapshot {
@@ -183,13 +183,14 @@ impl PluginFactory for AdGuardRuleFactory {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::provider::adguard_rule::model::RuleInput;
     use crate::plugin::provider::adguard_rule::parser::parse_rule;
     use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Message, Name, Question, RecordType};
-    use std::net::{Ipv4Addr, SocketAddr};
 
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
         let mut request = Message::new();

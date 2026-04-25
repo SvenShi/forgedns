@@ -1,12 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `has_wanted_ans` matcher plugin.
 //!
 //! Returns true when answer section contains at least one RR whose type
 //! matches any request question type.
+
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use async_trait::async_trait;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -14,9 +17,6 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct HasWantedAnsFactory {}
@@ -105,9 +105,8 @@ impl Matcher for HasWantedAnsMatcher {
 mod tests {
     use super::*;
     use crate::plugin::test_utils::{test_context, test_registry};
-    use crate::proto::Question;
     use crate::proto::rdata::A;
-    use crate::proto::{Name, RData, Record, RecordType};
+    use crate::proto::{Name, Question, RData, Record, RecordType};
 
     #[test]
     fn test_has_wanted_ans_quick_setup_rejects_param() {

@@ -1,18 +1,18 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared test utilities for plugin unit tests.
 
 #![cfg(test)]
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+
+use serde_yaml_ng::Value;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::plugin::PluginRegistry;
 use crate::proto::Message;
-use serde_yaml_ng::Value;
-use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
 
 pub(crate) fn test_registry() -> Arc<PluginRegistry> {
     Arc::new(PluginRegistry::new())

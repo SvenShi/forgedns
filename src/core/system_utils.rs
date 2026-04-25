@@ -1,14 +1,13 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared helpers for parsing simple runtime values and reading wall-clock or
 //! filesystem metadata.
 
-use cronexpr::jiff::tz::TimeZone;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use cronexpr::jiff::tz::TimeZone;
 use tokio::fs;
 
 const KIB: u64 = 1024;

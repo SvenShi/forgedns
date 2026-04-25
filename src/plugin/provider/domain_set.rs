@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! High-performance domain expression set provider.
 //!
@@ -16,6 +14,15 @@
 //! - runtime lookup checks the local matcher first, then referenced providers
 //!   through stable handles so child reloads become visible immediately.
 
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
+use serde::Deserialize;
+use tracing::{debug, info};
+
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result as DnsResult};
@@ -25,13 +32,6 @@ use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
-use arc_swap::ArcSwap;
-use async_trait::async_trait;
-use serde::Deserialize;
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
-use tracing::{debug, info};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct DomainSetArgs {
@@ -249,10 +249,11 @@ fn add_domain_rule(matcher: &mut DomainRuleMatcher, exp: &str, source: &str) -> 
 
 #[cfg(test)]
 mod tests {
+    use std::net::IpAddr;
+
     use super::*;
     use crate::plugin::provider::provider_utils::for_each_nonempty_rule_text;
     use crate::proto::Name;
-    use std::net::IpAddr;
 
     fn load_rules_text(
         matcher: &mut DomainRuleMatcher,

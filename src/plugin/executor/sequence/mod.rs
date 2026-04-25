@@ -1,8 +1,12 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
-pub mod chain;
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Deserializer};
+use tokio::sync::OnceCell;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -14,11 +18,8 @@ use crate::plugin::{
     Plugin, PluginFactory, PluginRegistry, UninitializedPlugin, expand_quick_setup_dependency_specs,
 };
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde::{Deserialize, Deserializer};
-use std::fmt::Debug;
-use std::sync::Arc;
-use tokio::sync::OnceCell;
+
+pub mod chain;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SequenceRef {

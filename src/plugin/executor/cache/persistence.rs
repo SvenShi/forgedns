@@ -1,9 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Cache persistence helpers.
+
+use std::sync::Arc;
+
+use tokio::fs;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
+use tracing::{info, warn};
+use wincode::{SchemaRead, SchemaWrite};
 
 use super::key::{CacheKey, EcsScopeDigest, normalize_domain_key};
 use super::{CacheItem, CacheMap};
@@ -12,12 +18,6 @@ use crate::core::error::Result;
 use crate::core::system_utils::file_len_if_exists;
 use crate::core::ttl_cache::TtlCacheEntry;
 use crate::proto::{DNSClass, Message, RecordType};
-use std::sync::Arc;
-use tokio::fs;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
-use tracing::{info, warn};
-use wincode::{SchemaRead, SchemaWrite};
 
 #[derive(Debug, SchemaRead, SchemaWrite)]
 struct PersistedCacheEntry {
@@ -257,7 +257,7 @@ mod tests {
             ecs_family: Some(2),
             ecs_source_prefix: Some(56),
             ecs_scope_prefix: Some(64),
-            ecs_network: Some(vec![0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0]),
+            ecs_network: Some(vec![0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0]),
             resp_bytes: vec![0, 1, 2],
             cache_age_ms: 10,
             last_access_age_ms: 5,
@@ -289,7 +289,7 @@ mod tests {
         assert_eq!(ecs.source_prefix, 56);
         assert_eq!(ecs.scope_prefix, 64);
         assert_eq!(ecs.network_len, 8);
-        assert_eq!(&ecs.network[..8], &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0]);
+        assert_eq!(&ecs.network[..8], &[0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0]);
     }
 
     #[test]

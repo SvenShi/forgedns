@@ -1,13 +1,13 @@
-use forgedns_proto::decode_rdata_from_wire;
-use forgedns_proto::{
-    A, AAAA, AFSDB, ANAME, AVC, CAA, CNAME, DNAME, DNSClass, HINFO, MB, MD, MF, MG, MINFO, MR, MX,
-    NAPTR, NS, NSAPPTR, Name, PTR, RData, RESINFO, RP, RT, Record, RecordType, SOA, SPF, SRV, TXT,
-};
-use std::fmt;
-use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::{fmt, fs};
+
+use forgedns_proto::{
+    A, AAAA, AFSDB, ANAME, AVC, CAA, CNAME, DNAME, DNSClass, HINFO, MB, MD, MF, MG, MINFO, MR, MX,
+    NAPTR, NS, NSAPPTR, Name, PTR, RData, RESINFO, RP, RT, Record, RecordType, SOA, SPF, SRV, TXT,
+    decode_rdata_from_wire,
+};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -1282,10 +1282,11 @@ impl fmt::Display for Token {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Runtime configuration loading and validation entry points.
 //!
@@ -16,11 +14,12 @@
 //! separate makes it easier to reuse the same validation path from the CLI,
 //! tests, and future embedding scenarios.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use crate::config::types::Config;
 use crate::core::error::Result;
 use crate::plugin::DependencyGraphReport;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 pub mod types;
 
@@ -33,7 +32,8 @@ pub struct ConfigValidationSummary {
 /// Load and parse configuration from YAML file
 ///
 /// # Errors
-/// Returns an error if the file cannot be read, if YAML parsing fails, or if validation fails.
+/// Returns an error if the file cannot be read, if YAML parsing fails, or if
+/// validation fails.
 pub fn init(file: &PathBuf) -> Result<Config> {
     // Using ? operator - errors are automatically converted via From trait
     let string = fs::read_to_string(file)?;
@@ -67,8 +67,9 @@ pub fn validate_text(text: &str) -> Result<ConfigValidationSummary> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     fn valid_config_yaml() -> &'static str {
         r#"

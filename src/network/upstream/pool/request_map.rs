@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Lock-free request/response correlation map.
 //!
@@ -15,22 +13,19 @@
 //! Each slot is described by a compact `meta` word plus inline sender storage.
 //! The high bits of `meta` encode a small state machine:
 //!
-//! - `EMPTY`
-//!   The slot has no live request and no probe-chain history that matters.
-//!   Lookup can stop when it sees this state because linear probing guarantees
-//!   the target key cannot exist later in the chain.
-//! - `RESERVED`
-//!   A transient hand-off state used while a thread is publishing or removing a
-//!   slot. Other threads must treat it as occupied and retry/skip so they never
-//!   observe a half-written sender pointer or race a concurrent detach.
-//! - `FULL`
-//!   The slot contains a stable `query_id -> Sender<Message>` mapping and can be
-//!   matched by `take()` or `remove()`.
-//! - `TOMBSTONE`
-//!   The slot used to hold an entry but was deleted. We cannot collapse it to
-//!   `EMPTY` immediately because older probe chains may still need to continue
-//!   past this position. Insertions may reuse tombstones, and the table resets
-//!   them back to `EMPTY` when the map becomes empty.
+//! - `EMPTY` The slot has no live request and no probe-chain history that
+//!   matters. Lookup can stop when it sees this state because linear probing
+//!   guarantees the target key cannot exist later in the chain.
+//! - `RESERVED` A transient hand-off state used while a thread is publishing or
+//!   removing a slot. Other threads must treat it as occupied and retry/skip so
+//!   they never observe a half-written sender pointer or race a concurrent
+//!   detach.
+//! - `FULL` The slot contains a stable `query_id -> Sender<Message>` mapping
+//!   and can be matched by `take()` or `remove()`.
+//! - `TOMBSTONE` The slot used to hold an entry but was deleted. We cannot
+//!   collapse it to `EMPTY` immediately because older probe chains may still
+//!   need to continue past this position. Insertions may reuse tombstones, and
+//!   the table resets them back to `EMPTY` when the map becomes empty.
 //!
 //! The resulting lifecycle is:
 //!
@@ -44,16 +39,19 @@
 //!   the inline sender, then publishes the final `FULL` state with `Release`.
 //! - `take()` and `remove()` first move a `FULL` slot back to `RESERVED`, then
 //!   move the inline sender out, then leave a `TOMBSTONE`.
-//! - `clear()` is the shutdown path. It forcibly drops every sender and rewrites
-//!   all slots back to `EMPTY` so connection close can promptly unblock waiters.
+//! - `clear()` is the shutdown path. It forcibly drops every sender and
+//!   rewrites all slots back to `EMPTY` so connection close can promptly
+//!   unblock waiters.
 
-use crate::core::error::{DnsError, Result};
-use crate::proto::Message;
 use std::cell::UnsafeCell;
 use std::hint::spin_loop;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+
 use tokio::sync::oneshot::Sender;
+
+use crate::core::error::{DnsError, Result};
+use crate::proto::Message;
 
 const ID_SPACE_SIZE: u32 = u16::MAX as u32 + 1;
 const MIN_SLOT_COUNT: usize = 8;
@@ -160,7 +158,8 @@ pub struct RequestMap {
 }
 
 impl RequestMap {
-    /// Create a new sparse request map sized for the expected max inflight load.
+    /// Create a new sparse request map sized for the expected max inflight
+    /// load.
     pub fn with_capacity(max_inflight: u16) -> Self {
         // Keep the table sparse on purpose. At the default inflight limit of 64,
         // we allocate 256 slots, which is still tiny but keeps linear probing
@@ -441,8 +440,9 @@ impl Drop for RequestMap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tokio::sync::oneshot;
+
+    use super::*;
 
     fn make_message(id: u16) -> Message {
         let mut message = Message::new();

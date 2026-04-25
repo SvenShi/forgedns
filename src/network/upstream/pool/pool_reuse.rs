@@ -1,7 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::fmt::Debug;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use crossbeam_queue::ArrayQueue;
+use tokio::sync::Notify;
+use tracing::{debug, info, warn};
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
@@ -11,15 +19,6 @@ use crate::network::upstream::pool::{
 };
 use crate::network::upstream::utils::close_conns;
 use crate::proto::Message;
-use async_trait::async_trait;
-use crossbeam_queue::ArrayQueue;
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
-use std::time::Duration;
-use tokio::sync::Notify;
-use tracing::{debug, info, warn};
 
 /// A reusable connection pool implementation
 /// - Keeps a minimum number of active connections (`min_size`)
@@ -311,12 +310,13 @@ impl<C: Connection> Drop for ReusePool<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::core::error::{DnsError, Result};
-    use crate::proto::Message;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    use super::*;
+    use crate::core::error::{DnsError, Result};
+    use crate::proto::Message;
 
     #[derive(Debug)]
     struct MockConnection {

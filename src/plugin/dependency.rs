@@ -1,16 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Plugin dependency resolution
 //!
 //! Provides startup-time dependency graph validation and topological sorting.
 
-use crate::config::types::PluginConfig;
-use crate::core::error::{DnsError, Result};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
+
+use crate::config::types::PluginConfig;
+use crate::core::error::{DnsError, Result};
 
 /// Expected dependency kind used during startup structural validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +136,8 @@ impl DependencySpec {
 /// Resolve plugin dependencies and return plugins in initialization order.
 ///
 /// The function validates missing nodes, self references, type mismatches, then
-/// performs topological sorting. All checks are startup-only and never on hot path.
+/// performs topological sorting. All checks are startup-only and never on hot
+/// path.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn resolve_dependencies(
     configs: Vec<PluginConfig>,

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Bootstrap DNS resolver for domain name resolution
 //!
@@ -14,17 +12,18 @@
 //! - Single resolver instance for multiple concurrent queries
 //! - Pre-parsed DNS queries to avoid repeated allocations
 
-use crate::core::app_clock::AppClock;
-use crate::core::error::{DnsError, Result};
-use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder};
-use crate::proto::{DNSClass, Message, MessageType, Opcode, Question};
-use crate::proto::{Name, RecordType};
-use rand::random;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU8, Ordering};
+
+use rand::random;
 use tokio::sync::{Notify, RwLock};
 use tracing::{debug, error, info, warn};
+
+use crate::core::app_clock::AppClock;
+use crate::core::error::{DnsError, Result};
+use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder};
+use crate::proto::{DNSClass, Message, MessageType, Name, Opcode, Question, RecordType};
 
 // State machine constants for atomic state transitions
 const STATE_NONE: u8 = 0; // Initial state, needs query
@@ -71,12 +70,15 @@ impl Bootstrap {
     /// Create a new bootstrap resolver
     ///
     /// # Arguments
-    /// * `bootstrap_server` - DNS server address for resolution (e.g., "8.8.8.8:53")
+    /// * `bootstrap_server` - DNS server address for resolution (e.g.,
+    ///   "8.8.8.8:53")
     /// * `domain` - Domain name to resolve (FQDN format)
-    /// * `ip_version` - IP version preference: Some(6) for IPv6, None or Some(4) for IPv4
+    /// * `ip_version` - IP version preference: Some(6) for IPv6, None or
+    ///   Some(4) for IPv4
     ///
     /// # Performance
-    /// Pre-builds the DNS query message to avoid repeated allocations on each query
+    /// Pre-builds the DNS query message to avoid repeated allocations on each
+    /// query
     pub fn new(bootstrap_server: &str, domain: &str, ip_version: Option<u8>) -> Result<Self> {
         // Pre-parse domain name (fail-fast strategy during initialization)
         let parsed_name = Name::from_str(domain).map_err(|e| {
@@ -121,8 +123,9 @@ impl Bootstrap {
 
     /// Get the resolved IP address, using cache or triggering a new query
     ///
-    /// This is the hot path - optimized for minimal overhead when cache is valid.
-    /// Uses a lock-free state machine for coordination among multiple concurrent callers.
+    /// This is the hot path - optimized for minimal overhead when cache is
+    /// valid. Uses a lock-free state machine for coordination among
+    /// multiple concurrent callers.
     ///
     /// # Returns
     /// - `Ok(IpAddr)` if resolution succeeds (from cache or fresh query)
@@ -236,8 +239,8 @@ impl Bootstrap {
     /// - Failure: STATE_QUERYING -> STATE_FAILED
     ///
     /// # Concurrency
-    /// This method is called by only one task at a time (enforced by state machine).
-    /// Other tasks wait via `query_done` notification.
+    /// This method is called by only one task at a time (enforced by state
+    /// machine). Other tasks wait via `query_done` notification.
     async fn query(&self) {
         // Execute DNS query using pre-built message template
         // Randomize query ID to prevent response spoofing

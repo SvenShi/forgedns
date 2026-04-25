@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `rcode` matcher plugin.
 //!
@@ -10,6 +8,12 @@
 //!
 //! Config currently accepts only decimal numeric rcodes, for example `["0"]`
 //! or quick-setup syntax like `rcode 2`.
+
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use ahash::AHashSet;
+use async_trait::async_trait;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -21,10 +25,6 @@ use crate::plugin::matcher::matcher_utils::{
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use ahash::AHashSet;
-use async_trait::async_trait;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct RcodeFactory {}
@@ -95,12 +95,12 @@ impl Matcher for RcodeMatcher {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::matcher::Matcher;
-    use crate::proto::{Message, Question, Rcode};
-    use crate::proto::{Name, RecordType};
-    use std::net::SocketAddr;
+    use crate::proto::{Message, Name, Question, Rcode, RecordType};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();

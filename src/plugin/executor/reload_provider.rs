@@ -1,12 +1,16 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `reload_provider` executor plugin.
 //!
 //! This executor reloads one or more provider plugins in place using their
 //! existing runtime configuration, without rebuilding the full application.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_yaml_ng::Value;
+use tracing::info;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -18,10 +22,6 @@ use crate::plugin::matcher::matcher_utils::{
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde_yaml_ng::Value;
-use std::sync::Arc;
-use tracing::info;
 
 #[derive(Debug)]
 struct ReloadProviderExecutor {

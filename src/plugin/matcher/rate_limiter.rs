@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `rate_limiter` matcher plugin.
 //!
@@ -21,6 +19,15 @@
 //! - `init` starts periodic cleanup for stale buckets.
 //! - `destroy` stops cleanup task and releases background resources.
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
@@ -30,14 +37,6 @@ use crate::core::ttl_cache::TtlCache;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 const DEFAULT_QPS: f64 = 20.0;
 const DEFAULT_BURST: f64 = 40.0;
@@ -326,10 +325,11 @@ fn mask_ip(ip: IpAddr, mask4: u8, mask6: u8) -> Option<IpAddr> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::plugin::test_utils::test_registry;
     use crate::proto::Message;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     fn make_context(ip: Ipv4Addr) -> DnsContext {
         DnsContext::new(

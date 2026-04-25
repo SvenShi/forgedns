@@ -1,13 +1,12 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Startup banner rendering and output helpers.
 
+use std::io::{self, Write};
+
 use crate::core::VERSION;
 use crate::core::error::{DnsError, Result};
-use std::io::{self, Write};
 
 const STARTUP_BANNER_REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 const STARTUP_BANNER_MIN_INNER_WIDTH: usize = 67;

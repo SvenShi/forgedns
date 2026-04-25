@@ -1,14 +1,13 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Owned DNS resource records.
 
-use crate::proto::{DNSClass, Name, RData, RecordType};
 use std::fmt::{Debug, Display, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;
+
+use crate::proto::{DNSClass, Name, RData, RecordType};
 
 /// Owned resource record.
 #[derive(Clone, Eq, PartialEq)]
@@ -49,6 +48,7 @@ impl Record {
     pub fn from_rdata(name: Name, ttl: u32, data: RData) -> Self {
         Self::from_rdata_with_class(name, ttl, DNSClass::IN, data)
     }
+
     /// Construct a record directly from arc RDATA.
     pub fn from_arc_rdata(name: Name, ttl: u32, data: Arc<RData>) -> Self {
         Self::from_arc_rdata_with_class(name, ttl, DNSClass::IN, data)
@@ -154,9 +154,10 @@ impl Record {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
     use crate::proto::rdata::{A, TXT};
-    use std::net::Ipv4Addr;
 
     #[test]
     fn clone_then_mutate_does_not_change_original() {

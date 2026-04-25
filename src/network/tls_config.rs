@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! TLS client configuration for secure DNS protocols
 //!
@@ -11,7 +9,11 @@
 //!
 //! Configurations are lazily initialized and cached for reuse.
 
-use crate::core::error::DnsError;
+use std::fmt::{Debug, Formatter};
+use std::fs::File;
+use std::io::BufReader;
+use std::sync::{Arc, Once};
+
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -19,11 +21,9 @@ use rustls::server::WebPkiClientVerifier;
 use rustls::{
     ClientConfig, DigitallySignedStruct, Error, RootCertStore, ServerConfig, SignatureScheme,
 };
-use std::fmt::{Debug, Formatter};
-use std::fs::File;
-use std::io::BufReader;
-use std::sync::{Arc, Once};
 use tracing::info;
+
+use crate::core::error::DnsError;
 
 lazy_static::lazy_static! {
     /// Secure TLS configuration with certificate validation
@@ -93,7 +93,8 @@ pub(crate) fn insecure_client_config() -> ClientConfig {
 
 /// Load TLS certificates and private key from files
 ///
-/// Reads PEM-encoded certificate chain and private key from the specified files.
+/// Reads PEM-encoded certificate chain and private key from the specified
+/// files.
 ///
 /// # Arguments
 /// * `cert_path` - Path to the certificate file (PEM format)
@@ -117,7 +118,8 @@ pub fn load_tls_config(
     }
 }
 
-/// Load server-side TLS configuration with optional client certificate verification.
+/// Load server-side TLS configuration with optional client certificate
+/// verification.
 pub fn load_server_tls_config(
     cert: Option<&str>,
     key: Option<&str>,

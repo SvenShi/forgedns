@@ -1,14 +1,13 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared listen-address parsing helpers for management and server endpoints.
 
-use crate::core::error::{DnsError, Result};
 use std::io::Error;
 use std::net::SocketAddr;
 use std::str::FromStr;
+
+use crate::core::error::{DnsError, Result};
 
 /// Parse a listen address.
 ///

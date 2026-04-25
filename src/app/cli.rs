@@ -1,14 +1,13 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Application CLI definition and startup options.
 
-use clap::{Args, Parser, Subcommand};
-use serde::Deserialize;
 use std::path::PathBuf;
 use std::time::Duration;
+
+use clap::{Args, Parser, Subcommand};
+use serde::Deserialize;
 
 /// Top-level CLI definition.
 #[derive(Parser, Clone, Debug)]
@@ -44,7 +43,8 @@ pub struct StartOptions {
     #[arg(short = 'd', long = "working-dir")]
     pub working_dir: Option<PathBuf>,
 
-    /// Log level override (overrides config file): off, trace, debug, info, warn, error
+    /// Log level override (overrides config file): off, trace, debug, info,
+    /// warn, error
     #[arg(short = 'l', long = "log-level")]
     pub log_level: Option<String>,
 }
@@ -150,7 +150,8 @@ pub struct UpgradeOptions {
     #[arg(long = "allow-prerelease", default_value_t = false, global = true)]
     pub allow_prerelease: bool,
 
-    /// Apply even when the selected release is not newer than the current version.
+    /// Apply even when the selected release is not newer than the current
+    /// version.
     #[arg(long = "force", default_value_t = false, global = true)]
     pub force: bool,
 
@@ -197,7 +198,8 @@ pub struct ServiceOptions {
 /// Supported service manager actions.
 #[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
 pub enum ServiceCommand {
-    /// Install the system service. Installation only registers auto-start, it does not start immediately.
+    /// Install the system service. Installation only registers auto-start, it
+    /// does not start immediately.
     Install(ServiceInstallOptions),
     /// Start the installed service.
     Start,
@@ -226,8 +228,9 @@ pub fn parse_cli() -> Cli {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::Parser;
+
+    use super::*;
 
     #[test]
     fn parse_start_command_with_explicit_flags() {

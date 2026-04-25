@@ -1,9 +1,17 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! V2Ray geosite.dat-backed domain provider.
+
+use std::any::Any;
+use std::fs;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
+use prost::Message;
+use serde::Deserialize;
+use tracing::info;
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
@@ -17,14 +25,6 @@ use crate::plugin::provider::v2ray_dat::{
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_factory;
-use arc_swap::ArcSwap;
-use async_trait::async_trait;
-use prost::Message;
-use serde::Deserialize;
-use std::any::Any;
-use std::fs;
-use std::sync::Arc;
-use tracing::info;
 
 #[derive(Debug, Clone, Deserialize)]
 struct GeoSiteArgs {

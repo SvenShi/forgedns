@@ -1,22 +1,22 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Built-in application control endpoints for the management API.
+
+use std::fmt::{Display, Formatter};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::{Request, StatusCode};
+use serde::Serialize;
+use tokio::sync::mpsc;
 
 use crate::api::{ApiHandler, ApiRegister, json_error, json_ok};
 use crate::config;
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, StatusCode};
-use serde::Serialize;
-use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlCommand {
@@ -398,11 +398,12 @@ pub fn register_builtin_routes(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::api::ApiHandler;
     use http::Method;
     use tempfile::NamedTempFile;
     use tokio::sync::mpsc::error::TryRecvError;
+
+    use super::*;
+    use crate::api::ApiHandler;
 
     fn valid_config_yaml() -> &'static str {
         r#"

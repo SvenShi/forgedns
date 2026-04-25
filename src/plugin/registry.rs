@@ -1,12 +1,16 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Plugin registry for managing plugin factories and instances
 //!
 //! Provides a centralized registry for managing plugin lifecycle,
 //! enabling better testability and support for multiple server instances.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use dashmap::DashMap;
+use tracing::{debug, error, info, warn};
 
 use crate::api::ApiRegister;
 use crate::api::control::{AppController, ControlRequestError};
@@ -17,10 +21,6 @@ use crate::plugin::executor::Executor;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::{Provider, register_reload_api_route};
 use crate::plugin::{PluginCreateContext, PluginDependent, PluginFactory, PluginInfo, PluginType};
-use dashmap::DashMap;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
-use tracing::{debug, error, info, warn};
 
 /// Plugin registry that manages plugin factories and instances
 ///
@@ -75,7 +75,8 @@ impl PluginRegistry {
     /// Register a plugin factory
     ///
     /// # Arguments
-    /// * `plugin_type` - The type name for this plugin (e.g., "forward", "udp_server")
+    /// * `plugin_type` - The type name for this plugin (e.g., "forward",
+    ///   "udp_server")
     /// * `factory` - The factory implementation for creating plugin instances
     pub fn register_factory(
         &mut self,
@@ -109,7 +110,8 @@ impl PluginRegistry {
 
     /// Initialize all plugins from configuration
     ///
-    /// Automatically resolves dependencies and initializes plugins in the correct order.
+    /// Automatically resolves dependencies and initializes plugins in the
+    /// correct order.
     ///
     /// # Arguments
     /// * `self` - Arc-wrapped registry to allow sharing with plugins
@@ -279,7 +281,8 @@ impl PluginRegistry {
         Ok(())
     }
 
-    /// Create a PluginInfo with access to the registry for dependency resolution
+    /// Create a PluginInfo with access to the registry for dependency
+    /// resolution
     ///
     /// Uses the factory's create method which receives the registry directly.
     async fn create_plugin_info_and_init(
@@ -674,6 +677,15 @@ impl Default for PluginRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::collections::HashMap as StdHashMap;
+    use std::io::{self, Write};
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use tracing_subscriber::fmt::MakeWriter;
+
     use super::*;
     use crate::config::types::PluginConfig;
     use crate::plugin::dependency::{
@@ -684,13 +696,6 @@ mod tests {
     use crate::plugin::provider::Provider;
     use crate::plugin::{Plugin, UninitializedPlugin};
     use crate::proto::Name;
-    use async_trait::async_trait;
-    use std::any::Any;
-    use std::collections::HashMap as StdHashMap;
-    use std::io::{self, Write};
-    use std::sync::Mutex as StdMutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tracing_subscriber::fmt::MakeWriter;
 
     #[test]
     fn test_registry_creation() {

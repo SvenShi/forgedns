@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Operating-system service management commands.
 //!
@@ -9,14 +7,16 @@
 //! uninstall ForgeDNS as a system service. It keeps platform-specific service
 //! manager details outside the normal foreground application runner.
 
-use crate::app::cli::{ServiceCommand, ServiceInstallOptions, ServiceOptions};
-use crate::core::error::{DnsError, Result};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
 use service_manager::{
     RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx,
     ServiceStatus, ServiceStatusCtx, ServiceStopCtx, ServiceUninstallCtx, native_service_manager,
 };
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+
+use crate::app::cli::{ServiceCommand, ServiceInstallOptions, ServiceOptions};
+use crate::core::error::{DnsError, Result};
 
 const SERVICE_LABEL: &str = "forgedns";
 

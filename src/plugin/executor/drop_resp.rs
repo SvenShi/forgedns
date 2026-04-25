@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `drop_resp` executor plugin.
 //!
@@ -9,7 +7,12 @@
 //!
 //! This plugin is useful when a previous executor produced a response but a
 //! later policy requires re-querying or rebuilding output. It only resets
-//! `context.response`/final packet output and keeps request metadata/marks untouched.
+//! `context.response`/final packet output and keeps request metadata/marks
+//! untouched.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -17,8 +20,6 @@ use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use std::sync::Arc;
 
 #[derive(Debug)]
 struct DropResp {

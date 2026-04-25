@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Common high-frequency RDATA payload types.
 //!
@@ -9,14 +7,13 @@
 //! The name-like RDATA types in this module are only thin wrappers around that
 //! canonical owned DNS name model.
 
+use std::net::IpAddr::{V4, V6};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::core::error::DnsError;
 use crate::proto::Name;
-use std::net::IpAddr;
-use std::net::IpAddr::{V4, V6};
-use std::net::{Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 
 /// Owned IPv4 address payload.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -174,9 +171,9 @@ pub struct ClientSubnet {
 impl ClientSubnet {
     /// Construct an ECS payload as described by RFC 7871 section 6.
     ///
-    /// `addr` is the original client address, while `source_prefix` and `scope_prefix`
-    /// are stored as-is. Wire encoding later masks the address down to the advertised
-    /// source prefix.
+    /// `addr` is the original client address, while `source_prefix` and
+    /// `scope_prefix` are stored as-is. Wire encoding later masks the
+    /// address down to the advertised source prefix.
     pub fn new(addr: IpAddr, source_prefix: u8, scope_prefix: u8) -> Self {
         Self {
             addr,
@@ -494,7 +491,8 @@ impl EdnsZoneVersion {
     }
 }
 
-/// Structured local/experimental EDNS payload mirroring miekg/dns's `EDNS0_LOCAL`.
+/// Structured local/experimental EDNS payload mirroring miekg/dns's
+/// `EDNS0_LOCAL`.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct EdnsLocal {
     code: u16,
@@ -515,7 +513,8 @@ impl EdnsLocal {
     }
 }
 
-/// Structured EDNS options modeled one-for-one after miekg/dns's EDNS0 option types.
+/// Structured EDNS options modeled one-for-one after miekg/dns's EDNS0 option
+/// types.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum EdnsOption {
     /// Long-Lived Queries option (code 1).
@@ -582,7 +581,8 @@ impl From<EdnsOption> for EdnsCode {
 }
 
 impl EdnsOption {
-    /// Return the encoded payload length of this option, excluding the 4-byte TL header.
+    /// Return the encoded payload length of this option, excluding the 4-byte
+    /// TL header.
     pub fn payload_len(&self) -> usize {
         match self {
             EdnsOption::Llq(_) => 18,
@@ -622,7 +622,8 @@ impl EdnsOption {
         }
     }
 
-    /// Return the raw payload bytes for options whose model is still byte-oriented.
+    /// Return the raw payload bytes for options whose model is still
+    /// byte-oriented.
     pub fn data(&self) -> &[u8] {
         match self {
             EdnsOption::Nsid(value) => value.nsid(),
@@ -706,8 +707,8 @@ impl Default for Edns {
 impl Edns {
     /// Construct a default EDNS pseudo-record model.
     ///
-    /// The default UDP payload size is ForgeDNS's preferred 1232 bytes, which is a
-    /// common safe DNS-over-UDP payload on the modern Internet.
+    /// The default UDP payload size is ForgeDNS's preferred 1232 bytes, which
+    /// is a common safe DNS-over-UDP payload on the modern Internet.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(EdnsInner {
@@ -751,7 +752,8 @@ impl Edns {
         self.inner.ext_rcode
     }
 
-    /// Set the high 8 bits of the extended response code carried in the OPT TTL field.
+    /// Set the high 8 bits of the extended response code carried in the OPT TTL
+    /// field.
     pub fn set_ext_rcode(&mut self, value: u8) {
         Arc::make_mut(&mut self.inner).ext_rcode = value;
     }
@@ -795,8 +797,9 @@ impl Edns {
 
     /// Insert or replace an EDNS option with the same code.
     ///
-    /// This mirrors the common DNS library behavior that an OPT RR should not contain
-    /// duplicate instances of the same structured option in the owned model.
+    /// This mirrors the common DNS library behavior that an OPT RR should not
+    /// contain duplicate instances of the same structured option in the
+    /// owned model.
     pub fn insert(&mut self, option: EdnsOption) {
         let code = EdnsCode::from(&option);
         self.remove(code);

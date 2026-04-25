@@ -1,29 +1,29 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! RDATA wire encoding and decoding helpers.
 
 #![allow(clippy::type_complexity)]
 
-//! RDATA wire encoding and decoding helpers.
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use crate::core::error::{DnsError, Result};
+use crate::proto::rdata::*;
+use crate::proto::wire::{push_u16, push_u32, read_u16_be, set_u16};
+use crate::proto::{Name, RData, RecordType};
 
 mod basic;
 mod dnssec;
 mod legacy;
 mod service;
 
-use crate::core::error::{DnsError, Result};
-use crate::proto::rdata::*;
-use crate::proto::wire::{push_u16, push_u32, read_u16_be, set_u16};
-use crate::proto::{Name, RData, RecordType};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
 #[inline]
 fn copy_boxed(packet: &[u8], start: usize, end: usize) -> Box<[u8]> {
     Box::<[u8]>::from(&packet[start..end])
 }
 
-/// Decode typed RDATA according to the RR-specific wire format defined by the corresponding RFC.
+/// Decode typed RDATA according to the RR-specific wire format defined by the
+/// corresponding RFC.
 pub(crate) fn parse_rdata(
     packet: &[u8],
     owner_name: &Name,
@@ -136,7 +136,8 @@ pub(crate) fn parse_rdata(
     }
 }
 
-/// Encode typed RDATA according to the RR-specific wire format defined by the corresponding RFC.
+/// Encode typed RDATA according to the RR-specific wire format defined by the
+/// corresponding RFC.
 pub(crate) fn encode_rdata<'a, F>(
     rdata: &'a RData,
     out: &mut Vec<u8>,
@@ -406,10 +407,11 @@ pub(crate) fn encode_edns_record(out: &mut Vec<u8>, edns: &Edns, ext_rcode: u8) 
     Ok(())
 }
 
-/// Parse a single domain name and require the RDATA to end exactly at that name boundary.
+/// Parse a single domain name and require the RDATA to end exactly at that name
+/// boundary.
 ///
-/// This helper is used by RR types whose entire RDATA is a single domain name encoded with the
-/// RFC 1035 section 4.1.4 compression rules.
+/// This helper is used by RR types whose entire RDATA is a single domain name
+/// encoded with the RFC 1035 section 4.1.4 compression rules.
 fn parse_name(packet: &[u8], start: usize, end: usize, kind: &str) -> Result<Name> {
     let (name, next) = Name::parse(packet, start)?;
     if next != end {
@@ -420,8 +422,8 @@ fn parse_name(packet: &[u8], start: usize, end: usize, kind: &str) -> Result<Nam
 
 /// Parse one DNS character-string as defined by RFC 1035 section 3.3.
 ///
-/// The returned offset always points to the first byte after the parsed string so callers can
-/// chain multiple strings inside one RDATA blob.
+/// The returned offset always points to the first byte after the parsed string
+/// so callers can chain multiple strings inside one RDATA blob.
 fn parse_character_string(packet: &[u8], start: usize, end: usize) -> Result<(Box<[u8]>, usize)> {
     if start >= end {
         return Err(DnsError::protocol("invalid character-string rdata length"));
@@ -435,7 +437,8 @@ fn parse_character_string(packet: &[u8], start: usize, end: usize) -> Result<(Bo
     Ok((copy_boxed(packet, data_start, data_end), data_end))
 }
 
-/// Parse a single character-string and require exact RDATA exhaustion afterwards.
+/// Parse a single character-string and require exact RDATA exhaustion
+/// afterwards.
 fn parse_single_character_string(
     packet: &[u8],
     start: usize,
@@ -487,7 +490,8 @@ fn parse_u16_name(packet: &[u8], start: usize, end: usize, kind: &str) -> Result
     Ok((value, name))
 }
 
-/// Encode a DNS character-string with the one-octet length prefix required by RFC 1035 section 3.3.
+/// Encode a DNS character-string with the one-octet length prefix required by
+/// RFC 1035 section 3.3.
 fn encode_character_string(out: &mut Vec<u8>, data: &[u8], kind: &str) -> Result<()> {
     if data.len() > u8::MAX as usize {
         return Err(DnsError::protocol(format!("{kind} exceeds 255 bytes")));

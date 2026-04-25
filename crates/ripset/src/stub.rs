@@ -136,7 +136,8 @@ pub fn nftset_del<E: Into<IpEntry>>(
     Err(IpSetError::UnsupportedPlatform)
 }
 
-/// Test if an IP exists in a nftables set (stub - returns UnsupportedPlatform error)
+/// Test if an IP exists in a nftables set (stub - returns UnsupportedPlatform
+/// error)
 pub fn nftset_test<E: Into<IpEntry>>(
     _family: &str,
     _table: &str,
@@ -146,12 +147,14 @@ pub fn nftset_test<E: Into<IpEntry>>(
     Err(IpSetError::UnsupportedPlatform)
 }
 
-/// List all entries in a nftables set (stub - returns UnsupportedPlatform error)
+/// List all entries in a nftables set (stub - returns UnsupportedPlatform
+/// error)
 pub fn nftset_list(_family: &str, _table: &str, _setname: &str) -> Result<Vec<IpEntry>> {
     Err(IpSetError::UnsupportedPlatform)
 }
 
-/// List all tables in a nftables family (stub - returns UnsupportedPlatform error)
+/// List all tables in a nftables family (stub - returns UnsupportedPlatform
+/// error)
 pub fn nftset_list_tables(_family: &str) -> Result<Vec<String>> {
     Err(IpSetError::UnsupportedPlatform)
 }

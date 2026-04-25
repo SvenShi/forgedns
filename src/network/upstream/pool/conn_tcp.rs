@@ -1,7 +1,18 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::select;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::{Notify, oneshot};
+use tokio::time::timeout;
+use tracing::{debug, error, trace, warn};
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
@@ -13,20 +24,6 @@ use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::{connect_stream, connect_tls};
 use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
 use crate::proto::Message;
-use async_trait::async_trait;
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::select;
-use tokio::sync::{
-    Notify,
-    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
-    oneshot,
-};
-use tokio::time::timeout;
-use tracing::{debug, error, trace, warn};
 
 /// Represents a single persistent TCP-based DNS connection.
 /// Handles both plaintext TCP and TLS (DoT) connections, supporting
@@ -64,8 +61,9 @@ struct QueuedQuery {
 impl Connection for TcpConnection {
     /// Gracefully close the TCP connection and notify background tasks
     ///
-    /// This method is idempotent - multiple calls are safe and will only close once.
-    /// Background read/write tasks will be notified and gracefully shut down.
+    /// This method is idempotent - multiple calls are safe and will only close
+    /// once. Background read/write tasks will be notified and gracefully
+    /// shut down.
     fn close(&self) {
         if self.closed.swap(true, Ordering::Relaxed) {
             return; // Already closed, no-op
@@ -81,7 +79,8 @@ impl Connection for TcpConnection {
         self.close_notify.notify_waiters();
     }
 
-    /// Sends a DNS query and waits asynchronously for its corresponding response
+    /// Sends a DNS query and waits asynchronously for its corresponding
+    /// response
     ///
     /// # Arguments
     /// * `request` - DNS query message to send
@@ -91,7 +90,8 @@ impl Connection for TcpConnection {
     /// - `Err(DnsError)` if connection closed, timeout occurs, or network error
     ///
     /// # Performance
-    /// Uses TCP length-prefixed framing (2-byte BE length header) as per RFC 1035
+    /// Uses TCP length-prefixed framing (2-byte BE length header) as per RFC
+    /// 1035
     async fn query(&self, request: Message) -> Result<Message> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(DnsError::protocol(format!(
@@ -203,8 +203,8 @@ impl TcpConnection {
 
     /// Background task: sends queued DNS requests through the TCP writer
     ///
-    /// Continuously drains the outbound message queue and writes to the TCP stream.
-    /// Terminates gracefully when close notification is received.
+    /// Continuously drains the outbound message queue and writes to the TCP
+    /// stream. Terminates gracefully when close notification is received.
     ///
     /// # Error Handling
     /// Write errors trigger connection closure and notify waiting queries
@@ -257,7 +257,8 @@ impl TcpConnection {
     /// - Delivers response via oneshot channel
     ///
     /// # Buffer Management
-    /// Uses a rolling buffer to handle partial reads and multiple messages per read
+    /// Uses a rolling buffer to handle partial reads and multiple messages per
+    /// read
     async fn listen_dns_response<S: AsyncRead + Unpin>(
         self: Arc<Self>,
         mut reader: TcpTransportReader<S>,

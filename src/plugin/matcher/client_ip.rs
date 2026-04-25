@@ -1,12 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `client_ip` matcher plugin.
 //!
 //! This plugin follows standard plugin lifecycle (`init/destroy`) and
 //! matches request source address against configured IP rules.
+
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use async_trait::async_trait;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -23,9 +26,6 @@ use crate::plugin::matcher::matcher_utils::{
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct ClientIpFactory {}
@@ -129,12 +129,12 @@ impl Matcher for ClientIpMatcher {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::matcher::Matcher;
-    use crate::proto::{DNSClass, Name, RecordType};
-    use crate::proto::{Message, Question};
-    use std::net::{Ipv4Addr, SocketAddr};
+    use crate::proto::{DNSClass, Message, Name, Question, RecordType};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();

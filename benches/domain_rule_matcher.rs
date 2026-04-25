@@ -1,7 +1,8 @@
+use std::hint::black_box;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use forgedns::core::rule_matcher::DomainRuleMatcher;
 use forgedns::proto::Name;
-use std::hint::black_box;
 
 fn make_domain_rules() -> Vec<String> {
     let mut rules = Vec::with_capacity(4_000);

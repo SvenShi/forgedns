@@ -1,7 +1,8 @@
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use forgedns::core::rule_matcher::IpPrefixMatcher;
 use std::hint::black_box;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use forgedns::core::rule_matcher::IpPrefixMatcher;
 
 fn make_ip_rules() -> Vec<String> {
     let mut rules = Vec::with_capacity(3_000);
@@ -35,8 +36,8 @@ fn bench_ip_matcher(c: &mut Criterion) {
     let matcher = build_ip_matcher(&rules);
     let ipv4_hit = IpAddr::V4(Ipv4Addr::new(10, 3, 9, 42));
     let ipv4_miss = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9));
-    let ipv6_hit = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0x04d2, 0, 0, 0, 0, 1));
-    let ipv6_miss = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1));
+    let ipv6_hit = IpAddr::V6(Ipv6Addr::new(0x2001, 0xDB8, 0x04D2, 0, 0, 0, 0, 1));
+    let ipv6_miss = IpAddr::V6(Ipv6Addr::new(0x2001, 0xDB9, 0, 0, 0, 0, 0, 1));
 
     let mut group = c.benchmark_group("rule_matcher_ip");
 

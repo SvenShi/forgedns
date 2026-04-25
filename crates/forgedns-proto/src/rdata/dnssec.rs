@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::core::error::DnsError;
 use crate::proto::{Name, RecordType};
@@ -22,15 +20,19 @@ impl DS {
             digest,
         }
     }
+
     pub fn key_tag(&self) -> u16 {
         self.key_tag
     }
+
     pub fn algorithm(&self) -> u8 {
         self.algorithm
     }
+
     pub fn digest_type(&self) -> u8 {
         self.digest_type
     }
+
     pub fn digest(&self) -> &[u8] {
         &self.digest
     }
@@ -57,12 +59,15 @@ impl SSHFP {
             fingerprint,
         }
     }
+
     pub fn algorithm(&self) -> u8 {
         self.algorithm
     }
+
     pub fn fp_type(&self) -> u8 {
         self.fp_type
     }
+
     pub fn fingerprint(&self) -> &[u8] {
         &self.fingerprint
     }
@@ -84,15 +89,19 @@ impl DNSKEY {
             public_key,
         }
     }
+
     pub fn flags(&self) -> u16 {
         self.flags
     }
+
     pub fn protocol(&self) -> u8 {
         self.protocol
     }
+
     pub fn algorithm(&self) -> u8 {
         self.algorithm
     }
+
     pub fn public_key(&self) -> &[u8] {
         &self.public_key
     }
@@ -122,15 +131,19 @@ impl TLSA {
             certificate,
         }
     }
+
     pub fn usage(&self) -> u8 {
         self.usage
     }
+
     pub fn selector(&self) -> u8 {
         self.selector
     }
+
     pub fn matching_type(&self) -> u8 {
         self.matching_type
     }
+
     pub fn certificate(&self) -> &[u8] {
         &self.certificate
     }
@@ -145,7 +158,8 @@ pub struct TypeBitMaps {
     types: Vec<RecordType>,
 }
 impl TypeBitMaps {
-    /// Decode type bit maps from wire data using RFC 4034 / RFC 5155 validation rules.
+    /// Decode type bit maps from wire data using RFC 4034 / RFC 5155 validation
+    /// rules.
     pub fn try_from_wire(wire: Box<[u8]>) -> Result<Self, DnsError> {
         let types = decode_type_bit_maps(&wire)?;
         Ok(Self { wire, types })
@@ -158,13 +172,16 @@ impl TypeBitMaps {
         let types = decode_type_bit_maps(&wire).unwrap_or_default();
         Self { wire, types }
     }
+
     pub fn from_types(types: Vec<RecordType>) -> Self {
         let wire = encode_type_bit_maps(&types).into_boxed_slice();
         Self { wire, types }
     }
+
     pub fn wire_data(&self) -> &[u8] {
         &self.wire
     }
+
     pub fn types(&self) -> &[RecordType] {
         &self.types
     }
@@ -236,7 +253,7 @@ fn encode_type_bit_maps(types: &[RecordType]) -> Vec<u8> {
         let mut bitmap = [0u8; 32];
         let mut max_index = 0usize;
         for code in group {
-            let low = (code & 0x00ff) as usize;
+            let low = (code & 0x00FF) as usize;
             let byte_index = low / 8;
             let bit_index = low % 8;
             bitmap[byte_index] |= 1 << (7 - bit_index);
@@ -263,15 +280,19 @@ impl CSYNC {
             type_bitmap,
         }
     }
+
     pub fn serial(&self) -> u32 {
         self.serial
     }
+
     pub fn flags(&self) -> u16 {
         self.flags
     }
+
     pub fn type_bitmap(&self) -> &[u8] {
         self.type_bitmap.wire_data()
     }
+
     pub fn type_bitmap_types(&self) -> &[RecordType] {
         self.type_bitmap.types()
     }
@@ -293,15 +314,19 @@ impl ZONEMD {
             digest,
         }
     }
+
     pub fn serial(&self) -> u32 {
         self.serial
     }
+
     pub fn scheme(&self) -> u8 {
         self.scheme
     }
+
     pub fn hash(&self) -> u8 {
         self.hash
     }
+
     pub fn digest(&self) -> &[u8] {
         &self.digest
     }
@@ -323,15 +348,19 @@ impl CERT {
             certificate,
         }
     }
+
     pub fn cert_type(&self) -> u16 {
         self.cert_type
     }
+
     pub fn key_tag(&self) -> u16 {
         self.key_tag
     }
+
     pub fn algorithm(&self) -> u8 {
         self.algorithm
     }
+
     pub fn certificate(&self) -> &[u8] {
         &self.certificate
     }
@@ -353,27 +382,35 @@ impl RRSIG {
     pub fn type_covered(&self) -> u16 {
         self.type_covered
     }
+
     pub fn algorithm(&self) -> u8 {
         self.algorithm
     }
+
     pub fn labels(&self) -> u8 {
         self.labels
     }
+
     pub fn orig_ttl(&self) -> u32 {
         self.orig_ttl
     }
+
     pub fn expiration(&self) -> u32 {
         self.expiration
     }
+
     pub fn inception(&self) -> u32 {
         self.inception
     }
+
     pub fn key_tag(&self) -> u16 {
         self.key_tag
     }
+
     pub fn signer_name(&self) -> &Name {
         &self.signer_name
     }
+
     pub fn signature(&self) -> &[u8] {
         &self.signature
     }
@@ -391,12 +428,15 @@ impl NSEC {
             type_bitmap,
         }
     }
+
     pub fn next_domain(&self) -> &Name {
         &self.next_domain
     }
+
     pub fn type_bitmap(&self) -> &[u8] {
         self.type_bitmap.wire_data()
     }
+
     pub fn type_bitmap_types(&self) -> &[RecordType] {
         self.type_bitmap.types()
     }
@@ -429,24 +469,31 @@ impl NSEC3 {
             type_bitmap,
         }
     }
+
     pub fn hash(&self) -> u8 {
         self.hash
     }
+
     pub fn flags(&self) -> u8 {
         self.flags
     }
+
     pub fn iterations(&self) -> u16 {
         self.iterations
     }
+
     pub fn salt(&self) -> &[u8] {
         &self.salt
     }
+
     pub fn next_domain(&self) -> &[u8] {
         &self.next_domain
     }
+
     pub fn type_bitmap(&self) -> &[u8] {
         self.type_bitmap.wire_data()
     }
+
     pub fn type_bitmap_types(&self) -> &[RecordType] {
         self.type_bitmap.types()
     }
@@ -468,15 +515,19 @@ impl NSEC3PARAM {
             salt,
         }
     }
+
     pub fn hash(&self) -> u8 {
         self.hash
     }
+
     pub fn flags(&self) -> u8 {
         self.flags
     }
+
     pub fn iterations(&self) -> u16 {
         self.iterations
     }
+
     pub fn salt(&self) -> &[u8] {
         &self.salt
     }
@@ -503,15 +554,19 @@ impl HIP {
             rendezvous_servers,
         }
     }
+
     pub fn hit(&self) -> &[u8] {
         &self.hit
     }
+
     pub fn public_key_algorithm(&self) -> u8 {
         self.public_key_algorithm
     }
+
     pub fn public_key(&self) -> &[u8] {
         &self.public_key
     }
+
     pub fn rendezvous_servers(&self) -> &[Name] {
         &self.rendezvous_servers
     }
@@ -534,9 +589,11 @@ impl TALINK {
             next_name,
         }
     }
+
     pub fn previous_name(&self) -> &Name {
         &self.previous_name
     }
+
     pub fn next_name(&self) -> &Name {
         &self.next_name
     }
@@ -579,24 +636,31 @@ impl TKEY {
             other_data,
         }
     }
+
     pub fn algorithm(&self) -> &Name {
         &self.algorithm
     }
+
     pub fn inception(&self) -> u32 {
         self.inception
     }
+
     pub fn expiration(&self) -> u32 {
         self.expiration
     }
+
     pub fn mode(&self) -> u16 {
         self.mode
     }
+
     pub fn error(&self) -> u16 {
         self.error
     }
+
     pub fn key(&self) -> &[u8] {
         &self.key
     }
+
     pub fn other_data(&self) -> &[u8] {
         &self.other_data
     }
@@ -632,24 +696,31 @@ impl TSIG {
             other_data,
         }
     }
+
     pub fn algorithm(&self) -> &Name {
         &self.algorithm
     }
+
     pub fn time_signed(&self) -> u64 {
         self.time_signed
     }
+
     pub fn fudge(&self) -> u16 {
         self.fudge
     }
+
     pub fn mac(&self) -> &[u8] {
         &self.mac
     }
+
     pub fn orig_id(&self) -> u16 {
         self.orig_id
     }
+
     pub fn error(&self) -> u16 {
         self.error
     }
+
     pub fn other_data(&self) -> &[u8] {
         &self.other_data
     }

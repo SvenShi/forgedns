@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `ipset` executor plugin.
 //!
@@ -19,18 +17,6 @@
 //! - queue overflow drops side effects (best effort).
 //! - writer failure disables plugin to prevent repeated netlink overhead.
 
-use crate::config::types::PluginConfig;
-use crate::core::context::DnsContext;
-use crate::core::error::{DnsError, Result};
-use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
-use ahash::AHashSet;
-use async_trait::async_trait;
-#[cfg(target_os = "linux")]
-use ripset::{IpCidr, ipset_add};
-use serde::Deserialize;
-use serde_yaml_ng::Value;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,9 +24,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 #[cfg(target_os = "linux")]
 use std::thread;
+
+use ahash::AHashSet;
+use async_trait::async_trait;
+#[cfg(target_os = "linux")]
+use ripset::{IpCidr, ipset_add};
+use serde::Deserialize;
+use serde_yaml_ng::Value;
 use tracing::debug;
 #[cfg(target_os = "linux")]
 use tracing::warn;
+
+use crate::config::types::PluginConfig;
+use crate::core::context::DnsContext;
+use crate::core::error::{DnsError, Result};
+use crate::plugin::executor::{ExecStep, Executor};
+use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::register_plugin_factory;
 
 #[cfg(target_os = "linux")]
 const IPSET_WRITER_QUEUE_SIZE: usize = 256;
@@ -143,7 +143,8 @@ impl Executor for IpSetExecutor {
             if let Err(e) = self.writer.try_send(entries) {
                 match e {
                     TrySendError::Full(_) => {
-                        // Best-effort side effect: dropping write preserves DNS path latency.
+                        // Best-effort side effect: dropping write preserves DNS
+                        // path latency.
                     }
                     TrySendError::Disconnected(_) => {
                         warn!(
@@ -340,9 +341,10 @@ fn write_ipset_entries(entries: &[IpSetEntry]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(target_os = "linux")]
     use ripset::IpCidr;
+
+    use super::*;
 
     #[test]
     fn test_parse_config_rejects_invalid_masks() {

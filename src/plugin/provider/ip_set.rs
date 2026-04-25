@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! High-performance IP/CIDR set provider.
 //!
 //! Design goals:
@@ -9,6 +7,16 @@
 //! - Unified IPv4/IPv6 semantics.
 //! - Local matcher plus stable referenced providers for composed sets.
 //! - Precise parse errors for file-based rules.
+
+use std::any::Any;
+use std::fmt::Debug;
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
+use serde::Deserialize;
+use tracing::{debug, info};
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
@@ -18,14 +26,6 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use arc_swap::ArcSwap;
-use async_trait::async_trait;
-use serde::Deserialize;
-use std::any::Any;
-use std::fmt::Debug;
-use std::net::IpAddr;
-use std::sync::Arc;
-use tracing::{debug, info};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct IpSetArgs {

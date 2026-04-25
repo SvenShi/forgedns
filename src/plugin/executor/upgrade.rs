@@ -1,13 +1,19 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `upgrade` executor plugin.
 //!
 //! Runs the shared upgrade subsystem from the plugin pipeline. This executor is
-//! intended for cron or explicit sequence orchestration, but it does not require
-//! a cron context.
+//! intended for cron or explicit sequence orchestration, but it does not
+//! require a cron context.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+use tracing::info;
 
 use crate::app::cli::RestartMode;
 use crate::config::types::PluginConfig;
@@ -18,12 +24,6 @@ use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
 use crate::upgrade::{self, UpgradeConfig};
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tracing::info;
 
 #[derive(Debug)]
 struct UpgradeExecutor {

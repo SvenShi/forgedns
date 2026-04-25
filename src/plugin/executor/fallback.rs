@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `fallback` executor plugin.
 //!
@@ -20,6 +18,14 @@
 //! - if both branches fail (or return no response), plugin returns error so the
 //!   server request handler can generate a failure response.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -27,12 +33,6 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde::Deserialize;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::watch;
-use tokio::task::JoinSet;
 
 #[derive(Debug, Clone, Deserialize)]
 struct FallbackConfig {
@@ -326,10 +326,10 @@ async fn run_executor(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::plugin::test_utils::test_context;
-    use crate::plugin::test_utils::{plugin_config, test_registry};
     use async_trait::async_trait;
+
+    use super::*;
+    use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
 
     #[test]
     fn test_fallback_factory_requires_args() {

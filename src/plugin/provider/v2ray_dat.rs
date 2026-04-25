@@ -1,12 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Minimal protobuf models for v2ray-rules-dat files.
 
-use prost::Message;
 use std::collections::HashSet;
+
+use prost::Message;
 
 #[derive(Clone, PartialEq, Message)]
 pub(crate) struct GeoIpList {

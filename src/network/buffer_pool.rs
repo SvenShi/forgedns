@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared wire buffer pooling for short-lived network payloads.
 //!
@@ -18,9 +16,10 @@
 //! - callers borrow buffers via an RAII wrapper; and
 //! - buffers that grew beyond the fixed capacity are replaced on return.
 
-use crossbeam_queue::ArrayQueue;
 use std::ops::{Deref, DerefMut};
 use std::sync::LazyLock;
+
+use crossbeam_queue::ArrayQueue;
 
 const DEFAULT_WIRE_BUFFER_CAPACITY: usize = 8196;
 const DEFAULT_WIRE_BUFFER_POOL_SIZE: usize = 256;

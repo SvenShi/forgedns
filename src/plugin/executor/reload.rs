@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `reload` executor plugin.
 //!
@@ -9,15 +7,17 @@
 //! control API. Triggering it schedules a full configuration reload instead of
 //! rebuilding selected plugin tags in place.
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use tracing::info;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use std::sync::Arc;
-use tracing::info;
 
 #[derive(Debug)]
 struct ReloadExecutor {

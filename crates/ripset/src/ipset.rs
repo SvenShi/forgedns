@@ -170,7 +170,8 @@ fn ipset_operate(setname: &str, entry: &IpEntry, cmd: u8) -> Result<()> {
     Err(IpSetError::ProtocolError)
 }
 
-// Custom error codes for ipset (from kernel include/uapi/linux/netfilter/ipset/ip_set.h)
+// Custom error codes for ipset (from kernel
+// include/uapi/linux/netfilter/ipset/ip_set.h)
 mod libc {
     pub use ::libc::*;
     // IPSET_ERR_PRIVATE = 4096, then PROTOCOL=4097, FIND_TYPE=4098, MAX_SETS=4099,
@@ -593,7 +594,8 @@ pub fn ipset_list(setname: &str) -> Result<Vec<IpEntry>> {
     Ok(result)
 }
 
-/// Parse attributes from ipset LIST response to extract IP addresses or networks.
+/// Parse attributes from ipset LIST response to extract IP addresses or
+/// networks.
 fn parse_ipset_list_attrs(data: &[u8], result: &mut Vec<IpEntry>) {
     let mut offset = 0;
 
@@ -706,8 +708,9 @@ fn parse_ipset_ip_attr(data: &[u8]) -> Option<IpAddr> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::net::IpAddr;
+
+    use super::*;
 
     #[test]
     fn test_ipset_msg_type() {

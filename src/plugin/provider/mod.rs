@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Provider plugin category.
 //!
 //! Providers expose reusable datasets to other plugins, especially matchers and
@@ -17,19 +15,19 @@
 //!
 //! Providers are initialized once, then shared through the plugin registry.
 //! Their per-request API should stay read-only and cheap.
+
 use std::any::Any;
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use crate::api::{ApiHandler, ApiRegister, json_error, json_ok};
-use crate::core::error::{DnsError, Result as DnsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{Request, StatusCode};
 use serde::Serialize;
 
-use crate::plugin::Plugin;
-use crate::plugin::PluginRegistry;
+use crate::api::{ApiHandler, ApiRegister, json_error, json_ok};
+use crate::core::error::{DnsError, Result as DnsResult};
+use crate::plugin::{Plugin, PluginRegistry};
 use crate::proto::{Name, Question};
 
 pub mod adguard_rule;
@@ -52,7 +50,8 @@ pub trait Provider: Plugin {
         false
     }
 
-    /// Question-level membership check for providers that need request question context.
+    /// Question-level membership check for providers that need request question
+    /// context.
     #[inline]
     fn contains_question(&self, _question: &Question) -> bool {
         false
@@ -139,20 +138,22 @@ pub(crate) fn register_reload_api_route(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::api::ApiHub;
-    use crate::config::types::{ApiConfig, ApiHttpConfig, PluginConfig};
-    use crate::plugin::dependency::DependencyKind;
-    use crate::plugin::matcher::qname::QnameFactory;
-    use crate::plugin::{PluginFactory, UninitializedPlugin};
+    use std::net::{SocketAddr, TcpListener as StdTcpListener};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use async_trait::async_trait;
     use http::{Method, Request as HttpRequest, StatusCode, Uri};
     use http_body_util::{BodyExt, Empty};
     use hyper_util::client::legacy::Client;
     use hyper_util::client::legacy::connect::HttpConnector;
     use hyper_util::rt::TokioExecutor;
-    use std::net::{SocketAddr, TcpListener as StdTcpListener};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::api::ApiHub;
+    use crate::config::types::{ApiConfig, ApiHttpConfig, PluginConfig};
+    use crate::plugin::dependency::DependencyKind;
+    use crate::plugin::matcher::qname::QnameFactory;
+    use crate::plugin::{PluginFactory, UninitializedPlugin};
 
     fn reserve_local_addr() -> SocketAddr {
         let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind test listener");

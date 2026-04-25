@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! DNS forwarding plugin
 //!
@@ -11,6 +9,15 @@
 //! - multi-upstream concurrent racing (`concurrent`) with first-success return
 //! - optional dual-stack probe flow used by `dual_selector`
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use rand::RngExt;
+use serde::Deserialize;
+use tokio::task::JoinSet;
+use tracing::{Level, debug, event_enabled, info, warn};
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -18,16 +25,8 @@ use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder, Upstre
 use crate::plugin::executor::dual_selector::{ForwardProbeRequest, ForwardProbeResult};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::proto::RecordType;
-use crate::proto::{Message, Rcode};
+use crate::proto::{Message, Rcode, RecordType};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use rand::RngExt;
-use serde::Deserialize;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::task::JoinSet;
-use tracing::{Level, debug, event_enabled, info, warn};
 
 const PROBE_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_CONCURRENT_QUERIES: usize = 3;
@@ -694,8 +693,7 @@ impl PluginFactory for ForwardFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::Name;
-    use crate::proto::{Question, Rcode};
+    use crate::proto::{Name, Question, Rcode};
 
     #[derive(Debug)]
     struct MockUpstream {

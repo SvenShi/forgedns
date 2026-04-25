@@ -1,20 +1,20 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Built-in application health endpoints for the management API.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::{Request, StatusCode};
+use serde::Serialize;
 
 use crate::api::{ApiHandler, ApiRegister, json_ok, simple_response};
 use crate::core::VERSION;
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, StatusCode};
-use serde::Serialize;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Debug)]
 pub struct HealthState {
@@ -181,9 +181,10 @@ pub fn register_builtin_routes(register: &ApiRegister, health: Arc<HealthState>)
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use http::Method;
     use http_body_util::BodyExt;
+
+    use super::*;
 
     fn test_request(path: &str) -> Request<Bytes> {
         let mut request = Request::builder()

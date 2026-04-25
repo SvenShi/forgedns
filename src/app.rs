@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Foreground application runtime entry used by the CLI `start` command.
 //!
@@ -22,20 +20,21 @@ pub mod cli;
 pub mod export_dat;
 mod logging;
 
-use crate::api::control::{AppController, ControlCommand};
-use crate::app::bootstrap::AppAssembly;
-use crate::app::cli::{CheckOptions, StartOptions};
-use crate::config;
-use crate::config::ConfigValidationSummary;
-use crate::config::types::Config;
-use crate::core;
-use crate::core::app_clock::AppClock;
-use crate::core::error::{DnsError, Result};
-use crate::plugin::dependency::DependencyKind;
 use std::collections::{HashMap, HashSet};
+
 use tokio::runtime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
+
+use crate::api::control::{AppController, ControlCommand};
+use crate::app::bootstrap::AppAssembly;
+use crate::app::cli::{CheckOptions, StartOptions};
+use crate::config::ConfigValidationSummary;
+use crate::config::types::Config;
+use crate::core::app_clock::AppClock;
+use crate::core::error::{DnsError, Result};
+use crate::plugin::dependency::DependencyKind;
+use crate::{config, core};
 
 /// Start ForgeDNS in the foreground using the provided CLI options.
 pub fn run(start: StartOptions) -> Result<()> {
@@ -46,7 +45,8 @@ pub fn run(start: StartOptions) -> Result<()> {
     init_runtime(start, config)
 }
 
-/// Validate a configuration file from the CLI without starting runtime services.
+/// Validate a configuration file from the CLI without starting runtime
+/// services.
 pub fn check(options: CheckOptions) -> Result<()> {
     let summary = run_check(&options)?;
     println!(
@@ -263,8 +263,9 @@ fn load_config(options: &StartOptions) -> Result<Config> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn write_config(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
         let path = dir.join(name);

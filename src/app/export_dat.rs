@@ -1,9 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! CLI support for exporting selected rules from v2ray-rules-dat files.
+
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::app::cli::{DatKind, ExportDatOptions, ExportFormat};
 use crate::core::error::{DnsError, Result};
@@ -13,9 +15,6 @@ use crate::plugin::provider::v2ray_dat::{
     geosite_domain_matches_selectors, matched_geosite_selectors, normalized_selectors,
     parse_geoip_dat, parse_geosite_dat, parse_geosite_selectors, unique_nonempty_selectors,
 };
-use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 pub fn run(options: ExportDatOptions) -> Result<()> {
     let selectors = unique_nonempty_selectors(&options.selectors);
@@ -551,9 +550,11 @@ fn validate_unique_output_paths(outputs: &[(PathBuf, String)]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn test_rule_path(relative_name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

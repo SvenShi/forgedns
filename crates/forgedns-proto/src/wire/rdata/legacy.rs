@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #![allow(clippy::type_complexity)]
 
@@ -48,7 +46,8 @@ pub(super) fn parse_hinfo(packet: &[u8], start: usize, end: usize) -> Result<RDa
     Ok(RData::HINFO(HINFO::new(cpu, os)))
 }
 
-/// Decode MINFO responsible mailbox and error mailbox names per RFC 1035 section 3.3.7.
+/// Decode MINFO responsible mailbox and error mailbox names per RFC 1035
+/// section 3.3.7.
 pub(super) fn parse_minfo(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     let (rmail, email) = parse_two_names(packet, start, end, "MINFO")?;
     Ok(RData::MINFO(MINFO::new(rmail, email)))
@@ -66,7 +65,8 @@ pub(super) fn parse_afsdb(packet: &[u8], start: usize, end: usize) -> Result<RDa
     Ok(RData::AFSDB(AFSDB::new(subtype, hostname)))
 }
 
-/// Decode X25 PSDN address as a single character-string per RFC 1183 section 3.1.
+/// Decode X25 PSDN address as a single character-string per RFC 1183 section
+/// 3.1.
 pub(super) fn parse_x25(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     let value = parse_single_character_string(packet, start, end, "X25")?;
     Ok(RData::X25(X25::new(value)))
@@ -77,7 +77,8 @@ pub(super) fn parse_nsap(packet: &[u8], start: usize, end: usize) -> Result<RDat
     Ok(RData::NSAP(NSAP(copy_boxed(packet, start, end))))
 }
 
-/// Decode ISDN address and optional subaddress character-strings per RFC 1183 section 3.2.
+/// Decode ISDN address and optional subaddress character-strings per RFC 1183
+/// section 3.2.
 pub(super) fn parse_isdn(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     let (address, sub_address) = parse_isdn_rdata(packet, start, end)?;
     Ok(RData::ISDN(ISDN::new(address, sub_address)))
@@ -112,12 +113,14 @@ pub(super) fn parse_px(packet: &[u8], start: usize, end: usize) -> Result<RData>
     Ok(RData::PX(PX::new(preference, map822, mapx400)))
 }
 
-/// Decode GPOS longitude, latitude, and altitude character-strings per RFC 1712.
+/// Decode GPOS longitude, latitude, and altitude character-strings per RFC
+/// 1712.
 pub(super) fn parse_gpos(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::GPOS(parse_gpos_rdata(packet, start, end)?))
 }
 
-/// Decode LOC fixed-width version, size, precision, and coordinates per RFC 1876 section 2.
+/// Decode LOC fixed-width version, size, precision, and coordinates per RFC
+/// 1876 section 2.
 pub(super) fn parse_loc(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::LOC(parse_loc_rdata(packet, start, end)?))
 }
@@ -132,7 +135,8 @@ pub(super) fn parse_atma(packet: &[u8], start: usize, end: usize) -> Result<RDat
     Ok(RData::ATMA(ATMA(copy_boxed(packet, start, end))))
 }
 
-/// Decode A6 prefix length, suffix, and optional prefix name per RFC 2874 section 3.
+/// Decode A6 prefix length, suffix, and optional prefix name per RFC 2874
+/// section 3.
 pub(super) fn parse_a6(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::A6(parse_a6_rdata(packet, start, end)?))
 }
@@ -190,7 +194,8 @@ pub(super) fn parse_unspec(packet: &[u8], start: usize, end: usize) -> Result<RD
     Ok(RData::UNSPEC(UNSPEC(copy_boxed(packet, start, end))))
 }
 
-/// Decode ANAME as a target domain name using the same wire form as CNAME-like records.
+/// Decode ANAME as a target domain name using the same wire form as CNAME-like
+/// records.
 pub(super) fn parse_aname(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::ANAME(ANAME(parse_name(
         packet, start, end, "ANAME",
@@ -232,7 +237,8 @@ pub(super) fn parse_any(start: usize, end: usize) -> Result<RData> {
     Ok(RData::ANY(ANY))
 }
 
-/// Encode legacy single-name RDATA variants, optionally with RFC 1035 name compression.
+/// Encode legacy single-name RDATA variants, optionally with RFC 1035 name
+/// compression.
 pub(super) fn encode_name_rr<'a>(
     name: &'a Name,
     out: &mut Vec<u8>,
@@ -260,7 +266,8 @@ pub(super) fn encode_hinfo(value: &HINFO, out: &mut Vec<u8>) -> Result<()> {
     encode_character_string(out, value.os(), "HINFO os")
 }
 
-/// Encode MINFO responsible mailbox and error mailbox names per RFC 1035 section 3.3.7.
+/// Encode MINFO responsible mailbox and error mailbox names per RFC 1035
+/// section 3.3.7.
 pub(super) fn encode_minfo<'a>(
     value: &'a MINFO,
     out: &mut Vec<u8>,
@@ -290,7 +297,8 @@ pub(super) fn encode_afsdb<'a>(
     write_name(out, value.hostname(), false)
 }
 
-/// Encode X25 PSDN address as a single character-string per RFC 1183 section 3.1.
+/// Encode X25 PSDN address as a single character-string per RFC 1183 section
+/// 3.1.
 pub(super) fn encode_x25(value: &X25, out: &mut Vec<u8>) -> Result<()> {
     encode_character_string(out, value.psdn_address(), "X25")
 }
@@ -300,7 +308,8 @@ pub(super) fn encode_nsap(value: &NSAP, out: &mut Vec<u8>) {
     out.extend_from_slice(&value.0);
 }
 
-/// Encode ISDN address and optional subaddress character-strings per RFC 1183 section 3.2.
+/// Encode ISDN address and optional subaddress character-strings per RFC 1183
+/// section 3.2.
 pub(super) fn encode_isdn(value: &ISDN, out: &mut Vec<u8>) -> Result<()> {
     encode_character_string(out, value.address(), "ISDN address")?;
     if let Some(sub) = value.sub_address() {
@@ -340,7 +349,8 @@ pub(super) fn encode_px<'a>(
     write_name(out, value.mapx400(), false)
 }
 
-/// Encode GPOS longitude, latitude, and altitude character-strings per RFC 1712.
+/// Encode GPOS longitude, latitude, and altitude character-strings per RFC
+/// 1712.
 pub(super) fn encode_gpos(value: &GPOS, out: &mut Vec<u8>) -> Result<()> {
     encode_character_string(out, value.longitude(), "GPOS longitude")?;
     encode_character_string(out, value.latitude(), "GPOS latitude")?;
@@ -374,7 +384,8 @@ pub(super) fn encode_atma(value: &ATMA, out: &mut Vec<u8>) {
     out.extend_from_slice(&value.0);
 }
 
-/// Encode A6 prefix length, suffix, and optional prefix name per RFC 2874 section 3.
+/// Encode A6 prefix length, suffix, and optional prefix name per RFC 2874
+/// section 3.
 pub(super) fn encode_a6<'a>(
     value: &'a A6,
     out: &mut Vec<u8>,
@@ -401,7 +412,7 @@ pub(super) fn encode_apl(value: &APL, out: &mut Vec<u8>) -> Result<()> {
         push_u16(out, prefix.family());
         out.push(prefix.prefix());
         let afd_len = prefix.afd_part().len();
-        if afd_len > 0x7f {
+        if afd_len > 0x7F {
             return Err(DnsError::protocol("APL afd part exceeds 127 bytes"));
         }
         let mut len = afd_len as u8;
@@ -518,7 +529,8 @@ fn parse_loc_rdata(packet: &[u8], start: usize, end: usize) -> Result<LOC> {
     ))
 }
 
-/// Parse APL prefix tuples with family, prefix length, negation bit, and truncated address part.
+/// Parse APL prefix tuples with family, prefix length, negation bit, and
+/// truncated address part.
 fn parse_apl_rdata(packet: &[u8], start: usize, end: usize) -> Result<APL> {
     let mut cursor = start;
     let mut prefixes = Vec::new();
@@ -528,7 +540,7 @@ fn parse_apl_rdata(packet: &[u8], start: usize, end: usize) -> Result<APL> {
         }
         let family = u16::from_be_bytes([packet[cursor], packet[cursor + 1]]);
         let prefix = packet[cursor + 2];
-        let afd_len = packet[cursor + 3] & 0x7f;
+        let afd_len = packet[cursor + 3] & 0x7F;
         let negation = (packet[cursor + 3] & 0x80) != 0;
         let afd_start = cursor + 4;
         let afd_end = afd_start + afd_len as usize;
@@ -675,7 +687,7 @@ mod tests {
             (
                 &[
                     0, 0x12, 0x13, 0x14, 0x81, 0x23, 0x45, 0x67, 0x84, 0x56, 0x78, 0x90, 0x00,
-                    0x98, 0x97, 0x3b,
+                    0x98, 0x97, 0x3B,
                 ],
                 parse_loc,
             ),
@@ -696,7 +708,7 @@ mod tests {
             ),
             (&[0, 0, 3, 232], parse_uid),
             (&[0, 0, 3, 232], parse_gid),
-            (&[0xaa, 0xbb], parse_unspec),
+            (&[0xAA, 0xBB], parse_unspec),
             (&[5, b'a', b'n', b'a', b'm', b'e', 0], parse_aname),
             (&[], |_p, s, e| parse_ixfr(s, e)),
             (&[], |_p, s, e| parse_axfr(s, e)),

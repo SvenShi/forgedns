@@ -1,17 +1,17 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Owned DNS name model.
 
-use crate::core::error::{DnsError, Result};
-use smallvec::SmallVec;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
+
+use smallvec::SmallVec;
+
+use crate::core::error::{DnsError, Result};
 
 const MAX_NAME_WIRE_OCTETS: usize = 255;
 const MAX_COMPRESSION_POINTERS: usize = (MAX_NAME_WIRE_OCTETS + 1).div_ceil(2) - 2;
@@ -71,7 +71,8 @@ const ASCII_LOWERCASE_TABLE: [u8; 256] = build_ascii_lowercase_table();
 /// Layout:
 /// - `wire`: expanded wire name preserving original input/packet case
 /// - `wire_label_offsets`: start offset of each label length octet in `wire`
-/// - `presentation`: eagerly built canonical lowercased escaped fqdn with offsets
+/// - `presentation`: eagerly built canonical lowercased escaped fqdn with
+///   offsets
 #[derive(Debug, Clone)]
 pub struct Name {
     inner: Arc<NameInner>,
@@ -339,14 +340,16 @@ impl Name {
         &self.inner.wire[start..end]
     }
 
-    /// Borrow the canonical suffix from label index `index` to the end, without a trailing dot.
+    /// Borrow the canonical suffix from label index `index` to the end, without
+    /// a trailing dot.
     #[inline]
     pub(crate) fn suffix_from(&self, index: usize) -> &str {
         let start = self.presentation().fqdn_label_offsets[index] as usize;
         &self.as_str()[start..]
     }
 
-    /// Borrow the original-case wire suffix from `wire`, including the terminating root label.
+    /// Borrow the original-case wire suffix from `wire`, including the
+    /// terminating root label.
     #[inline]
     pub(crate) fn wire_suffix_from(&self, index: usize) -> &[u8] {
         if index == self.label_count() {
@@ -751,8 +754,8 @@ mod tests {
     }
 
     #[test]
-    // Reverse-lookup helpers are used by matchers and should stay stable for both IPv4
-    // and IPv6 nibble-style names.
+    // Reverse-lookup helpers are used by matchers and should stay stable for both
+    // IPv4 and IPv6 nibble-style names.
     fn parse_arpa_name_roundtrip_examples() {
         let v4 = Name::from_ascii("4.3.2.1.in-addr.arpa.").unwrap();
         assert_eq!(
@@ -779,13 +782,13 @@ mod tests {
                 "compressed suffix",
                 vec![
                     7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 3, b'w',
-                    b'w', b'w', 0xc0, 0x00,
+                    b'w', b'w', 0xC0, 0x00,
                 ],
                 true,
             ),
-            ("pointer loop", vec![0xc0, 0x00], false),
-            ("truncated pointer", vec![0xc0], false),
-            ("pointer past end", vec![0xc0, 0x10], false),
+            ("pointer loop", vec![0xC0, 0x00], false),
+            ("truncated pointer", vec![0xC0], false),
+            ("pointer past end", vec![0xC0, 0x10], false),
             ("label exceeds packet", vec![3, b'w'], false),
         ];
 

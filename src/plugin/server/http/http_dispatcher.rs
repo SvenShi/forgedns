@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! HTTP Dispatcher - Routes requests based on method and path
 //!
@@ -9,8 +7,9 @@
 //! - GET method: DNS query passed via URL parameter (base64url encoded)
 //! - POST method: DNS query passed in request body (binary format)
 
-use crate::plugin::server::{RequestHandle, RequestMeta};
-use crate::proto::{Message, Rcode};
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use ahash::AHashMap;
 use async_trait::async_trait;
 use base64::Engine;
@@ -18,9 +17,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderValue, Method, Response, StatusCode};
-use std::net::SocketAddr;
-use std::sync::Arc;
 use tracing::{debug, warn};
+
+use crate::plugin::server::{RequestHandle, RequestMeta};
+use crate::proto::{Message, Rcode};
 
 const CONTENT_TYPE_DNS_MESSAGE: HeaderValue = HeaderValue::from_static("application/dns-message");
 const CONTENT_TYPE_TEXT_PLAIN: HeaderValue = HeaderValue::from_static("text/plain");
@@ -57,8 +57,8 @@ impl HttpDispatcher {
 
     /// Handle an HTTP request
     ///
-    /// Dispatches the request to the appropriate handler based on method and path.
-    /// Returns a 404 response if no matching route is found.
+    /// Dispatches the request to the appropriate handler based on method and
+    /// path. Returns a 404 response if no matching route is found.
     #[hotpath::measure]
     pub async fn handle_request(
         &self,
@@ -107,7 +107,8 @@ pub trait HttpHandler: Send + Sync + 'static {
     /// - `path`: Request path
     /// - `query`: Optional query string
     /// - `body`: Request body as bytes
-    /// - `src_addr`: Source address of the client (maybe real client IP from headers)
+    /// - `src_addr`: Source address of the client (maybe real client IP from
+    ///   headers)
     async fn handle(
         &self,
         method: Method,
@@ -334,16 +335,17 @@ fn http_cache_ttl(response: &Message) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::Result;
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
-    use crate::proto::{Name, RecordType};
-    use crate::proto::{Question, Rcode};
-    use async_trait::async_trait;
-    use std::sync::Mutex;
+    use crate::proto::{Name, Question, Rcode, RecordType};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ObservedRequest {

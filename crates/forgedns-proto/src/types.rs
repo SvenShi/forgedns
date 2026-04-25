@@ -1,14 +1,13 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! DNS enums used by the owned message model.
 
-use crate::core::error::{DnsError, Result as DnsResult};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+
+use crate::core::error::{DnsError, Result as DnsResult};
 
 /// DNS message direction.
 #[derive(Debug, Eq, PartialEq, PartialOrd, Copy, Clone, Hash)]
@@ -186,7 +185,7 @@ impl Rcode {
             Self::BADALG => 5,
             Self::BADTRUNC => 6,
             Self::BADCOOKIE => 7,
-            Self::Unknown(code) => (code & 0x000f) as u8,
+            Self::Unknown(code) => (code & 0x000F) as u8,
         }
     }
 
@@ -212,7 +211,7 @@ impl Rcode {
             Self::BADALG => 1,
             Self::BADTRUNC => 1,
             Self::BADCOOKIE => 1,
-            Self::Unknown(code) => ((code >> 4) & 0x00ff) as u8,
+            Self::Unknown(code) => ((code >> 4) & 0x00FF) as u8,
         }
     }
 
@@ -223,32 +222,49 @@ impl Rcode {
 
     #[inline]
     pub fn from_parts(high: u8, low: u8) -> Self {
-        Self::from((u16::from(high) << 4) | u16::from(low & 0x0f))
+        Self::from((u16::from(high) << 4) | u16::from(low & 0x0F))
     }
 
     /// Transforms the response code into the human message
     pub fn to_str(self) -> &'static str {
         match self {
             Self::NoError => "No Error",
-            Self::FormErr => "Form Error", // 1     FormErr       Format Error                        [RFC1035]
-            Self::ServFail => "Server Failure", // 2     ServFail      Server Failure                      [RFC1035]
-            Self::NXDomain => "Non-Existent Domain", // 3     NXDomain      Non-Existent Domain                 [RFC1035]
-            Self::NotImp => "Not Implemented", // 4     NotImp        Not Implemented                     [RFC1035]
-            Self::Refused => "Query Refused", // 5     Refused       Query Refused                       [RFC1035]
-            Self::YXDomain => "Name should not exist", // 6     YXDomain      Name Exists when it should not      [RFC2136][RFC6672]
-            Self::YXRRSet => "RR Set should not exist", // 7     YXRRSet       RR Set Exists when it should not    [RFC2136]
-            Self::NXRRSet => "RR Set does not exist", // 8     NXRRSet       RR Set that should exist does not   [RFC2136]
-            Self::NotAuth => "Not authorized", // 9     NotAuth       Server Not Authoritative for zone   [RFC2136]
-            Self::NotZone => "Name not in zone", // 10    NotZone       Name not contained in zone          [RFC2136]
+            Self::FormErr => "Form Error", // 1     FormErr       Format Error
+            // [RFC1035]
+            Self::ServFail => "Server Failure", // 2     ServFail      Server Failure
+            // [RFC1035]
+            Self::NXDomain => "Non-Existent Domain", // 3     NXDomain      Non-Existent Domain
+            // [RFC1035]
+            Self::NotImp => "Not Implemented", // 4     NotImp        Not Implemented
+            // [RFC1035]
+            Self::Refused => "Query Refused", // 5     Refused       Query Refused
+            // [RFC1035]
+            Self::YXDomain => "Name should not exist", /* 6     YXDomain      Name Exists when it should not      [RFC2136][RFC6672] */
+            Self::YXRRSet => "RR Set should not exist", // 7     YXRRSet       RR Set Exists when
+            // it should not    [RFC2136]
+            Self::NXRRSet => "RR Set does not exist", // 8     NXRRSet       RR Set that should
+            // exist does not   [RFC2136]
+            Self::NotAuth => "Not authorized", // 9     NotAuth       Server Not Authoritative
+            // for zone   [RFC2136]
+            Self::NotZone => "Name not in zone", // 10    NotZone       Name not contained in
+            // zone          [RFC2136]
             Self::BADVERS => "Bad OPT Version",
             Self::BADSIG => "TSIG Signature Failure",
-            Self::BADKEY => "Key not recognized", // 17    BADKEY        Key not recognized                  [RFC2845]
-            Self::BADTIME => "Signature out of time window", // 18    BADTIME       Signature out of time window        [RFC2845]
-            Self::BADMODE => "Bad TKEY mode", // 19    BADMODE       Bad TKEY Mode                       [RFC2930]
-            Self::BADNAME => "Duplicate key name", // 20    BADNAME       Duplicate key name                  [RFC2930]
-            Self::BADALG => "Algorithm not supported", // 21    BADALG        Algorithm not supported             [RFC2930]
-            Self::BADTRUNC => "Bad truncation", // 22    BADTRUNC      Bad Truncation                      [RFC4635]
-            Self::BADCOOKIE => "Bad server cookie", // 23    BADCOOKIE     Bad/missing Server Cookie           [RFC7873]
+            Self::BADKEY => "Key not recognized", // 17    BADKEY        Key not recognized
+            // [RFC2845]
+            Self::BADTIME => "Signature out of time window", // 18    BADTIME       Signature
+            // out of time window
+            // [RFC2845]
+            Self::BADMODE => "Bad TKEY mode", // 19    BADMODE       Bad TKEY Mode
+            // [RFC2930]
+            Self::BADNAME => "Duplicate key name", // 20    BADNAME       Duplicate key name
+            // [RFC2930]
+            Self::BADALG => "Algorithm not supported", // 21    BADALG        Algorithm not
+            // supported             [RFC2930]
+            Self::BADTRUNC => "Bad truncation", // 22    BADTRUNC      Bad Truncation
+            // [RFC4635]
+            Self::BADCOOKIE => "Bad server cookie", // 23    BADCOOKIE     Bad/missing Server
+            // Cookie           [RFC7873]
             Self::Unknown(_) => "Unknown response code",
         }
     }
@@ -269,17 +285,18 @@ impl From<u16> for Rcode {
             3 => Self::NXDomain, // 3    NXDomain   Non-Existent Domain                  [RFC1035]
             4 => Self::NotImp,  // 4    NotImp     Not Implemented                      [RFC1035]
             5 => Self::Refused, // 5    Refused    Query Refused                        [RFC1035]
-            6 => Self::YXDomain, // 6    YXDomain   Name Exists when it should not       [RFC2136][RFC6672]
-            7 => Self::YXRRSet,  // 7    YXRRSet    RR Set Exists when it should not     [RFC2136]
-            8 => Self::NXRRSet,  // 8    NXRRSet    RR Set that should exist does not    [RFC2136]
-            9 => Self::NotAuth,  // 9    NotAuth    Server Not Authoritative for zone    [RFC2136]
+            6 => Self::YXDomain, // 6    YXDomain   Name Exists when it should not
+            // [RFC2136][RFC6672]
+            7 => Self::YXRRSet, // 7    YXRRSet    RR Set Exists when it should not     [RFC2136]
+            8 => Self::NXRRSet, // 8    NXRRSet    RR Set that should exist does not    [RFC2136]
+            9 => Self::NotAuth, // 9    NotAuth    Server Not Authoritative for zone    [RFC2136]
             10 => Self::NotZone, // 10   NotZone    Name not contained in zone           [RFC2136]
             16 => Self::BADVERS, // 16    BADVERS/BADSIG context-dependent; default to EDNS BADVERS
-            17 => Self::BADKEY,  // 17    BADKEY    Key not recognized                   [RFC2845]
+            17 => Self::BADKEY, // 17    BADKEY    Key not recognized                   [RFC2845]
             18 => Self::BADTIME, // 18    BADTIME   Signature out of time window         [RFC2845]
             19 => Self::BADMODE, // 19    BADMODE   Bad TKEY Mode                        [RFC2930]
             20 => Self::BADNAME, // 20    BADNAME   Duplicate key name                   [RFC2930]
-            21 => Self::BADALG,  // 21    BADALG    Algorithm not supported              [RFC2930]
+            21 => Self::BADALG, // 21    BADALG    Algorithm not supported              [RFC2930]
             22 => Self::BADTRUNC, // 22    BADTRUNC  Bad Truncation                       [RFC4635]
             23 => Self::BADCOOKIE, // 23    BADCOOKIE Bad/missing Server Cookie            [RFC7873]
             code => Self::Unknown(code),
@@ -296,12 +313,12 @@ impl From<Rcode> for u16 {
             Rcode::NXDomain => 3, // 3   NXDomain   Non-Existent Domain                   [RFC1035]
             Rcode::NotImp => 4,  // 4   NotImp     Not Implemented                       [RFC1035]
             Rcode::Refused => 5, // 5   Refused    Query Refused                         [RFC1035]
-            Rcode::YXDomain => 6, // 6   YXDomain   Name Exists when it should not        [RFC2136][RFC6672]
-            Rcode::YXRRSet => 7,  // 7   YXRRSet    RR Set Exists when it should not      [RFC2136]
-            Rcode::NXRRSet => 8,  // 8   NXRRSet    RR Set that should exist does not     [RFC2136]
-            Rcode::NotAuth => 9,  // 9   NotAuth    Server Not Authoritative for zone     [RFC2136]
+            Rcode::YXDomain => 6, // 6   YXDomain   Name Exists when it should not
+            // [RFC2136][RFC6672]
+            Rcode::YXRRSet => 7, // 7   YXRRSet    RR Set Exists when it should not      [RFC2136]
+            Rcode::NXRRSet => 8, // 8   NXRRSet    RR Set that should exist does not     [RFC2136]
+            Rcode::NotAuth => 9, // 9   NotAuth    Server Not Authoritative for zone     [RFC2136]
             Rcode::NotZone => 10, // 10  NotZone    Name not contained in zone            [RFC2136]
-            //
             // 11-15    Unassigned
             //
             // 16  BADVERS  Bad OPT Version         [RFC6891]
@@ -313,7 +330,8 @@ impl From<Rcode> for u16 {
             Rcode::BADNAME => 20, // 20  BADNAME   Duplicate key name                     [RFC2930]
             Rcode::BADALG => 21, // 21  BADALG    Algorithm not supported                [RFC2930]
             Rcode::BADTRUNC => 22, // 22  BADTRUNC  Bad Truncation                         [RFC4635]
-            Rcode::BADCOOKIE => 23, // 23  BADCOOKIE Bad/missing Server Cookie              [RFC7873]
+            Rcode::BADCOOKIE => 23, // 23  BADCOOKIE Bad/missing Server Cookie
+            // [RFC7873]
             Rcode::Unknown(code) => code,
         }
     }
@@ -333,9 +351,9 @@ mod tests {
         assert_eq!(Rcode::BADVERS.high(), 1);
         assert!(Rcode::BADVERS.has_extended_bits());
 
-        assert_eq!(Rcode::Unknown(0x03af).low(), 0x0f);
-        assert_eq!(Rcode::Unknown(0x03af).high(), 0x3a);
-        assert_eq!(Rcode::from_parts(0x3a, 0x0f), Rcode::Unknown(0x03af));
+        assert_eq!(Rcode::Unknown(0x03AF).low(), 0x0F);
+        assert_eq!(Rcode::Unknown(0x03AF).high(), 0x3A);
+        assert_eq!(Rcode::from_parts(0x3A, 0x0F), Rcode::Unknown(0x03AF));
         assert_eq!(Rcode::from_parts(1, 0), Rcode::BADVERS);
     }
 }

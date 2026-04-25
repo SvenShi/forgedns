@@ -1,14 +1,13 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::proto::Message;
 use std::net::SocketAddr;
+
 use tokio::net::UdpSocket;
 
 use crate::core::error::{DnsError, Result};
 use crate::network::buffer_pool::wire_buffer_pool;
+use crate::proto::Message;
 
 /// UDP transport wrapper for DNS messages.
 ///

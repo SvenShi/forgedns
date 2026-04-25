@@ -1,7 +1,17 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::fmt::Debug;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use tokio::task::yield_now;
+use tracing::debug;
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
@@ -11,17 +21,6 @@ use crate::network::upstream::pool::{
 };
 use crate::network::upstream::utils::close_conns;
 use crate::proto::Message;
-use arc_swap::ArcSwap;
-use async_trait::async_trait;
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
-use std::time::Duration;
-use tokio::task::yield_now;
-use tracing::debug;
 
 #[derive(Debug)]
 pub struct PipelinePool<C: Connection> {
@@ -292,10 +291,11 @@ impl<C: Connection> Drop for PipelinePool<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    use super::*;
 
     #[derive(Debug)]
     struct MockConnection {

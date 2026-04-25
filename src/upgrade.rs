@@ -1,9 +1,20 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Release upgrade support shared by the CLI and executor plugin.
+
+use std::fs::{self, File};
+use std::io::{BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use fs2::FileExt;
+use http::header::{HeaderValue, USER_AGENT};
+use semver::Version;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use tokio::time::timeout;
+use tracing::info;
 
 use crate::app::cli::{RestartMode, UpgradeAction, UpgradeOptions};
 use crate::core::VERSION;
@@ -13,17 +24,6 @@ use crate::network::http_client::{
 };
 use crate::network::upstream::parse_socks5_opt;
 use crate::service;
-use fs2::FileExt;
-use http::header::{HeaderValue, USER_AGENT};
-use semver::Version;
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use std::fs::{self, File};
-use std::io::{BufReader, Read, Write};
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::time::timeout;
-use tracing::info;
 
 const DEFAULT_REPOSITORY: &str = "SvenShi/forgedns";
 const DEFAULT_TARGET: &str = "latest";

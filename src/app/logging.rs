@@ -1,16 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Application logging bootstrap and formatter.
 
-use crate::config::types::{LogConfig, LogRotation};
-use crate::core::app_clock::AppClock;
-use crate::core::system_utils::unix_time;
-use std::fmt as std_fmt;
-use std::fs;
 use std::path::Path;
+use std::{fmt as std_fmt, fs};
+
 use tracing::{Event, Subscriber, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -21,6 +16,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
+
+use crate::config::types::{LogConfig, LogRotation};
+use crate::core::app_clock::AppClock;
+use crate::core::system_utils::unix_time;
 
 /// Initialize the logging system with console and optional file output.
 pub fn start_logging(log: LogConfig) -> WorkerGuard {

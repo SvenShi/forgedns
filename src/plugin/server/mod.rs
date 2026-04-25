@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Server plugin category.
 //!
 //! Server plugins terminate inbound DNS transports and feed normalized requests
@@ -15,21 +13,23 @@
 //! - construct [`DnsContext`] inputs from decoded DNS messages plus transport
 //!   metadata;
 //! - invoke the configured entry executor chain; and
-//! - translate the resulting [`crate::proto::Message`] back into the transport's
-//!   response format.
+//! - translate the resulting [`crate::proto::Message`] back into the
+//!   transport's response format.
 //!
 //! This separation keeps protocol code isolated from matchers, executors, and
 //! providers, while preserving a common request lifecycle across all servers.
-use crate::core::context::DnsContext;
-use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginRegistry};
-use crate::proto::{Message, Rcode};
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
 use tracing::{Level, debug, event_enabled, warn};
 
+use crate::core::context::DnsContext;
 pub(crate) use crate::network::listen::parse_listen_addr;
+use crate::plugin::executor::{ExecStep, Executor};
+use crate::plugin::{Plugin, PluginRegistry};
+use crate::proto::{Message, Rcode};
 
 pub mod http;
 pub mod quic;
@@ -195,14 +195,15 @@ impl RequestHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
     use super::*;
     use crate::continue_next;
     use crate::core::error::Result;
     use crate::plugin::test_utils::test_registry;
-    use crate::proto::Question;
-    use crate::proto::{Name, RecordType};
-    use async_trait::async_trait;
-    use std::sync::Mutex;
+    use crate::proto::{Name, Question, RecordType};
 
     #[test]
     fn test_parse_listen_addr_accepts_port_only_shorthand() {

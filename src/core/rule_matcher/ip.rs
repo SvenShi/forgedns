@@ -1,20 +1,19 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! High-performance IP prefix matcher shared by providers and DNS matchers.
 //!
-//! Rules are collected in a simple append-only form during loading and can later be compiled
-//! into structures tuned for repeated membership checks:
+//! Rules are collected in a simple append-only form during loading and can
+//! later be compiled into structures tuned for repeated membership checks:
 //!
-//! - IPv4 ranges are partitioned by the high 16 bits of the address, then each page is encoded
-//!   as empty, fully covered, a few inline ranges, or a bitmap.
-//! - IPv6 ranges are merged into a sorted non-overlapping array and queried either linearly for
-//!   tiny rule sets or with a partition-based lookup for larger ones.
+//! - IPv4 ranges are partitioned by the high 16 bits of the address, then each
+//!   page is encoded as empty, fully covered, a few inline ranges, or a bitmap.
+//! - IPv6 ranges are merged into a sorted non-overlapping array and queried
+//!   either linearly for tiny rule sets or with a partition-based lookup for
+//!   larger ones.
 //!
-//! This keeps startup logic straightforward while ensuring the query-time path stays allocation
-//! free and branch-light.
+//! This keeps startup logic straightforward while ensuring the query-time path
+//! stays allocation free and branch-light.
 
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -244,8 +243,9 @@ impl V6Matcher {
 
 /// Public IP prefix matcher used by providers and IP-oriented rule plugins.
 ///
-/// Callers typically append rules with `add_rule()`, call `finalize()` once after loading,
-/// and then use one of the `contains_*` methods on the request path.
+/// Callers typically append rules with `add_rule()`, call `finalize()` once
+/// after loading, and then use one of the `contains_*` methods on the request
+/// path.
 #[derive(Debug, Default)]
 pub struct IpPrefixMatcher {
     v4_rules: Vec<Ipv4Range>,
@@ -281,7 +281,8 @@ impl IpPrefixMatcher {
 
     /// Parse and append a host or CIDR rule.
     ///
-    /// Empty lines are ignored so raw rule-list input can be streamed in directly.
+    /// Empty lines are ignored so raw rule-list input can be streamed in
+    /// directly.
     pub fn add_rule(&mut self, raw_rule: &str) -> Result<(), String> {
         let rule = raw_rule.trim();
         if rule.is_empty() {
@@ -354,8 +355,8 @@ impl IpPrefixMatcher {
 
 /// Compile merged IPv4 ranges into a two-level page matcher.
 ///
-/// The high 16 bits select a page. Inside each page we choose the lightest representation that
-/// can describe the covered low 16-bit intervals.
+/// The high 16 bits select a page. Inside each page we choose the lightest
+/// representation that can describe the covered low 16-bit intervals.
 fn compile_v4_matcher(ranges: &mut Vec<Ipv4Range>) -> Option<V4Matcher> {
     if ranges.is_empty() {
         return None;
@@ -568,7 +569,8 @@ fn merge_v6_ranges(ranges: &mut Vec<Ipv6Range>) {
     ranges.truncate(write + 1);
 }
 
-/// Merge page-local low-16-bit intervals after IPv4 ranges have been split by page.
+/// Merge page-local low-16-bit intervals after IPv4 ranges have been split by
+/// page.
 fn merge_local_u16_ranges(ranges: &mut Vec<(u16, u16)>) {
     if ranges.len() <= 1 {
         return;
@@ -622,7 +624,8 @@ fn bit_mask_between(start_bit: u32, end_bit: u32) -> u64 {
     end_mask & (u64::MAX << start_bit)
 }
 
-/// Parse a host address or CIDR prefix and normalize it into network bits plus prefix length.
+/// Parse a host address or CIDR prefix and normalize it into network bits plus
+/// prefix length.
 ///
 /// Bare addresses are treated as `/32` for IPv4 and `/128` for IPv6.
 fn parse_ip_prefix(raw: &str) -> Result<ParsedPrefix, String> {
@@ -710,7 +713,8 @@ fn mask_v6_bits(bits: u128, prefix_len: u8) -> u128 {
     }
 }
 
-/// Convert an IPv6 address into a big-endian integer for fast range comparisons.
+/// Convert an IPv6 address into a big-endian integer for fast range
+/// comparisons.
 #[inline]
 fn ipv6_to_u128(ip: Ipv6Addr) -> u128 {
     u128::from_be_bytes(ip.octets())
@@ -718,8 +722,9 @@ fn ipv6_to_u128(ip: Ipv6Addr) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::net::Ipv4Addr;
+
+    use super::*;
 
     #[test]
     fn test_ipv4_host_rule() {

@@ -1,18 +1,18 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::model::{AdGuardRuleConfig, DnsTypeConstraint, ParsedRule, PatternMatcher, RuleInput};
-use crate::core::error::{DnsError, Result as DnsResult};
-use crate::proto::RecordType;
-use regex::RegexBuilder;
-use serde_yaml_ng::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
 use std::str::FromStr;
+
+use regex::RegexBuilder;
+use serde_yaml_ng::Value;
 use tracing::warn;
+
+use super::model::{AdGuardRuleConfig, DnsTypeConstraint, ParsedRule, PatternMatcher, RuleInput};
+use crate::core::error::{DnsError, Result as DnsResult};
+use crate::proto::RecordType;
 
 pub(super) fn parse_config(args: Option<Value>) -> DnsResult<AdGuardRuleConfig> {
     let Some(args) = args else {

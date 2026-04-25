@@ -1,11 +1,10 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Connection pooling infrastructure for DNS upstreams
 //!
-//! Provides high-performance connection management with different pooling strategies:
+//! Provides high-performance connection management with different pooling
+//! strategies:
 //!
 //! # Pool Types
 //!
@@ -35,6 +34,18 @@
 //! - Zero-copy message passing where possible
 //! - Connection reuse to amortize handshake costs
 
+use std::fmt::Debug;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use tokio::task::yield_now;
+
+use crate::core::error::Result;
+use crate::core::task_center;
+use crate::proto::Message;
+
 mod request_map;
 
 pub(crate) mod conn_h2;
@@ -45,19 +56,8 @@ pub(crate) mod conn_udp;
 pub(crate) mod pool_pipeline;
 pub(crate) mod pool_reuse;
 
-use crate::core::error::Result;
-use crate::core::task_center;
-use crate::proto::Message;
-use async_trait::async_trait;
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::Weak;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-use tokio::task::yield_now;
-
-/// Connection trait - represents a single persistent connection to an upstream DNS server
+/// Connection trait - represents a single persistent connection to an upstream
+/// DNS server
 ///
 /// All connection types (UDP, TCP, QUIC, H2, H3) implement this trait.
 /// Connections manage their own request/response correlation and lifecycle.
@@ -98,10 +98,12 @@ pub trait ConnectionBuilder<C: Connection>: Send + Sync + Debug + 'static {
     /// Create a new connection with the given ID
     ///
     /// # Arguments
-    /// * `conn_id` - Unique identifier for this connection (used for debugging/logging)
+    /// * `conn_id` - Unique identifier for this connection (used for
+    ///   debugging/logging)
     ///
     /// # Returns
-    /// Arc-wrapped connection on success, or error if connection establishment fails
+    /// Arc-wrapped connection on success, or error if connection establishment
+    /// fails
     async fn create_connection(&self, conn_id: u16) -> Result<Arc<C>>;
 }
 
@@ -127,7 +129,8 @@ pub trait ConnectionPool<C: Connection>: Send + Sync + Debug + 'static {
     async fn maintain(&self);
 }
 
-/// Pools that own a periodic maintenance task managed by the global task center.
+/// Pools that own a periodic maintenance task managed by the global task
+/// center.
 pub trait ManagedMaintenanceTask {
     fn maintenance_task_id(&self) -> &Mutex<Option<u64>>;
     fn maintenance_task_name(&self) -> String;

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! TCP DNS server plugin
 //!
@@ -15,6 +13,21 @@
 //! `cert` and `key` configuration options pointing to PEM-encoded certificate
 //! and private key files.
 
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
+use tokio::net::TcpListener;
+use tokio::sync::{oneshot, watch};
+use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use tracing::{debug, error, info, warn};
+
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::network::tls_config::load_tls_config;
@@ -27,20 +40,6 @@ use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::proto::Message;
 use crate::register_plugin_factory;
 
-use async_trait::async_trait;
-use serde::Deserialize;
-use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::net::TcpListener;
-use tokio::sync::{oneshot, watch};
-use tokio_rustls::TlsAcceptor;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, warn};
-
 const DEFAULT_IDLE_TIMEOUT: u64 = 10;
 
 const TCP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
@@ -50,7 +49,8 @@ const TCP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
 pub struct TcpServerConfig {
     /// Entry executor plugin tag to process incoming requests.
     ///
-    /// - Must reference an existing executor plugin registered in `PluginRegistry`.
+    /// - Must reference an existing executor plugin registered in
+    ///   `PluginRegistry`.
     /// - All TCP/TLS DNS queries will be forwarded to this executor.
     entry: String,
 
@@ -63,7 +63,8 @@ pub struct TcpServerConfig {
 
     /// Path to TLS certificate file (PEM format, optional).
     ///
-    /// - When both `cert` and `key` are provided, TLS will be enabled (DoT on port 853).
+    /// - When both `cert` and `key` are provided, TLS will be enabled (DoT on
+    ///   port 853).
     /// - When either is missing, server runs in plain TCP mode.
     cert: Option<String>,
 
@@ -444,11 +445,13 @@ impl PluginFactory for TcpServerFactory {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use serde_yaml_ng::from_str;
+    use tokio::time::Duration;
+
     use super::*;
     use crate::plugin::test_utils::{plugin_config, test_registry};
-    use serde_yaml_ng::from_str;
-    use std::net::{IpAddr, Ipv4Addr};
-    use tokio::time::Duration;
 
     #[test]
     fn test_tcp_factory_requires_args() {

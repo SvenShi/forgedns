@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Utility functions for connection pooling
 //!
@@ -11,10 +9,11 @@
 //! - DoH request construction
 //! - Connection cleanup
 
-use crate::core::error::{DnsError, Result};
-use crate::network::tls_config::{insecure_client_config, secure_client_config};
-use crate::network::upstream::pool::Connection;
-use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
+use std::io::ErrorKind;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::sync::Arc;
+use std::time::Duration;
+
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use bytes::BytesMut;
@@ -25,15 +24,16 @@ use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TokioRuntime};
 use rustls::pki_types::ServerName;
 use socket2::{Domain, Protocol, Socket, Type};
-use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket};
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tracing::info;
+
+use crate::core::error::{DnsError, Result};
+use crate::network::tls_config::{insecure_client_config, secure_client_config};
+use crate::network::upstream::pool::Connection;
+use crate::network::upstream::{ConnectionInfo, ConnectionType, Socks5Opt};
 
 /// Establish TLS connection over an existing TCP stream
 ///
@@ -41,7 +41,8 @@ use tracing::info;
 ///
 /// # Arguments
 /// * `tcp_stream` - Established TCP connection to upgrade to TLS
-/// * `skip_cert` - If true, skip certificate validation (**INSECURE** - testing/debug only!)
+/// * `skip_cert` - If true, skip certificate validation (**INSECURE** -
+///   testing/debug only!)
 /// * `server_name` - SNI (Server Name Indication) hostname for TLS handshake
 /// * `conn_timeout` - Maximum time to wait for TLS handshake to complete
 ///
@@ -50,8 +51,9 @@ use tracing::info;
 /// - `Err(DnsError)` if handshake fails or times out
 ///
 /// # Security Warning
-/// Setting `skip_cert` to true disables certificate validation and makes the connection
-/// vulnerable to man-in-the-middle attacks. Only use this for testing!
+/// Setting `skip_cert` to true disables certificate validation and makes the
+/// connection vulnerable to man-in-the-middle attacks. Only use this for
+/// testing!
 #[inline]
 pub(crate) async fn connect_tls(
     tcp_stream: TcpStream,
@@ -85,8 +87,10 @@ pub(crate) async fn connect_tls(
 ///
 /// # Arguments
 /// * `udp_socket` - Pre-configured UDP socket (already connected to remote)
-/// * `skip_cert` - If true, skip certificate validation (**INSECURE** - testing only!)
-/// * `server_name` - SNI (Server Name Indication) hostname for TLS 1.3 handshake
+/// * `skip_cert` - If true, skip certificate validation (**INSECURE** - testing
+///   only!)
+/// * `server_name` - SNI (Server Name Indication) hostname for TLS 1.3
+///   handshake
 /// * `conn_timeout` - Maximum time to wait for QUIC handshake to complete
 ///
 /// # Returns
@@ -99,7 +103,8 @@ pub(crate) async fn connect_tls(
 /// - Includes ALPN negotiation for "doq" protocol
 ///
 /// # Security Warning
-/// Setting `skip_cert` to true disables certificate validation. Only use for testing!
+/// Setting `skip_cert` to true disables certificate validation. Only use for
+/// testing!
 pub(crate) async fn connect_quic(
     udp_socket: UdpSocket,
     skip_cert: bool,
@@ -158,7 +163,8 @@ const DNS_HEADER_VALUE: HeaderValue = HeaderValue::from_static("application/dns-
 /// Build a DoH GET request with base64url-encoded DNS query
 ///
 /// Constructs an HTTP GET request following RFC 8484 Section 4.1 (GET method).
-/// The DNS message is base64url-encoded (without padding) and appended to the URI.
+/// The DNS message is base64url-encoded (without padding) and appended to the
+/// URI.
 ///
 /// # Arguments
 /// * `uri` - Base URI with "?dns=" already appended (will add base64 query)
@@ -215,10 +221,12 @@ pub fn get_cap_buf_with_context_len<T>(response: &mut Response<T>) -> BytesMut {
 /// Build DoH request URI template from connection info
 ///
 /// Constructs the full HTTPS URI for DoH requests, handling non-standard ports.
-/// The returned URI ends with "?dns=" ready for base64url-encoded query to be appended.
+/// The returned URI ends with "?dns=" ready for base64url-encoded query to be
+/// appended.
 ///
 /// # Arguments
-/// * `connection_info` - Connection configuration with server name, port, and path
+/// * `connection_info` - Connection configuration with server name, port, and
+///   path
 ///
 /// # Returns
 /// String containing "https://server:port/path?dns=" (port omitted if 443)
@@ -228,7 +236,8 @@ pub fn get_cap_buf_with_context_len<T>(response: &mut Response<T>) -> BytesMut {
 /// - Custom port: `https://dns.example.com:8443/dns-query?dns=`
 ///
 /// # Performance
-/// Pre-reserves 512 bytes to accommodate the base64-encoded DNS query without reallocation
+/// Pre-reserves 512 bytes to accommodate the base64-encoded DNS query without
+/// reallocation
 pub fn build_doh_request_uri(connection_info: &ConnectionInfo) -> String {
     let mut uri = if connection_info.port != ConnectionType::DoH.default_port() {
         // Include port in URI for non-standard ports
@@ -244,7 +253,8 @@ pub fn build_doh_request_uri(connection_info: &ConnectionInfo) -> String {
         )
     };
 
-    // Pre-allocate space for base64url-encoded DNS query (~600 bytes for typical query)
+    // Pre-allocate space for base64url-encoded DNS query (~600 bytes for typical
+    // query)
     uri.reserve(512);
     uri
 }
@@ -262,7 +272,8 @@ pub fn build_doh_request_uri(connection_info: &ConnectionInfo) -> String {
 /// - `Err(DnsError)` if resolution fails or returns no results
 ///
 /// # Notes
-/// - This is typically used once during initialization for static upstream servers
+/// - This is typically used once during initialization for static upstream
+///   servers
 /// - For dynamic resolution with TTL support, use Bootstrap instead
 /// - Blocks the current task - consider using bootstrap for async resolution
 /// - Returns the first address from the system resolver (maybe IPv4 or IPv6)
@@ -298,28 +309,31 @@ pub fn try_lookup_server_name(server_name: &str) -> Result<IpAddr> {
 
 /// Create and configure a UDP socket for DNS communication
 ///
-/// Creates a non-blocking UDP socket with optional Linux-specific socket options
-/// (SO_MARK, SO_BINDTODEVICE) and connects it to the remote DNS server.
+/// Creates a non-blocking UDP socket with optional Linux-specific socket
+/// options (SO_MARK, SO_BINDTODEVICE) and connects it to the remote DNS server.
 ///
 /// # Arguments
 /// * `remote_ip` - Remote server IP address (if None, resolves server_name)
 /// * `server_name` - Hostname to resolve if remote_ip is None
 /// * `port` - Remote server port
 /// * `so_mark` - Linux SO_MARK socket option (for policy routing)
-/// * `bind_to_device` - Linux SO_BINDTODEVICE option (bind to specific interface)
+/// * `bind_to_device` - Linux SO_BINDTODEVICE option (bind to specific
+///   interface)
 ///
 /// # Returns
 /// - `Ok(UdpSocket)` connected UDP socket in non-blocking mode
 /// - `Err(DnsError)` if socket creation, configuration, or connection fails
 ///
 /// # Platform-Specific Features
-/// - **Linux**: Supports SO_MARK (for netfilter/policy routing) and SO_BINDTODEVICE
+/// - **Linux**: Supports SO_MARK (for netfilter/policy routing) and
+///   SO_BINDTODEVICE
 /// - **Other platforms**: SO_MARK and bind_to_device options are ignored
 ///
 /// # Notes
 /// - Socket is set to non-blocking mode for async I/O
 /// - SO_REUSEADDR is enabled to allow rapid reconnection
-/// - connect() is called to set the default destination (allows using send vs send_to)
+/// - connect() is called to set the default destination (allows using send vs
+///   send_to)
 #[allow(unused)]
 pub fn connect_socket(
     remote_ip: Option<IpAddr>,
@@ -369,7 +383,8 @@ pub fn connect_socket(
         socket.bind_device(Some(device.as_bytes()))?;
     }
 
-    // Connect socket to set default destination (allows using send() instead of send_to())
+    // Connect socket to set default destination (allows using send() instead of
+    // send_to())
     socket.connect(&socket_addr.into())?;
 
     Ok(socket.into())
@@ -385,7 +400,8 @@ async fn connect_tcp_socket(socket: Socket, socket_addr: SocketAddr) -> Result<T
     let std_stream: std::net::TcpStream = socket.into();
     let stream = TcpStream::from_std(std_stream)?;
 
-    // Ensure the async connect has completed before the stream is used by SOCKS/TLS layers.
+    // Ensure the async connect has completed before the stream is used by SOCKS/TLS
+    // layers.
     stream.writable().await?;
     if let Some(err) = stream.take_error()? {
         return Err(err.into());
@@ -421,7 +437,8 @@ fn is_connect_in_progress(err: &std::io::Error) -> bool {
 /// * `server_name` - Hostname to resolve if remote_ip is None
 /// * `port` - Remote server port
 /// * `so_mark` - Linux SO_MARK socket option (for policy routing)
-/// * `bind_to_device` - Linux SO_BINDTODEVICE option (bind to specific interface)
+/// * `bind_to_device` - Linux SO_BINDTODEVICE option (bind to specific
+///   interface)
 /// * `socks5_opt` - Optional SOCKS5 proxy configuration
 ///
 /// # Returns
@@ -429,7 +446,8 @@ fn is_connect_in_progress(err: &std::io::Error) -> bool {
 /// - `Err(DnsError)` if socket creation, configuration, or connection fails
 ///
 /// # Socket Configuration
-/// - **TCP_NODELAY**: Enabled to disable Nagle's algorithm for low-latency DNS queries
+/// - **TCP_NODELAY**: Enabled to disable Nagle's algorithm for low-latency DNS
+///   queries
 /// - **SO_REUSEADDR**: Enabled to allow rapid reconnection
 /// - **Non-blocking**: Set for async I/O compatibility
 ///
@@ -561,12 +579,14 @@ pub async fn connect_stream(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::proto::Message;
-    use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    use super::*;
+    use crate::proto::Message;
 
     #[derive(Debug)]
     struct MockConnection {

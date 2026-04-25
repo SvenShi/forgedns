@@ -1,16 +1,16 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! DNS request/response context management.
 
-use crate::plugin::PluginRegistry;
-use crate::proto::Message;
-use ahash::{AHashMap, AHashSet};
 use std::any::Any;
 use std::net::SocketAddr;
 use std::sync::Arc;
+
+use ahash::{AHashMap, AHashSet};
+
+use crate::plugin::PluginRegistry;
+use crate::proto::Message;
 
 /// Typed metadata attached to the request by the inbound server layer.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -221,10 +221,11 @@ pub struct DnsContext {
 }
 
 impl DnsContext {
-    /// Context attribute key: dual_selector requests extra preferred-type probe in forward.
+    /// Context attribute key: dual_selector requests extra preferred-type probe
+    /// in forward.
     pub const ATTR_FORWARD_PROBE_REQUEST: &'static str = "dual_selector.forward_probe_request";
-
-    /// Context attribute key: forward returns probe result back to dual_selector.
+    /// Context attribute key: forward returns probe result back to
+    /// dual_selector.
     pub const ATTR_FORWARD_PROBE_RESULT: &'static str = "dual_selector.forward_probe_result";
 
     #[inline]
@@ -404,11 +405,11 @@ impl DnsContext {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::proto::rdata::A;
-    use crate::proto::{DNSClass, Question};
-    use crate::proto::{Message, Name, RData, Record, RecordType};
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use crate::proto::{DNSClass, Message, Name, Question, RData, Record, RecordType};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();
@@ -442,7 +443,7 @@ mod tests {
         let packet = vec![
             0x12, 0x34, 0x01, 0x10, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'a',
             b'p', b'i', 0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm',
-            0x00, 0x00, 0x1c, 0x00, 0x01,
+            0x00, 0x00, 0x1C, 0x00, 0x01,
         ];
 
         ctx.replace_request(Message::from_bytes(&packet).expect("packet should parse"));

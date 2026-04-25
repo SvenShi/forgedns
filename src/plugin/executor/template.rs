@@ -1,16 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared request-context templating utilities for executor plugins.
 //!
 //! These templates intentionally expose only a stable built-in key set so
 //! plugin behavior remains predictable and safe to validate during startup.
 
+use serde_json::{Number as JsonNumber, Value as JsonValue};
+
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use serde_json::{Number as JsonNumber, Value as JsonValue};
 
 pub(crate) const BUILTIN_KEYS: &[&str] = &[
     "qname",

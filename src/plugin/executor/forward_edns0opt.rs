@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `forward_edns0opt` executor plugin.
 //!
@@ -11,13 +9,20 @@
 //! Runtime behavior:
 //! - `execute`: extracts configured option codes from request OPT records and
 //!   prepares them for continuation-local post processing.
-//! - continuation post-stage: re-inserts those options into response OPT records after
-//!   downstream executors complete.
+//! - continuation post-stage: re-inserts those options into response OPT
+//!   records after downstream executors complete.
 //!
 //! Safety/perf notes:
 //! - options are filtered by code allow-list (`codes`) and deduplicated.
 //! - response OPT record is created only when needed.
 //! - when no codes are configured, plugin becomes near no-op.
+
+use std::sync::Arc;
+
+use ahash::AHashSet;
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -26,11 +31,6 @@ use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{EdnsCode, EdnsOption};
 use crate::{continue_next, register_plugin_factory};
-use ahash::AHashSet;
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ForwardEdns0OptConfig {
@@ -214,12 +214,12 @@ fn split_tokens(raw: &str) -> Vec<&str> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::test_utils::test_registry;
-    use crate::proto::{ClientSubnet, DNSClass, Message, Question};
-    use crate::proto::{Name, RecordType};
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use crate::proto::{ClientSubnet, DNSClass, Message, Name, Question, RecordType};
 
     #[test]
     fn test_parse_codes_from_value_validation() {

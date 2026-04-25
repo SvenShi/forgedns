@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Public library surface for ForgeDNS.
 //!
@@ -9,7 +7,8 @@
 //! integration tests, and embedding scenarios. The architecture is organized
 //! around the main request path:
 //!
-//! `server -> DnsContext -> matcher / executor / provider pipeline -> upstream or side effects -> response`
+//! `server -> DnsContext -> matcher / executor / provider pipeline -> upstream
+//! or side effects -> response`
 //!
 //! Top-level modules:
 //!

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Management HTTP API hub and route registration.
 //!
@@ -22,14 +20,11 @@
 //! runtime state with the application, but it does not participate in query
 //! matching or response generation.
 
-pub mod control;
-pub mod health;
+use std::convert::Infallible;
+use std::fmt::{Debug, Formatter};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::api::health::HealthState;
-use crate::config::types::{ApiAuthConfig, ApiConfig, ResolvedApiHttpConfig};
-use crate::core::error::{DnsError, Result};
-use crate::network::listen::parse_listen_addr;
-use crate::network::tls_config::load_server_tls_config;
 use ahash::AHashMap;
 use async_trait::async_trait;
 use base64::Engine;
@@ -38,20 +33,24 @@ use bytes::Bytes;
 use http::{HeaderMap, Method, Request, Response, StatusCode};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full};
-use hyper::body::Frame;
-use hyper::body::Incoming;
+use hyper::body::{Frame, Incoming};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use serde::Serialize;
-use std::convert::Infallible;
-use std::fmt::{Debug, Formatter};
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex as StdMutex};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, oneshot, watch};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
+
+use crate::api::health::HealthState;
+use crate::config::types::{ApiAuthConfig, ApiConfig, ResolvedApiHttpConfig};
+use crate::core::error::{DnsError, Result};
+use crate::network::listen::parse_listen_addr;
+use crate::network::tls_config::load_server_tls_config;
+
+pub mod control;
+pub mod health;
 
 pub type ApiBody = UnsyncBoxBody<Bytes, Infallible>;
 pub type ApiResponse = Response<ApiBody>;
@@ -91,7 +90,8 @@ impl ApiRegister {
         self.register_route(Method::POST, path, handler)
     }
 
-    /// Register one handler using path-prefix matching under an absolute API path.
+    /// Register one handler using path-prefix matching under an absolute API
+    /// path.
     pub fn register_prefix_route(
         &self,
         method: Method,
@@ -101,7 +101,8 @@ impl ApiRegister {
         self.hub.register_prefix_route(method, path_prefix, handler)
     }
 
-    /// Register one GET handler using path-prefix matching under an absolute API path.
+    /// Register one GET handler using path-prefix matching under an absolute
+    /// API path.
     pub fn register_get_prefix(
         &self,
         path_prefix: &str,
@@ -110,7 +111,8 @@ impl ApiRegister {
         self.register_prefix_route(Method::GET, path_prefix, handler)
     }
 
-    /// Register one POST handler using path-prefix matching under an absolute API path.
+    /// Register one POST handler using path-prefix matching under an absolute
+    /// API path.
     pub fn register_post_prefix(
         &self,
         path_prefix: &str,
@@ -141,7 +143,8 @@ impl ApiRegister {
             .register_plugin_route(plugin_tag, Method::POST, subpath, handler)
     }
 
-    /// Register one GET handler using path-prefix matching under `/plugins/<plugin_tag>/<subpath>`.
+    /// Register one GET handler using path-prefix matching under
+    /// `/plugins/<plugin_tag>/<subpath>`.
     pub fn register_plugin_get_prefix(
         &self,
         plugin_tag: &str,
@@ -152,7 +155,8 @@ impl ApiRegister {
             .register_plugin_prefix_route(plugin_tag, Method::GET, subpath, handler)
     }
 
-    /// Register one POST handler using path-prefix matching under `/plugins/<plugin_tag>/<subpath>`.
+    /// Register one POST handler using path-prefix matching under
+    /// `/plugins/<plugin_tag>/<subpath>`.
     pub fn register_plugin_post_prefix(
         &self,
         plugin_tag: &str,
@@ -751,21 +755,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::types::{ApiAuthConfig, ApiConfig, ApiHttpConfig, ApiHttpDetailedConfig};
+    use std::net::{SocketAddr, TcpListener as StdTcpListener};
+
     use async_trait::async_trait;
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
     use http::Uri;
     use http::header::{AUTHORIZATION, CONTENT_TYPE};
     use http_body_util::{BodyExt, Empty};
-    use hyper::Request as HyperRequest;
-    use hyper::Version;
+    use hyper::{Request as HyperRequest, Version};
     use hyper_util::client::legacy::Client;
     use hyper_util::client::legacy::connect::HttpConnector;
     use serde::Serialize;
-    use std::net::{SocketAddr, TcpListener as StdTcpListener};
     use tokio::time::{Duration, sleep};
+
+    use super::*;
+    use crate::config::types::{ApiAuthConfig, ApiConfig, ApiHttpConfig, ApiHttpDetailedConfig};
 
     #[derive(Debug)]
     struct TestEchoHandler;

@@ -1,13 +1,25 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! QUIC DNS server plugin
 //!
 //! Listens for DNS queries over QUIC and processes them through a configured
 //! entry plugin executor. Handles concurrent requests efficiently and manages
 //! task spawning with automatic cleanup.
+
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
+use rustls::ServerConfig;
+use serde::Deserialize;
+use tokio::sync::{oneshot, watch};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
@@ -20,29 +32,19 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{ConnectionGuard, RequestHandle, RequestMeta, Server, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use quinn::{Endpoint, EndpointConfig, IdleTimeout, TransportConfig};
-use rustls::ServerConfig;
-use serde::Deserialize;
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::{oneshot, watch};
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, warn};
 
 /// QUIC server configuration
 #[derive(Deserialize)]
 pub struct QuicServerConfig {
     /// Entry executor plugin tag to process incoming requests.
     ///
-    /// - Must reference an existing executor plugin registered in `PluginRegistry`.
+    /// - Must reference an existing executor plugin registered in
+    ///   `PluginRegistry`.
     /// - All DoQ (DNS over QUIC) queries will be forwarded to this executor.
     entry: String,
 
-    /// QUIC listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:853", ":853").
+    /// QUIC listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:853",
+    /// ":853").
     ///
     /// - `:port` binds on `0.0.0.0:port`.
     /// - Must be a valid listen address or validation will fail.
@@ -158,8 +160,9 @@ impl Plugin for QuicServer {
 
 impl Server for QuicServer {
     fn run(&self) {
-        // Spawn the QUIC server loop. This call is non-blocking and returns immediately.
-        // The event loop will accept incoming QUIC connections and process DoQ streams.
+        // Spawn the QUIC server loop. This call is non-blocking and returns
+        // immediately. The event loop will accept incoming QUIC connections and
+        // process DoQ streams.
         debug!(listen = %self.listen, "Spawning QUIC server task");
         if let Err(e) = self.spawn_server_task(None) {
             error!(plugin = %self.tag, error = %e, "Failed to spawn QUIC server task");
@@ -238,8 +241,9 @@ async fn run_server(
     info!(listen = %addr, "QUIC server stopped");
 }
 
-/// Accept a QUIC connection and handle all bidirectional streams (DNS over QUIC).
-/// Each bi-directional stream represents a single DNS query/response exchange.
+/// Accept a QUIC connection and handle all bidirectional streams (DNS over
+/// QUIC). Each bi-directional stream represents a single DNS query/response
+/// exchange.
 #[hotpath::measure]
 async fn handle_quic_connection(connecting: quinn::Incoming, handler: Arc<RequestHandle>) {
     let remote_addr = connecting.remote_address();

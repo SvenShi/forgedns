@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `query_summary` executor plugin.
 //!
@@ -9,10 +7,18 @@
 //!
 //! This plugin is an observer-only stage:
 //! - continuation pre-stage stores request start timestamp.
-//! - continuation post-stage logs source, qname/qtype, final rcode and elapsed time.
+//! - continuation post-stage logs source, qname/qtype, final rcode and elapsed
+//!   time.
 //!
 //! It does not change request routing or response content, so it can be placed
 //! anywhere in a sequence for tracing and latency attribution.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+use tracing::info;
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
@@ -21,11 +27,6 @@ use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::{continue_next, register_plugin_factory};
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::sync::Arc;
-use tracing::info;
 
 const DEFAULT_MSG: &str = "query summary";
 
@@ -173,15 +174,17 @@ fn parse_msg(args: Option<Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use tracing::dispatcher::Dispatch;
+    use tracing_subscriber::fmt::MakeWriter;
+
     use super::*;
     use crate::core::error::DnsError;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_context;
     use crate::proto::Message;
-    use std::io;
-    use std::sync::{Arc, Mutex};
-    use tracing::dispatcher::Dispatch;
-    use tracing_subscriber::fmt::MakeWriter;
 
     #[test]
     fn test_parse_msg_trims_and_filters_empty() {

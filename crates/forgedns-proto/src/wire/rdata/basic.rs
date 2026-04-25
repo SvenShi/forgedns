@@ -1,13 +1,12 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #![allow(clippy::type_complexity)]
 
 use super::*;
 
-/// Decode an IPv4 address RDATA from exactly 4 octets as defined by RFC 1035 section 3.4.1.
+/// Decode an IPv4 address RDATA from exactly 4 octets as defined by RFC 1035
+/// section 3.4.1.
 pub(super) fn parse_a(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     if end - start != 4 {
         return Err(DnsError::protocol("invalid A rdata length"));
@@ -20,7 +19,8 @@ pub(super) fn parse_a(packet: &[u8], start: usize, end: usize) -> Result<RData> 
     ))))
 }
 
-/// Decode an IPv6 address RDATA from exactly 16 octets as defined by RFC 3596 section 2.2.
+/// Decode an IPv6 address RDATA from exactly 16 octets as defined by RFC 3596
+/// section 2.2.
 pub(super) fn parse_aaaa(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     if end - start != 16 {
         return Err(DnsError::protocol("invalid AAAA rdata length"));
@@ -30,7 +30,8 @@ pub(super) fn parse_aaaa(packet: &[u8], start: usize, end: usize) -> Result<RDat
     Ok(RData::AAAA(AAAA(Ipv6Addr::from(bytes))))
 }
 
-/// Decode a compressed domain-name-only RDATA such as CNAME per RFC 1035 section 3.3.1.
+/// Decode a compressed domain-name-only RDATA such as CNAME per RFC 1035
+/// section 3.3.1.
 pub(super) fn parse_cname(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::CNAME(CNAME(parse_name(
         packet, start, end, "CNAME",
@@ -59,7 +60,8 @@ pub(super) fn parse_srv(packet: &[u8], start: usize, end: usize) -> Result<RData
     Ok(RData::SRV(SRV::new(priority, weight, port, target)))
 }
 
-/// Decode NAPTR order, preference, character-strings, and replacement name per RFC 3403 section 4.1.
+/// Decode NAPTR order, preference, character-strings, and replacement name per
+/// RFC 3403 section 4.1.
 pub(super) fn parse_naptr(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     let (order, preference, flags, services, regexp, replacement) =
         parse_naptr_rdata(packet, start, end)?;
@@ -79,7 +81,8 @@ pub(super) fn parse_caa(packet: &[u8], start: usize, end: usize) -> Result<RData
     Ok(RData::CAA(CAA::new(flag, tag, value)))
 }
 
-/// Decode TXT RDATA as a raw sequence of DNS character-strings per RFC 1035 section 3.3.14.
+/// Decode TXT RDATA as a raw sequence of DNS character-strings per RFC 1035
+/// section 3.3.14.
 pub(super) fn parse_txt(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::TXT(parse_txt_wire(packet, start, end)?))
 }
@@ -113,7 +116,8 @@ pub(super) fn parse_soa(packet: &[u8], start: usize, end: usize) -> Result<RData
     )))
 }
 
-/// Decode OPT RDATA and its surrounding pseudo-RR metadata per RFC 6891 section 6.1.2.
+/// Decode OPT RDATA and its surrounding pseudo-RR metadata per RFC 6891 section
+/// 6.1.2.
 pub(super) fn parse_opt(
     packet: &[u8],
     owner_name: &Name,
@@ -140,7 +144,8 @@ pub(super) fn encode_aaaa(addr: &AAAA, out: &mut Vec<u8>) {
     out.extend_from_slice(&addr.0.octets());
 }
 
-/// Encode a single domain-name RDATA field, optionally enabling RFC 1035 name compression.
+/// Encode a single domain-name RDATA field, optionally enabling RFC 1035 name
+/// compression.
 pub(super) fn encode_name_rdata<'a>(
     out: &mut Vec<u8>,
     name: &'a Name,
@@ -162,7 +167,8 @@ pub(super) fn encode_mx<'a>(
 }
 
 /// Encode SRV priority/weight/port/target wire data per RFC 2782 section 3.
-/// Encode SRV priority, weight, port, and uncompressed target name per RFC 2782 section 3.
+/// Encode SRV priority, weight, port, and uncompressed target name per RFC 2782
+/// section 3.
 pub(super) fn encode_srv<'a>(
     value: &'a SRV,
     out: &mut Vec<u8>,
@@ -175,7 +181,8 @@ pub(super) fn encode_srv<'a>(
 }
 
 /// Encode NAPTR wire data per RFC 3403 section 4.1.
-/// Encode NAPTR order, preference, character-strings, and replacement name per RFC 3403 section 4.1.
+/// Encode NAPTR order, preference, character-strings, and replacement name per
+/// RFC 3403 section 4.1.
 pub(super) fn encode_naptr<'a>(
     value: &'a NAPTR,
     out: &mut Vec<u8>,
@@ -201,12 +208,14 @@ pub(super) fn encode_caa(value: &CAA, out: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-/// Encode TXT wire data as the original DNS character-string sequence per RFC 1035 section 3.3.14.
+/// Encode TXT wire data as the original DNS character-string sequence per RFC
+/// 1035 section 3.3.14.
 pub(super) fn encode_txt(value: &TXT, out: &mut Vec<u8>) {
     out.extend_from_slice(value.wire_data());
 }
 
-/// Encode SPF using the TXT-compatible wire representation from RFC 7208 section 3.3.
+/// Encode SPF using the TXT-compatible wire representation from RFC 7208
+/// section 3.3.
 pub(super) fn encode_spf(value: &SPF, out: &mut Vec<u8>) {
     out.extend_from_slice(value.0.wire_data());
 }
@@ -250,7 +259,8 @@ pub(super) fn encode_opt(value: &OPT, out: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-/// Parse MX preference and exchange while requiring the RDATA to end exactly after the name.
+/// Parse MX preference and exchange while requiring the RDATA to end exactly
+/// after the name.
 fn parse_mx_rdata(packet: &[u8], start: usize, end: usize) -> Result<(u16, Name)> {
     if start + 2 > end {
         return Err(DnsError::protocol("invalid MX rdata length"));
@@ -263,7 +273,8 @@ fn parse_mx_rdata(packet: &[u8], start: usize, end: usize) -> Result<(u16, Name)
     Ok((preference, exchange))
 }
 
-/// Parse SOA MNAME, RNAME, and the five 32-bit timer fields per RFC 1035 section 3.3.13.
+/// Parse SOA MNAME, RNAME, and the five 32-bit timer fields per RFC 1035
+/// section 3.3.13.
 fn parse_soa_rdata(
     packet: &[u8],
     start: usize,
@@ -325,7 +336,8 @@ fn parse_srv_rdata(packet: &[u8], start: usize, end: usize) -> Result<(u16, u16,
     Ok((priority, weight, port, target))
 }
 
-/// Parse NAPTR fixed-width fields, three character-strings, and a replacement name per RFC 3403.
+/// Parse NAPTR fixed-width fields, three character-strings, and a replacement
+/// name per RFC 3403.
 fn parse_naptr_rdata(
     packet: &[u8],
     start: usize,
@@ -346,7 +358,8 @@ fn parse_naptr_rdata(
     Ok((order, preference, flags, services, regexp, replacement))
 }
 
-/// Parse CAA flag, tag-length-prefixed tag, and trailing value bytes per RFC 8659 section 4.1.
+/// Parse CAA flag, tag-length-prefixed tag, and trailing value bytes per RFC
+/// 8659 section 4.1.
 fn parse_caa_rdata(packet: &[u8], start: usize, end: usize) -> Result<(u8, Box<[u8]>, Box<[u8]>)> {
     if start + 2 > end {
         return Err(DnsError::protocol("invalid CAA rdata length"));
@@ -381,7 +394,8 @@ fn parse_txt_wire(packet: &[u8], start: usize, end: usize) -> Result<TXT> {
     Ok(TXT::new(copy_boxed(packet, start, end)))
 }
 
-/// Parse an OPT pseudo-RR payload from CLASS, TTL, and EDNS options per RFC 6891 section 6.1.2.
+/// Parse an OPT pseudo-RR payload from CLASS, TTL, and EDNS options per RFC
+/// 6891 section 6.1.2.
 fn parse_opt_rdata(packet: &[u8], class: u16, ttl: u32, start: usize, end: usize) -> Result<Edns> {
     let mut edns = Edns::new();
     edns.set_udp_payload_size(class);
@@ -565,7 +579,8 @@ fn parse_zone_version(data: &[u8]) -> Option<EdnsZoneVersion> {
     Some(EdnsZoneVersion::new(data[0], data[1], data[2..].to_vec()))
 }
 
-/// Encode a single EDNS option as code, length, and option payload per RFC 6891 section 6.1.2.
+/// Encode a single EDNS option as code, length, and option payload per RFC 6891
+/// section 6.1.2.
 pub(super) fn encode_edns_option(out: &mut Vec<u8>, option: &EdnsOption) -> Result<()> {
     match option {
         EdnsOption::Llq(value) => {
@@ -798,7 +813,7 @@ mod tests {
                 &[7, b'r', b'e', b's', b'i', b'n', b'f', b'o'],
                 parse_resinfo,
             ),
-            (&[0xde, 0xad], parse_doa),
+            (&[0xDE, 0xAD], parse_doa),
             (
                 &[
                     2, b'n', b's', 0, 10, b'h', b'o', b's', b't', b'm', b'a', b's', b't', b'e',
@@ -845,7 +860,7 @@ mod tests {
     fn opt_rdata_parse_encode_roundtrip() {
         let packet = [
             0x00, 0x08, 0x00, 0x07, 0x00, 0x01, 24, 0, 192, 0, 2, // ECS
-            0xfd, 0xe9, 0x00, 0x03, 1, 2, 3, // unknown
+            0xFD, 0xE9, 0x00, 0x03, 1, 2, 3, // unknown
         ];
         let parsed = parse_opt(&packet, &Name::root(), 1400, 0x8000, 0, packet.len()).unwrap();
         let mut encoded = Vec::new();
@@ -860,7 +875,7 @@ mod tests {
     fn edns_option_parse_encode_roundtrip() {
         let cases: &[(u16, &[u8])] = &[
             (0x0008, &[0x00, 0x01, 24, 0, 192, 0, 2]),
-            (0xfde9, &[1, 2, 3, 4]),
+            (0xFDE9, &[1, 2, 3, 4]),
         ];
 
         for (code, data) in cases {

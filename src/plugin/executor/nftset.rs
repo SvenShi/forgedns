@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `nftset` executor plugin.
 //!
@@ -20,18 +18,6 @@
 //!   errors and extra overhead.
 //! - on non-Linux platforms this plugin degrades to no-op behavior.
 
-use crate::config::types::PluginConfig;
-use crate::core::context::DnsContext;
-use crate::core::error::{DnsError, Result};
-use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
-use ahash::AHashSet;
-use async_trait::async_trait;
-#[cfg(target_os = "linux")]
-use ripset::{IpCidr, nftset_add};
-use serde::Deserialize;
-use serde_yaml_ng::Value;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,8 +25,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 #[cfg(target_os = "linux")]
 use std::thread;
+
+use ahash::AHashSet;
+use async_trait::async_trait;
+#[cfg(target_os = "linux")]
+use ripset::{IpCidr, nftset_add};
+use serde::Deserialize;
+use serde_yaml_ng::Value;
 #[cfg(target_os = "linux")]
 use tracing::warn;
+
+use crate::config::types::PluginConfig;
+use crate::core::context::DnsContext;
+use crate::core::error::{DnsError, Result};
+use crate::plugin::executor::{ExecStep, Executor};
+use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::register_plugin_factory;
 
 #[cfg(target_os = "linux")]
 const NFTSET_WRITER_QUEUE_SIZE: usize = 256;
@@ -189,7 +189,8 @@ impl Executor for NftSetExecutor {
                 if let Err(e) = self.writer.try_send(batch) {
                     match e {
                         TrySendError::Full(_) => {
-                            // Best-effort side effect: dropping write preserves DNS path latency.
+                            // Best-effort side effect: dropping write preserves
+                            // DNS path latency.
                         }
                         TrySendError::Disconnected(_) => {
                             warn!(
@@ -471,9 +472,10 @@ fn write_nftset_prefixes(set: &ResolvedSet, prefixes: &[IpPrefix]) -> Result<()>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(target_os = "linux")]
     use ripset::IpCidr;
+
+    use super::*;
 
     #[test]
     fn test_parse_config_rejects_empty_table_or_set_name() {

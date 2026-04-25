@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `redirect` executor plugin.
 //!
@@ -11,29 +9,30 @@
 //! Two-stage behavior:
 //! - `execute`: match rule by original qname and replace request query name
 //!   with redirect target.
-//! - continuation post-stage: restore original query name in request/response and add
-//!   synthetic CNAME from original -> target before upstream answers.
+//! - continuation post-stage: restore original query name in request/response
+//!   and add synthetic CNAME from original -> target before upstream answers.
 //!
 //! This keeps downstream resolution consistent with redirected target while
 //! still returning a client-facing CNAME chain.
 
-use crate::config::types::PluginConfig;
-use crate::core::context::DnsContext;
-use crate::core::error::{DnsError, Result};
-use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::proto::Question;
-use crate::proto::{CNAME, DNSClass, Name, RData, Record};
-use crate::{continue_next, register_plugin_factory};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::sync::Arc;
+
 use ahash::AHashMap;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use async_trait::async_trait;
 use regex::{Regex, RegexSet, RegexSetBuilder};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::sync::Arc;
+
+use crate::config::types::PluginConfig;
+use crate::core::context::DnsContext;
+use crate::core::error::{DnsError, Result};
+use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
+use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::proto::{CNAME, DNSClass, Name, Question, RData, Record};
+use crate::{continue_next, register_plugin_factory};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RedirectConfig {
@@ -406,14 +405,14 @@ fn _question_name(question: &Question) -> &Name {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::DnsError;
     use crate::plugin::test_utils::test_registry;
-    use crate::proto::Message;
     use crate::proto::rdata::A;
-    use crate::proto::{RData, RecordType};
-    use std::net::{Ipv4Addr, SocketAddr};
+    use crate::proto::{Message, RData, RecordType};
 
     #[test]
     fn test_parse_redirect_rule_validation() {

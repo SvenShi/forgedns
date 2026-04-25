@@ -1,22 +1,21 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Owned RDATA payloads and EDNS helpers.
 
-use crate::proto::RecordType;
 use std::net::IpAddr;
-
-mod basic;
-mod dnssec;
-mod legacy;
-mod service;
 
 pub use basic::*;
 pub use dnssec::*;
 pub use legacy::*;
 pub use service::*;
+
+use crate::proto::RecordType;
+
+mod basic;
+mod dnssec;
+mod legacy;
+mod service;
 
 /// Supported owned RDATA payloads.
 #[derive(Debug, Clone, Eq, PartialEq)]

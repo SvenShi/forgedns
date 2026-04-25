@@ -5,17 +5,19 @@
 //! The business layer only sees normalized address-list keys, ownership-aware
 //! upsert behavior, and stable plugin errors.
 
-use super::manager::{
-    AddressListFamily, AddressListKey, decode_owned_comment, parse_router_address,
-};
-use crate::core::error::{DnsError, Result};
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::time::Duration;
+
 use async_trait::async_trait;
 use mikrotik_rs::MikrotikDevice;
 use mikrotik_rs::protocol::CommandResponse;
 use mikrotik_rs::protocol::command::CommandBuilder;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::time::Duration;
+
+use super::manager::{
+    AddressListFamily, AddressListKey, decode_owned_comment, parse_router_address,
+};
+use crate::core::error::{DnsError, Result};
 
 /// RouterOS field containing the internal row id.
 const ADDRESS_ID_FIELD: &str = ".id";

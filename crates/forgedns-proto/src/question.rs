@@ -1,12 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Owned DNS question model.
 
-use crate::proto::{DNSClass, Name, RecordType};
 use std::fmt::{Debug, Display, Formatter};
+
+use crate::proto::{DNSClass, Name, RecordType};
 
 /// Owned DNS question used by the message representation.
 #[derive(Clone, Eq, PartialEq)]

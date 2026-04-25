@@ -1,20 +1,42 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `query_recorder` executor plugin.
 //!
-//! Records structured request/response snapshots plus execution-path events into
-//! recorder-scoped SQLite tables.
+//! Records structured request/response snapshots plus execution-path events
+//! into recorder-scoped SQLite tables.
 //!
 //! Design constraints:
 //! - pure executor observer, no server-path finalization hook;
-//! - request snapshot is captured at recorder entry, response snapshot after `next`;
-//! - each recorder owns its own queue, SQLite connection, writer thread, tail buffer,
-//!   and SSE broadcaster;
-//! - persistence uses one `records` table and one `steps` table per recorder schema
-//!   version.
+//! - request snapshot is captured at recorder entry, response snapshot after
+//!   `next`;
+//! - each recorder owns its own queue, SQLite connection, writer thread, tail
+//!   buffer, and SSE broadcaster;
+//! - persistence uses one `records` table and one `steps` table per recorder
+//!   schema version.
+
+use std::collections::VecDeque;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use bytes::Bytes;
+use http::{Request, StatusCode};
+use hyper::body::Frame;
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use serde_yaml_ng::Value as YamlValue;
+use tokio::sync::broadcast;
+use tracing::{error, warn};
 
 use crate::api::{
     ApiHandler, ApiRegister, json_error, json_ok, simple_response, streaming_response,
@@ -32,26 +54,6 @@ use crate::proto::rdata::{
 };
 use crate::proto::{DNSClass, Message, Opcode, Question, RData, Rcode, Record, RecordType};
 use crate::{continue_next, register_plugin_factory};
-use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use bytes::Bytes;
-use http::{Request, StatusCode};
-use hyper::body::Frame;
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
-use serde_yaml_ng::Value as YamlValue;
-use std::collections::VecDeque;
-use std::net::IpAddr;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
-use tokio::sync::broadcast;
-use tracing::{error, warn};
 
 const SCHEMA_VERSION: &str = "v1";
 const DEFAULT_QUEUE_SIZE: usize = 8_192;
@@ -930,10 +932,10 @@ fn sanitize_tag(tag: &str) -> String {
 }
 
 fn fnv1a_hex(input: &[u8]) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut hash = 0xCBF2_9CE4_8422_2325u64;
     for byte in input {
         hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x1000_0000_01b3);
+        hash = hash.wrapping_mul(0x1000_0000_01B3);
     }
     format!("{hash:016x}")
 }
@@ -2574,14 +2576,15 @@ fn to_runtime_error(err: rusqlite::Error) -> DnsError {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use tempfile::NamedTempFile;
+
     use super::*;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{test_context, test_registry};
     use crate::proto::rdata::{A, CNAME};
-    use crate::proto::{Message, Name, Question};
-    use crate::proto::{RData, Record};
-    use std::net::{Ipv4Addr, SocketAddr};
-    use tempfile::NamedTempFile;
+    use crate::proto::{Message, Name, Question, RData, Record};
 
     #[test]
     fn test_table_names_include_tag_hash_and_version() {

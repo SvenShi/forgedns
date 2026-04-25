@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `sleep` executor plugin.
 //!
@@ -12,6 +10,12 @@
 //! `tokio::time::sleep`, so it does not block worker threads, but it does add
 //! end-to-end request latency by design.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -19,10 +23,6 @@ use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde::Deserialize;
-use std::sync::Arc;
-use std::time::Duration;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SleepConfig {
@@ -127,10 +127,11 @@ fn parse_sleep_quick_duration(raw: &str) -> Result<Duration> {
 
 #[cfg(test)]
 mod tests {
+    use serde_yaml_ng::Value;
+
     use super::*;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
-    use serde_yaml_ng::Value;
 
     #[test]
     fn test_sleep_factory_quick_setup_validation() {

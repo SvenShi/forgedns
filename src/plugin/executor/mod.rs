@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Executor plugin category.
 //!
 //! Executors are the active stages in a ForgeDNS sequence pipeline. They can:
@@ -24,21 +22,13 @@
 //! - push expensive initialization into plugin startup when possible; and
 //! - keep side effects off the latency-sensitive response path unless required
 //!   for correctness.
+
 use async_trait::async_trait;
 
+use crate::core::context::DnsContext;
 use crate::core::error::Result;
+use crate::plugin::Plugin;
 pub use crate::plugin::executor::sequence::chain::ExecutorNext;
-use crate::{core::context::DnsContext, plugin::Plugin};
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ExecStep {
-    /// Continue executing the current chain or report natural completion.
-    Next,
-    /// Stop the current chain immediately.
-    Stop,
-    /// Return control to the caller without resuming the current sequence.
-    Return,
-}
 
 pub mod arbitrary;
 pub mod black_hole;
@@ -106,4 +96,14 @@ pub trait Executor: Plugin {
             ExecStep::Stop | ExecStep::Return => Ok(result),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ExecStep {
+    /// Continue executing the current chain or report natural completion.
+    Next,
+    /// Stop the current chain immediately.
+    Stop,
+    /// Return control to the caller without resuming the current sequence.
+    Return,
 }

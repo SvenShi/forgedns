@@ -1,10 +1,9 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::proto::Name;
-use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct KX {
@@ -18,9 +17,11 @@ impl KX {
             exchanger,
         }
     }
+
     pub fn preference(&self) -> u16 {
         self.preference
     }
+
     pub fn exchanger(&self) -> &Name {
         &self.exchanger
     }
@@ -38,9 +39,11 @@ impl NID {
             node_id,
         }
     }
+
     pub fn preference(&self) -> u16 {
         self.preference
     }
+
     pub fn node_id(&self) -> u64 {
         self.node_id
     }
@@ -58,9 +61,11 @@ impl L32 {
             locator,
         }
     }
+
     pub fn preference(&self) -> u16 {
         self.preference
     }
+
     pub fn locator(&self) -> Ipv4Addr {
         self.locator
     }
@@ -78,9 +83,11 @@ impl L64 {
             locator,
         }
     }
+
     pub fn preference(&self) -> u16 {
         self.preference
     }
+
     pub fn locator(&self) -> u64 {
         self.locator
     }
@@ -95,9 +102,11 @@ impl LP {
     pub fn new(preference: u16, fqdn: Name) -> Self {
         Self { preference, fqdn }
     }
+
     pub fn preference(&self) -> u16 {
         self.preference
     }
+
     pub fn fqdn(&self) -> &Name {
         &self.fqdn
     }
@@ -122,12 +131,15 @@ impl URI {
             target,
         }
     }
+
     pub fn priority(&self) -> u16 {
         self.priority
     }
+
     pub fn weight(&self) -> u16 {
         self.weight
     }
+
     pub fn target(&self) -> &[u8] {
         &self.target
     }
@@ -157,18 +169,23 @@ impl IPSECKEY {
             public_key,
         }
     }
+
     pub fn precedence(&self) -> u8 {
         self.precedence
     }
+
     pub fn gateway_type(&self) -> u8 {
         self.gateway_type
     }
+
     pub fn algorithm(&self) -> u8 {
         self.algorithm
     }
+
     pub fn gateway(&self) -> &[u8] {
         &self.gateway
     }
+
     pub fn public_key(&self) -> &[u8] {
         &self.public_key
     }
@@ -183,21 +200,24 @@ pub struct SvcParam {
 impl SvcParam {
     /// Construct one SvcParam from already-decoded wire bytes.
     ///
-    /// The raw `value` is retained exactly as supplied so encode roundtrips can preserve
-    /// unknown data, while `parsed` eagerly records a structured interpretation for the
-    /// well-known keys defined by RFC 9460.
+    /// The raw `value` is retained exactly as supplied so encode roundtrips can
+    /// preserve unknown data, while `parsed` eagerly records a structured
+    /// interpretation for the well-known keys defined by RFC 9460.
     pub fn new(key: u16, value: Box<[u8]>) -> Self {
         let parsed = SvcParamValue::from_wire(key, &value);
         Self { key, value, parsed }
     }
+
     /// Return the numeric SvcParamKey.
     pub fn key(&self) -> u16 {
         self.key
     }
+
     /// Return the original wire value bytes for this parameter.
     pub fn value(&self) -> &[u8] {
         &self.value
     }
+
     /// Return the structured interpretation of `value` for known keys.
     pub fn parsed(&self) -> &SvcParamValue {
         &self.parsed
@@ -219,11 +239,12 @@ pub enum SvcParamValue {
 }
 
 impl SvcParamValue {
-    /// Decode one SvcParam payload using the key-specific wire rules from RFC 9460.
+    /// Decode one SvcParam payload using the key-specific wire rules from RFC
+    /// 9460.
     ///
-    /// Unknown keys, malformed payloads, and known keys with invalid lengths are mapped
-    /// to `Unknown` so the owned model can preserve raw bytes without pretending the
-    /// payload was semantically understood.
+    /// Unknown keys, malformed payloads, and known keys with invalid lengths
+    /// are mapped to `Unknown` so the owned model can preserve raw bytes
+    /// without pretending the payload was semantically understood.
     fn from_wire(key: u16, value: &[u8]) -> Self {
         match key {
             0 => {
@@ -317,14 +338,17 @@ impl SVCB {
             params,
         }
     }
+
     /// Return the SVCB priority value.
     pub fn priority(&self) -> u16 {
         self.priority
     }
+
     /// Return the alias target or alternative service target name.
     pub fn target(&self) -> &Name {
         &self.target
     }
+
     /// Borrow all attached SvcParams in stored order.
     pub fn params(&self) -> &[SvcParam] {
         &self.params
@@ -348,12 +372,15 @@ impl AMTRELAY {
             gateway,
         }
     }
+
     pub fn precedence(&self) -> u8 {
         self.precedence
     }
+
     pub fn gateway_type(&self) -> u8 {
         self.gateway_type
     }
+
     pub fn gateway(&self) -> &[u8] {
         &self.gateway
     }
@@ -365,8 +392,9 @@ mod tests {
     use crate::proto::Name;
 
     #[test]
-    // Covers the key-specific interpretation layer separately from the wire codec so
-    // malformed known-key payloads can never be mistaken for valid structured values.
+    // Covers the key-specific interpretation layer separately from the wire codec
+    // so malformed known-key payloads can never be mistaken for valid
+    // structured values.
     fn svc_param_value_from_wire_matrix() {
         let port_443 = 443u16.to_be_bytes();
         let cases: Vec<(u16, &[u8], SvcParamValue)> = vec![
@@ -427,7 +455,8 @@ mod tests {
     }
 
     #[test]
-    // Keeps the owned model accessors honest after future refactors of the wire layer.
+    // Keeps the owned model accessors honest after future refactors of the wire
+    // layer.
     fn svc_param_and_svcb_model_accessors_work() {
         let param = SvcParam::new(3, 8443u16.to_be_bytes().to_vec().into_boxed_slice());
         assert_eq!(param.key(), 3);

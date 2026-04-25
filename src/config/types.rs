@@ -1,15 +1,14 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Configuration structure definitions
 //!
 //! Defines the schema for ForgeDNS configuration files (YAML format).
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde_yaml_ng::Value;
-use std::collections::HashMap;
 use thiserror::Error;
 
 /// Configuration validation errors
@@ -75,8 +74,8 @@ impl Config {
     /// Validate configuration
     ///
     /// Validates the configuration structure (log level, plugin tags/types).
-    /// Plugin-specific validation (e.g., listen addresses, upstreams) is delegated
-    /// to each PluginFactory during plugin initialization.
+    /// Plugin-specific validation (e.g., listen addresses, upstreams) is
+    /// delegated to each PluginFactory during plugin initialization.
     pub fn validate(&self) -> Result<(), ConfigError> {
         if matches!(self.runtime.worker_threads, Some(0)) {
             return Err(ConfigError::InvalidRuntimeWorkerThreads);

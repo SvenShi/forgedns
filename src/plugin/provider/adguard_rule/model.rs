@@ -1,12 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use regex::Regex;
+use serde::Deserialize;
 
 use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::proto::{Name, RecordType};
-use regex::Regex;
-use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub(super) struct AdGuardRuleConfig {

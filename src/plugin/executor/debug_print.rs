@@ -1,12 +1,17 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `debug_print` executor plugin.
 //!
 //! This plugin logs request/response objects at info level for debugging.
 //! It mirrors mosdns `debug_print` quick setup semantics in ForgeDNS.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+use tracing::info;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -14,11 +19,6 @@ use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::sync::Arc;
-use tracing::info;
 
 const DEFAULT_MSG: &str = "debug print";
 
@@ -124,10 +124,11 @@ fn parse_msg_from_value(args: Option<Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use Value;
+
     use super::*;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_context;
-    use Value;
 
     #[test]
     fn test_parse_msg_from_value_supports_string_and_struct() {

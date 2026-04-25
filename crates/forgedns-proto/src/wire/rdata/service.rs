@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #![allow(clippy::type_complexity)]
 
@@ -19,7 +17,8 @@ fn validate_svc_param_key_order(last_key: Option<u16>, key: u16) -> Result<()> {
     Ok(())
 }
 
-/// Canonically encode a single SvcParam value according to its key-specific wire format from RFC 9460.
+/// Canonically encode a single SvcParam value according to its key-specific
+/// wire format from RFC 9460.
 fn encode_svc_param_wire(param: &SvcParam) -> Result<Box<[u8]>> {
     let value = match param.parsed() {
         SvcParamValue::Mandatory(keys) => {
@@ -61,7 +60,8 @@ fn encode_svc_param_wire(param: &SvcParam) -> Result<Box<[u8]>> {
     Ok(value)
 }
 
-/// Encode the shared SVCB/HTTPS body format: priority, target name, then canonically ordered params.
+/// Encode the shared SVCB/HTTPS body format: priority, target name, then
+/// canonically ordered params.
 fn encode_svcb_like<'a>(
     priority: u16,
     target: &'a Name,
@@ -98,7 +98,8 @@ pub(super) fn parse_kx(packet: &[u8], start: usize, end: usize) -> Result<RData>
     Ok(RData::KX(KX::new(preference, exchanger)))
 }
 
-/// Decode IPSECKEY precedence, gateway selector, and public key per RFC 4025 section 2.1.
+/// Decode IPSECKEY precedence, gateway selector, and public key per RFC 4025
+/// section 2.1.
 pub(super) fn parse_ipseckey(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::IPSECKEY(parse_ipseckey_like_rdata(
         packet, start, end, "IPSECKEY",
@@ -115,7 +116,8 @@ pub(super) fn parse_https(packet: &[u8], start: usize, end: usize) -> Result<RDa
     Ok(RData::HTTPS(HTTPS(parse_svcb_rdata(packet, start, end)?)))
 }
 
-/// Decode AMTRELAY precedence, gateway selector, and gateway bytes per RFC 8777 section 4.2.
+/// Decode AMTRELAY precedence, gateway selector, and gateway bytes per RFC 8777
+/// section 4.2.
 pub(super) fn parse_amtrelay(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::AMTRELAY(parse_amtrelay_rdata(packet, start, end)?))
 }
@@ -165,7 +167,8 @@ pub(super) fn encode_kx<'a>(
     write_name(out, value.exchanger(), false)
 }
 
-/// Encode IPSECKEY precedence, gateway selector bytes, and public key per RFC 4025 section 2.1.
+/// Encode IPSECKEY precedence, gateway selector bytes, and public key per RFC
+/// 4025 section 2.1.
 pub(super) fn encode_ipseckey(value: &IPSECKEY, out: &mut Vec<u8>) {
     out.push(value.precedence());
     out.push(value.gateway_type());
@@ -174,7 +177,8 @@ pub(super) fn encode_ipseckey(value: &IPSECKEY, out: &mut Vec<u8>) {
     out.extend_from_slice(value.public_key());
 }
 
-/// Encode SVCB wire data using canonical parameter ordering from RFC 9460 section 2.2.
+/// Encode SVCB wire data using canonical parameter ordering from RFC 9460
+/// section 2.2.
 pub(super) fn encode_svcb<'a>(
     value: &'a SVCB,
     out: &mut Vec<u8>,
@@ -189,7 +193,8 @@ pub(super) fn encode_svcb<'a>(
     )
 }
 
-/// Encode HTTPS wire data using the SVCB parameter rules from RFC 9460 section 9.
+/// Encode HTTPS wire data using the SVCB parameter rules from RFC 9460 section
+/// 9.
 pub(super) fn encode_https<'a>(
     value: &'a HTTPS,
     out: &mut Vec<u8>,
@@ -204,7 +209,8 @@ pub(super) fn encode_https<'a>(
     )
 }
 
-/// Encode AMTRELAY precedence, gateway type, and gateway bytes per RFC 8777 section 4.2.
+/// Encode AMTRELAY precedence, gateway type, and gateway bytes per RFC 8777
+/// section 4.2.
 pub(super) fn encode_amtrelay(value: &AMTRELAY, out: &mut Vec<u8>) {
     out.push(value.precedence());
     out.push(value.gateway_type());
@@ -350,8 +356,8 @@ fn parse_uri_rdata(packet: &[u8], start: usize, end: usize) -> Result<URI> {
     ))
 }
 
-/// Parse SVCB/HTTPS parameter blocks with the strict ordering and duplicate-key rules from
-/// RFC 9460 section 2.2.
+/// Parse SVCB/HTTPS parameter blocks with the strict ordering and duplicate-key
+/// rules from RFC 9460 section 2.2.
 fn parse_svcb_rdata(packet: &[u8], start: usize, end: usize) -> Result<SVCB> {
     if start + 2 > end {
         return Err(DnsError::protocol("invalid SVCB rdata length"));
@@ -382,7 +388,8 @@ fn parse_svcb_rdata(packet: &[u8], start: usize, end: usize) -> Result<SVCB> {
     Ok(SVCB::new(priority, target, params))
 }
 
-/// Parse IPSECKEY or AMTRELAY-style gateway selector records that carry a variable gateway field.
+/// Parse IPSECKEY or AMTRELAY-style gateway selector records that carry a
+/// variable gateway field.
 fn parse_ipseckey_like_rdata(
     packet: &[u8],
     start: usize,
@@ -396,7 +403,7 @@ fn parse_ipseckey_like_rdata(
     let gateway_type = packet[start + 1];
     let algorithm = packet[start + 2];
     let mut cursor = start + 3;
-    let gateway_len = match gateway_type & 0x7f {
+    let gateway_len = match gateway_type & 0x7F {
         0 => 0,
         1 => 4,
         2 => 16,
@@ -429,7 +436,7 @@ fn parse_amtrelay_rdata(packet: &[u8], start: usize, end: usize) -> Result<AMTRE
     let precedence = packet[start];
     let gateway_type = packet[start + 1];
     let cursor = start + 2;
-    let gateway_len = match gateway_type & 0x7f {
+    let gateway_len = match gateway_type & 0x7F {
         0 => 0,
         1 => 4,
         2 => 16,
@@ -471,7 +478,7 @@ mod tests {
             ),
             (
                 &[
-                    0, 1, 5, b'h', b't', b't', b'p', b's', 0, 0, 3, 0, 2, 0x20, 0xfb,
+                    0, 1, 5, b'h', b't', b't', b'p', b's', 0, 0, 3, 0, 2, 0x20, 0xFB,
                 ],
                 parse_https,
             ),
@@ -529,7 +536,7 @@ mod tests {
             ),
             (
                 "svcb reserved key",
-                parse_svcb(&[0, 1, 3, b's', b'v', b'c', 0, 0xff, 0xff, 0, 0], 0, 11),
+                parse_svcb(&[0, 1, 3, b's', b'v', b'c', 0, 0xFF, 0xFF, 0, 0], 0, 11),
             ),
             ("amtrelay bad gateway type", parse_amtrelay(&[1, 99], 0, 2)),
             ("uri truncated", parse_uri(&[0, 1, 0], 0, 3)),

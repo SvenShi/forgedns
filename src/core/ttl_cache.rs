@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared TTL cache component.
 //!
@@ -13,10 +11,11 @@
 //! It is designed for plugin-level caches where each plugin keeps its own key
 //! and value types but shares the same cache behavior.
 
-use ahash::RandomState as AHashBuilder;
-use dashmap::{DashMap, Entry};
 use std::hash::Hash;
 use std::sync::Arc;
+
+use ahash::RandomState as AHashBuilder;
+use dashmap::{DashMap, Entry};
 
 /// Snapshot of one cached entry with metadata.
 #[derive(Debug, Clone)]
@@ -118,7 +117,8 @@ where
         }
     }
 
-    /// Get one retained, non-expired entry and optionally refresh its access timestamp.
+    /// Get one retained, non-expired entry and optionally refresh its access
+    /// timestamp.
     ///
     /// This method only enforces the shared cache-retention deadline
     /// (`expire_at_ms`). Callers that need a fresh/stale split can apply their

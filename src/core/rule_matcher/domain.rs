@@ -1,34 +1,39 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
-//! High-performance domain rule matching primitives shared by providers and matchers.
+//! High-performance domain rule matching primitives shared by providers and
+//! matchers.
 //!
-//! This module intentionally keeps domain matching independent from any concrete plugin so
-//! large rule sets can be parsed once, compiled once, and then reused on the hot query path.
-//! The matcher supports four rule families commonly seen in rule-list ecosystems:
+//! This module intentionally keeps domain matching independent from any
+//! concrete plugin so large rule sets can be parsed once, compiled once, and
+//! then reused on the hot query path. The matcher supports four rule families
+//! commonly seen in rule-list ecosystems:
 //!
 //! - `full:` exact FQDN matches.
 //! - `domain:` suffix matches such as `example.com` matching `www.example.com`.
-//! - `keyword:` substring matches compiled into a single Aho-Corasick automaton.
+//! - `keyword:` substring matches compiled into a single Aho-Corasick
+//!   automaton.
 //! - `regexp:` regular expressions compiled into a single `RegexSet`.
 //!
-//! The public `DomainRuleMatcher` is an aggregator over these specialized engines. Parsing and
-//! normalization happen when rules are loaded, while request-time matching stays branch-light.
+//! The public `DomainRuleMatcher` is an aggregator over these specialized
+//! engines. Parsing and normalization happen when rules are loaded, while
+//! request-time matching stays branch-light.
 
-use crate::proto::Name;
+use std::borrow::Cow;
+
 use ahash::{AHashMap, AHashSet};
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::{RegexBuilder, RegexSet, RegexSetBuilder};
-use std::borrow::Cow;
+
+use crate::proto::Name;
 
 /// A single node in the reversed-label trie used by `domain:` suffix rules.
 ///
-/// For a rule like `www.example.com`, labels are inserted as `com -> example -> www`.
-/// This makes suffix matching on an already-normalized DNS name a straight walk from TLD
-/// toward the leftmost label. `terminal` means the path up to this node already forms a
-/// complete suffix rule, so matching can stop early without consuming all labels.
+/// For a rule like `www.example.com`, labels are inserted as `com -> example ->
+/// www`. This makes suffix matching on an already-normalized DNS name a
+/// straight walk from TLD toward the leftmost label. `terminal` means the path
+/// up to this node already forms a complete suffix rule, so matching can stop
+/// early without consuming all labels.
 #[derive(Debug, Default)]
 pub(crate) struct DomainTrieNode {
     pub(crate) terminal: bool,
@@ -37,9 +42,10 @@ pub(crate) struct DomainTrieNode {
 
 /// A compact arena-backed trie for domain suffix rules.
 ///
-/// The trie stores all nodes in a flat `Vec` and uses `u32` indices instead of pointers.
-/// Compared with a pointer-heavy recursive structure, this keeps allocations predictable and
-/// improves locality for repeated lookups on the query path.
+/// The trie stores all nodes in a flat `Vec` and uses `u32` indices instead of
+/// pointers. Compared with a pointer-heavy recursive structure, this keeps
+/// allocations predictable and improves locality for repeated lookups on the
+/// query path.
 #[derive(Debug)]
 pub(crate) struct DomainTrie {
     /// Flat arena to avoid pointer-heavy tree allocations.
@@ -62,10 +68,11 @@ impl DomainTrie {
         self.rule_count > 0
     }
 
-    /// Insert a suffix rule by reversed labels, e.g. `google.com` => `com -> google`.
+    /// Insert a suffix rule by reversed labels, e.g. `google.com` => `com ->
+    /// google`.
     ///
-    /// Duplicate logical rules are collapsed by only incrementing `rule_count` the first time
-    /// the final node becomes terminal.
+    /// Duplicate logical rules are collapsed by only incrementing `rule_count`
+    /// the first time the final node becomes terminal.
     pub(crate) fn insert(&mut self, domain: &str) {
         let mut cursor = 0u32;
         for label in domain.rsplit('.') {
@@ -95,9 +102,9 @@ impl DomainTrie {
 
     /// Match a normalized DNS name against the suffix trie.
     ///
-    /// The walk proceeds from the rightmost label to the leftmost label. As soon as a terminal
-    /// node is reached the rule matches, which naturally implements "match this suffix or any
-    /// subdomain below it".
+    /// The walk proceeds from the rightmost label to the leftmost label. As
+    /// soon as a terminal node is reached the rule matches, which naturally
+    /// implements "match this suffix or any subdomain below it".
     #[inline]
     pub(crate) fn contains_name(&self, name: &Name) -> bool {
         let mut cursor = 0u32;
@@ -124,8 +131,9 @@ pub(crate) enum DomainRuleKind {
 
 /// Split a textual rule expression into its rule kind and payload.
 ///
-/// Expressions without an explicit prefix default to `domain:` semantics because suffix rules
-/// are the most common representation in traditional rule-list files.
+/// Expressions without an explicit prefix default to `domain:` semantics
+/// because suffix rules are the most common representation in traditional
+/// rule-list files.
 #[inline]
 pub(crate) fn split_domain_rule_expression(exp: &str) -> (DomainRuleKind, &str) {
     if let Some(v) = exp.strip_prefix("full:") {
@@ -143,8 +151,8 @@ pub(crate) fn split_domain_rule_expression(exp: &str) -> (DomainRuleKind, &str) 
 
 /// Exact domain matcher for `full:` rules.
 ///
-/// The caller is responsible for normalizing the domain text before insertion so lookups can
-/// stay as a plain hash set membership test.
+/// The caller is responsible for normalizing the domain text before insertion
+/// so lookups can stay as a plain hash set membership test.
 #[derive(Debug, Default)]
 pub(crate) struct FullDomainMatcher {
     rules: AHashSet<Box<str>>,
@@ -169,8 +177,9 @@ impl FullDomainMatcher {
 
 /// Trie-backed suffix matcher for `domain:` rules.
 ///
-/// This is the preferred engine for common domain suffix lists because it avoids regex or
-/// substring scans and allows early exits while walking DNS labels.
+/// This is the preferred engine for common domain suffix lists because it
+/// avoids regex or substring scans and allows early exits while walking DNS
+/// labels.
 #[derive(Debug, Default)]
 pub(crate) struct TrieDomainMatcher {
     trie: DomainTrie,
@@ -200,8 +209,9 @@ impl TrieDomainMatcher {
 
 /// Substring matcher for `keyword:` rules.
 ///
-/// Rules are buffered first and then compiled into one Aho-Corasick automaton during
-/// `finalize()`. This keeps insertion simple while making repeated lookups cheap.
+/// Rules are buffered first and then compiled into one Aho-Corasick automaton
+/// during `finalize()`. This keeps insertion simple while making repeated
+/// lookups cheap.
 #[derive(Debug, Default)]
 pub(crate) struct KeywordDomainMatcher {
     pending_patterns: Vec<String>,
@@ -218,8 +228,9 @@ impl KeywordDomainMatcher {
 
     /// Compile pending keyword rules into a single automaton.
     ///
-    /// The builder is case-sensitive because rule text has already been normalized to lowercase
-    /// before insertion, which avoids paying for case folding during every match.
+    /// The builder is case-sensitive because rule text has already been
+    /// normalized to lowercase before insertion, which avoids paying for
+    /// case folding during every match.
     pub(crate) fn finalize(&mut self) -> Result<(), String> {
         if self.pending_patterns.is_empty() {
             return Ok(());
@@ -248,8 +259,9 @@ impl KeywordDomainMatcher {
 
 /// Regular-expression matcher for `regexp:` rules.
 ///
-/// Each rule is syntax-checked on insertion so configuration errors can be reported with the
-/// original source location. Successful rules are later compiled into one `RegexSet`.
+/// Each rule is syntax-checked on insertion so configuration errors can be
+/// reported with the original source location. Successful rules are later
+/// compiled into one `RegexSet`.
 #[derive(Debug, Default)]
 pub(crate) struct RegexpDomainMatcher {
     pending_patterns: Vec<String>,
@@ -295,9 +307,10 @@ impl RegexpDomainMatcher {
 
 /// Aggregated domain matcher used by rule providers and request matchers.
 ///
-/// The type keeps each rule family in its own specialized engine instead of forcing every rule
-/// through a single generic matcher. This lets the hot path evaluate exact and suffix matches
-/// first, then fall back to more expensive keyword and regex checks only when needed.
+/// The type keeps each rule family in its own specialized engine instead of
+/// forcing every rule through a single generic matcher. This lets the hot path
+/// evaluate exact and suffix matches first, then fall back to more expensive
+/// keyword and regex checks only when needed.
 #[derive(Debug, Default)]
 pub struct DomainRuleMatcher {
     full: Option<FullDomainMatcher>,
@@ -346,8 +359,9 @@ impl DomainRuleMatcher {
 
     /// Parse and insert one domain expression from a specific source.
     ///
-    /// `source` is included in validation errors so callers can surface accurate diagnostics for
-    /// files, providers, or config fragments. Domain-like rules are normalized here to ensure the
+    /// `source` is included in validation errors so callers can surface
+    /// accurate diagnostics for files, providers, or config fragments.
+    /// Domain-like rules are normalized here to ensure the
     /// compiled matchers only store lowercase names without trailing dots.
     pub fn add_expression(&mut self, exp: &str, source: &str) -> Result<(), String> {
         let exp = exp.trim();
@@ -394,9 +408,10 @@ impl DomainRuleMatcher {
 
     /// Compile deferred matcher state after all rules have been loaded.
     ///
-    /// `full:` and `domain:` rules are ready immediately, but keyword and regex rules benefit
-    /// from bulk compilation into shared automata. Callers should finalize once after loading
-    /// and before the matcher is placed on the request path.
+    /// `full:` and `domain:` rules are ready immediately, but keyword and regex
+    /// rules benefit from bulk compilation into shared automata. Callers
+    /// should finalize once after loading and before the matcher is placed
+    /// on the request path.
     pub fn finalize(&mut self) -> Result<(), String> {
         if let Some(keyword) = &mut self.keyword {
             keyword.finalize()?;
@@ -427,11 +442,12 @@ impl DomainRuleMatcher {
     }
 }
 
-/// Normalize user-provided domain text without forcing an allocation in the common case.
+/// Normalize user-provided domain text without forcing an allocation in the
+/// common case.
 ///
-/// The function trims surrounding ASCII whitespace, removes trailing dots, and lowercases the
-/// result only when uppercase bytes are present. `Cow` is used so already-normalized input can
-/// be borrowed directly.
+/// The function trims surrounding ASCII whitespace, removes trailing dots, and
+/// lowercases the result only when uppercase bytes are present. `Cow` is used
+/// so already-normalized input can be borrowed directly.
 #[inline]
 pub(crate) fn normalize_domain_cow(domain: &str) -> Cow<'_, str> {
     let bytes = domain.as_bytes();

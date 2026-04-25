@@ -1,7 +1,21 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+use std::fmt::{Debug, Formatter};
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+
+use async_trait::async_trait;
+use bytes::{BufMut, Bytes};
+use futures::future::poll_fn;
+use h3::client::{RequestStream, SendRequest};
+use h3_quinn::{BidiStream, OpenStreams};
+use http::Version;
+use tokio::select;
+use tokio::sync::Notify;
+use tokio::time::timeout;
+use tracing::{debug, trace, warn};
+
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::network::buffer_pool::wire_buffer_pool;
@@ -12,20 +26,6 @@ use crate::network::upstream::utils::{
 };
 use crate::network::upstream::{Connection, ConnectionInfo};
 use crate::proto::Message;
-use async_trait::async_trait;
-use bytes::{BufMut, Bytes};
-use futures::future::poll_fn;
-use h3::client::{RequestStream, SendRequest};
-use h3_quinn::{BidiStream, OpenStreams};
-use http::Version;
-use std::fmt::{Debug, Formatter};
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
-use tokio::select;
-use tokio::sync::Notify;
-use tokio::time::timeout;
-use tracing::{debug, trace, warn};
 
 pub struct H3Connection {
     id: u16,

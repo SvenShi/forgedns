@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `ros_address_list` executor plugin.
 //!
@@ -12,10 +10,12 @@
 //!
 //! Architecture overview:
 //! - continuation pre-stage stays hot-path light.
-//! - continuation post-stage extracts normalized query domain and unique A/AAAA IPs.
+//! - continuation post-stage extracts normalized query domain and unique A/AAAA
+//!   IPs.
 //! - address-list synchronization is delegated to a single-owner background
 //!   manager state machine.
-//! - RouterOS API details are isolated in `MikrotikApi` adapter implementations.
+//! - RouterOS API details are isolated in `MikrotikApi` adapter
+//!   implementations.
 //! - ownership metadata is persisted in RouterOS `comment` so cleanup can
 //!   safely distinguish ForgeDNS-managed entries from foreign entries.
 //!
@@ -29,6 +29,23 @@
 //! - load persistent file-backed entries at startup and keep them fixed until
 //!   the plugin is reloaded.
 
+use std::fs;
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use ahash::{AHashMap, AHashSet};
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+use tokio::sync::{mpsc, oneshot};
+use tracing::warn;
+
+use self::api::{MikrotikApi, MikrotikRsClient};
+use self::manager::{
+    AddressListFamily, AddressListKey, AddressListManager, AddressListManagerConfig,
+    AddressListManagerRuntime, ManagerCommand, ObservedAddr,
+};
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -36,16 +53,9 @@ use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::Rcode;
 use crate::{continue_next, register_plugin_factory};
-use ahash::{AHashMap, AHashSet};
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::fs;
-use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
-use tracing::warn;
+
+mod api;
+mod manager;
 
 /// Default lower TTL clamp for dynamic address-list entries.
 const DEFAULT_MIN_TTL: u32 = 60;
@@ -60,15 +70,6 @@ const DEFAULT_COMMENT_PREFIX: &str = "fdns";
 /// Maximum time sync mode waits for one observe command to finish.
 const SYNC_OBSERVE_TIMEOUT_SECS: u64 = 8;
 
-mod api;
-mod manager;
-
-use self::api::{MikrotikApi, MikrotikRsClient};
-use self::manager::{
-    AddressListFamily, AddressListKey, AddressListManager, AddressListManagerConfig,
-    AddressListManagerRuntime, ManagerCommand, ObservedAddr,
-};
-
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct MikrotikConfigArgs {
@@ -78,7 +79,8 @@ struct MikrotikConfigArgs {
     username: Option<String>,
     /// RouterOS login password.
     password: Option<String>,
-    /// Whether post stage waits RouterOS writes (`false`) or queues work (`true`).
+    /// Whether post stage waits RouterOS writes (`false`) or queues work
+    /// (`true`).
     #[serde(rename = "async")]
     async_mode: Option<bool>,
     /// IPv4 address-list name for observed IPv4 answers.
@@ -209,7 +211,8 @@ struct MikrotikExecutor {
     config: MikrotikConfig,
     /// Pre-built manager consumed during `init()`.
     manager: Option<AddressListManager>,
-    /// Sender exposed to continuation post-stage after the background runtime starts.
+    /// Sender exposed to continuation post-stage after the background runtime
+    /// starts.
     command_tx: Option<mpsc::Sender<ManagerCommand>>,
     /// Runtime handle stored so `destroy()` can stop worker tasks.
     runtime: Mutex<Option<AddressListManagerRuntime>>,
@@ -692,6 +695,8 @@ fn parse_persistent_item(
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+
     use super::*;
     use crate::plugin::PluginRegistry;
     use crate::plugin::executor::ros_address_list::api::RouterListEntry;
@@ -700,7 +705,6 @@ mod tests {
     };
     use crate::proto::rdata::{A, AAAA};
     use crate::proto::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
-    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[derive(Debug, Default)]
     struct MockApiState {

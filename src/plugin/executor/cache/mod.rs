@@ -1,14 +1,29 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! DNS response cache executor plugin.
 //!
 //! Provides an in-memory cache keyed by normalized query name + query context
-//! (qtype/qclass/DO/CD and optional ECS scope). Cache entries expire by TTL and are
-//! periodically cleaned up.
+//! (qtype/qclass/DO/CD and optional ECS scope). Cache entries expire by TTL and
+//! are periodically cleaned up.
+use std::fmt::Debug;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use ahash::AHashSet;
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::{Request, StatusCode};
+use serde::{Deserialize, Serialize};
+use serde_yaml_ng::Value;
+use tokio::sync::OnceCell;
+use tracing::{Level, debug, event_enabled, info, warn};
+
+use self::key::{CacheKey, build_cache_key as build_cache_key_internal};
+use self::persistence::{
+    dump_cache_to_bytes, dump_cache_to_file, load_cache_from_bytes, load_cache_from_file,
+};
 use crate::api::{ApiHandler, ApiRegister, json_error, json_ok, simple_response};
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
@@ -20,27 +35,9 @@ use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Message, Rcode};
 use crate::{continue_next, register_plugin_factory};
-use ahash::AHashSet;
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, StatusCode};
-use serde::{Deserialize, Serialize};
-use serde_yaml_ng::Value;
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-use tokio::sync::OnceCell;
-use tracing::{Level, debug, event_enabled, info, warn};
 
 mod key;
 mod persistence;
-
-use self::key::{CacheKey, build_cache_key as build_cache_key_internal};
-use self::persistence::{
-    dump_cache_to_bytes, dump_cache_to_file, load_cache_from_bytes, load_cache_from_file,
-};
 
 // Default cache size.
 const DEFAULT_CACHE_SIZE: usize = 1024;
@@ -1080,16 +1077,19 @@ impl ApiHandler for CacheLoadDumpHandler {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    use async_trait::async_trait;
+
     use super::*;
     use crate::plugin::PluginRegistry;
     use crate::plugin::executor::Executor;
     use crate::plugin::executor::sequence::chain::ChainProgram;
     use crate::proto::rdata::SOA;
-    use crate::proto::{DNSClass, Edns, EdnsOption, Question};
-    use crate::proto::{Message, Name, RData, Record, RecordType};
-    use async_trait::async_trait;
-    use std::net::{Ipv4Addr, SocketAddr};
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use crate::proto::{
+        DNSClass, Edns, EdnsOption, Message, Name, Question, RData, Record, RecordType,
+    };
 
     fn test_cache(config: CacheConfig) -> Cache {
         let cache_negative = config.cache_negative.unwrap_or(true);

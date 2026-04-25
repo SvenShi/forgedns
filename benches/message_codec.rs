@@ -1,12 +1,13 @@
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use forgedns::proto::{
-    DNSClass, EdnsCode, EdnsOption, Message, MessageType, Opcode, Question, RData, Rcode, Record,
-    RecordType,
-    rdata::{self},
-};
 use std::hint::black_box;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use forgedns::proto::rdata::{self};
+use forgedns::proto::{
+    DNSClass, EdnsCode, EdnsOption, Message, MessageType, Opcode, Question, RData, Rcode, Record,
+    RecordType,
+};
 
 fn forgedns_name(raw: &str) -> forgedns::proto::Name {
     forgedns::proto::Name::from_ascii(raw).expect("fixture name should be valid")
@@ -124,7 +125,7 @@ fn build_large_payload_message() -> Message {
         forgedns_name("bulk.example.com."),
         120,
         RData::AAAA(rdata::AAAA(Ipv6Addr::new(
-            0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x42,
+            0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x42,
         ))),
     ));
 
@@ -151,7 +152,7 @@ fn build_compat_fixture_message() -> Message {
     message.add_answer(Record::from_rdata(
         forgedns_name("example.com."),
         301,
-        RData::AAAA(rdata::AAAA(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))),
+        RData::AAAA(rdata::AAAA(Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 1))),
     ));
     message.add_answer(Record::from_rdata(
         forgedns_name("alias.example.com."),
@@ -294,16 +295,16 @@ fn bench_response_builders(c: &mut Criterion) {
         Ipv4Addr::new(192, 0, 2, 16),
         Ipv4Addr::new(192, 0, 2, 17),
     ];
-    let v6_one = [Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10)];
+    let v6_one = [Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x10)];
     let v6_eight = [
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10),
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x11),
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x12),
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x13),
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x14),
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x15),
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x16),
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x17),
+        Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x10),
+        Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x11),
+        Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x12),
+        Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x13),
+        Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x14),
+        Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x15),
+        Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x16),
+        Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x17),
     ];
     let v4_one_rdata = v4_one.map(|addr| Arc::new(RData::A(rdata::A(addr))));
     let v4_eight_rdata = v4_eight.map(|addr| Arc::new(RData::A(rdata::A(addr))));

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared runtime primitives used across the whole ForgeDNS process.
 //!
@@ -9,8 +7,8 @@
 //! subsystems depend on:
 //!
 //! - [`app_clock`]: low-overhead elapsed-time tracking for logs and metrics.
-//! - [`context`]: [`context::DnsContext`] and related state passed through the plugin
-//!   pipeline during request execution.
+//! - [`context`]: [`context::DnsContext`] and related state passed through the
+//!   plugin pipeline during request execution.
 //! - [`error`]: common error types and result aliases.
 //! - [`rule_matcher`]: reusable domain and string matching helpers.
 //! - [`task_center`]: shared async task orchestration helpers.

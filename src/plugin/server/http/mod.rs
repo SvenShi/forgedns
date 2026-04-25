@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! HTTP DNS server plugin
 //!
@@ -15,9 +13,16 @@
 //! `cert` and `key` configuration options pointing to PEM-encoded certificate
 //! and private key files.
 
-mod http2_server;
-mod http3_server;
-mod http_dispatcher;
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use http::{HeaderValue, Method};
+use rustls::ServerConfig;
+use serde::Deserialize;
+use tokio::sync::{oneshot, watch};
+use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
@@ -27,15 +32,10 @@ use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler
 use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use http::{HeaderValue, Method};
-use rustls::ServerConfig;
-use serde::Deserialize;
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use tokio::sync::{oneshot, watch};
-use tracing::{debug, error, info, warn};
+
+mod http2_server;
+mod http3_server;
+mod http_dispatcher;
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT: u64 = 30;
 
@@ -44,21 +44,25 @@ pub(crate) const DEFAULT_IDLE_TIMEOUT: u64 = 30;
 pub struct HttpServerConfig {
     /// DoH route entries mapping HTTP paths to executor plugins.
     ///
-    /// - Each route defines a `path` (e.g., "/dns-query") and an executor `exec` tag.
+    /// - Each route defines a `path` (e.g., "/dns-query") and an executor
+    ///   `exec` tag.
     /// - Requests are routed by HTTP method and path via `HttpDispatcher`.
     entries: Vec<Entry>,
 
-    /// HTTP listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:443", ":443").
+    /// HTTP listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:443",
+    /// ":443").
     ///
     /// - `:port` binds on `0.0.0.0:port`.
     /// - Must be a valid listen address or validation will fail.
-    /// - When TLS is configured, server runs HTTPS (HTTP/2) and optional HTTP/3.
+    /// - When TLS is configured, server runs HTTPS (HTTP/2) and optional
+    ///   HTTP/3.
     listen: String,
 
     /// HTTP header name to extract real client IP (optional).
     ///
     /// - Common values: "X-Real-IP", "X-Forwarded-For".
-    /// - Useful when running behind reverse proxies; falls back to TCP source IP if absent.
+    /// - Useful when running behind reverse proxies; falls back to TCP source
+    ///   IP if absent.
     src_ip_header: Option<String>,
 
     /// Path to TLS certificate file (PEM format, optional).
@@ -75,7 +79,8 @@ pub struct HttpServerConfig {
     /// HTTP connection idle timeout in seconds.
     ///
     /// - Default: 30 seconds if omitted.
-    /// - Applies to HTTP/2 connections; HTTP/3 uses QUIC transport idle timeout.
+    /// - Applies to HTTP/2 connections; HTTP/3 uses QUIC transport idle
+    ///   timeout.
     idle_timeout: Option<u64>,
 
     /// Enable HTTP/3 (QUIC) for DoH connections.
@@ -447,7 +452,8 @@ pub fn extract_client_ip(
             );
             return addr;
         }
-        // X-Forwarded-For may contain multiple IPs, take the first one (original client)
+        // X-Forwarded-For may contain multiple IPs, take the first one (original
+        // client)
         if let Some(first_ip) = ip_str.split(',').next() {
             let first_ip = first_ip.trim();
             if let Ok(ip) = first_ip.parse::<std::net::IpAddr>() {
@@ -466,11 +472,13 @@ pub fn extract_client_ip(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use std::net::{IpAddr, Ipv4Addr};
+
     use http::HeaderMap;
     use serde_yaml_ng::from_str;
-    use std::net::{IpAddr, Ipv4Addr};
+
+    use super::*;
+    use crate::plugin::test_utils::{plugin_config, test_registry};
 
     #[test]
     fn test_http_factory_requires_args() {

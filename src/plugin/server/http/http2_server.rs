@@ -1,24 +1,23 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::plugin::server::ConnectionGuard;
-use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
-use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
-use crate::plugin::server::tcp;
-use bytes::{BufMut, Bytes, BytesMut};
-use http::header::{ALT_SVC, CONTENT_LENGTH};
-use rustls::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+use bytes::{BufMut, Bytes, BytesMut};
+use http::header::{ALT_SVC, CONTENT_LENGTH};
+use rustls::ServerConfig;
 use tokio::sync::{oneshot, watch};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
+
+use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
+use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
+use crate::plugin::server::{ConnectionGuard, tcp};
 
 /// Main HTTP/2 server loop (over TCP)
 ///
@@ -181,7 +180,8 @@ pub async fn run_server(
 /// 7. Returns HTTP response
 ///
 /// # Type Parameters
-/// - `S`: Stream type implementing AsyncRead + AsyncWrite (e.g., TcpStream, TlsStream)
+/// - `S`: Stream type implementing AsyncRead + AsyncWrite (e.g., TcpStream,
+///   TlsStream)
 #[hotpath::measure]
 async fn handle_http_stream<S>(
     stream: S,
@@ -232,8 +232,9 @@ async fn handle_http_stream<S>(
             let query = uri.query().map(Arc::from);
             let headers = request.headers();
 
-            // Try to extract real client IP from HTTP headers (e.g., X-Real-IP, X-Forwarded-For)
-            // This is essential when running behind a reverse proxy
+            // Try to extract real client IP from HTTP headers (e.g., X-Real-IP,
+            // X-Forwarded-For) This is essential when running behind a reverse
+            // proxy
             let client_addr = extract_client_ip(headers, &src_ip_header, src);
 
             debug!(
@@ -375,6 +376,13 @@ fn insert_alt_svc_header(headers: &mut http::HeaderMap, alt_svc: Option<&http::H
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use http::Request;
+    use tokio::io::duplex;
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::Result;
@@ -383,13 +391,7 @@ mod tests {
     use crate::plugin::server::RequestHandle;
     use crate::plugin::server::http::http_dispatcher::DnsPostHandler;
     use crate::plugin::test_utils::test_registry;
-    use crate::proto::{Message, Question, Rcode};
-    use crate::proto::{Name, RecordType};
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use http::Request;
-    use std::sync::{Arc, Mutex};
-    use tokio::io::duplex;
+    use crate::proto::{Message, Name, Question, Rcode, RecordType};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ObservedRequest {

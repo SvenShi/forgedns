@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Wire-length helpers for DNS message encoding.
 
@@ -23,9 +21,10 @@ pub(crate) fn edns_option_len(option: &EdnsOption) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
     use super::*;
     use crate::proto::{ClientSubnet, Edns};
-    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     // Verifies that the shared helper stays aligned with the actual OPT option

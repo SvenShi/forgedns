@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Matcher plugin category.
 //!
 //! Matchers are pure predicates used by executors such as `sequence` to branch
@@ -17,7 +15,9 @@
 //!
 //! Matchers should stay fast and side-effect free. They read from
 //! [`DnsContext`] and return a boolean decision through [`Matcher::is_match`].
-use crate::{core::context::DnsContext, plugin::Plugin};
+
+use crate::core::context::DnsContext;
+use crate::plugin::Plugin;
 
 pub mod client_ip;
 pub mod cname;

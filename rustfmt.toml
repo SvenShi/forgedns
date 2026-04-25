@@ -1,0 +1,17 @@
+edition = "2024"
+style_edition = "2024"
+unstable_features = true
+
+hex_literal_case = "Upper"
+float_literal_trailing_zero = "Always"
+
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+
+normalize_comments = true
+normalize_doc_attributes = true
+wrap_comments = true
+
+reorder_impl_items = true
+
+use_field_init_shorthand = true

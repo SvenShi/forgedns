@@ -1,21 +1,20 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
-use crate::plugin::server::ConnectionGuard;
-use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
-use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
-use crate::plugin::server::quic;
-use bytes::{BufMut, Bytes, BytesMut};
-use http::header::CONTENT_LENGTH;
-use rustls::ServerConfig;
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use bytes::{BufMut, Bytes, BytesMut};
+use http::header::CONTENT_LENGTH;
+use rustls::ServerConfig;
 use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
+
+use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
+use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
+use crate::plugin::server::{ConnectionGuard, quic};
 
 const MAX_HTTP3_BODY_SIZE: usize = 64 * 1024;
 
@@ -326,11 +325,13 @@ fn http3_server_config(mut server_config: ServerConfig) -> ServerConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fmt::{Debug, Formatter};
+
     use rustls::ServerConfig;
     use rustls::server::{ClientHello, ResolvesServerCert};
     use rustls::sign::CertifiedKey;
-    use std::fmt::{Debug, Formatter};
+
+    use super::*;
 
     struct RejectingResolver;
 

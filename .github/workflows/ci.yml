@@ -51,7 +51,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: nightly
           components: rustfmt, clippy
 
       - name: Cache Rust artifacts

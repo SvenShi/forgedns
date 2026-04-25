@@ -1,16 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Application assembly helpers for wiring API and plugin runtime components.
+
+use std::sync::Arc;
 
 use crate::api::control::{self, AppController};
 use crate::api::{ApiHub, ApiRegister};
 use crate::config::types::Config;
 use crate::core::error::Result;
 use crate::plugin::{self, PluginRegistry};
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct AppAssembly {

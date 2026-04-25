@@ -1,9 +1,10 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Owned DNS message model.
+
+use std::net::IpAddr;
+use std::sync::Arc;
 
 use crate::core::error::{DnsError, Result};
 use crate::proto::rdata::{A, AAAA, Edns};
@@ -13,8 +14,6 @@ use crate::proto::wire::{
 use crate::proto::{
     DNSClass, Header, MessageType, Name, Opcode, Question, RData, Rcode, Record, RecordType,
 };
-use std::net::IpAddr;
-use std::sync::Arc;
 
 /// Owned DNS message that flows directly through the pipeline.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -101,13 +100,15 @@ impl Message {
         encode_message_into(self, self.id(), out)
     }
 
-    /// Append the encoded wire message to the provided buffer without clearing it first.
+    /// Append the encoded wire message to the provided buffer without clearing
+    /// it first.
     #[hotpath::measure]
     pub fn append_to(&self, out: &mut Vec<u8>) -> Result<()> {
         encode_message_into(self, self.id(), out)
     }
 
-    /// Encode the message into a newly allocated byte vector with an overridden ID.
+    /// Encode the message into a newly allocated byte vector with an overridden
+    /// ID.
     #[hotpath::measure]
     pub fn to_bytes_with_id(&self, id: u16) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(self.bytes_len());
@@ -115,7 +116,8 @@ impl Message {
         Ok(out)
     }
 
-    /// Append the encoded wire message with an overridden ID to the provided buffer.
+    /// Append the encoded wire message with an overridden ID to the provided
+    /// buffer.
     ///
     /// This method preserves any bytes that are already present in `out` and
     /// writes the DNS header and body after the current end of the buffer.
@@ -124,7 +126,8 @@ impl Message {
         encode_message_into(self, id, out)
     }
 
-    /// Append the encoded wire message with an overridden ID to the provided buffer.
+    /// Append the encoded wire message with an overridden ID to the provided
+    /// buffer.
     #[hotpath::measure]
     pub fn append_to_with_id(&self, id: u16, out: &mut Vec<u8>) -> Result<()> {
         encode_message_into(self, id, out)
@@ -136,7 +139,8 @@ impl Message {
         encode_message_with_limit(self, Some(max_size), self.id(), out)
     }
 
-    /// Append the encoded wire message with an overridden ID while honoring `max_size`.
+    /// Append the encoded wire message with an overridden ID while honoring
+    /// `max_size`.
     #[hotpath::measure]
     pub fn append_to_with_limit_and_id(
         &self,
@@ -147,7 +151,8 @@ impl Message {
         encode_message_with_limit(self, Some(max_size), id, out)
     }
 
-    /// Encode the message into a newly allocated byte vector while honoring `max_size`.
+    /// Encode the message into a newly allocated byte vector while honoring
+    /// `max_size`.
     #[hotpath::measure]
     pub fn to_bytes_with_limit(&self, max_size: usize) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(self.bytes_len().min(max_size.max(DNS_HEADER_LEN)));
@@ -155,7 +160,8 @@ impl Message {
         Ok(out)
     }
 
-    /// Encode the message into a newly allocated byte vector with an overridden ID and size cap.
+    /// Encode the message into a newly allocated byte vector with an overridden
+    /// ID and size cap.
     #[hotpath::measure]
     pub fn to_bytes_with_limit_and_id(&self, max_size: usize, id: u16) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(self.bytes_len().min(max_size.max(DNS_HEADER_LEN)));
@@ -169,8 +175,8 @@ impl Message {
     /// - treats sizes below 512 as 512,
     /// - disables compression when the uncompressed payload already fits,
     /// - otherwise prefers compressed full message if it fits,
-    /// - otherwise keeps prefix records while dropping from `Additional`, then `Authority`,
-    ///   then `Answer`,
+    /// - otherwise keeps prefix records while dropping from `Additional`, then
+    ///   `Authority`, then `Answer`,
     /// - always preserves the EDNS OPT pseudo-RR when present,
     /// - always preserves detached signature records in the trailer block,
     /// - sets TC if any RR is omitted,
@@ -386,6 +392,7 @@ impl Message {
     pub fn authority_count(&self) -> u16 {
         self.authorities.len() as u16
     }
+
     pub fn additional_count(&self) -> u16 {
         self.additionals.len() as u16
             + self.signature.len() as u16
@@ -454,6 +461,7 @@ impl Message {
     pub fn take_answers(&mut self) -> Vec<Record> {
         std::mem::take(&mut self.answers)
     }
+
     pub fn authorities(&self) -> &[Record] {
         &self.authorities
     }
@@ -613,6 +621,7 @@ impl Message {
             .iter()
             .any(|record| wanted.contains(&record.rr_type()))
     }
+
     pub fn has_answer_type(&self, wanted: RecordType) -> bool {
         self.answers.iter().any(|record| wanted == record.rr_type())
     }
@@ -774,12 +783,14 @@ impl Message {
 pub(crate) struct TruncationLens {
     /// Total length after encoding the header and all questions.
     pub questions_end_len: usize,
-    /// Total length after keeping the first `i + 1` answers, excluding later sections.
+    /// Total length after keeping the first `i + 1` answers, excluding later
+    /// sections.
     pub answers_prefix_lens: Vec<usize>,
-    /// Total length after keeping all answers and the first `i + 1` authority records.
+    /// Total length after keeping all answers and the first `i + 1` authority
+    /// records.
     pub authorities_prefix_lens: Vec<usize>,
-    /// Total length after keeping all answers, all authorities, and the first `i + 1`
-    /// additional records.
+    /// Total length after keeping all answers, all authorities, and the first
+    /// `i + 1` additional records.
     pub additionals_prefix_lens: Vec<usize>,
     /// Fixed trailer length contributed by EDNS and detached signature records.
     pub trailer_len: usize,
@@ -799,8 +810,8 @@ mod tests {
     use crate::proto::rdata::{Edns, TXT};
 
     #[test]
-    // Verifies the classic DNS truncation rule that TC must be set and OPT must remain
-    // attached when space allows.
+    // Verifies the classic DNS truncation rule that TC must be set and OPT must
+    // remain attached when space allows.
     fn truncate_retains_edns_and_sets_tc() {
         let mut message = Message::new();
         message.add_question(Question::new(
@@ -830,7 +841,8 @@ mod tests {
     }
 
     #[test]
-    // A previous truncate call must not leave stale TC behind once the message fits again.
+    // A previous truncate call must not leave stale TC behind once the message fits
+    // again.
     fn truncate_clears_tc_when_message_now_fits() {
         let mut message = Message::new();
         message.add_question(Question::new(
@@ -883,8 +895,8 @@ mod tests {
     }
 
     #[test]
-    // Length prediction is used by truncate and preallocation; it should continue to
-    // match the actual encoder across common message shapes.
+    // Length prediction is used by truncate and preallocation; it should continue
+    // to match the actual encoder across common message shapes.
     fn bytes_len_matches_encoded_size_matrix() {
         let mut query = Message::new();
         query.add_question(Question::new(
@@ -922,8 +934,8 @@ mod tests {
     }
 
     #[test]
-    // A small size sweep gives us confidence that truncation remains monotonic across
-    // the most common UDP payload budgets.
+    // A small size sweep gives us confidence that truncation remains monotonic
+    // across the most common UDP payload budgets.
     fn truncate_size_sweep_stays_within_budget() {
         let mut message = Message::new();
         message.add_question(Question::new(

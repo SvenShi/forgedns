@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared HTTP client helpers.
 //!
@@ -9,9 +7,11 @@
 //! executors, rule downloads, and release upgrades. It centralizes TLS policy,
 //! SOCKS5 dialing, redirects, response draining, and atomic file downloads.
 
-use crate::core::error::{DnsError, Result};
-use crate::network::tls_config::{insecure_client_config, secure_client_config};
-use crate::network::upstream::{Socks5Opt, connect_tcp_stream};
+use std::fmt;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::task::{Context, Poll};
+
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use http::header::{CONTENT_LENGTH, HeaderName, HeaderValue, LOCATION};
@@ -21,16 +21,16 @@ use hyper::body::Incoming;
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use std::fmt;
-use std::net::IpAddr;
-use std::path::{Path, PathBuf};
-use std::task::{Context, Poll};
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tower_service::Service;
 use url::Url;
+
+use crate::core::error::{DnsError, Result};
+use crate::network::tls_config::{insecure_client_config, secure_client_config};
+use crate::network::upstream::{Socks5Opt, connect_tcp_stream};
 
 pub const DEFAULT_MAX_REDIRECTS: usize = 5;
 
@@ -284,9 +284,9 @@ struct HttpConnector {
 }
 
 impl Service<Uri> for HttpConnector {
-    type Response = TokioIo<TcpStream>;
     type Error = DnsError;
     type Future = BoxFuture<'static, std::result::Result<Self::Response, Self::Error>>;
+    type Response = TokioIo<TcpStream>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
         Poll::Ready(Ok(()))

@@ -1,7 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket};
+use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::process::Command;
+use std::sync::{Arc as StdArc, Arc};
 
 use bytes::Bytes;
 use forgedns::config::types::Config;
@@ -11,25 +15,16 @@ use forgedns::network::transport::udp_transport::UdpTransport;
 use forgedns::plugin;
 use forgedns::plugin::executor::ExecStep;
 use forgedns::plugin::{PluginRegistry, PluginType};
-use forgedns::proto::{DNSClass, Message, Question, Rcode};
-use forgedns::proto::{Name, RecordType};
+use forgedns::proto::{DNSClass, Message, Name, Question, Rcode, RecordType};
 use http_body_util::{BodyExt, Full};
 use hyper::header::LOCATION;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket};
-use std::path::PathBuf;
-#[cfg(target_os = "linux")]
-use std::process::Command;
-use std::sync::Arc as StdArc;
-use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
-use tokio::net::UdpSocket;
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 #[cfg(target_os = "linux")]
 use tokio::time::sleep;
@@ -1686,8 +1681,8 @@ plugins:
     for ip in [
         IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
         IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42)),
-        IpAddr::V6(Ipv6Addr::from([0x2001, 0xdb8, 0, 0, 0, 0, 0, 7])),
-        IpAddr::V6(Ipv6Addr::from([0x2001, 0xdb8, 0xabcd, 0, 0, 0, 0, 0x1234])),
+        IpAddr::V6(Ipv6Addr::from([0x2001, 0xDB8, 0, 0, 0, 0, 0, 7])),
+        IpAddr::V6(Ipv6Addr::from([0x2001, 0xDB8, 0xABCD, 0, 0, 0, 0, 0x1234])),
     ] {
         let mut ctx = make_context(registry.clone(), "example.com.");
         ctx.set_peer_addr(SocketAddr::new(ip, 5300));
@@ -1697,8 +1692,8 @@ plugins:
     for ip in [
         IpAddr::V4(Ipv4Addr::new(203, 0, 113, 8)),
         IpAddr::V4(Ipv4Addr::new(198, 51, 101, 1)),
-        IpAddr::V6(Ipv6Addr::from([0x2001, 0xdb8, 0, 0, 0, 0, 0, 8])),
-        IpAddr::V6(Ipv6Addr::from([0x2001, 0xdb8, 0xabce, 0, 0, 0, 0, 1])),
+        IpAddr::V6(Ipv6Addr::from([0x2001, 0xDB8, 0, 0, 0, 0, 0, 8])),
+        IpAddr::V6(Ipv6Addr::from([0x2001, 0xDB8, 0xABCE, 0, 0, 0, 0, 1])),
     ] {
         let mut ctx = make_context(registry.clone(), "example.com.");
         ctx.set_peer_addr(SocketAddr::new(ip, 5300));

@@ -1,12 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use bytes::BytesMut;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 
 use crate::core::error::{DnsError, Result};
 use crate::proto::Message;
-use bytes::BytesMut;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 
 pub struct TcpTransport<S> {
     stream: S,
@@ -140,10 +139,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::proto::{DNSClass, Question};
-    use crate::proto::{Name, RecordType};
     use tokio::io::{AsyncWriteExt, duplex};
+
+    use super::*;
+    use crate::proto::{DNSClass, Name, Question, RecordType};
 
     fn make_message(id: u16, qname: &str) -> Message {
         let mut message = Message::new();
@@ -237,7 +236,7 @@ mod tests {
         let transport = TcpTransport::new(client);
         let (mut reader, _writer) = transport.into_split();
         let message = make_message(13, "valid-after-bad.example.");
-        let mut payload = vec![0u8, 3u8, 0xff, 0x00, 0x7f];
+        let mut payload = vec![0u8, 3u8, 0xFF, 0x00, 0x7F];
         payload.extend_from_slice(&encode_frame(&message));
 
         tokio::spawn(async move {

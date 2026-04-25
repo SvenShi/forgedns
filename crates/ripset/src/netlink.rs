@@ -2,13 +2,13 @@
 
 #![allow(dead_code)]
 
-use std::io;
-use std::mem;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::Duration;
+use std::{io, mem};
 
-// Compile-time size assertions to ensure struct layouts match kernel expectations
-// These are architecture-independent and will fail compilation if sizes don't match
+// Compile-time size assertions to ensure struct layouts match kernel
+// expectations These are architecture-independent and will fail compilation if
+// sizes don't match
 const _: () = assert!(size_of::<NlMsgHdr>() == 16);
 const _: () = assert!(size_of::<NfGenMsg>() == 4);
 const _: () = assert!(size_of::<NlAttr>() == 4);
@@ -427,8 +427,8 @@ impl MsgBuffer {
         self.align();
     }
 
-    /// Add a netlink attribute with u32 value in network byte order (for nftables).
-    /// Does NOT set the NLA_F_NET_BYTEORDER flag.
+    /// Add a netlink attribute with u32 value in network byte order (for
+    /// nftables). Does NOT set the NLA_F_NET_BYTEORDER flag.
     pub fn put_attr_u32_nft(&mut self, attr_type: u16, val: u32) {
         let len = NlAttr::SIZE + 4;
         self.put_u16(len as u16);
@@ -437,8 +437,8 @@ impl MsgBuffer {
         self.align();
     }
 
-    /// Add a netlink attribute with u64 value in network byte order (for nftables).
-    /// Does NOT set the NLA_F_NET_BYTEORDER flag.
+    /// Add a netlink attribute with u64 value in network byte order (for
+    /// nftables). Does NOT set the NLA_F_NET_BYTEORDER flag.
     pub fn put_attr_u64_nft(&mut self, attr_type: u16, val: u64) {
         let len = NlAttr::SIZE + 8;
         self.put_u16(len as u16);
@@ -467,7 +467,8 @@ impl MsgBuffer {
         self.align();
     }
 
-    /// Start a nested attribute. Returns the offset where the length will be stored.
+    /// Start a nested attribute. Returns the offset where the length will be
+    /// stored.
     pub fn start_nested(&mut self, attr_type: u16) -> usize {
         let offset = self.data.len();
         self.put_u16(0); // Placeholder for length

@@ -1,22 +1,22 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Unified error handling module for ForgeDNS
 //!
-//! Provides a centralized error type that can represent various error conditions
-//! throughout the application, making error handling more consistent and easier
-//! to maintain.
+//! Provides a centralized error type that can represent various error
+//! conditions throughout the application, making error handling more consistent
+//! and easier to maintain.
 
-use crate::config::types::ConfigError;
 use forgedns_proto::ProtoError;
 use thiserror::Error;
+
+use crate::config::types::ConfigError;
 
 /// Main error type for ForgeDNS
 ///
 /// This enum represents all possible errors that can occur in the application.
-/// It can be constructed from various error types using the `From` trait implementations.
+/// It can be constructed from various error types using the `From` trait
+/// implementations.
 #[derive(Debug, Error)]
 pub enum DnsError {
     /// I/O operation failed

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `arbitrary` executor plugin.
 //!
@@ -14,6 +12,14 @@
 //! ForgeDNS keeps a `short_circuit` switch as an explicit extension so callers
 //! can stop the executor chain after a synthetic response when needed.
 
+use std::sync::Arc;
+
+use ahash::AHashMap;
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+use zoneparser::{ParseOptions, parse_file as parse_zone_file, parse_str as parse_zone_str};
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -21,12 +27,6 @@ use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{DNSClass, Name, Rcode, Record, RecordType};
 use crate::register_plugin_factory;
-use ahash::AHashMap;
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::sync::Arc;
-use zoneparser::{ParseOptions, parse_file as parse_zone_file, parse_str as parse_zone_str};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -216,14 +216,16 @@ fn finalize_index(index: BuildAnswerIndex) -> AnswerIndex {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    use tempfile::NamedTempFile;
+
     use super::*;
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::test_utils::test_registry;
     use crate::proto::rdata::A;
     use crate::proto::{Message, Question, RData};
-    use std::io::Write;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-    use tempfile::NamedTempFile;
 
     fn make_context(question_specs: &[(&str, RecordType, DNSClass)]) -> DnsContext {
         let mut request = Message::new();

@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `hosts` executor plugin.
 //!
@@ -20,6 +18,18 @@
 //!
 //! Unprefixed rules default to `full:` to mirror mosdns `hosts`.
 
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use ahash::AHashMap;
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
+use async_trait::async_trait;
+use regex::{Regex, RegexSet, RegexSetBuilder};
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -29,16 +39,6 @@ use crate::proto::{
     A, AAAA, DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType, SOA,
 };
 use crate::register_plugin_factory;
-use ahash::AHashMap;
-use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
-use async_trait::async_trait;
-use regex::{Regex, RegexSet, RegexSetBuilder};
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::net::IpAddr;
-use std::sync::Arc;
 
 const HOSTS_ANSWER_TTL: u32 = 10;
 const HOSTS_FAKE_SOA_TTL: u32 = 300;
@@ -622,12 +622,14 @@ fn normalize_name(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use tempfile::NamedTempFile;
+
     use super::*;
     use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Name, Question};
-    use std::io::Write;
-    use std::net::{Ipv4Addr, SocketAddr};
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_parse_hosts_line_validation() {

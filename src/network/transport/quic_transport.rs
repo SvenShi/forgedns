@@ -1,10 +1,9 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+use quinn::{Connection, ConnectionError, RecvStream, SendStream};
+
 use crate::core::error::{DnsError, Result};
 use crate::proto::Message;
-use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 
 /// QUIC connection transport that can accept or open bidirectional streams
 /// and yield reader/writer wrappers compatible with TCP transport interface.

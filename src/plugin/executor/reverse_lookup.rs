@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `reverse_lookup` executor plugin.
 //!
@@ -10,13 +8,23 @@
 //! Pipeline semantics:
 //! - `execute`: optionally intercepts PTR requests and answers directly from
 //!   cache (`handle_ptr = true`).
-//! - continuation post-stage: after downstream response is available, extracts A/AAAA
-//!   answer IPs and updates cache with bounded TTL.
+//! - continuation post-stage: after downstream response is available, extracts
+//!   A/AAAA answer IPs and updates cache with bounded TTL.
 //!
 //! Cache design:
 //! - shared TTL cache component for consistent cache behavior across plugins.
 //! - periodic cleanup removes expired entries and trims overflow in batches.
 //! - IPv4-mapped IPv6 addresses are normalized to keep lookup keys consistent.
+
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::{Request, StatusCode};
+use serde::Deserialize;
 
 use crate::api::{ApiHandler, ApiRegister, simple_response};
 use crate::config::types::PluginConfig;
@@ -27,17 +35,8 @@ use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::proto::Rcode;
-use crate::proto::{Name, PTR, RData, Record, RecordType};
+use crate::proto::{Name, PTR, RData, Rcode, Record, RecordType};
 use crate::{continue_next, register_plugin_factory};
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, StatusCode};
-use serde::Deserialize;
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 const DEFAULT_SIZE: usize = 65_535;
 const DEFAULT_TTL: u32 = 7_200;
@@ -320,16 +319,17 @@ fn parse_ptr_name(name: &Name) -> Option<IpAddr> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use http::Method;
+    use http_body_util::BodyExt;
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_registry;
     use crate::proto::rdata::A;
-    use crate::proto::{Message, Question};
-    use crate::proto::{Name, RData, Record};
-    use http::Method;
-    use http_body_util::BodyExt;
-    use std::net::{Ipv4Addr, SocketAddr};
+    use crate::proto::{Message, Name, Question, RData, Record};
 
     #[test]
     fn test_parse_ptr_name_ipv4_and_invalid() {

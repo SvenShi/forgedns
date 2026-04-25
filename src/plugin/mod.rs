@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Plugin system and registry for ForgeDNS.
 //!
@@ -22,20 +20,22 @@
 //! - factories are registered through [`crate::register_plugin_factory!`];
 //! - runtime configuration is validated against the registered plugin types;
 //! - plugin dependencies are resolved in category-aware order; and
-//! - concrete plugin instances are initialized and stored in [`PluginRegistry`].
+//! - concrete plugin instances are initialized and stored in
+//!   [`PluginRegistry`].
 //!
 //! This keeps protocol handling, policy logic, and reusable datasets composable
 //! while preserving a single request pipeline centered on
 //! [`crate::core::context::DnsContext`].
 
-pub(crate) mod dependency;
-pub mod executor;
-pub mod matcher;
-pub mod provider;
-pub mod registry;
-pub mod server;
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::sync::Arc;
 
-pub(crate) mod test_utils;
+use async_trait::async_trait;
+pub use dependency::DependencyGraphReport;
+use futures::future::BoxFuture;
+pub use registry::PluginRegistry;
+use serde_yaml_ng::Value;
 
 use crate::api::ApiRegister;
 use crate::config::types::{Config, PluginConfig};
@@ -44,14 +44,15 @@ use crate::plugin::executor::Executor;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::Provider;
 use crate::plugin::server::Server;
-use async_trait::async_trait;
-pub use dependency::DependencyGraphReport;
-use futures::future::BoxFuture;
-pub use registry::PluginRegistry;
-use serde_yaml_ng::Value;
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::sync::Arc;
+
+pub mod executor;
+pub mod matcher;
+pub mod provider;
+pub mod registry;
+pub mod server;
+
+pub(crate) mod dependency;
+pub(crate) mod test_utils;
 
 /// Uninitialized plugin returned by factories
 #[allow(unused)]
@@ -95,8 +96,8 @@ impl UninitializedPlugin {
 
 /// Initialize all configured plugins
 ///
-/// Creates a registry, registers all built-in factories, and initializes plugins
-/// in dependency order. Returns the initialized registry.
+/// Creates a registry, registers all built-in factories, and initializes
+/// plugins in dependency order. Returns the initialized registry.
 ///
 /// # Arguments
 /// * `config` - Server configuration containing plugin definitions
@@ -130,8 +131,9 @@ pub fn validate_configuration(config: &Config) -> Result<()> {
 }
 
 pub fn analyze_configuration(config: &Config) -> Result<DependencyGraphReport> {
-    use crate::plugin::dependency;
     use std::collections::{HashMap, HashSet};
+
+    use crate::plugin::dependency;
 
     let mut factories = HashMap::new();
     let mut factory_kinds = HashMap::new();
@@ -422,9 +424,11 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
     ///
     /// # Arguments
     /// * `plugin_info` - Plugin configuration from the config file
-    /// * `registry` - Shared reference to the plugin registry for accessing other plugins
+    /// * `registry` - Shared reference to the plugin registry for accessing
+    ///   other plugins
     ///
-    /// Returns an uninitialized plugin that will be initialized by the registry.
+    /// Returns an uninitialized plugin that will be initialized by the
+    /// registry.
     fn create(
         &self,
         plugin_config: &PluginConfig,

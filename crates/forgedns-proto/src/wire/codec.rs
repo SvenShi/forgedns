@@ -1,13 +1,10 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared message encoder and decoder.
 
 use crate::core::error::{DnsError, Result};
-use crate::proto::wire::CompressionState;
-use crate::proto::wire::{encode_edns_record, encode_rdata, parse_rdata};
+use crate::proto::wire::{CompressionState, encode_edns_record, encode_rdata, parse_rdata};
 use crate::proto::{
     DNSClass, Header, Message, MessageType, Name, Question, RData, Rcode, Record, RecordType,
 };
@@ -91,7 +88,8 @@ fn prepare_output_buffer_append(out: &mut Vec<u8>) -> usize {
 #[inline]
 /// Encode the DNS header per RFC 1035 section 4.1.1.
 ///
-/// Extended response codes follow RFC 6891 section 6.1.3 and therefore require EDNS.
+/// Extended response codes follow RFC 6891 section 6.1.3 and therefore require
+/// EDNS.
 fn set_header(
     out: &mut [u8],
     message: &Message,
@@ -110,7 +108,7 @@ fn set_header(
     if matches!(message.message_type(), MessageType::Response) {
         flags |= FLAG_QR;
     }
-    flags |= u16::from(u8::from(message.opcode()) & 0x0f) << 11;
+    flags |= u16::from(u8::from(message.opcode()) & 0x0F) << 11;
     if message.authoritative() {
         flags |= FLAG_AA;
     }
@@ -144,8 +142,9 @@ fn set_header(
 
 /// Decode a full DNS message from wire format.
 ///
-/// Section layout follows RFC 1035 section 4.1. Message-level EDNS handling follows
-/// RFC 6891, while SIG0/TSIG placement checks follow RFC 2931 / RFC 8945.
+/// Section layout follows RFC 1035 section 4.1. Message-level EDNS handling
+/// follows RFC 6891, while SIG0/TSIG placement checks follow RFC 2931 / RFC
+/// 8945.
 pub(crate) fn decode_message(packet: &[u8]) -> Result<Message> {
     let (
         mut header,
@@ -283,7 +282,7 @@ fn parse_header(packet: &[u8]) -> Result<(Header, usize, u16, u16, u16, u16, u16
     Ok((
         Header::from_wire(id, flags),
         DNS_HEADER_LEN,
-        flags & 0x000f,
+        flags & 0x000F,
         question_count,
         answer_count,
         authority_count,
@@ -346,7 +345,8 @@ fn parse_question(packet: &[u8], offset: usize) -> Result<(Question, usize)> {
     Ok((Question::new(name, qtype, qclass), next_offset + 4))
 }
 
-/// Decode a DNS resource record header and its RDATA payload per RFC 1035 section 4.1.3.
+/// Decode a DNS resource record header and its RDATA payload per RFC 1035
+/// section 4.1.3.
 fn parse_record(packet: &[u8], offset: usize) -> Result<(Record, usize)> {
     let (name, next_offset) = Name::parse(packet, offset)?;
     if next_offset + 10 > packet.len() {
@@ -432,9 +432,10 @@ pub(crate) fn encode_message_into_mode(
 
 /// Encode a complete DNS message while respecting a size budget.
 ///
-/// When the full message does not fit, this path reserves budget for the detached trailer
-/// (OPT plus signature records), emits prefix records from Answer, Authority, and Additional,
-/// then writes the trailer with name compression disabled.
+/// When the full message does not fit, this path reserves budget for the
+/// detached trailer (OPT plus signature records), emits prefix records from
+/// Answer, Authority, and Additional, then writes the trailer with name
+/// compression disabled.
 pub(crate) fn encode_message_with_limit(
     message: &Message,
     max_size: Option<usize>,
@@ -448,7 +449,8 @@ pub(crate) fn encode_message_with_limit(
             return Ok(());
         }
 
-        // Fast path 2: the compressed full message still fits, so no truncation is required.
+        // Fast path 2: the compressed full message still fits, so no truncation is
+        // required.
         let lens = message.compute_truncation_lens(true);
         if lens.total_len <= limit {
             encode_message_into_mode(message, id, out, true)?;
@@ -464,8 +466,8 @@ pub(crate) fn encode_message_with_limit(
             push_u16(out, u16::from(question.qclass()));
         }
 
-        // The main sections may consume only the remaining space after reserving the fixed
-        // trailer block calculated by `compute_truncation_lens`.
+        // The main sections may consume only the remaining space after reserving the
+        // fixed trailer block calculated by `compute_truncation_lens`.
         if lens.trailer_len > limit {
             return Err(DnsError::protocol(
                 "dns message cannot fit within UDP payload while preserving EDNS/signature trailer",
@@ -507,8 +509,9 @@ pub(crate) fn encode_message_with_limit(
         } else {
             truncated = true;
         }
-        // The trailer is intentionally emitted without compression so it cannot reference
-        // names introduced by RR data that may have been omitted during truncation.
+        // The trailer is intentionally emitted without compression so it cannot
+        // reference names introduced by RR data that may have been omitted
+        // during truncation.
         compression.disable();
 
         if let Some(edns) = message.edns() {
@@ -547,7 +550,8 @@ pub(crate) fn is_compressible(message: &Message) -> bool {
             || message.edns().is_some())
 }
 
-/// Encode every record in one section and increment the caller-owned section count.
+/// Encode every record in one section and increment the caller-owned section
+/// count.
 fn encode_section<'a>(
     out: &mut Vec<u8>,
     records: &'a [Record],
@@ -561,11 +565,12 @@ fn encode_section<'a>(
     Ok(())
 }
 
-/// Encode a section until the packet would exceed `limit`, truncating at record boundaries.
+/// Encode a section until the packet would exceed `limit`, truncating at record
+/// boundaries.
 ///
-/// The caller passes a budget that already excludes the fixed trailer size. When a record
-/// would overflow that budget, its partially written wire bytes are discarded and the
-/// section terminates immediately.
+/// The caller passes a budget that already excludes the fixed trailer size.
+/// When a record would overflow that budget, its partially written wire bytes
+/// are discarded and the section terminates immediately.
 fn encode_section_with_limit<'a>(
     out: &mut Vec<u8>,
     records: &'a [Record],
@@ -585,7 +590,8 @@ fn encode_section_with_limit<'a>(
     Ok(true)
 }
 
-/// Encode a possibly-compressed DNS name using RFC 1035 section 4.1.4 compression pointers.
+/// Encode a possibly-compressed DNS name using RFC 1035 section 4.1.4
+/// compression pointers.
 fn encode_name<'a>(
     out: &mut Vec<u8>,
     name: &'a Name,
@@ -594,7 +600,8 @@ fn encode_name<'a>(
     encode_name_mode(out, name, compression, true)
 }
 
-/// Encode a DNS name while forbidding a compression pointer to the current owner name.
+/// Encode a DNS name while forbidding a compression pointer to the current
+/// owner name.
 fn encode_name_no_compress<'a>(
     out: &mut Vec<u8>,
     name: &'a Name,
@@ -604,9 +611,10 @@ fn encode_name_no_compress<'a>(
 }
 /// Shared DNS name encoder used by owner names and embedded RDATA names.
 ///
-/// This method enforces the RFC 1035 label length and total-name length limits, optionally
-/// searches the compression table for the longest reusable suffix, and emits either raw labels
-/// plus a terminal zero or raw labels plus a compression pointer.
+/// This method enforces the RFC 1035 label length and total-name length limits,
+/// optionally searches the compression table for the longest reusable suffix,
+/// and emits either raw labels plus a terminal zero or raw labels plus a
+/// compression pointer.
 fn encode_name_mode<'a>(
     out: &mut Vec<u8>,
     name: &'a Name,
@@ -684,9 +692,10 @@ fn encode_record<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
     use super::*;
     use crate::proto::*;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     fn roundtrip_with_answer(data: RData, answer_name: &str) -> Record {
         let mut message = Message::new();
@@ -875,14 +884,14 @@ mod tests {
                 &[
                     0x12, 0x34, 0x81, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 7,
                     b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0, 1, 0, 1,
-                    0xff,
+                    0xFF,
                 ],
             ),
             (
                 "duplicate opt",
                 &[
                     0x12, 0x34, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0, 0,
-                    0x29, 0x04, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0, 0, 0x29, 0x04, 0xd0,
+                    0x29, 0x04, 0xD0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0, 0, 0x29, 0x04, 0xD0,
                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 ],
             ),
@@ -891,7 +900,7 @@ mod tests {
                 &[
                     0x12, 0x34, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 7,
                     b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0, 0x29,
-                    0x04, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x04, 0xD0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 ],
             ),
         ];
@@ -909,22 +918,22 @@ mod tests {
                 vec![
                     0x12, 0x34, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0, 0,
                     0x18, 0x00, 0x01, 0, 0, 0, 0, 0, 4, 0, 1, 8, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1,
-                    1, b'a', 0, 0x00, 0x29, 0x04, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    1, b'a', 0, 0x00, 0x29, 0x04, 0xD0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 ],
             ),
             (
                 "tsig not final",
                 vec![
                     0x12, 0x34, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 1,
-                    b'a', 0, 0x00, 0xfa, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 1, b'a',
-                    0, 0, 0, 0, 0, 0, 0x00, 0x29, 0x04, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    b'a', 0, 0x00, 0xFA, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 1, b'a',
+                    0, 0, 0, 0, 0, 0, 0x00, 0x29, 0x04, 0xD0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 ],
             ),
             (
                 "duplicate opt",
                 vec![
                     0x12, 0x34, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0, 0,
-                    0x29, 0x04, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0, 0, 0x29, 0x04, 0xd0,
+                    0x29, 0x04, 0xD0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0, 0, 0x29, 0x04, 0xD0,
                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 ],
             ),
@@ -1029,7 +1038,7 @@ mod tests {
                 3,
                 1,
                 1,
-                vec![0xde, 0xad, 0xbe, 0xef].into_boxed_slice(),
+                vec![0xDE, 0xAD, 0xBE, 0xEF].into_boxed_slice(),
             )),
             "_853._tcp.example.com.",
         );
@@ -1039,7 +1048,7 @@ mod tests {
                 assert_eq!(value.usage(), 3);
                 assert_eq!(value.selector(), 1);
                 assert_eq!(value.matching_type(), 1);
-                assert_eq!(value.certificate(), &[0xde, 0xad, 0xbe, 0xef]);
+                assert_eq!(value.certificate(), &[0xDE, 0xAD, 0xBE, 0xEF]);
             }
             other => panic!("expected TLSA answer, got: {other:?}"),
         }
@@ -1153,7 +1162,7 @@ mod tests {
             RData::SPF(SPF(TXT::new(txt_wire(b"v=spf1 -all")))),
             RData::AVC(AVC(TXT::new(txt_wire(b"avc")))),
             RData::RESINFO(RESINFO(TXT::new(txt_wire(b"resinfo")))),
-            RData::DOA(DOA(vec![0xde, 0xad].into_boxed_slice())),
+            RData::DOA(DOA(vec![0xDE, 0xAD].into_boxed_slice())),
             RData::SOA(SOA::new(
                 name("ns.example.com."),
                 name("hostmaster.example.com."),
@@ -1205,11 +1214,11 @@ mod tests {
                 1,
                 0,
                 10,
-                vec![0xaa, 0xbb].into_boxed_slice(),
+                vec![0xAA, 0xBB].into_boxed_slice(),
                 vec![0x01, 0x02].into_boxed_slice(),
                 TypeBitMaps::from_types(vec![RecordType::MX]),
             )),
-            RData::NSEC3PARAM(NSEC3PARAM::new(1, 0, 10, vec![0xaa].into_boxed_slice())),
+            RData::NSEC3PARAM(NSEC3PARAM::new(1, 0, 10, vec![0xAA].into_boxed_slice())),
             RData::TLSA(TLSA::new(3, 1, 1, vec![1, 2, 3].into_boxed_slice())),
             RData::SMIMEA(SMIMEA(TLSA::new(3, 1, 1, vec![4, 5, 6].into_boxed_slice()))),
             RData::HIP(HIP::new(
@@ -1231,7 +1240,7 @@ mod tests {
                 8,
                 vec![8, 9].into_boxed_slice(),
             ))),
-            RData::OPENPGPKEY(OPENPGPKEY(vec![0xaa, 0xbb].into_boxed_slice())),
+            RData::OPENPGPKEY(OPENPGPKEY(vec![0xAA, 0xBB].into_boxed_slice())),
             RData::CSYNC(CSYNC::new(
                 9,
                 1,
@@ -1361,7 +1370,7 @@ mod tests {
             RData::UINFO(UINFO(b"user info".to_vec().into_boxed_slice())),
             RData::UID(UID(1000)),
             RData::GID(GID(1000)),
-            RData::UNSPEC(UNSPEC(vec![0xaa, 0xbb].into_boxed_slice())),
+            RData::UNSPEC(UNSPEC(vec![0xAA, 0xBB].into_boxed_slice())),
             RData::ANAME(ANAME(name("aname.example.com."))),
             RData::IXFR(IXFR),
             RData::AXFR(AXFR),
@@ -1579,7 +1588,7 @@ mod tests {
             0x00, 0x01, // priority
             0x03, b's', b'v', b'c', 0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c',
             b'o', b'm', 0x00, // target
-            0x00, 0x03, 0x00, 0x02, 0x20, 0xfb, // key 3
+            0x00, 0x03, 0x00, 0x02, 0x20, 0xFB, // key 3
             0x00, 0x01, 0x00, 0x01, b'h', // key 1 after key 3 => invalid
         ];
         let err = parse_rdata(

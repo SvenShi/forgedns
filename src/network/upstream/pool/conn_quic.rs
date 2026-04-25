@@ -1,7 +1,16 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+use std::fmt::{Debug, Formatter};
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+
+use async_trait::async_trait;
+use tokio::select;
+use tokio::sync::Notify;
+use tokio::time::timeout;
+use tracing::{debug, trace, warn};
+
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
 use crate::network::transport::quic_transport::QuicTransport;
@@ -9,17 +18,6 @@ use crate::network::upstream::pool::ConnectionBuilder;
 use crate::network::upstream::utils::{connect_quic, connect_socket};
 use crate::network::upstream::{Connection, ConnectionInfo};
 use crate::proto::Message;
-
-use async_trait::async_trait;
-use std::fmt::{Debug, Formatter};
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
-use tokio::select;
-
-use tokio::sync::Notify;
-use tokio::time::timeout;
-use tracing::{debug, trace, warn};
 
 pub struct QuicConnection {
     id: u16,
@@ -63,7 +61,8 @@ impl Connection for QuicConnection {
     ///
     /// # Returns
     /// - `Ok(DnsResponse)` if response received within timeout
-    /// - `Err(DnsError)` if connection closed, stream open fails, or timeout occurs
+    /// - `Err(DnsError)` if connection closed, stream open fails, or timeout
+    ///   occurs
     ///
     /// # Protocol
     /// Each DNS query uses a new bidirectional QUIC stream:

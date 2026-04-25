@@ -1,12 +1,16 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `qtype` matcher plugin.
 //!
 //! This plugin follows standard plugin lifecycle (`init/destroy`) and
 //! matches DNS question types in request queries.
+
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use ahash::AHashSet;
+use async_trait::async_trait;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -18,10 +22,6 @@ use crate::plugin::matcher::matcher_utils::{
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use ahash::AHashSet;
-use async_trait::async_trait;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct QtypeFactory {}
@@ -93,12 +93,12 @@ impl Matcher for QtypeMatcher {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::matcher::Matcher;
-    use crate::proto::{DNSClass, Name, RecordType};
-    use crate::proto::{Message, Question};
-    use std::net::SocketAddr;
+    use crate::proto::{DNSClass, Message, Name, Question, RecordType};
 
     fn make_context(qtypes: &[RecordType]) -> DnsContext {
         let mut request = Message::new();

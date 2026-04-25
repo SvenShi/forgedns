@@ -1,33 +1,36 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #![allow(clippy::type_complexity)]
 
 use super::*;
 
-/// Decode SIG(0) wire data using the SIG/RRSIG layout from RFC 2931 and RFC 4034.
+/// Decode SIG(0) wire data using the SIG/RRSIG layout from RFC 2931 and RFC
+/// 4034.
 pub(super) fn parse_sig(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::SIG(SIG(parse_rrsig_rdata(packet, start, end)?)))
 }
 
-/// Decode KEY wire data using the DNSKEY-like fixed header plus opaque key bytes.
+/// Decode KEY wire data using the DNSKEY-like fixed header plus opaque key
+/// bytes.
 pub(super) fn parse_key(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::KEY(KEY(parse_dnskey_rdata(packet, start, end)?)))
 }
 
-/// Decode DS key tag, algorithm, digest type, and digest bytes per RFC 4034 section 5.1.
+/// Decode DS key tag, algorithm, digest type, and digest bytes per RFC 4034
+/// section 5.1.
 pub(super) fn parse_ds(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::DS(parse_ds_rdata(packet, start, end)?))
 }
 
-/// Decode SSHFP algorithm, fingerprint type, and fingerprint bytes per RFC 4255 section 3.1.
+/// Decode SSHFP algorithm, fingerprint type, and fingerprint bytes per RFC 4255
+/// section 3.1.
 pub(super) fn parse_sshfp(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::SSHFP(parse_sshfp_rdata(packet, start, end)?))
 }
 
-/// Decode CERT certificate type, key tag, algorithm, and certificate bytes per RFC 4398 section 2.1.
+/// Decode CERT certificate type, key tag, algorithm, and certificate bytes per
+/// RFC 4398 section 2.1.
 pub(super) fn parse_cert(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::CERT(parse_cert_rdata(packet, start, end)?))
 }
@@ -41,7 +44,8 @@ pub(super) fn parse_nsec(packet: &[u8], start: usize, end: usize) -> Result<RDat
     Ok(RData::NSEC(parse_nsec_rdata(packet, start, end)?))
 }
 
-/// Decode DNSKEY flags, protocol, algorithm, and public key bytes per RFC 4034 section 2.1.
+/// Decode DNSKEY flags, protocol, algorithm, and public key bytes per RFC 4034
+/// section 2.1.
 pub(super) fn parse_dnskey(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::DNSKEY(parse_dnskey_rdata(packet, start, end)?))
 }
@@ -56,14 +60,16 @@ pub(super) fn parse_nsec3(packet: &[u8], start: usize, end: usize) -> Result<RDa
     Ok(RData::NSEC3(parse_nsec3_rdata(packet, start, end)?))
 }
 
-/// Decode NSEC3PARAM hash algorithm, flags, iterations, and salt per RFC 5155 section 4.
+/// Decode NSEC3PARAM hash algorithm, flags, iterations, and salt per RFC 5155
+/// section 4.
 pub(super) fn parse_nsec3param(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::NSEC3PARAM(parse_nsec3param_rdata(
         packet, start, end,
     )?))
 }
 
-/// Decode TLSA certificate usage, selector, matching type, and association data per RFC 6698 section 2.1.
+/// Decode TLSA certificate usage, selector, matching type, and association data
+/// per RFC 6698 section 2.1.
 pub(super) fn parse_tlsa(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::TLSA(parse_tlsa_like_rdata(packet, start, end)?))
 }
@@ -75,7 +81,8 @@ pub(super) fn parse_smimea(packet: &[u8], start: usize, end: usize) -> Result<RD
     )?)))
 }
 
-/// Decode HIP fixed fields, HIT, public key, and rendezvous server names per RFC 8005 section 4.1.
+/// Decode HIP fixed fields, HIT, public key, and rendezvous server names per
+/// RFC 8005 section 4.1.
 pub(super) fn parse_hip(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::HIP(parse_hip_rdata(packet, start, end)?))
 }
@@ -120,17 +127,20 @@ pub(super) fn parse_csync(packet: &[u8], start: usize, end: usize) -> Result<RDa
     Ok(RData::CSYNC(parse_csync_rdata(packet, start, end)?))
 }
 
-/// Decode ZONEMD serial, scheme, hash algorithm, and digest bytes per RFC 8976 section 2.
+/// Decode ZONEMD serial, scheme, hash algorithm, and digest bytes per RFC 8976
+/// section 2.
 pub(super) fn parse_zonemd(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::ZONEMD(parse_zonemd_rdata(packet, start, end)?))
 }
 
-/// Decode TKEY algorithm name, inception/expiration, mode, error, key data, and other data per RFC 2930 section 2.
+/// Decode TKEY algorithm name, inception/expiration, mode, error, key data, and
+/// other data per RFC 2930 section 2.
 pub(super) fn parse_tkey(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::TKEY(parse_tkey_rdata(packet, start, end)?))
 }
 
-/// Decode TSIG algorithm name, time fields, MAC, original ID, error, and other data per RFC 8945 section 4.2.
+/// Decode TSIG algorithm name, time fields, MAC, original ID, error, and other
+/// data per RFC 8945 section 4.2.
 pub(super) fn parse_tsig(packet: &[u8], start: usize, end: usize) -> Result<RData> {
     Ok(RData::TSIG(parse_tsig_rdata(packet, start, end)?))
 }
@@ -171,7 +181,8 @@ pub(super) fn encode_key(value: &KEY, out: &mut Vec<u8>) {
     out.extend_from_slice(value.0.public_key());
 }
 
-/// Encode DS key tag, algorithm, digest type, and digest bytes per RFC 4034 section 5.1.
+/// Encode DS key tag, algorithm, digest type, and digest bytes per RFC 4034
+/// section 5.1.
 pub(super) fn encode_ds(value: &DS, out: &mut Vec<u8>) {
     push_u16(out, value.key_tag());
     out.push(value.algorithm());
@@ -179,14 +190,16 @@ pub(super) fn encode_ds(value: &DS, out: &mut Vec<u8>) {
     out.extend_from_slice(value.digest());
 }
 
-/// Encode SSHFP algorithm, fingerprint type, and fingerprint bytes per RFC 4255 section 3.1.
+/// Encode SSHFP algorithm, fingerprint type, and fingerprint bytes per RFC 4255
+/// section 3.1.
 pub(super) fn encode_sshfp(value: &SSHFP, out: &mut Vec<u8>) {
     out.push(value.algorithm());
     out.push(value.fp_type());
     out.extend_from_slice(value.fingerprint());
 }
 
-/// Encode CERT certificate type, key tag, algorithm, and certificate bytes per RFC 4398 section 2.1.
+/// Encode CERT certificate type, key tag, algorithm, and certificate bytes per
+/// RFC 4398 section 2.1.
 pub(super) fn encode_cert(value: &CERT, out: &mut Vec<u8>) {
     push_u16(out, value.cert_type());
     push_u16(out, value.key_tag());
@@ -223,7 +236,8 @@ pub(super) fn encode_nsec<'a>(
     Ok(())
 }
 
-/// Encode DNSKEY flags, protocol, algorithm, and public key bytes per RFC 4034 section 2.1.
+/// Encode DNSKEY flags, protocol, algorithm, and public key bytes per RFC 4034
+/// section 2.1.
 pub(super) fn encode_dnskey(value: &DNSKEY, out: &mut Vec<u8>) {
     push_u16(out, value.flags());
     out.push(value.protocol());
@@ -248,7 +262,8 @@ pub(super) fn encode_nsec3(value: &NSEC3, out: &mut Vec<u8>) {
     out.extend_from_slice(value.type_bitmap());
 }
 
-/// Encode NSEC3PARAM hash algorithm, flags, iterations, and salt per RFC 5155 section 4.
+/// Encode NSEC3PARAM hash algorithm, flags, iterations, and salt per RFC 5155
+/// section 4.
 pub(super) fn encode_nsec3param(value: &NSEC3PARAM, out: &mut Vec<u8>) {
     out.push(value.hash());
     out.push(value.flags());
@@ -257,7 +272,8 @@ pub(super) fn encode_nsec3param(value: &NSEC3PARAM, out: &mut Vec<u8>) {
     out.extend_from_slice(value.salt());
 }
 
-/// Encode HIP fixed fields, HIT, public key, and rendezvous server names per RFC 8005 section 4.1.
+/// Encode HIP fixed fields, HIT, public key, and rendezvous server names per
+/// RFC 8005 section 4.1.
 pub(super) fn encode_hip<'a>(
     value: &'a HIP,
     out: &mut Vec<u8>,
@@ -322,7 +338,8 @@ pub(super) fn encode_csync(value: &CSYNC, out: &mut Vec<u8>) {
     out.extend_from_slice(value.type_bitmap());
 }
 
-/// Encode ZONEMD serial, scheme, hash algorithm, and digest bytes per RFC 8976 section 2.
+/// Encode ZONEMD serial, scheme, hash algorithm, and digest bytes per RFC 8976
+/// section 2.
 pub(super) fn encode_zonemd(value: &ZONEMD, out: &mut Vec<u8>) {
     push_u32(out, value.serial());
     out.push(value.scheme());
@@ -330,7 +347,8 @@ pub(super) fn encode_zonemd(value: &ZONEMD, out: &mut Vec<u8>) {
     out.extend_from_slice(value.digest());
 }
 
-/// Encode TKEY algorithm name, time fields, key data, and other data per RFC 2930 section 2.
+/// Encode TKEY algorithm name, time fields, key data, and other data per RFC
+/// 2930 section 2.
 pub(super) fn encode_tkey<'a>(
     value: &'a TKEY,
     out: &mut Vec<u8>,
@@ -348,7 +366,8 @@ pub(super) fn encode_tkey<'a>(
     Ok(())
 }
 
-/// Encode TSIG algorithm name, time fields, MAC, original ID, error, and other data per RFC 8945 section 4.2.
+/// Encode TSIG algorithm name, time fields, MAC, original ID, error, and other
+/// data per RFC 8945 section 4.2.
 pub(super) fn encode_tsig<'a>(
     value: &'a TSIG,
     out: &mut Vec<u8>,
@@ -356,12 +375,12 @@ pub(super) fn encode_tsig<'a>(
 ) -> Result<()> {
     write_name(out, value.algorithm(), false)?;
     let t = value.time_signed();
-    out.push(((t >> 40) & 0xff) as u8);
-    out.push(((t >> 32) & 0xff) as u8);
-    out.push(((t >> 24) & 0xff) as u8);
-    out.push(((t >> 16) & 0xff) as u8);
-    out.push(((t >> 8) & 0xff) as u8);
-    out.push((t & 0xff) as u8);
+    out.push(((t >> 40) & 0xFF) as u8);
+    out.push(((t >> 32) & 0xFF) as u8);
+    out.push(((t >> 24) & 0xFF) as u8);
+    out.push(((t >> 16) & 0xFF) as u8);
+    out.push(((t >> 8) & 0xFF) as u8);
+    out.push((t & 0xFF) as u8);
     push_u16(out, value.fudge());
     push_u16(out, value.mac().len() as u16);
     out.extend_from_slice(value.mac());
@@ -377,7 +396,8 @@ pub(super) fn encode_ta(value: &TA, out: &mut Vec<u8>) {
     encode_ds(&value.0, out);
 }
 
-/// Encode TLSA certificate usage, selector, matching type, and association data per RFC 6698 section 2.1.
+/// Encode TLSA certificate usage, selector, matching type, and association data
+/// per RFC 6698 section 2.1.
 pub(super) fn encode_tlsa(value: &TLSA, out: &mut Vec<u8>) {
     out.push(value.usage());
     out.push(value.selector());
@@ -393,7 +413,8 @@ pub(super) fn encode_smimea(value: &SMIMEA, out: &mut Vec<u8>) {
     out.extend_from_slice(value.0.certificate());
 }
 
-/// Parse the shared DS-family layout of key tag, algorithm, digest type, and digest bytes.
+/// Parse the shared DS-family layout of key tag, algorithm, digest type, and
+/// digest bytes.
 fn parse_ds_rdata(packet: &[u8], start: usize, end: usize) -> Result<DS> {
     if start + 4 > end {
         return Err(DnsError::protocol("invalid DS rdata length"));
@@ -431,7 +452,8 @@ fn parse_dnskey_rdata(packet: &[u8], start: usize, end: usize) -> Result<DNSKEY>
     ))
 }
 
-/// Parse the TLSA/SMIMEA fixed 3-byte header and trailing certificate association data.
+/// Parse the TLSA/SMIMEA fixed 3-byte header and trailing certificate
+/// association data.
 fn parse_tlsa_like_rdata(packet: &[u8], start: usize, end: usize) -> Result<TLSA> {
     if start + 3 > end {
         return Err(DnsError::protocol("invalid TLSA/SMIMEA rdata length"));
@@ -479,7 +501,8 @@ fn parse_zonemd_rdata(packet: &[u8], start: usize, end: usize) -> Result<ZONEMD>
     ))
 }
 
-/// Parse CERT certificate type, key tag, algorithm, and trailing certificate bytes.
+/// Parse CERT certificate type, key tag, algorithm, and trailing certificate
+/// bytes.
 fn parse_cert_rdata(packet: &[u8], start: usize, end: usize) -> Result<CERT> {
     if start + 5 > end {
         return Err(DnsError::protocol("invalid CERT rdata length"));
@@ -492,7 +515,8 @@ fn parse_cert_rdata(packet: &[u8], start: usize, end: usize) -> Result<CERT> {
     ))
 }
 
-/// Parse RRSIG fixed fields, signer name, and trailing signature bytes per RFC 4034 section 3.1.
+/// Parse RRSIG fixed fields, signer name, and trailing signature bytes per RFC
+/// 4034 section 3.1.
 fn parse_rrsig_rdata(packet: &[u8], start: usize, end: usize) -> Result<RRSIG> {
     if start + 18 > end {
         return Err(DnsError::protocol("invalid RRSIG rdata length"));
@@ -597,7 +621,8 @@ fn parse_nsec3param_rdata(packet: &[u8], start: usize, end: usize) -> Result<NSE
     ))
 }
 
-/// Parse HIP fixed-length header, variable HIT/public key blocks, and trailing rendezvous names.
+/// Parse HIP fixed-length header, variable HIT/public key blocks, and trailing
+/// rendezvous names.
 fn parse_hip_rdata(packet: &[u8], start: usize, end: usize) -> Result<HIP> {
     if start + 4 > end {
         return Err(DnsError::protocol("invalid HIP rdata length"));
@@ -630,7 +655,8 @@ fn parse_hip_rdata(packet: &[u8], start: usize, end: usize) -> Result<HIP> {
     ))
 }
 
-/// Parse TKEY algorithm name, time fields, key data, and other data blocks per RFC 2930 section 2.
+/// Parse TKEY algorithm name, time fields, key data, and other data blocks per
+/// RFC 2930 section 2.
 fn parse_tkey_rdata(packet: &[u8], start: usize, end: usize) -> Result<TKEY> {
     let (algorithm, cursor) = Name::parse(packet, start)?;
     if cursor + 14 > end {
@@ -673,7 +699,8 @@ fn parse_tkey_rdata(packet: &[u8], start: usize, end: usize) -> Result<TKEY> {
     ))
 }
 
-/// Parse TSIG algorithm name, 48-bit signing time, MAC, original ID, error, and other data per RFC 8945.
+/// Parse TSIG algorithm name, 48-bit signing time, MAC, original ID, error, and
+/// other data per RFC 8945.
 fn parse_tsig_rdata(packet: &[u8], start: usize, end: usize) -> Result<TSIG> {
     let (algorithm, cursor) = Name::parse(packet, start)?;
     if cursor + 12 > end {
@@ -744,8 +771,8 @@ mod tests {
             (&[4, b'n', b'e', b'x', b't', 0, 0, 1, 0x40], parse_nsec),
             (&[1, 1, 2, 3], parse_dnskey),
             (&[1, 2, 3], parse_dhcid),
-            (&[1, 0, 0, 10, 1, 0xaa, 1, 0xbb, 0, 1, 0x20], parse_nsec3),
-            (&[1, 0, 0, 10, 1, 0xaa], parse_nsec3param),
+            (&[1, 0, 0, 10, 1, 0xAA, 1, 0xBB, 0, 1, 0x20], parse_nsec3),
+            (&[1, 0, 0, 10, 1, 0xAA], parse_nsec3param),
             (&[3, 1, 1, 1, 2, 3], parse_tlsa),
             (&[3, 1, 1, 4, 5, 6], parse_smimea),
             (
@@ -760,7 +787,7 @@ mod tests {
             ),
             (&[0, 1, 8, 2, 1, 2], parse_cds),
             (&[1, 1, 3, 8, 8, 9], parse_cdnskey),
-            (&[0xaa, 0xbb], parse_openpgpkey),
+            (&[0xAA, 0xBB], parse_openpgpkey),
             (&[0, 0, 0, 9, 0, 1, 0, 1, 0x40], parse_csync),
             (&[0, 0, 0, 1, 1, 1, 1, 2, 3], parse_zonemd),
             (
@@ -841,11 +868,11 @@ mod tests {
             ("dnskey too short", parse_dnskey(&[1, 1, 3], 0, 3)),
             (
                 "nsec3 zero bitmap len",
-                parse_nsec3(&[1, 0, 0, 1, 1, 0xaa, 1, 0xbb, 0, 0], 0, 10),
+                parse_nsec3(&[1, 0, 0, 1, 1, 0xAA, 1, 0xBB, 0, 0], 0, 10),
             ),
             (
                 "nsec3param truncated salt",
-                parse_nsec3param(&[1, 0, 0, 1, 2, 0xaa], 0, 6),
+                parse_nsec3param(&[1, 0, 0, 1, 2, 0xAA], 0, 6),
             ),
             ("tlsa too short", parse_tlsa(&[3, 1], 0, 2)),
             (

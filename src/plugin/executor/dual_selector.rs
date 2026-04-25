@@ -1,17 +1,23 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `prefer_ipv4` / `prefer_ipv6` quick-setup executors.
 //!
 //! This plugin follows mosdns dual-selector behavior:
-//! - For preferred qtype (A for prefer_ipv4 / AAAA for prefer_ipv6):
-//!   pass query through and cache positive preferred-type answers.
+//! - For preferred qtype (A for prefer_ipv4 / AAAA for prefer_ipv6): pass query
+//!   through and cache positive preferred-type answers.
 //! - For non-preferred qtype:
 //!   1) block immediately when cache says preferred type exists.
-//!   2) otherwise ask `forward` to run an extra preferred-type probe.
-//!      The final block/pass decision is applied in continuation post-stage.
+//!   2) otherwise ask `forward` to run an extra preferred-type probe. The final
+//!      block/pass decision is applied in continuation post-stage.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
 
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
@@ -23,12 +29,6 @@ use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Rcode, RecordType};
 use crate::{continue_next, register_plugin_factory};
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 const CLEANUP_INTERVAL_SECS: u64 = 30;
 const DEFAULT_CACHE_ENABLED: bool = true;
@@ -363,12 +363,12 @@ impl PluginFactory for DualSelectorFactory {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
     use super::*;
     use crate::plugin::executor::ExecStep;
     use crate::proto::rdata::{A, AAAA};
-    use crate::proto::{DNSClass, Message, Question};
-    use crate::proto::{Name, RData, Record};
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use crate::proto::{DNSClass, Message, Name, Question, RData, Record};
 
     fn make_context(qtype: RecordType) -> DnsContext {
         let mut request = Message::new();

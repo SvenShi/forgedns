@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `cron` executor plugin.
 //!
@@ -15,6 +13,19 @@
 //! - executor `Stop`, response mutation, or errors never stop later executors;
 //! - overlapping triggers are skipped rather than queued; and
 //! - quick-setup executors are owned and destroyed by this plugin.
+
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use cronexpr::Crontab;
+use cronexpr::jiff::Timestamp;
+use serde::Deserialize;
+use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
+use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -30,17 +41,6 @@ use crate::plugin::{
 };
 use crate::proto::Message;
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use cronexpr::Crontab;
-use cronexpr::jiff::Timestamp;
-use serde::Deserialize;
-use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{Mutex, oneshot};
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
-use tracing::{debug, error, info, warn};
 
 const ATTR_PLUGIN_TAG: &str = "cron.plugin_tag";
 const ATTR_JOB_NAME: &str = "cron.job_name";
@@ -803,16 +803,18 @@ async fn run_job(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use serde_yaml_ng::Value;
+    use tokio::sync::Notify;
+
     use super::*;
     use crate::plugin::dependency::DependencySpec;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::{plugin_config, test_registry};
     use crate::register_plugin_factory;
-    use async_trait::async_trait;
-    use serde_yaml_ng::Value;
-    use std::sync::Mutex as StdMutex;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use tokio::sync::Notify;
 
     #[derive(Debug, Clone, Copy)]
     enum StubBehavior {

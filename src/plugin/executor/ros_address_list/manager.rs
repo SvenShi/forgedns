@@ -7,23 +7,26 @@
 //! - execute idempotent create/update/delete through [`MikrotikApi`]
 //!
 //! Design notes:
-//! - RouterOS remains the authority for dynamic expiration via native `timeout`.
+//! - RouterOS remains the authority for dynamic expiration via native
+//!   `timeout`.
 //! - local state is intentionally lightweight and only suppresses redundant
 //!   refresh writes; it does not attempt to mirror full remote state.
 //! - persistent items are reconciled as a desired set and never enter the
 //!   dynamic refresh cache.
 
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use ahash::{AHashMap, AHashSet};
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
+use tracing::{debug, warn};
+
 use super::api::MikrotikApi;
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 use crate::core::task_center;
-use ahash::{AHashMap, AHashSet};
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use tracing::{debug, warn};
 
 /// Host prefix used for normalized IPv4 single-address entries.
 const HOST_PREFIX_V4: u8 = 32;
@@ -39,7 +42,8 @@ const DYNAMIC_CACHE_PRUNE_INTERVAL_SECS: u64 = 60;
 const SHUTDOWN_TIMEOUT_SECS: u64 = 8;
 /// Hard upper bound for locally cached dynamic refresh states.
 const MAX_DYNAMIC_CACHE_ENTRIES: usize = 65_536;
-/// Maximum time a dynamic key can go without a refresh attempt under steady traffic.
+/// Maximum time a dynamic key can go without a refresh attempt under steady
+/// traffic.
 const MAX_DYNAMIC_REFRESH_SUPPRESS_MS: u64 = 60_000;
 /// Minimum refresh lead time before estimated RouterOS timeout expiry.
 const MIN_DYNAMIC_REFRESH_LEAD_MS: u64 = 1_000;
@@ -368,7 +372,8 @@ pub(super) struct AddressListManager {
     cfg: AddressListManagerConfig,
     /// Current desired persistent set.
     persistent_items: AHashSet<AddressListKey>,
-    /// Lightweight local cache that suppresses redundant dynamic refresh writes.
+    /// Lightweight local cache that suppresses redundant dynamic refresh
+    /// writes.
     dynamic_refresh_cache: AHashMap<AddressListKey, DynamicRefreshState>,
     /// One-time startup guard.
     initialized: bool,

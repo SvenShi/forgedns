@@ -1,22 +1,20 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use ahash::AHashSet;
+use tracing::debug;
+
 use crate::core::context::{DnsContext, ExecutionPathEvent};
 use crate::core::error::{DnsError, Result};
-use crate::plugin::UninitializedPlugin;
-use crate::plugin::executor::sequence::Rule;
 use crate::plugin::executor::sequence::{
-    SequenceRef, parse_control_flow_sequence_tag, parse_sequence_ref,
+    Rule, SequenceRef, parse_control_flow_sequence_tag, parse_sequence_ref,
 };
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::Matcher;
-use crate::plugin::{PluginHolder, PluginRegistry};
+use crate::plugin::{PluginHolder, PluginRegistry, UninitializedPlugin};
 use crate::proto::Rcode;
-use ahash::AHashSet;
-use std::fmt::Debug;
-use std::sync::Arc;
-use tracing::debug;
 
 #[derive(Debug)]
 struct MatcherRef {
@@ -32,10 +30,11 @@ enum BuiltinOp {
     Accept,
     /// Stop current sequence execution and return to caller.
     Return,
-    /// Build and set a DNS response with the specified numeric rcode, then stop.
+    /// Build and set a DNS response with the specified numeric rcode, then
+    /// stop.
     ///
-    /// Sequence config currently accepts only decimal numeric rcode values such as
-    /// `reject 2`; mnemonic names like `SERVFAIL` are not parsed here.
+    /// Sequence config currently accepts only decimal numeric rcode values such
+    /// as `reject 2`; mnemonic names like `SERVFAIL` are not parsed here.
     Reject(Rcode),
     /// Execute another sequence executor, then continue current program.
     Jump(Arc<dyn Executor>),
@@ -634,14 +633,15 @@ fn parse_mark_values(arg: Option<&str>) -> Result<AHashSet<u32>> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
     use super::*;
     use crate::continue_next;
     use crate::plugin::Plugin;
-    use crate::proto::{Message, Question};
-    use crate::proto::{Name, RecordType};
-    use async_trait::async_trait;
-    use std::net::{Ipv4Addr, SocketAddr};
-    use std::sync::Mutex;
+    use crate::proto::{Message, Name, Question, RecordType};
 
     #[derive(Debug, Clone, Copy)]
     enum StubBehavior {

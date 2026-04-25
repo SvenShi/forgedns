@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `string_exp` matcher plugin.
 //!
@@ -9,12 +7,20 @@
 //!
 //! Expression format:
 //! - `<source> <op> <arg...>` (or compact `<source><op> <arg...>`).
-//! - sources include `qname`, `qtype`, `rcode`, `resp_ip`, `mark`,
-//!   `client_ip`, `server_name`, `url_path`, and `$ENV_KEY`.
+//! - sources include `qname`, `qtype`, `rcode`, `resp_ip`, `mark`, `client_ip`,
+//!   `server_name`, `url_path`, and `$ENV_KEY`.
 //! - operations include `eq`, `prefix`, `suffix`, `contains`, `regexp`, `zl`.
 //!
 //! This matcher is designed for flexible policy composition when dedicated
 //! typed matchers are not enough.
+
+use std::borrow::Cow;
+use std::fmt::{Debug, Write as _};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use regex::Regex;
+use serde_yaml_ng::Value;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -22,13 +28,6 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use regex::Regex;
-use serde_yaml_ng::Value;
-use std::borrow::Cow;
-use std::fmt::Debug;
-use std::fmt::Write as _;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct StringExpFactory {}
@@ -359,13 +358,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::matcher::Matcher;
     use crate::proto::rdata::A;
-    use crate::proto::{Message, Question, Rcode};
-    use crate::proto::{Name, RData, Record, RecordType};
-    use std::net::{Ipv4Addr, SocketAddr};
+    use crate::proto::{Message, Name, Question, RData, Rcode, Record, RecordType};
 
     fn make_context() -> DnsContext {
         let mut request = Message::new();

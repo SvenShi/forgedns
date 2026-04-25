@@ -1,13 +1,22 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! UDP DNS server plugin
 //!
 //! Listens for DNS queries over UDP and processes them through a configured
 //! entry plugin executor. Handles concurrent requests efficiently and manages
 //! task spawning with automatic cleanup.
+
+use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use socket2::{Domain, Protocol, Socket, Type};
+use tokio::net::UdpSocket;
+use tokio::sync::{oneshot, watch};
+use tokio_util::task::TaskTracker;
+use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::context::RequestMeta;
@@ -17,16 +26,6 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde::Deserialize;
-use socket2::{Domain, Protocol, Socket, Type};
-use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
-use std::sync::Arc;
-use std::sync::Mutex;
-use tokio::net::UdpSocket;
-use tokio::sync::{oneshot, watch};
-use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, warn};
 
 const UDP_RECV_BUFFER_SIZE: usize = 65_535;
 const UDP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
@@ -36,11 +35,13 @@ const UDP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
 pub struct UdpServerConfig {
     /// Entry executor plugin tag to process incoming requests.
     ///
-    /// - Must reference an existing executor plugin registered in `PluginRegistry`.
+    /// - Must reference an existing executor plugin registered in
+    ///   `PluginRegistry`.
     /// - All UDP-based DNS queries will be forwarded to this executor.
     entry: String,
 
-    /// UDP listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:53", ":53").
+    /// UDP listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:53",
+    /// ":53").
     ///
     /// - `:port` binds on `0.0.0.0:port`.
     /// - Must be a valid listen address or validation will fail.
@@ -295,9 +296,10 @@ impl PluginFactory for UdpServerFactory {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
     use super::*;
     use crate::plugin::test_utils::{plugin_config, test_registry};
-    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn test_udp_factory_requires_args() {

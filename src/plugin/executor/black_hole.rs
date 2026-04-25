@@ -1,7 +1,5 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `black_hole` executor plugin.
 //!
@@ -16,6 +14,13 @@
 //! - for `AAAA` queries returns configured IPv6 list.
 //! - for other types, plugin is pass-through (`Next` without response changes).
 
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_yaml_ng::Value;
+
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
@@ -23,11 +28,6 @@ use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{A, AAAA, RData, RecordType};
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_yaml_ng::Value;
-use std::net::IpAddr;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct BlackHoleConfig {
@@ -239,13 +239,13 @@ fn split_ips(ips: Vec<IpAddr>) -> (Vec<Arc<RData>>, Vec<Arc<RData>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+
     use super::*;
     use crate::plugin::UninitializedPlugin;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::test_utils::test_registry;
-    use crate::proto::{DNSClass, Name};
-    use crate::proto::{Message, Question};
-    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+    use crate::proto::{DNSClass, Message, Name, Question};
 
     fn make_context(qtype: RecordType) -> DnsContext {
         let mut request = Message::new();

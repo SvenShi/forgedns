@@ -1,11 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `ptr_ip` matcher plugin.
 //!
 //! Matches IP decoded from PTR query names.
+
+use std::fmt::Debug;
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use async_trait::async_trait;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
@@ -23,10 +27,6 @@ use crate::plugin::matcher::matcher_utils::{
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::RecordType;
 use crate::register_plugin_factory;
-use async_trait::async_trait;
-use std::fmt::Debug;
-use std::net::IpAddr;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct PtrIpFactory {}
@@ -152,12 +152,12 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::matcher::Matcher;
-    use crate::proto::{Message, Question};
-    use crate::proto::{Name, RecordType};
-    use std::net::SocketAddr;
+    use crate::proto::{Message, Name, Question, RecordType};
 
     #[tokio::test]
     async fn test_ptr_ip_match_ipv4_arpa() {

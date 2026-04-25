@@ -1,5 +1,6 @@
-use crate::proto::Name;
 use ahash::{AHashMap, AHashSet};
+
+use crate::proto::Name;
 
 const MAX_COMPRESSION_POINTER_OFFSET: usize = 0x4000;
 
@@ -21,9 +22,9 @@ impl<'a> LenCompressionMap<'a> {
         }
     }
 
-    /// Stop recording new suffixes once the trailer-length calculation reaches the
-    /// detached signature block. This mirrors the limited encoder, where trailer names
-    /// are intentionally emitted without compression.
+    /// Stop recording new suffixes once the trailer-length calculation reaches
+    /// the detached signature block. This mirrors the limited encoder,
+    /// where trailer names are intentionally emitted without compression.
     pub(crate) fn disable(&mut self) {
         self.enabled = false;
     }
@@ -106,8 +107,9 @@ impl<'a> CompressionState<'a> {
 
     /// Disable name compression for all subsequent encodes.
     ///
-    /// The limited UDP path switches compression off before writing the trailer so the
-    /// detached signature block cannot reference names introduced by truncated RR data.
+    /// The limited UDP path switches compression off before writing the trailer
+    /// so the detached signature block cannot reference names introduced by
+    /// truncated RR data.
     pub(crate) fn disable(&mut self) {
         self.enabled = false;
     }

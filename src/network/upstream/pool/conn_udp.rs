@@ -1,7 +1,18 @@
-/*
- * SPDX-FileCopyrightText: 2025 Sven Shi
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-FileCopyrightText: 2025 Sven Shi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::fmt::Debug;
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use tokio::net::UdpSocket;
+use tokio::select;
+use tokio::sync::{Notify, oneshot};
+use tokio::time::timeout;
+use tracing::{debug, error, trace, warn};
 
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
@@ -11,17 +22,6 @@ use crate::network::upstream::pool::request_map::RequestMap;
 use crate::network::upstream::pool::{Connection, ConnectionBuilder};
 use crate::network::upstream::utils::connect_socket;
 use crate::proto::Message;
-use async_trait::async_trait;
-use std::fmt::Debug;
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
-use tokio::net::UdpSocket;
-use tokio::select;
-use tokio::sync::{Notify, oneshot};
-use tokio::time::timeout;
-use tracing::{debug, error, trace, warn};
 
 const UDP_RECV_BUFFER_SIZE: usize = 8_196;
 
@@ -42,7 +42,8 @@ pub struct UdpConnection {
     timeout: Duration,
     /// Timestamp of last activity (milliseconds)
     last_used: AtomicU64,
-    /// Connection closed flag (prevents use after closure and ensures idempotent close)
+    /// Connection closed flag (prevents use after closure and ensures
+    /// idempotent close)
     closed: AtomicBool,
 }
 
@@ -56,8 +57,9 @@ const RETRY_TIMEOUT: Duration = Duration::from_secs(1);
 impl Connection for UdpConnection {
     /// Close this UDP connection and notify all waiting tasks
     ///
-    /// UDP connections are stateless, so close mainly signals the listener task to exit.
-    /// This method is idempotent - multiple calls are safe and will only execute once.
+    /// UDP connections are stateless, so close mainly signals the listener task
+    /// to exit. This method is idempotent - multiple calls are safe and
+    /// will only execute once.
     fn close(&self) {
         // Atomically set closed flag and check previous value
         if self.closed.swap(true, Ordering::SeqCst) {
@@ -154,14 +156,16 @@ impl Connection for UdpConnection {
         Err(DnsError::protocol("UDP query timed out after retries"))
     }
 
-    /// Return the number of active queries currently tracked by this connection.
+    /// Return the number of active queries currently tracked by this
+    /// connection.
     fn using_count(&self) -> u16 {
         self.request_map.size()
     }
 
     /// Check if the UDP connection is available for new queries
     ///
-    /// Returns false if the connection has been closed (e.g., due to send failure)
+    /// Returns false if the connection has been closed (e.g., due to send
+    /// failure)
     fn available(&self) -> bool {
         !self.closed.load(Ordering::Relaxed)
     }
@@ -196,10 +200,12 @@ impl UdpConnection {
         }
     }
 
-    /// Asynchronously listen for DNS responses and deliver them to matching queries
+    /// Asynchronously listen for DNS responses and deliver them to matching
+    /// queries
     ///
-    /// Continuously receives UDP datagrams and matches them to pending queries by ID.
-    /// This task runs per connection until all requests complete or the connection closes.
+    /// Continuously receives UDP datagrams and matches them to pending queries
+    /// by ID. This task runs per connection until all requests complete or
+    /// the connection closes.
     ///
     /// # Buffer Size
     /// Uses 4KB buffer which is sufficient for most DNS responses.
