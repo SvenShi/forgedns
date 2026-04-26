@@ -31,9 +31,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_yaml_ng::Value as YamlValue;
-use tracing::warn;
 
-use self::backend::{RecorderBackend, WriterCommand};
+use self::backend::RecorderBackend;
 use self::model::{PendingRecord, QueryRecorderConfig, ResolvedRecorderConfig};
 use crate::api::ApiRegister;
 use crate::config::types::PluginConfig;
@@ -42,7 +41,9 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{
+    Plugin, PluginCreateContext, PluginFactory, PluginRegistry, UninitializedPlugin,
+};
 use crate::{continue_next, register_plugin_factory};
 
 const DEFAULT_QUEUE_SIZE: usize = 8_192;
@@ -51,6 +52,7 @@ const DEFAULT_FLUSH_INTERVAL_MS: u64 = 200;
 const DEFAULT_MEMORY_TAIL: usize = 1_024;
 const DEFAULT_RETENTION_DAYS: u64 = 7;
 const DEFAULT_CLEANUP_INTERVAL_HOURS: u64 = 1;
+const ONE_DAY_MS: u64 = 24 * 60 * 60 * 1000;
 
 #[derive(Debug)]
 struct QueryRecorder {
@@ -68,26 +70,24 @@ impl Plugin for QueryRecorder {
     }
 
     async fn init(&mut self) -> Result<()> {
-        let backend = RecorderBackend::new(self.tag.clone(), self.config.clone())?;
-        backend.register_api_routes(self.api_register.as_ref())?;
+        let backend = RecorderBackend::run(self.tag.clone(), self.config.clone())?;
+        api::register(&backend, self.api_register.as_ref())?;
 
-        let queue_tx = backend.queue_tx.clone();
+        let recorder_backend = backend.clone();
         let retention_days = self.config.retention_days;
         self.cleanup_task_id = Some(task_center::spawn_fixed(
             format!("query_recorder:{}:cleanup", self.tag),
             Duration::from_secs(self.config.cleanup_interval_hours * 60 * 60),
             move || {
-                let queue_tx = queue_tx.clone();
+                let recorder_backend = recorder_backend.clone();
                 async move {
-                    let retention_ms = retention_days.saturating_mul(24 * 60 * 60 * 1000);
+                    let retention_ms = retention_days.saturating_mul(ONE_DAY_MS);
                     let cutoff_ms = AppClock::elapsed_millis().saturating_sub(retention_ms);
-                    if let Err(err) = queue_tx.try_send(WriterCommand::Cleanup { cutoff_ms }) {
-                        warn!("query_recorder cleanup skipped: {}", err);
-                    }
+                    recorder_backend.cleanup(cutoff_ms);
                 }
             },
         ));
-        self.backend = Some(backend);
+        self.backend.replace(backend);
         Ok(())
     }
 
@@ -139,18 +139,20 @@ impl Executor for QueryRecorder {
         let request = context.request.clone();
         context.enable_execution_path();
         let step_start_index = context.execution_path_len();
-        let started_at_ms = AppClock::elapsed_millis();
+        let instant = AppClock::now();
+        let timestamp = AppClock::now_timestamp();
         let result = continue_next!(next, context);
-        let elapsed_ms = AppClock::elapsed_millis().saturating_sub(started_at_ms);
-        let pending = PendingRecord::capture(
+        let pending_record = PendingRecord::new(
             request,
-            context,
-            started_at_ms,
-            elapsed_ms,
+            context.response.clone(),
+            timestamp,
+            instant.elapsed().as_millis() as u64,
+            context.execution_path.clone(),
             step_start_index,
-            result.as_ref().err(),
+            context.peer_addr(),
+            result.as_ref().err().map(ToString::to_string),
         );
-        backend.enqueue(pending);
+        backend.enqueue(pending_record);
         result
     }
 }
@@ -240,7 +242,7 @@ impl PluginFactory for QueryRecorderFactory {
         &self,
         plugin_config: &PluginConfig,
         registry: Arc<PluginRegistry>,
-        _context: &crate::plugin::PluginCreateContext,
+        _context: &PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let config = resolve_config(plugin_config.args.clone())?;
         Ok(UninitializedPlugin::Executor(Box::new(QueryRecorder::new(
@@ -248,16 +250,5 @@ impl PluginFactory for QueryRecorderFactory {
             config,
             registry.api_register(),
         ))))
-    }
-
-    fn quick_setup(
-        &self,
-        _tag: &str,
-        _param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
-        Err(DnsError::plugin(
-            "query_recorder does not support quick setup syntax",
-        ))
     }
 }

@@ -82,6 +82,14 @@ pub enum DnsError {
     #[error("wincode read error: {0}")]
     WinCodeReadError(#[from] wincode::ReadError),
 
+    /// rusqlite error
+    #[error("rusqlite error: {0}")]
+    Rusqlite(#[from] rusqlite::Error),
+
+    /// serde json error
+    #[error("serde json error: {0}")]
+    SerdeJson(#[from] serde_json::Error),
+
     /// Generic error with custom message
     #[error("{0}")]
     Generic(String),

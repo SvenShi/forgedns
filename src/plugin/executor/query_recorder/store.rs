@@ -22,6 +22,17 @@ use crate::core::error::{DnsError, Result};
 const SCHEMA_VERSION: &str = "v1";
 const CLEANUP_BATCH_SIZE: usize = 1_000;
 
+pub(super) fn open_database(path: &Path) -> rusqlite::Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA foreign_keys=ON;
+         PRAGMA auto_vacuum=INCREMENTAL;",
+    )?;
+    Ok(conn)
+}
+
 pub(super) fn table_names(tag: &str) -> TableNames {
     let safe_tag = sanitize_tag(tag);
     let hash = fnv1a_hex(tag.as_bytes());
@@ -57,27 +68,7 @@ fn fnv1a_hex(input: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-pub(super) fn initialize_database(path: &Path, tables: &TableNames) -> Result<()> {
-    let mut conn = open_database(path).map_err(|err| {
-        DnsError::plugin(format!("failed to open query_recorder database: {err}"))
-    })?;
-    create_schema(&mut conn, tables).map_err(|err| {
-        DnsError::plugin(format!("failed to initialize query_recorder schema: {err}"))
-    })
-}
-
-fn open_database(path: &Path) -> rusqlite::Result<Connection> {
-    let conn = Connection::open(path)?;
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;
-         PRAGMA auto_vacuum=INCREMENTAL;",
-    )?;
-    Ok(conn)
-}
-
-fn create_schema(conn: &mut Connection, tables: &TableNames) -> rusqlite::Result<()> {
+pub(crate) fn create_schema(conn: &mut Connection, tables: &TableNames) -> rusqlite::Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {records} (
             id INTEGER PRIMARY KEY,
@@ -133,9 +124,9 @@ fn create_schema(conn: &mut Connection, tables: &TableNames) -> rusqlite::Result
 pub(super) fn run_writer_thread(
     context: WriterThreadContext,
     rx: Receiver<WriterCommand>,
-) -> std::result::Result<(), String> {
+    mut conn: Connection,
+) -> Result<()> {
     let WriterThreadContext {
-        path,
         tables,
         stop_requested,
         tail,
@@ -144,10 +135,6 @@ pub(super) fn run_writer_thread(
         batch_size,
         flush_interval,
     } = context;
-
-    let mut conn = open_database(&path)
-        .map_err(|err| format!("failed to open database '{}': {}", path.display(), err))?;
-    create_schema(&mut conn, &tables).map_err(|err| format!("failed to create schema: {err}"))?;
 
     let mut pending = Vec::with_capacity(batch_size);
     loop {
@@ -174,8 +161,7 @@ pub(super) fn run_writer_thread(
                     memory_tail,
                     &broadcaster,
                 )?;
-                run_cleanup(&mut conn, &tables, cutoff_ms)
-                    .map_err(|err| format!("cleanup failed: {err}"))?;
+                run_cleanup(&mut conn, &tables, cutoff_ms)?;
             }
             Err(RecvTimeoutError::Timeout) => {
                 flush_pending(
@@ -214,22 +200,19 @@ fn flush_pending(
     tail: &Arc<Mutex<VecDeque<RecordDetail>>>,
     memory_tail: usize,
     broadcaster: &broadcast::Sender<RecordDetail>,
-) -> std::result::Result<(), String> {
+) -> Result<()> {
     if pending.is_empty() {
         return Ok(());
     }
 
-    let tx = conn
-        .transaction()
-        .map_err(|err| format!("failed to begin transaction: {err}"))?;
+    let tx = conn.transaction()?;
     let mut committed = Vec::with_capacity(pending.len());
     for pending_record in pending.drain(..) {
-        let detail = insert_record(&tx, tables, pending_record)
-            .map_err(|err| format!("failed to insert record: {err}"))?;
+        let (record, steps) = pending_record.take_to_record();
+        let detail = insert_record(&tx, tables, record, steps)?;
         committed.push(detail);
     }
-    tx.commit()
-        .map_err(|err| format!("failed to commit transaction: {err}"))?;
+    tx.commit()?;
 
     let mut tail_guard = tail
         .lock()
@@ -247,20 +230,15 @@ fn flush_pending(
 fn insert_record(
     tx: &rusqlite::Transaction<'_>,
     tables: &TableNames,
-    pending: PendingRecord,
-) -> rusqlite::Result<RecordDetail> {
-    let record = pending.record;
-    let questions_json = serde_json::to_string(&record.questions_json)
-        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+    record: RecordRow,
+    steps: Vec<StepJson>,
+) -> Result<RecordDetail> {
+    let questions_json = serde_json::to_string(&record.questions_json)?;
     let req_edns_json = serialize_optional_json(&record.req_edns_json)?;
-    let answers_json = serde_json::to_string(&record.answers_json)
-        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-    let authorities_json = serde_json::to_string(&record.authorities_json)
-        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-    let additionals_json = serde_json::to_string(&record.additionals_json)
-        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-    let signature_json = serde_json::to_string(&record.signature_json)
-        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+    let answers_json = serde_json::to_string(&record.answers_json)?;
+    let authorities_json = serde_json::to_string(&record.authorities_json)?;
+    let additionals_json = serde_json::to_string(&record.additionals_json)?;
+    let signature_json = serde_json::to_string(&record.signature_json)?;
     let resp_edns_json = serialize_optional_json(&record.resp_edns_json)?;
 
     tx.execute(
@@ -326,7 +304,7 @@ fn insert_record(
     )?;
     let record_id = tx.last_insert_rowid();
 
-    for step in &pending.steps {
+    for step in &steps {
         tx.execute(
             &format!(
                 "INSERT INTO {} (
@@ -357,7 +335,7 @@ fn insert_record(
             id: record_id,
             ..record
         },
-        steps: pending.steps,
+        steps,
     })
 }
 
@@ -401,8 +379,7 @@ pub(super) fn query_records(
     backend: Arc<RecorderBackend>,
     query: ListQuery,
 ) -> std::result::Result<(Vec<RecordRow>, Option<String>), DnsError> {
-    let conn = open_database(&backend.path)
-        .map_err(|err| DnsError::plugin(format!("failed to open recorder database: {err}")))?;
+    let conn = open_database(&backend.path)?;
     let sql = format!(
         "SELECT
             id,
@@ -443,40 +420,21 @@ pub(super) fn query_records(
         records = backend.tables.records
     );
 
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|err| DnsError::plugin(format!("failed to prepare list query: {err}")))?;
-    let mut rows = stmt
-        .query(params![
-            query
-                .since_ms
-                .map(as_i64)
-                .transpose()
-                .map_err(to_plugin_error)?,
-            query
-                .until_ms
-                .map(as_i64)
-                .transpose()
-                .map_err(to_plugin_error)?,
-            query
-                .cursor
-                .map(|cursor| as_i64(cursor.created_at_ms))
-                .transpose()
-                .map_err(to_plugin_error)?,
-            query.cursor.map(|cursor| cursor.id),
-            query.limit as i64,
-        ])
-        .map_err(|err| DnsError::plugin(format!("failed to run list query: {err}")))?;
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params![
+        query.since_ms.map(as_i64).transpose()?,
+        query.until_ms.map(as_i64).transpose()?,
+        query
+            .cursor
+            .map(|cursor| as_i64(cursor.created_at_ms))
+            .transpose()?,
+        query.cursor.map(|cursor| cursor.id),
+        query.limit as i64,
+    ])?;
 
     let mut records = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|err| DnsError::plugin(format!("failed to fetch list row: {err}")))?
-    {
-        records.push(
-            read_record_row(row)
-                .map_err(|err| DnsError::plugin(format!("failed to decode list row: {err}")))?,
-        );
+    while let Some(row) = rows.next()? {
+        records.push(read_record_row(row)?);
     }
 
     let next_cursor = records.last().map(|record| {
@@ -492,8 +450,7 @@ pub(super) fn load_record_detail(
     backend: Arc<RecorderBackend>,
     record_id: i64,
 ) -> std::result::Result<Option<RecordDetail>, DnsError> {
-    let conn = open_database(&backend.path)
-        .map_err(|err| DnsError::plugin(format!("failed to open recorder database: {err}")))?;
+    let conn = open_database(&backend.path)?;
     let record_sql = format!(
         "SELECT
             id,
@@ -529,11 +486,9 @@ pub(super) fn load_record_detail(
     );
 
     let record = conn
-        .prepare(&record_sql)
-        .map_err(|err| DnsError::plugin(format!("failed to prepare detail query: {err}")))?
+        .prepare(&record_sql)?
         .query_row(params![record_id], read_record_row)
-        .optional()
-        .map_err(|err| DnsError::plugin(format!("failed to load detail row: {err}")))?;
+        .optional()?;
 
     let Some(record) = record else {
         return Ok(None);
@@ -555,42 +510,23 @@ fn load_steps(
          ORDER BY event_index ASC",
         steps = tables.steps
     );
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|err| DnsError::plugin(format!("failed to prepare step query: {err}")))?;
-    let mut rows = stmt
-        .query(params![record_id])
-        .map_err(|err| DnsError::plugin(format!("failed to run step query: {err}")))?;
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params![record_id])?;
 
     let mut steps = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|err| DnsError::plugin(format!("failed to fetch step row: {err}")))?
-    {
+    while let Some(row) = rows.next()? {
         steps.push(StepJson {
-            event_index: row
-                .get::<_, i64>(0)
-                .and_then(non_negative_usize)
-                .map_err(|err| DnsError::plugin(format!("invalid step event_index: {err}")))?,
-            sequence_tag: row
-                .get(1)
-                .map_err(|err| DnsError::plugin(format!("invalid step sequence_tag: {err}")))?,
+            event_index: row.get::<_, i64>(0).and_then(non_negative_usize)?,
+            sequence_tag: row.get(1)?,
             node_index: row
-                .get::<_, Option<i64>>(2)
-                .map_err(|err| DnsError::plugin(format!("invalid step node_index: {err}")))?
+                .get::<_, Option<i64>>(2)?
                 .map(|value| {
                     usize::try_from(value).map_err(|_| DnsError::plugin("negative step node_index"))
                 })
                 .transpose()?,
-            kind: row
-                .get(3)
-                .map_err(|err| DnsError::plugin(format!("invalid step kind: {err}")))?,
-            tag: row
-                .get(4)
-                .map_err(|err| DnsError::plugin(format!("invalid step tag: {err}")))?,
-            outcome: row
-                .get(5)
-                .map_err(|err| DnsError::plugin(format!("invalid step outcome: {err}")))?,
+            kind: row.get(3)?,
+            tag: row.get(4)?,
+            outcome: row.get(5)?,
         });
     }
     Ok(steps)
@@ -600,8 +536,7 @@ pub(super) fn load_stats_overview(
     backend: Arc<RecorderBackend>,
     query: StatsQuery,
 ) -> std::result::Result<StatsOverview, DnsError> {
-    let conn = open_database(&backend.path)
-        .map_err(|err| DnsError::plugin(format!("failed to open recorder database: {err}")))?;
+    let conn = open_database(&backend.path)?;
     let sql = format!(
         "SELECT
             COUNT(*) AS query_total,
@@ -613,20 +548,11 @@ pub(super) fn load_stats_overview(
         records = backend.tables.records
     );
 
-    conn.prepare(&sql)
-        .map_err(|err| DnsError::plugin(format!("failed to prepare overview query: {err}")))?
+    conn.prepare(&sql)?
         .query_row(
             params![
-                query
-                    .since_ms
-                    .map(as_i64)
-                    .transpose()
-                    .map_err(to_plugin_error)?,
-                query
-                    .until_ms
-                    .map(as_i64)
-                    .transpose()
-                    .map_err(to_plugin_error)?,
+                query.since_ms.map(as_i64).transpose()?,
+                query.until_ms.map(as_i64).transpose()?,
             ],
             |row| {
                 Ok(StatsOverview {
@@ -643,8 +569,7 @@ pub(super) fn load_plugin_stats(
     backend: Arc<RecorderBackend>,
     query: PluginsStatsQuery,
 ) -> std::result::Result<(u64, Vec<PluginStatsRow>), DnsError> {
-    let conn = open_database(&backend.path)
-        .map_err(|err| DnsError::plugin(format!("failed to open recorder database: {err}")))?;
+    let conn = open_database(&backend.path)?;
     let total_records = count_records(&conn, &backend.tables, query.since_ms, query.until_ms)?;
     let kind_filter = query.kind.sql_value();
     let sql = format!(
@@ -676,55 +601,27 @@ pub(super) fn load_plugin_stats(
         records = backend.tables.records
     );
 
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|err| DnsError::plugin(format!("failed to prepare plugin stats query: {err}")))?;
-    let mut rows = stmt
-        .query(params![
-            query
-                .since_ms
-                .map(as_i64)
-                .transpose()
-                .map_err(to_plugin_error)?,
-            query
-                .until_ms
-                .map(as_i64)
-                .transpose()
-                .map_err(to_plugin_error)?,
-            kind_filter,
-        ])
-        .map_err(|err| DnsError::plugin(format!("failed to run plugin stats query: {err}")))?;
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params![
+        query.since_ms.map(as_i64).transpose()?,
+        query.until_ms.map(as_i64).transpose()?,
+        kind_filter,
+    ])?;
 
     let mut stats = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|err| DnsError::plugin(format!("failed to fetch plugin stats row: {err}")))?
-    {
-        let query_hits = row
-            .get::<_, i64>(5)
-            .and_then(non_negative_u64)
-            .map_err(|err| DnsError::plugin(format!("invalid plugin stats query_hits: {err}")))?;
+    while let Some(row) = rows.next()? {
+        let query_hits = row.get::<_, i64>(5).and_then(non_negative_u64)?;
         stats.push(PluginStatsRow {
-            kind: row
-                .get(0)
-                .map_err(|err| DnsError::plugin(format!("invalid plugin stats kind: {err}")))?,
-            tag: row
-                .get(1)
-                .map_err(|err| DnsError::plugin(format!("invalid plugin stats tag: {err}")))?,
+            kind: row.get(0)?,
+            tag: row.get(1)?,
             evaluated: row
                 .get::<_, i64>(2)
                 .and_then(non_negative_u64)
                 .map_err(|err| {
                     DnsError::plugin(format!("invalid plugin stats evaluated: {err}"))
                 })?,
-            matched: row
-                .get::<_, i64>(3)
-                .and_then(non_negative_u64)
-                .map_err(|err| DnsError::plugin(format!("invalid plugin stats matched: {err}")))?,
-            executed: row
-                .get::<_, i64>(4)
-                .and_then(non_negative_u64)
-                .map_err(|err| DnsError::plugin(format!("invalid plugin stats executed: {err}")))?,
+            matched: row.get::<_, i64>(3).and_then(non_negative_u64)?,
+            executed: row.get::<_, i64>(4).and_then(non_negative_u64)?,
             query_total: query_hits,
             query_share: if total_records == 0 {
                 0.0
@@ -748,12 +645,11 @@ fn count_records(
            AND (?2 IS NULL OR created_at_ms <= ?2)",
         records = tables.records
     );
-    conn.prepare(&sql)
-        .map_err(|err| DnsError::plugin(format!("failed to prepare count query: {err}")))?
+    conn.prepare(&sql)?
         .query_row(
             params![
-                since_ms.map(as_i64).transpose().map_err(to_plugin_error)?,
-                until_ms.map(as_i64).transpose().map_err(to_plugin_error)?,
+                since_ms.map(as_i64).transpose()?,
+                until_ms.map(as_i64).transpose()?,
             ],
             |row| row.get::<_, i64>(0).and_then(non_negative_u64),
         )
@@ -853,8 +749,4 @@ fn non_negative_u16(value: i64) -> rusqlite::Result<u16> {
 
 fn non_negative_usize(value: i64) -> rusqlite::Result<usize> {
     usize::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value))
-}
-
-fn to_plugin_error(err: rusqlite::Error) -> DnsError {
-    DnsError::plugin(format!("{err}"))
 }

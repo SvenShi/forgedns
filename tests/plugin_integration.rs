@@ -9,6 +9,7 @@ use std::sync::{Arc as StdArc, Arc};
 
 use bytes::Bytes;
 use forgedns::config::types::Config;
+use forgedns::core::app_clock::AppClock;
 use forgedns::core::context::{DnsContext, RequestMeta};
 use forgedns::core::error::{DnsError, Result};
 use forgedns::network::transport::udp_transport::UdpTransport;
@@ -31,6 +32,7 @@ use tokio::time::sleep;
 use tokio::time::{Duration, timeout};
 
 fn parse_config(yaml: &str) -> Result<Config> {
+    AppClock::start();
     let config: Config = serde_yaml_ng::from_str(yaml)?;
     config.validate()?;
     Ok(config)

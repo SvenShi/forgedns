@@ -19,7 +19,9 @@ use super::model::{
     RecordRow, StatsQuery,
 };
 use super::store::{load_plugin_stats, load_record_detail, load_stats_overview, query_records};
-use crate::api::{ApiHandler, json_error, json_ok, simple_response, streaming_response};
+use crate::api::{
+    ApiHandler, ApiRegister, json_error, json_ok, simple_response, streaming_response,
+};
 use crate::core::error::Result;
 
 const DEFAULT_LIST_LIMIT: usize = 100;
@@ -434,56 +436,55 @@ fn sse_record_frame(record: &RecordDetail) -> Bytes {
     }
 }
 
-impl RecorderBackend {
-    pub(super) fn register_api_routes(
-        &self,
-        api_register: Option<&crate::api::ApiRegister>,
-    ) -> Result<()> {
-        let Some(api_register) = api_register else {
-            return Ok(());
-        };
+pub(super) fn register(
+    backend: &Arc<RecorderBackend>,
+    api_register: Option<&ApiRegister>,
+) -> Result<()> {
+    let Some(api_register) = api_register else {
+        return Ok(());
+    };
 
-        let backend = Arc::new(self.clone_shallow());
-        api_register.register_plugin_get(
-            &self.tag,
-            "/records",
-            Arc::new(RecordsListHandler {
-                backend: backend.clone(),
-            }),
-        )?;
+    api_register.register_plugin_get(
+        &backend.tag,
+        "/records",
+        Arc::new(RecordsListHandler {
+            backend: backend.clone(),
+        }),
+    )?;
 
-        let detail_prefix = format!("/plugins/{}/records/", self.tag);
-        api_register.register_plugin_get_prefix(
-            &self.tag,
-            "/records/",
-            Arc::new(RecordDetailHandler {
-                backend: backend.clone(),
-                path_prefix: detail_prefix,
-            }),
-        )?;
+    let detail_prefix = format!("/plugins/{}/records/", backend.tag);
+    api_register.register_plugin_get_prefix(
+        &backend.tag,
+        "/records/",
+        Arc::new(RecordDetailHandler {
+            backend: backend.clone(),
+            path_prefix: detail_prefix,
+        }),
+    )?;
 
-        api_register.register_plugin_get(
-            &self.tag,
-            "/stats/overview",
-            Arc::new(StatsOverviewHandler {
-                backend: backend.clone(),
-            }),
-        )?;
+    api_register.register_plugin_get(
+        &backend.tag,
+        "/stats/overview",
+        Arc::new(StatsOverviewHandler {
+            backend: backend.clone(),
+        }),
+    )?;
 
-        api_register.register_plugin_get(
-            &self.tag,
-            "/stats/plugins",
-            Arc::new(StatsPluginsHandler {
-                backend: backend.clone(),
-            }),
-        )?;
+    api_register.register_plugin_get(
+        &backend.tag,
+        "/stats/plugins",
+        Arc::new(StatsPluginsHandler {
+            backend: backend.clone(),
+        }),
+    )?;
 
-        api_register.register_plugin_get(
-            &self.tag,
-            "/stream",
-            Arc::new(StreamHandler { backend }),
-        )?;
+    api_register.register_plugin_get(
+        &backend.tag,
+        "/stream",
+        Arc::new(StreamHandler {
+            backend: backend.clone(),
+        }),
+    )?;
 
-        Ok(())
-    }
+    Ok(())
 }

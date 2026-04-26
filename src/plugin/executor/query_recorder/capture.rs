@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2025 Sven Shi
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -10,8 +11,7 @@ use serde_json::{Value, json};
 use super::model::{
     EdnsJson, EdnsOptionJson, PendingRecord, QuestionJson, RecordJson, RecordRow, StepJson,
 };
-use crate::core::context::{DnsContext, ExecutionPathEvent};
-use crate::core::error::DnsError;
+use crate::core::context::{ExecutionPath, ExecutionPathEvent};
 use crate::proto::rdata::{
     self, CAA, ClientSubnet, DNSKEY, DS, Edns, EdnsCode, EdnsExtendedDnsError, EdnsOption, NSEC,
     NSEC3, NSEC3PARAM, RRSIG, SOA, SSHFP, SVCB, TLSA, TXT, URI,
@@ -19,40 +19,69 @@ use crate::proto::rdata::{
 use crate::proto::{DNSClass, Message, Opcode, Question, RData, Rcode, Record, RecordType};
 
 impl PendingRecord {
-    pub(super) fn capture(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
         request: Message,
-        context: &DnsContext,
+        response: Option<Message>,
         created_at_ms: u64,
         elapsed_ms: u64,
+        exec_path: ExecutionPath,
         step_start_index: usize,
-        error: Option<&DnsError>,
+        client_ip: SocketAddr,
+        error: Option<String>,
     ) -> Self {
+        Self {
+            request,
+            response,
+            created_at_ms,
+            elapsed_ms,
+            exec_path,
+            step_start_index,
+            client_ip,
+            error,
+        }
+    }
+
+    pub(super) fn take_to_record(self) -> (RecordRow, Vec<StepJson>) {
+        let PendingRecord {
+            request,
+            response,
+            created_at_ms,
+            elapsed_ms,
+            exec_path,
+            step_start_index,
+            client_ip,
+            error,
+        } = self;
+
         let questions_json = request
             .questions()
             .iter()
             .map(question_json)
             .collect::<Vec<_>>();
         let req_edns_json = request.edns().as_ref().map(edns_json);
-        let steps = context
-            .execution_path_events_from(step_start_index)
+        let steps = exec_path
+            .events_from(step_start_index)
             .iter()
             .enumerate()
             .map(step_json)
             .collect::<Vec<_>>();
+
+        let no_err = error.is_none();
 
         let mut record = RecordRow {
             id: 0,
             created_at_ms,
             elapsed_ms,
             request_id: request.id(),
-            client_ip: context.peer_addr().ip().to_string(),
+            client_ip: client_ip.ip().to_string(),
             questions_json,
             req_rd: request.recursion_desired(),
             req_cd: request.checking_disabled(),
             req_ad: request.authentic_data(),
             req_opcode: opcode_name(request.opcode()),
             req_edns_json,
-            error: error.map(ToString::to_string),
+            error,
             has_response: false,
             rcode: None,
             resp_aa: None,
@@ -70,9 +99,7 @@ impl PendingRecord {
             resp_edns_json: None,
         };
 
-        if error.is_none()
-            && let Some(response) = context.response()
-        {
+        if no_err && let Some(response) = response {
             record.has_response = true;
             record.rcode = Some(rcode_name(response.rcode()));
             record.resp_aa = Some(response.authoritative());
@@ -106,7 +133,7 @@ impl PendingRecord {
             record.resp_edns_json = response.edns().as_ref().map(edns_json);
         }
 
-        Self { record, steps }
+        (record, steps)
     }
 }
 
@@ -118,7 +145,7 @@ fn question_json(question: &Question) -> QuestionJson {
     }
 }
 
-fn step_json((event_index, event): (usize, &ExecutionPathEvent)) -> StepJson {
+fn step_json((event_index, event): (usize, &Arc<ExecutionPathEvent>)) -> StepJson {
     StepJson {
         event_index,
         sequence_tag: event.sequence_tag.clone(),

@@ -9,6 +9,7 @@ use tempfile::NamedTempFile;
 use super::model::{ListQuery, PendingRecord, QueryRecorderConfig};
 use super::store::{query_records, table_names};
 use super::{QueryRecorder, QueryRecorderFactory, resolve_config};
+use crate::core::app_clock::AppClock;
 use crate::core::context::{DnsContext, ExecutionPathEvent};
 use crate::core::error::DnsError;
 use crate::plugin::executor::{ExecStep, Executor};
@@ -46,20 +47,28 @@ fn test_record_capture_without_response_uses_empty_sections() {
         "entered",
     ));
 
-    let pending =
-        PendingRecord::capture(request, &ctx, 100, 10, 0, Some(&DnsError::plugin("boom")));
+    let pending = PendingRecord::new(
+        request,
+        ctx.response.clone(),
+        100,
+        10,
+        ctx.execution_path.clone(),
+        0,
+        ctx.peer_addr(),
+        Some(DnsError::plugin("boom").to_string()),
+    );
+    let (record, steps) = pending.take_to_record();
 
-    assert!(!pending.record.has_response);
-    assert_eq!(pending.record.answer_count, 0);
-    assert!(pending.record.answers_json.is_empty());
+    assert!(!record.has_response);
+    assert_eq!(record.answer_count, 0);
+    assert!(record.answers_json.is_empty());
     assert!(
-        pending
-            .record
+        record
             .error
             .as_deref()
             .is_some_and(|value| value.contains("boom"))
     );
-    assert_eq!(pending.steps.len(), 1);
+    assert_eq!(steps.len(), 1);
 }
 
 #[test]
@@ -89,17 +98,29 @@ fn test_record_capture_with_structured_response() {
     ctx.set_response(response);
     ctx.enable_execution_path();
 
-    let pending = PendingRecord::capture(request, &ctx, 100, 12, 0, None);
+    let pending = PendingRecord::new(
+        request,
+        ctx.response.clone(),
+        100,
+        12,
+        ctx.execution_path.clone(),
+        0,
+        ctx.peer_addr(),
+        None,
+    );
+    let (record, _) = pending.take_to_record();
 
-    assert!(pending.record.has_response);
-    assert_eq!(pending.record.answer_count, 1);
-    assert_eq!(pending.record.authority_count, 1);
-    assert_eq!(pending.record.answers_json[0].payload_kind, "A");
-    assert_eq!(pending.record.authorities_json[0].payload_kind, "CNAME");
+    assert!(record.has_response);
+    assert_eq!(record.answer_count, 1);
+    assert_eq!(record.authority_count, 1);
+    assert_eq!(record.answers_json[0].payload_kind, "A");
+    assert_eq!(record.authorities_json[0].payload_kind, "CNAME");
 }
 
 #[tokio::test]
 async fn test_query_recorder_execute_enqueues_record() {
+    AppClock::start();
+
     let temp = NamedTempFile::new().unwrap();
     let config = resolve_config(Some(
         serde_yaml_ng::to_value(QueryRecorderConfig {
@@ -155,7 +176,7 @@ fn test_factory_rejects_quick_setup() {
         Ok(_) => panic!("quick setup should be rejected"),
         Err(err) => err,
     };
-    assert!(err.to_string().contains("does not support quick setup"));
+    assert!(err.to_string().contains("quick setup"));
 }
 
 #[test]

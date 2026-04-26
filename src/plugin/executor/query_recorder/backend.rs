@@ -13,7 +13,7 @@ use tokio::sync::broadcast;
 use tracing::{error, warn};
 
 use super::model::{PendingRecord, RecordDetail, ResolvedRecorderConfig, TableNames};
-use super::store::{initialize_database, run_writer_thread, table_names};
+use super::store::{create_schema, open_database, run_writer_thread, table_names};
 use crate::core::error::{DnsError, Result};
 
 #[derive(Debug)]
@@ -38,7 +38,6 @@ pub(super) enum WriterCommand {
 
 #[derive(Debug)]
 pub(super) struct WriterThreadContext {
-    pub(super) path: PathBuf,
     pub(super) tables: TableNames,
     pub(super) stop_requested: Arc<AtomicBool>,
     pub(super) tail: Arc<Mutex<VecDeque<RecordDetail>>>,
@@ -49,7 +48,7 @@ pub(super) struct WriterThreadContext {
 }
 
 impl RecorderBackend {
-    pub(super) fn new(tag: String, config: ResolvedRecorderConfig) -> Result<Arc<Self>> {
+    pub(super) fn run(tag: String, config: ResolvedRecorderConfig) -> Result<Arc<Self>> {
         if let Some(parent) = config.path.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -62,8 +61,16 @@ impl RecorderBackend {
             })?;
         }
 
+        let mut conn = open_database(&config.path).map_err(|err| {
+            format!(
+                "failed to open database '{}': {}",
+                config.path.display(),
+                err
+            )
+        })?;
+
         let tables = table_names(&tag);
-        initialize_database(&config.path, &tables)?;
+        create_schema(&mut conn, &tables)?;
 
         let (queue_tx, queue_rx) = sync_channel(config.queue_size);
         let stop_requested = Arc::new(AtomicBool::new(false));
@@ -73,7 +80,6 @@ impl RecorderBackend {
         let (broadcaster, _) = broadcast::channel(config.memory_tail.max(16));
         let dropped_total = Arc::new(AtomicU64::new(0));
 
-        let writer_path = config.path.clone();
         let writer_tables = tables.clone();
         let writer_stop = stop_requested.clone();
         let writer_tail = tail.clone();
@@ -86,7 +92,6 @@ impl RecorderBackend {
             .spawn(move || {
                 if let Err(err) = run_writer_thread(
                     WriterThreadContext {
-                        path: writer_path,
                         tables: writer_tables,
                         stop_requested: writer_stop,
                         tail: writer_tail,
@@ -96,12 +101,10 @@ impl RecorderBackend {
                         flush_interval,
                     },
                     queue_rx,
+                    conn,
                 ) {
                     error!("query_recorder writer stopped: {}", err);
                 }
-            })
-            .map_err(|err| {
-                DnsError::plugin(format!("failed to spawn query_recorder writer: {err}"))
             })?;
 
         Ok(Arc::new(Self {
@@ -128,18 +131,9 @@ impl RecorderBackend {
         }
     }
 
-    pub(super) fn clone_shallow(&self) -> Self {
-        Self {
-            tag: self.tag.clone(),
-            path: self.path.clone(),
-            tables: self.tables.clone(),
-            queue_tx: self.queue_tx.clone(),
-            stop_requested: self.stop_requested.clone(),
-            writer_handle: Mutex::new(None),
-            tail: self.tail.clone(),
-            memory_tail: self.memory_tail,
-            broadcaster: self.broadcaster.clone(),
-            dropped_total: self.dropped_total.clone(),
+    pub(super) fn cleanup(&self, cutoff_ms: u64) {
+        if let Err(err) = self.queue_tx.try_send(WriterCommand::Cleanup { cutoff_ms }) {
+            warn!("query_recorder cleanup skipped: {}", err);
         }
     }
 }

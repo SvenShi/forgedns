@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: 2025 Sven Shi
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use forgedns_proto::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::core::context::ExecutionPath;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct QueryRecorderConfig {
     pub(super) path: String,
@@ -120,8 +123,14 @@ pub(super) struct RecordDetail {
 
 #[derive(Debug, Clone)]
 pub(super) struct PendingRecord {
-    pub(super) record: RecordRow,
-    pub(super) steps: Vec<StepJson>,
+    pub(super) request: Message,
+    pub(super) response: Option<Message>,
+    pub(super) created_at_ms: u64,
+    pub(super) elapsed_ms: u64,
+    pub(super) exec_path: ExecutionPath,
+    pub(super) step_start_index: usize,
+    pub(super) client_ip: SocketAddr,
+    pub(super) error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

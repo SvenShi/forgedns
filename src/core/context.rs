@@ -168,7 +168,7 @@ impl ExecutionPathEvent {
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct ExecutionPath {
     enabled: bool,
-    events: Vec<ExecutionPathEvent>,
+    events: Vec<Arc<ExecutionPathEvent>>,
 }
 
 impl ExecutionPath {
@@ -195,17 +195,17 @@ impl ExecutionPath {
     #[inline]
     pub fn push(&mut self, event: ExecutionPathEvent) {
         if self.enabled {
-            self.events.push(event);
+            self.events.push(Arc::new(event));
         }
     }
 
     #[inline]
-    pub fn events(&self) -> &[ExecutionPathEvent] {
+    pub fn events(&self) -> &[Arc<ExecutionPathEvent>] {
         &self.events
     }
 
     #[inline]
-    pub fn events_from(&self, start: usize) -> &[ExecutionPathEvent] {
+    pub fn events_from(&self, start: usize) -> &[Arc<ExecutionPathEvent>] {
         self.events.get(start..).unwrap_or(&[])
     }
 }
@@ -365,13 +365,8 @@ impl DnsContext {
     }
 
     #[inline]
-    pub fn execution_path_events(&self) -> &[ExecutionPathEvent] {
+    pub fn execution_path_events(&self) -> &[Arc<ExecutionPathEvent>] {
         self.execution_path.events()
-    }
-
-    #[inline]
-    pub fn execution_path_events_from(&self, start: usize) -> &[ExecutionPathEvent] {
-        self.execution_path.events_from(start)
     }
 
     #[inline]
@@ -541,7 +536,7 @@ mod tests {
 
         assert_eq!(ctx.execution_path_len(), 2);
         assert_eq!(
-            ctx.execution_path_events_from(1)[0].tag.as_deref(),
+            ctx.execution_path.events_from(1)[0].tag.as_deref(),
             Some("forward")
         );
     }
