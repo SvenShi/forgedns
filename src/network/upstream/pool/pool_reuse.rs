@@ -468,6 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_maintain_drops_idle_and_invalid_connections() {
+        AppClock::start();
         let pool = make_pool(0, 4, 0, MockBuilder::new(vec![]));
         let idle = Arc::new(MockConnection::new(true, 0, 0));
         let invalid = Arc::new(MockConnection::new(false, 0, 0));
@@ -489,6 +490,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_maintain_reuses_idle_connection_to_preserve_min_size() {
+        AppClock::start();
         let pool = make_pool(1, 1, 0, MockBuilder::new(vec![]));
         let conn = Arc::new(MockConnection::new(true, 0, 0));
         pool.connections
@@ -505,6 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_maintain_keeps_idle_connection_with_inflight_queries() {
+        AppClock::start();
         let pool = make_pool(0, 1, 0, MockBuilder::new(vec![]));
         let conn = Arc::new(MockConnection::new(true, 1, 0));
         pool.connections

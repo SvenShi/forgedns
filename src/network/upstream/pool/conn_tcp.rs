@@ -454,6 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_returns_error_when_connection_is_closed() {
+        AppClock::start();
         let (sender, _receiver) = unbounded_channel();
         let connection = TcpConnection::new(
             7,

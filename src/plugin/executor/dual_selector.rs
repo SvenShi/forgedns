@@ -435,6 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_hit_blocks_non_preferred_immediately() {
+        AppClock::start();
         let selector = make_selector(RecordType::A);
         selector.cache_preferred("example.com");
 
@@ -447,6 +448,7 @@ mod tests {
 
     #[tokio::test]
     async fn preferred_post_warms_cache_for_next_non_preferred_request() {
+        AppClock::start();
         let selector = make_selector(RecordType::A);
         let mut preferred_context = make_context(RecordType::A);
         set_answer(&mut preferred_context, RecordType::A);
@@ -467,6 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_preferred_uses_probe_result_and_blocks_when_preferred_exists() {
+        AppClock::start();
         let selector = make_selector(RecordType::A);
         let mut context = make_context(RecordType::AAAA);
 
@@ -496,6 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_preferred_without_preferred_answer_is_cached_to_skip_next_probe() {
+        AppClock::start();
         let selector = make_selector(RecordType::A);
         let mut first = make_context(RecordType::AAAA);
         set_answer(&mut first, RecordType::AAAA);
@@ -544,6 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_preferred_returns_forward_error_when_probe_not_blocking() {
+        AppClock::start();
         let selector = make_selector(RecordType::A);
         let mut context = make_context(RecordType::AAAA);
 
@@ -563,6 +568,7 @@ mod tests {
 
     #[tokio::test]
     async fn probe_error_does_not_block_or_warm_cache() {
+        AppClock::start();
         let selector = make_selector(RecordType::A);
         let mut context = make_context(RecordType::AAAA);
 

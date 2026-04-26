@@ -361,6 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_collector_records_error_path() {
+        AppClock::start();
         let plugin = make_collector();
         let mut ctx = test_context();
 
@@ -377,6 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_collector_records_success_latency() {
+        AppClock::start();
         let plugin = make_collector();
         let mut ctx = test_context();
         ctx.set_response(crate::proto::Message::new());

@@ -771,6 +771,7 @@ mod tests {
 
     use super::*;
     use crate::config::types::{ApiAuthConfig, ApiConfig, ApiHttpConfig, ApiHttpDetailedConfig};
+    use crate::core::app_clock::AppClock;
 
     #[derive(Debug)]
     struct TestEchoHandler;
@@ -885,6 +886,7 @@ mod tests {
 
     #[test]
     fn test_register_helper_methods_register_without_error() {
+        AppClock::start();
         let addr = reserve_local_addr();
         let hub = test_api_hub(addr, None);
         let register = ApiRegister::new(hub);
@@ -905,6 +907,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hyper_http1_serves_auth_and_plugin_route() {
+        AppClock::start();
         let addr = reserve_local_addr();
         let hub = test_api_hub(
             addr,
@@ -971,6 +974,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hyper_http2_serves_builtin_health_route() {
+        AppClock::start();
         let addr = reserve_local_addr();
         let hub = test_api_hub(addr, None);
 

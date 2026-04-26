@@ -1366,6 +1366,7 @@ mod tests {
 
     #[tokio::test]
     async fn truncated_response_is_not_cached() {
+        AppClock::start();
         let mut cache = test_cache(default_test_config());
         let _ = cache.init().await;
 
@@ -1384,6 +1385,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_hit_sets_outbound_message_response() {
+        AppClock::start();
         let mut cache = test_cache(default_test_config());
         let _ = cache.init().await;
 
@@ -1425,6 +1427,7 @@ mod tests {
 
     #[tokio::test]
     async fn lazy_cache_hit_returns_stale_response_with_lazy_ttl() {
+        AppClock::start();
         let mut cfg = default_test_config();
         cfg.lazy_cache_ttl = Some(30);
         let mut cache = test_cache(cfg);
@@ -1470,6 +1473,7 @@ mod tests {
 
     #[tokio::test]
     async fn lazy_cache_ttl_does_not_shorten_fresh_window() {
+        AppClock::start();
         let mut cfg = default_test_config();
         cfg.lazy_cache_ttl = Some(30);
         let mut cache = test_cache(cfg);
@@ -1518,6 +1522,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_hit_triggers_only_one_background_refresh() {
+        AppClock::start();
         let mut cfg = default_test_config();
         cfg.lazy_cache_ttl = Some(30);
         cfg.short_circuit = Some(true);

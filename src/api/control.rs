@@ -423,6 +423,7 @@ plugins:
 
     #[tokio::test]
     async fn control_handlers_enqueue_shutdown_and_reload() {
+        AppClock::start();
         let temp = NamedTempFile::new().expect("temp file");
         std::fs::write(temp.path(), valid_config_yaml()).expect("write config");
         let (controller, mut rx) = AppController::new(temp.path().to_path_buf());
@@ -456,6 +457,7 @@ plugins:
 
     #[tokio::test]
     async fn reload_handler_rejects_parallel_reload_requests() {
+        AppClock::start();
         let temp = NamedTempFile::new().expect("temp file");
         std::fs::write(temp.path(), valid_config_yaml()).expect("write config");
         let (controller, _rx) = AppController::new(temp.path().to_path_buf());
@@ -470,6 +472,7 @@ plugins:
 
     #[tokio::test]
     async fn config_handlers_validate_current_file_and_request_body() {
+        AppClock::start();
         let temp = NamedTempFile::new().expect("temp file");
         std::fs::write(temp.path(), valid_config_yaml()).expect("write config");
         let (controller, _rx) = AppController::new(temp.path().to_path_buf());
@@ -505,6 +508,7 @@ plugins:
 
     #[test]
     fn reload_snapshot_tracks_state_transitions() {
+        AppClock::start();
         let temp = NamedTempFile::new().expect("temp file");
         let (controller, _rx) = AppController::new(temp.path().to_path_buf());
         assert_eq!(controller.reload_snapshot().status, "idle");

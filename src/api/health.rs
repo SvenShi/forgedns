@@ -202,6 +202,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_healthz_readyz_and_health_follow_state() {
+        AppClock::start();
         let health = Arc::new(HealthState::new());
         let healthz = HealthzHandler {
             health: health.clone(),
