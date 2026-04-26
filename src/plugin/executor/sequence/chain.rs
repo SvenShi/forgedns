@@ -9,7 +9,7 @@ use tracing::debug;
 use crate::core::context::{DnsContext, ExecutionPathEvent};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::sequence::{
-    Rule, SequenceRef, parse_control_flow_sequence_tag, parse_sequence_ref,
+    Rule, SequenceRef, parse_control_flow_sequence_tag, parse_matcher_expr, parse_sequence_ref,
 };
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::Matcher;
@@ -577,27 +577,6 @@ impl ChainBuilder {
                 Ok(matcher)
             }
         }
-    }
-}
-
-/// Parse matcher expression and optional reverse prefix (`!`).
-///
-/// Examples:
-/// - `$qname` -> `(false, "$qname")`
-/// - `!$qname` -> `(true, "$qname")`
-fn parse_matcher_expr(raw: &str) -> Result<(bool, &str)> {
-    let matcher_expr = raw.trim_start();
-    if let Some(matcher_expr) = matcher_expr.strip_prefix('!') {
-        let matcher_expr = matcher_expr.trim_start();
-        if matcher_expr.is_empty() {
-            return Err(DnsError::plugin(format!(
-                "invalid matcher reference: '{}'",
-                raw
-            )));
-        }
-        Ok((true, matcher_expr))
-    } else {
-        Ok((false, matcher_expr))
     }
 }
 

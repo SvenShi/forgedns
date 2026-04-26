@@ -60,6 +60,28 @@ pub(super) fn parse_sequence_ref(raw: &str) -> DnsResult<SequenceRef> {
     })
 }
 
+/// Parse matcher expression and optional reverse prefix (`!`).
+///
+/// Examples:
+/// - `$qname` -> `(false, "$qname")`
+/// - `!$qname` -> `(true, "$qname")`
+/// - `!qname domain:example.com` -> `(true, "qname domain:example.com")`
+pub(super) fn parse_matcher_expr(raw: &str) -> DnsResult<(bool, &str)> {
+    let matcher_expr = raw.trim_start();
+    if let Some(matcher_expr) = matcher_expr.strip_prefix('!') {
+        let matcher_expr = matcher_expr.trim_start();
+        if matcher_expr.is_empty() {
+            return Err(DnsError::plugin(format!(
+                "invalid matcher reference: '{}'",
+                raw
+            )));
+        }
+        Ok((true, matcher_expr))
+    } else {
+        Ok((false, matcher_expr))
+    }
+}
+
 pub(super) fn parse_control_flow_sequence_tag(op: &str, raw: &str) -> DnsResult<String> {
     let tag = raw.trim();
     if tag.is_empty() {
@@ -206,7 +228,10 @@ impl PluginFactory for SequenceFactory {
             if let Some(matches) = rule.matches {
                 for (match_idx, matcher) in matches.into_iter().enumerate() {
                     let field = format!("args[{}].matches[{}]", rule_idx, match_idx);
-                    match parse_sequence_ref(&matcher) {
+                    let Ok((_, matcher)) = parse_matcher_expr(&matcher) else {
+                        continue;
+                    };
+                    match parse_sequence_ref(matcher) {
                         Ok(SequenceRef::PluginTag(tag)) => {
                             result.push(DependencySpec::matcher(field, tag));
                         }

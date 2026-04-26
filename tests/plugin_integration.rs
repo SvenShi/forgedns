@@ -672,6 +672,36 @@ plugins:
     Ok(())
 }
 
+#[test]
+fn test_analyze_configuration_tracks_negated_sequence_matcher_tag_dependency() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: seq
+    type: sequence
+    args:
+      - matches: "!$allow_all"
+        exec: accept
+  - tag: allow_all
+    type: _true
+"#;
+
+    let config = parse_config(yaml)?;
+    let report = plugin::analyze_configuration(&config)?;
+
+    assert_eq!(
+        report.init_order,
+        vec!["allow_all".to_string(), "seq".to_string()]
+    );
+    assert!(report.edges.iter().any(|edge| {
+        edge.source_tag == "seq"
+            && edge.target_tag == "allow_all"
+            && edge.field == "args[0].matches[0]"
+    }));
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_plugin_system_init_resolves_sequence_quick_setup_provider_dependency() -> Result<()> {
     let yaml = r#"
