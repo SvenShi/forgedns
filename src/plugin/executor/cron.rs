@@ -20,19 +20,17 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cronexpr::Crontab;
-use cronexpr::jiff::Timestamp;
+use jiff::Timestamp;
 use serde::Deserialize;
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
+use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::core::system_utils::{
-    parse_simple_duration, system_timezone_name, unix_timestamp_millis,
-};
+use crate::core::system_utils::{parse_simple_duration, system_timezone_name};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{
@@ -109,27 +107,6 @@ struct RuntimeJob {
     handle: Option<JoinHandle<()>>,
 }
 
-#[derive(Debug, Clone)]
-struct SchedulerClock {
-    base_wall_ms: i64,
-    base_instant: Instant,
-}
-
-impl SchedulerClock {
-    fn new() -> Self {
-        Self {
-            base_wall_ms: unix_timestamp_millis(),
-            base_instant: Instant::now(),
-        }
-    }
-
-    fn now_ms(&self) -> i64 {
-        let elapsed_ms = self.base_instant.elapsed().as_millis();
-        let elapsed_ms = elapsed_ms.min(i64::MAX as u128) as i64;
-        self.base_wall_ms.saturating_add(elapsed_ms)
-    }
-}
-
 #[derive(Debug)]
 struct CronExecutor {
     tag: String,
@@ -153,10 +130,9 @@ impl Plugin for CronExecutor {
             prepared_jobs.push(self.prepare_job(job, job_index).await?);
         }
 
-        let clock = SchedulerClock::new();
         let mut runtime_jobs = Vec::with_capacity(prepared_jobs.len());
         for job in prepared_jobs {
-            let next_run_ms = compute_next_run_ms(&job.trigger, clock.now_ms())?;
+            let next_run_ms = compute_next_run_ms(&job.trigger, Timestamp::now().as_millisecond())?;
             runtime_jobs.push(RuntimeJob {
                 name: job.name,
                 trigger: job.trigger,
@@ -170,7 +146,6 @@ impl Plugin for CronExecutor {
         let handle = tokio::spawn(run_scheduler(
             self.tag.clone(),
             self.registry.clone(),
-            clock,
             runtime_jobs,
             stop_rx,
         ));
@@ -570,26 +545,16 @@ fn plugin_type_kind_name(plugin_type: crate::plugin::PluginType) -> &'static str
     }
 }
 
-fn compute_next_run_ms(trigger: &JobTrigger, reference_ms: i64) -> Result<i64> {
+fn compute_next_run_ms(trigger: &JobTrigger, timestamp_ms: i64) -> Result<i64> {
     match trigger {
-        JobTrigger::Cron {
-            crontab,
-            timezone_name,
-            ..
-        } => {
-            let timestamp = Timestamp::from_millisecond(reference_ms).map_err(|e| {
+        JobTrigger::Cron { crontab, .. } => {
+            let timestamp = Timestamp::from_millisecond(timestamp_ms).map_err(|e| {
                 DnsError::plugin(format!(
                     "failed to build timestamp from '{}': {}",
-                    reference_ms, e
+                    timestamp_ms, e
                 ))
             })?;
-            let zoned = timestamp.in_tz(timezone_name).map_err(|e| {
-                DnsError::plugin(format!(
-                    "failed to project timestamp into timezone '{}': {}",
-                    timezone_name, e
-                ))
-            })?;
-            let next = crontab.find_next(zoned.to_string().as_str()).map_err(|e| {
+            let next = crontab.find_next(timestamp).map_err(|e| {
                 DnsError::plugin(format!(
                     "failed to compute next run for cron schedule '{}': {}",
                     trigger_description(trigger),
@@ -600,14 +565,18 @@ fn compute_next_run_ms(trigger: &JobTrigger, reference_ms: i64) -> Result<i64> {
         }
         JobTrigger::Interval { interval } => {
             let interval_ms = interval.as_millis().min(i64::MAX as u128) as i64;
-            Ok(reference_ms.saturating_add(interval_ms))
+            Ok(timestamp_ms.saturating_add(interval_ms))
         }
     }
 }
 
 fn trigger_description(trigger: &JobTrigger) -> String {
     match trigger {
-        JobTrigger::Cron { schedule, .. } => schedule.clone(),
+        JobTrigger::Cron {
+            schedule,
+            timezone_name,
+            ..
+        } => format!("{} {}", schedule, timezone_name),
         JobTrigger::Interval { interval } => format!("{:?}", interval),
     }
 }
@@ -625,14 +594,13 @@ fn advance_next_run_past_now(job: &mut RuntimeJob, now_ms: i64) -> Result<()> {
 async fn run_scheduler(
     plugin_tag: String,
     registry: Arc<PluginRegistry>,
-    clock: SchedulerClock,
     mut jobs: Vec<RuntimeJob>,
     mut stop_rx: oneshot::Receiver<()>,
 ) {
     loop {
         reap_finished_job_handles(&plugin_tag, &mut jobs).await;
 
-        let now_ms = clock.now_ms();
+        let now_ms = AppClock::now_timestamp() as i64;
         let mut due = Vec::new();
         let mut next_delay_ms: Option<u64> = None;
 
@@ -1047,24 +1015,21 @@ jobs:
         );
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_interval_scheduler_waits_full_interval_before_first_run() {
+        AppClock::start();
         let log = Arc::new(StdMutex::new(Vec::new()));
         let executor = Arc::new(StubExecutor::new("probe", StubBehavior::Next, log.clone()));
-        let clock = SchedulerClock::new();
+        let interval = Duration::from_millis(50);
         let first_run_at = compute_next_run_ms(
-            &JobTrigger::Interval {
-                interval: Duration::from_secs(60),
-            },
-            clock.now_ms(),
+            &JobTrigger::Interval { interval },
+            AppClock::now_timestamp() as i64,
         )
         .unwrap();
 
         let job = RuntimeJob {
             name: "job".to_string(),
-            trigger: JobTrigger::Interval {
-                interval: Duration::from_secs(60),
-            },
+            trigger: JobTrigger::Interval { interval },
             next_run_ms: first_run_at,
             executors: vec![executor.clone()],
             handle: None,
@@ -1073,45 +1038,39 @@ jobs:
         let scheduler = tokio::spawn(run_scheduler(
             "cron".to_string(),
             test_registry(),
-            clock,
             vec![job],
             stop_rx,
         ));
 
-        tokio::time::advance(Duration::from_secs(59)).await;
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(executor.started.load(Ordering::Relaxed), 0);
 
-        tokio::time::advance(Duration::from_secs(1)).await;
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
         assert_eq!(executor.started.load(Ordering::Relaxed), 1);
 
         let _ = stop_tx.send(());
         scheduler.await.unwrap();
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_scheduler_skips_overlapping_job_runs() {
+        AppClock::start();
         let log = Arc::new(StdMutex::new(Vec::new()));
         let blocker = Arc::new(Notify::new());
         let executor = Arc::new(
             StubExecutor::new("probe", StubBehavior::Next, log.clone())
                 .with_blocker(blocker.clone()),
         );
-        let clock = SchedulerClock::new();
+        let interval = Duration::from_millis(20);
         let first_run_at = compute_next_run_ms(
-            &JobTrigger::Interval {
-                interval: Duration::from_secs(60),
-            },
-            clock.now_ms(),
+            &JobTrigger::Interval { interval },
+            AppClock::now_timestamp() as i64,
         )
         .unwrap();
 
         let job = RuntimeJob {
             name: "job".to_string(),
-            trigger: JobTrigger::Interval {
-                interval: Duration::from_secs(60),
-            },
+            trigger: JobTrigger::Interval { interval },
             next_run_ms: first_run_at,
             executors: vec![executor.clone()],
             handle: None,
@@ -1120,17 +1079,14 @@ jobs:
         let scheduler = tokio::spawn(run_scheduler(
             "cron".to_string(),
             test_registry(),
-            clock,
             vec![job],
             stop_rx,
         ));
 
-        tokio::time::advance(Duration::from_secs(60)).await;
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
         assert_eq!(executor.started.load(Ordering::Relaxed), 1);
 
-        tokio::time::advance(Duration::from_secs(60)).await;
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(executor.started.load(Ordering::Relaxed), 1);
 
         blocker.notify_waiters();

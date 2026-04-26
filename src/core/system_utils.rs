@@ -5,10 +5,12 @@
 //! filesystem metadata.
 
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use cronexpr::jiff::tz::TimeZone;
+use jiff::tz::TimeZone;
 use tokio::fs;
+
+use crate::core::app_clock::AppClock;
 
 const KIB: u64 = 1024;
 const MIB: u64 = KIB * 1024;
@@ -17,16 +19,8 @@ const TIB: u64 = GIB * 1024;
 
 /// Read the current wall-clock time since the Unix epoch.
 #[inline]
-pub fn unix_time() -> Duration {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-}
-
-/// Read the current Unix timestamp in milliseconds.
-#[inline]
-pub fn unix_timestamp_millis() -> i64 {
-    unix_time().as_millis().min(i64::MAX as u128) as i64
+pub fn unix_timestamp() -> u64 {
+    AppClock::now_timestamp()
 }
 
 /// Resolve the current system IANA timezone name.
@@ -137,11 +131,6 @@ pub fn parse_byte_size(raw: &str) -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_unix_timestamp_millis_is_non_negative() {
-        assert!(unix_timestamp_millis() >= 0);
-    }
 
     #[test]
     fn test_system_timezone_name_is_non_empty() {

@@ -6,6 +6,7 @@
 use std::path::Path;
 use std::{fmt as std_fmt, fs};
 
+use jiff::Zoned;
 use tracing::{Event, Subscriber, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -19,7 +20,6 @@ use tracing_subscriber::{EnvFilter, Registry};
 
 use crate::config::types::{LogConfig, LogRotation};
 use crate::core::app_clock::AppClock;
-use crate::core::system_utils::unix_time;
 
 /// Initialize the logging system with console and optional file output.
 pub fn start_logging(log: LogConfig) -> WorkerGuard {
@@ -127,43 +127,6 @@ fn build_official_appender(
 /// Custom log formatter for ForgeDNS.
 pub struct ForgeDnsLogFormatter;
 
-#[inline]
-fn civil_from_days(days_since_epoch: i64) -> (i32, u8, u8) {
-    let z = days_since_epoch + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let mut year = (yoe + era * 400) as i32;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u8;
-    let month = (mp + if mp < 10 { 3 } else { -9 }) as u8;
-    if month <= 2 {
-        year += 1;
-    }
-    (year, month, day)
-}
-
-#[inline]
-fn write_utc_iso8601(
-    writer: &mut format::Writer<'_>,
-    unix_secs: u64,
-    millis: u32,
-) -> std_fmt::Result {
-    let days = (unix_secs / 86_400) as i64;
-    let sod = (unix_secs % 86_400) as u32;
-    let hour = sod / 3_600;
-    let minute = (sod % 3_600) / 60;
-    let second = sod % 60;
-    let (year, month, day) = civil_from_days(days);
-
-    write!(
-        writer,
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        year, month, day, hour, minute, second, millis
-    )
-}
-
 impl<S, N> FormatEvent<S, N> for ForgeDnsLogFormatter
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
@@ -176,16 +139,14 @@ where
         event: &Event<'_>,
     ) -> std_fmt::Result {
         let metadata = event.metadata();
-        let wall = unix_time();
-        let wall_secs = wall.as_secs();
-        let wall_millis = wall.subsec_millis();
         let elapsed_ms = AppClock::elapsed_millis();
         let elapsed_secs = elapsed_ms / 1000;
         let elapsed_sub_ms = elapsed_ms % 1000;
-        write_utc_iso8601(&mut writer, wall_secs, wall_millis)?;
+        let zoned = Zoned::now();
         write!(
             &mut writer,
-            " T+{}.{:03} {} {}",
+            "{} T+{}.{:03} {} {}",
+            zoned.strftime("%Y-%m-%dT%H:%M:%S%:z"),
             elapsed_secs,
             elapsed_sub_ms,
             metadata.level(),
