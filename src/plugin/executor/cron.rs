@@ -275,12 +275,10 @@ impl CronExecutor {
                 }
 
                 let quick_tag = format!("@qs:cron:{}:{}:{}", self.tag, job_index, exec_index);
-                let uninitialized = self.registry.quick_setup(
-                    &plugin_type,
-                    &quick_tag,
-                    param,
-                    self.registry.clone(),
-                )?;
+                let uninitialized =
+                    self.registry
+                        .clone()
+                        .quick_setup(&plugin_type, &quick_tag, param)?;
                 let executor = uninitialized.init_and_wrap().await?;
                 let executor = match executor {
                     PluginHolder::Executor(executor) => executor,

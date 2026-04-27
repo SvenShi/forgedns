@@ -34,6 +34,43 @@ sidebar_position: 4
 
 ---
 
+## `any_match`
+
+### 作用
+
+组合多个 matcher 表达式，只要任意一个命中就返回 `true`。
+
+### 配置示例
+
+```yaml
+- tag: any_policy_hit
+  type: any_match
+  args:
+    - "$lan_clients"
+    - "qtype 28"
+    - "!$blocked_qname"
+```
+
+### 配置项
+
+`any_match` 的 `args` 为 matcher 表达式列表。
+
+- 类型：`array[string]`；必填：是；默认值：无
+- 支持元素：
+  - matcher tag 引用（如 `"$match_tag"`）
+  - quick setup matcher 表达式（如 `"qname domain:example.com"`）
+  - 取反 matcher 表达式（如 `"!$has_resp"`）
+- 运行影响：
+  - 按配置顺序依次判断，命中任意一个后立即短路返回 `true`。
+  - 全部不命中时返回 `false`。
+
+### 典型用途
+
+- 把多个“可放行条件”合并为单个 matcher，复用到多个 sequence 规则。
+- 作为复杂条件的“或”组合层，减少重复配置。
+
+---
+
 ## `qname`
 
 ### 作用
@@ -792,4 +829,3 @@ args:
 - 临时禁用某条规则。
 
 ---
-

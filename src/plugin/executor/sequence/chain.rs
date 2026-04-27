@@ -9,20 +9,12 @@ use tracing::debug;
 use crate::core::context::{DnsContext, ExecutionPathEvent};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::sequence::{
-    Rule, SequenceRef, parse_control_flow_sequence_tag, parse_matcher_expr, parse_sequence_ref,
+    PluginRef, Rule, parse_control_flow_sequence_tag, parse_matcher_expr,
 };
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::matcher::Matcher;
+use crate::plugin::matcher::{Matcher, MatcherRef};
 use crate::plugin::{PluginHolder, PluginRegistry, UninitializedPlugin};
 use crate::proto::Rcode;
-
-#[derive(Debug)]
-struct MatcherRef {
-    /// Concrete matcher instance used by this instruction.
-    matcher: Arc<dyn Matcher>,
-    /// Whether matcher result should be logically negated (`!matcher`).
-    reverse: bool,
-}
 
 #[derive(Debug)]
 enum BuiltinOp {
@@ -273,24 +265,16 @@ impl ChainProgram {
 
     fn matches_instruction(&self, context: &mut DnsContext, instruction: &Instruction) -> bool {
         for matcher_ref in &instruction.matchers {
-            let matched = matcher_ref.matcher.is_match(context);
-            let matched = if matcher_ref.reverse {
-                !matched
-            } else {
-                matched
-            };
+            let matched = matcher_ref.is_match(context);
             self.record_event(
                 context,
                 instruction.node_index,
                 "matcher",
-                Some(matcher_ref.matcher.tag()),
+                Some(matcher_ref.tag()),
                 if matched { "matched" } else { "not_matched" },
             );
             if !matched {
-                debug!(
-                    "instruction skipped, matcher: {}",
-                    matcher_ref.matcher.tag()
-                );
+                debug!("instruction skipped, matcher: {}", matcher_ref.tag());
                 return false;
             }
         }
@@ -422,12 +406,11 @@ impl ChainBuilder {
             for (match_index, matcher_raw) in matcher_exprs.iter().enumerate() {
                 let field = format!("args[{}].matches[{}]", node_index, match_index);
                 let (reverse, matcher_expr) = parse_matcher_expr(matcher_raw)?;
-                matchers.push(MatcherRef {
-                    matcher: self
-                        .resolve_matcher_ref(matcher_expr, node_index, match_index, &field)
+                matchers.push(MatcherRef::new(
+                    self.resolve_matcher_ref(matcher_expr, node_index, match_index, &field)
                         .await?,
                     reverse,
-                });
+                ));
             }
         }
 
@@ -509,20 +492,21 @@ impl ChainBuilder {
         expr: &str,
         node_index: usize,
     ) -> Result<Arc<dyn Executor>> {
-        match parse_sequence_ref(expr)? {
-            SequenceRef::PluginTag(tag) => {
+        match PluginRef::from_str(expr)? {
+            PluginRef::PluginTag(tag) => {
                 let field = format!("args[{}].exec", node_index);
                 self.registry
                     .get_executor_dependency(&self.sequence_tag, &field, &tag)
             }
-            SequenceRef::QuickSetup { plugin_type, param } => {
-                let quick_tag = format!("@qs:exec:{}:{}", self.sequence_tag, node_index);
-                let uninitialized = self.registry.quick_setup(
-                    &plugin_type,
-                    &quick_tag,
-                    param,
-                    self.registry.clone(),
-                )?;
+            PluginRef::QuickSetup { plugin_type, param } => {
+                let quick_tag = format!(
+                    "@qs:exec:{}:{}:{}",
+                    self.sequence_tag, node_index, plugin_type
+                );
+                let uninitialized =
+                    self.registry
+                        .clone()
+                        .quick_setup(&plugin_type, &quick_tag, param)?;
                 let executor = uninitialized.init_and_wrap().await?;
                 let executor = match executor {
                     PluginHolder::Executor(executor) => executor,
@@ -546,23 +530,21 @@ impl ChainBuilder {
         match_index: usize,
         field: &str,
     ) -> Result<Arc<dyn Matcher>> {
-        match parse_sequence_ref(expr)? {
-            SequenceRef::PluginTag(tag) => {
+        match PluginRef::from_str(expr)? {
+            PluginRef::PluginTag(tag) => {
                 self.registry
                     .get_matcher_dependency(&self.sequence_tag, field, &tag)
             }
-            SequenceRef::QuickSetup { plugin_type, param } => {
+            PluginRef::QuickSetup { plugin_type, param } => {
                 // Generate deterministic synthetic runtime tag for quick-setup matcher.
                 let quick_tag = format!(
-                    "@qs:match:{}:{}:{}",
-                    self.sequence_tag, node_index, match_index
+                    "@qs:match:{}:{}:{}:{}",
+                    self.sequence_tag, node_index, match_index, plugin_type
                 );
-                let uninitialized: UninitializedPlugin = self.registry.quick_setup(
-                    &plugin_type,
-                    &quick_tag,
-                    param,
-                    self.registry.clone(),
-                )?;
+                let uninitialized: UninitializedPlugin =
+                    self.registry
+                        .clone()
+                        .quick_setup(&plugin_type, &quick_tag, param)?;
                 let matcher = uninitialized.init_and_wrap().await?;
                 let matcher = match matcher {
                     PluginHolder::Matcher(matcher) => matcher,

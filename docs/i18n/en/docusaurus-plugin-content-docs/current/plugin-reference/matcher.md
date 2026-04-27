@@ -34,6 +34,43 @@ Negation:
 
 ---
 
+## `any_match`
+
+### Purpose
+
+Composes multiple matcher expressions and returns `true` when any one of them matches.
+
+### Example Configuration
+
+```yaml
+- tag: any_policy_hit
+  type: any_match
+  args:
+    - "$lan_clients"
+    - "qtype 28"
+    - "!$blocked_qname"
+```
+
+### Configuration Details
+
+`any_match` uses an `array[string]` `args` list.
+
+- Type: `array[string]`; Required: yes; Default: none
+- Supported entries:
+  - matcher tag references (for example `"$match_tag"`)
+  - quick-setup matcher expressions (for example `"qname domain:example.com"`)
+  - negated matcher expressions (for example `"!$has_resp"`)
+- Runtime impact:
+  - Evaluates entries in order and short-circuits on the first matched entry.
+  - Returns `false` only when all entries fail.
+
+### Typical Uses
+
+- Reuse one logical OR matcher across multiple sequence rules.
+- Keep complex branching readable by moving OR conditions into one matcher.
+
+---
+
 ## `qname`
 
 ### Purpose
@@ -752,4 +789,3 @@ No standalone configuration fields.
 - Temporarily disable a branch.
 
 ---
-

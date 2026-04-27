@@ -378,10 +378,14 @@ pub trait Plugin: Debug + Send + Sync + 'static {
     fn tag(&self) -> &str;
 
     /// Initialize the plugin (called once during server startup)
-    async fn init(&mut self) -> Result<()>;
+    async fn init(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     /// Clean up plugin resources (called during shutdown)
-    async fn destroy(&self) -> Result<()>;
+    async fn destroy(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Plugin factory trait for creating plugin instances from configuration
@@ -537,6 +541,47 @@ impl PluginInfo {
     /// Get reference to underlying Plugin trait object
     pub fn as_plugin(&self) -> &dyn Plugin {
         self.plugin_holder.as_plugin()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PluginRef {
+    PluginTag(String),
+    QuickSetup {
+        plugin_type: String,
+        param: Option<String>,
+    },
+}
+
+impl PluginRef {
+    pub fn from_str(raw: &str) -> Result<Self> {
+        let raw = raw.trim_start();
+        if raw.is_empty() {
+            return Err(DnsError::plugin(format!(
+                "invalid plugin reference: '{}'",
+                raw
+            )));
+        }
+        if let Some(tag) = raw.strip_prefix('$') {
+            let tag = tag.trim();
+            if tag.is_empty() {
+                return Err(DnsError::plugin(format!(
+                    "invalid plugin reference: '{}'",
+                    raw
+                )));
+            }
+            return Ok(PluginRef::PluginTag(tag.to_string()));
+        }
+
+        let mut split = raw.splitn(2, char::is_whitespace);
+        let plugin_type = split
+            .next()
+            .ok_or_else(|| DnsError::plugin(format!("invalid quick setup syntax: '{}'", raw)))?;
+        let param = split.next().map(String::from);
+        Ok(PluginRef::QuickSetup {
+            plugin_type: plugin_type.to_string(),
+            param,
+        })
     }
 }
 

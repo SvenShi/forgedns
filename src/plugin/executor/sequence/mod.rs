@@ -14,73 +14,14 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainProgram};
 use crate::plugin::executor::{ExecStep, Executor};
+use crate::plugin::matcher::parse_matcher_expr;
 use crate::plugin::{
-    Plugin, PluginFactory, PluginRegistry, UninitializedPlugin, expand_quick_setup_dependency_specs,
+    Plugin, PluginFactory, PluginRef, PluginRegistry, UninitializedPlugin,
+    expand_quick_setup_dependency_specs,
 };
 use crate::register_plugin_factory;
 
 pub mod chain;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum SequenceRef {
-    PluginTag(String),
-    QuickSetup {
-        plugin_type: String,
-        param: Option<String>,
-    },
-}
-
-pub(super) fn parse_sequence_ref(raw: &str) -> DnsResult<SequenceRef> {
-    let raw = raw.trim_start();
-    if raw.is_empty() {
-        return Err(DnsError::plugin(format!(
-            "invalid plugin reference: '{}'",
-            raw
-        )));
-    }
-    if let Some(tag) = raw.strip_prefix('$') {
-        let tag = tag.trim();
-        if tag.is_empty() {
-            return Err(DnsError::plugin(format!(
-                "invalid plugin reference: '{}'",
-                raw
-            )));
-        }
-        return Ok(SequenceRef::PluginTag(tag.to_string()));
-    }
-
-    let mut split = raw.splitn(2, char::is_whitespace);
-    let plugin_type = split
-        .next()
-        .ok_or_else(|| DnsError::plugin(format!("invalid quick setup syntax: '{}'", raw)))?;
-    let param = split.next().map(String::from);
-    Ok(SequenceRef::QuickSetup {
-        plugin_type: plugin_type.to_string(),
-        param,
-    })
-}
-
-/// Parse matcher expression and optional reverse prefix (`!`).
-///
-/// Examples:
-/// - `$qname` -> `(false, "$qname")`
-/// - `!$qname` -> `(true, "$qname")`
-/// - `!qname domain:example.com` -> `(true, "qname domain:example.com")`
-pub(super) fn parse_matcher_expr(raw: &str) -> DnsResult<(bool, &str)> {
-    let matcher_expr = raw.trim_start();
-    if let Some(matcher_expr) = matcher_expr.strip_prefix('!') {
-        let matcher_expr = matcher_expr.trim_start();
-        if matcher_expr.is_empty() {
-            return Err(DnsError::plugin(format!(
-                "invalid matcher reference: '{}'",
-                raw
-            )));
-        }
-        Ok((true, matcher_expr))
-    } else {
-        Ok((false, matcher_expr))
-    }
-}
 
 pub(super) fn parse_control_flow_sequence_tag(op: &str, raw: &str) -> DnsResult<String> {
     let tag = raw.trim();
@@ -231,11 +172,11 @@ impl PluginFactory for SequenceFactory {
                     let Ok((_, matcher)) = parse_matcher_expr(&matcher) else {
                         continue;
                     };
-                    match parse_sequence_ref(matcher) {
-                        Ok(SequenceRef::PluginTag(tag)) => {
+                    match PluginRef::from_str(matcher) {
+                        Ok(PluginRef::PluginTag(tag)) => {
                             result.push(DependencySpec::matcher(field, tag));
                         }
-                        Ok(SequenceRef::QuickSetup { plugin_type, param }) => {
+                        Ok(PluginRef::QuickSetup { plugin_type, param }) => {
                             result.extend(expand_quick_setup_dependency_specs(
                                 &field,
                                 &plugin_type,
@@ -251,11 +192,11 @@ impl PluginFactory for SequenceFactory {
                 if let Some(tag) = parse_control_flow_dependency(&exec) {
                     result.push(DependencySpec::executor_type(field, tag, "sequence"));
                 } else {
-                    match parse_sequence_ref(&exec) {
-                        Ok(SequenceRef::PluginTag(tag)) => {
+                    match PluginRef::from_str(&exec) {
+                        Ok(PluginRef::PluginTag(tag)) => {
                             result.push(DependencySpec::executor(field, tag));
                         }
-                        Ok(SequenceRef::QuickSetup { plugin_type, param }) => {
+                        Ok(PluginRef::QuickSetup { plugin_type, param }) => {
                             result.extend(expand_quick_setup_dependency_specs(
                                 &field,
                                 &plugin_type,
@@ -329,8 +270,8 @@ mod tests {
 
     #[test]
     fn test_parse_sequence_ref_and_control_flow_dependency() {
-        assert!(parse_sequence_ref("$abc").is_ok());
-        assert!(parse_sequence_ref("abc").is_ok());
+        assert!(PluginRef::from_str("$abc").is_ok());
+        assert!(PluginRef::from_str("abc").is_ok());
 
         assert_eq!(parse_control_flow_dependency("accept"), None);
         assert_eq!(
