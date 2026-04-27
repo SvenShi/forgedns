@@ -10,6 +10,26 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
+  <ReleaseCard version="v0.5.0" badge="Minor Release" date="2026-04-27" defaultOpen>
+      **Highlights**
+
+      - Added the `query_recorder` executor for persisted query logging with retention cleanup, plus plugin API endpoints for stats, paginated record listing, and single-record details to improve auditing and troubleshooting workflows.
+      - `query_recorder` is currently **Experimental**. Its API surface and configuration fields may change in upcoming minor releases, so avoid tightly coupling production workflows to its current contract.
+      - Added the `any_match` matcher so one matcher can aggregate multiple matcher expressions and return true when any branch matches, including negated expressions like `!$tag`.
+      - When HTTP/3 is enabled on the HTTP server, HTTP/2 responses now automatically advertise `Alt-Svc: h3=":<listen-port>"; ma=86400` so clients can discover and upgrade to H3 smoothly.
+
+      **Fixes And Runtime**
+
+      - Fixed dependency tracking for negated matchers (for example `!$has_resp`) inside `sequence`, so quick setup and dependency analysis no longer miss those references (Closed #75).
+      - Unified time handling around `jiff + AppClock`, making cron scheduling, log time formatting, and system-time access paths more consistent across runtime scenarios.
+
+      **Upgrade Notes**
+
+      - This release does not require global config migrations. Existing `v0.4.x` configurations can be upgraded directly.
+      - To enable query auditing, insert `query_recorder` into your `sequence` chain and tune retention parameters according to disk budget.
+      - For automatic HTTP/3 discovery by DoH clients, ensure `enable_http3: true` is set and TLS certificate/key are configured correctly.
+  </ReleaseCard>
+
   <ReleaseCard version="v0.4.2" badge="Patch Release" date="2026-04-24" defaultOpen>
       **Highlights**
 

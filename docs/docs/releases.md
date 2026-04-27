@@ -11,6 +11,26 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 
 <div className="release-stack">
 
+  <ReleaseCard version="v0.5.0" badge="Minor Release" date="2026-04-27" defaultOpen>
+      **Highlights**
+
+      - 新增 `query_recorder` executor：支持将查询记录落盘、按保留策略清理，并通过插件 API 查询统计、分页读取和单条记录详情，方便审计与排障。
+      - `query_recorder` 当前为**试验性（Experimental）**能力，后续小版本中其 API 与配置字段可能发生调整，请避免在强依赖稳定性的生产流程中直接绑定其细节。
+      - 新增 `any_match` matcher：支持在一个 matcher 中聚合多条 matcher 表达式，只要任意一条命中即返回 true，并支持 `!$tag` 形式的否定表达式。
+      - HTTP server 在启用 HTTP/3 时，会在 HTTP/2 响应中自动宣告 `Alt-Svc: h3=":<listen-port>"; ma=86400`，帮助客户端平滑发现并升级到 H3。
+
+      **Fixes And Runtime**
+
+      - 修复 `sequence` 中否定 matcher（如 `!$has_resp`）未正确纳入依赖跟踪的问题，避免 quick setup / 依赖分析阶段出现遗漏（Closed #75）。
+      - 时间相关逻辑统一到 `jiff + AppClock`，使 cron 触发、日志时间和系统时间获取路径更一致，降低跨时区和时钟边界下的行为偏差。
+
+      **Upgrade Notes**
+
+      - 本次发布不引入必须变更的全局配置字段，现有 `v0.4.x` 配置可直接升级。
+      - 如需启用查询审计，可在 `sequence` 中按需插入 `query_recorder`，并结合 retention 参数控制磁盘占用。
+      - 如需让 DoH 客户端自动发现 HTTP/3，请确认 HTTP server 已启用 `enable_http3: true` 且证书配置完整。
+  </ReleaseCard>
+
   <ReleaseCard version="v0.4.2" badge="Patch Release" date="2026-04-24" defaultOpen>
       **Highlights**
 
