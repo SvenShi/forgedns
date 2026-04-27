@@ -30,7 +30,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
       - For automatic HTTP/3 discovery by DoH clients, ensure `enable_http3: true` is set and TLS certificate/key are configured correctly.
   </ReleaseCard>
 
-  <ReleaseCard version="v0.4.2" badge="Patch Release" date="2026-04-24" defaultOpen>
+  <ReleaseCard version="v0.4.2" badge="Patch Release" date="2026-04-24">
       **Highlights**
 
       - Fixed an issue where some connections were not properly released in upstream race scenarios, such as when multiple concurrent upstreams were configured or fallback was enabled.
@@ -38,7 +38,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 
   </ReleaseCard>
 
-  <ReleaseCard version="v0.4.1" badge="Patch Release" date="2026-04-23" defaultOpen>
+  <ReleaseCard version="v0.4.1" badge="Patch Release" date="2026-04-23">
       **Fixes**
 
       - Fixed an upstream `request_map` memory leak during connection close, request timeout, and abnormal cleanup paths, preventing pending query waiters and senders from being retained over time.

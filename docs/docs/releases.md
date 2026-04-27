@@ -31,7 +31,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
       - 如需让 DoH 客户端自动发现 HTTP/3，请确认 HTTP server 已启用 `enable_http3: true` 且证书配置完整。
   </ReleaseCard>
 
-  <ReleaseCard version="v0.4.2" badge="Patch Release" date="2026-04-24" defaultOpen>
+  <ReleaseCard version="v0.4.2" badge="Patch Release" date="2026-04-24">
       **Highlights**
 
       - 修复在配置多个并发 upstream、启用 fallback 等存在上游竞争的场景下，部分连接未被正确释放的问题。
