@@ -17,9 +17,7 @@ fn main() -> Result<()> {
         Command::ExportDat(export) => app::export_dat::run(export),
         Command::Service(service_opts) => service::run(service_opts),
         Command::Upgrade(upgrade_opts) => {
-            let action = upgrade_opts
-                .action
-                .unwrap_or(forgedns::app::cli::UpgradeAction::Apply);
+            let action = upgrade_opts.action.unwrap_or(cli::UpgradeAction::Apply);
             let config = upgrade::UpgradeConfig::from_cli(&upgrade_opts);
             upgrade::run_cli(action, config)
         }

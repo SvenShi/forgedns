@@ -131,13 +131,13 @@ pub struct UpgradeOptions {
     pub asset: String,
 
     /// Directory used to cache downloaded release files.
-    #[arg(long = "cache-dir", default_value = "./upgrade/cache", global = true)]
+    #[arg(long = "cache-dir", default_value = "./upgrade-cache", global = true)]
     pub cache_dir: PathBuf,
 
     /// Directory used to store binary backups before apply.
     #[arg(
         long = "backup-dir",
-        default_value = "./upgrade/backups",
+        default_value = "./upgrade-backups",
         global = true
     )]
     pub backup_dir: PathBuf,
