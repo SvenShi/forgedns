@@ -86,7 +86,7 @@ pub(super) struct StepJson {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(super) struct RecordRow {
     pub(super) id: i64,
-    pub(super) created_at_ms: u64,
+    pub(super) created_at_ms: i64,
     pub(super) elapsed_ms: u64,
     pub(super) request_id: u16,
     pub(super) client_ip: String,
@@ -125,7 +125,7 @@ pub(super) struct RecordDetail {
 pub(super) struct PendingRecord {
     pub(super) request: Message,
     pub(super) response: Option<Message>,
-    pub(super) created_at_ms: u64,
+    pub(super) created_at_ms: i64,
     pub(super) elapsed_ms: u64,
     pub(super) exec_path: ExecutionPath,
     pub(super) step_start_index: usize,
@@ -167,7 +167,7 @@ pub(super) struct PluginsStatsQuery {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ListCursor {
-    pub(super) created_at_ms: u64,
+    pub(super) created_at_ms: i64,
     pub(super) id: i64,
 }
 

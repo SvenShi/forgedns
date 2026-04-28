@@ -274,7 +274,7 @@ fn insert_record(
             tables.records
         ),
         params![
-            as_i64(record.created_at_ms)?,
+            record.created_at_ms,
             as_i64(record.elapsed_ms)?,
             i64::from(record.request_id),
             record.client_ip,
@@ -352,8 +352,7 @@ where
         .transpose()
 }
 
-fn run_cleanup(conn: &mut Connection, tables: &TableNames, cutoff_ms: u64) -> rusqlite::Result<()> {
-    let cutoff_ms = as_i64(cutoff_ms)?;
+fn run_cleanup(conn: &mut Connection, tables: &TableNames, cutoff_ms: i64) -> rusqlite::Result<()> {
     loop {
         let deleted = conn.execute(
             &format!(
@@ -424,12 +423,8 @@ pub(super) fn query_records(
     let mut rows = stmt.query(params![
         query.since_ms.map(as_i64).transpose()?,
         query.until_ms.map(as_i64).transpose()?,
-        query
-            .cursor
-            .map(|cursor| as_i64(cursor.created_at_ms))
-            .transpose()?,
         query.cursor.map(|cursor| cursor.id),
-        query.limit as i64,
+        query.limit.saturating_add(1) as i64,
     ])?;
 
     let mut records = Vec::new();
@@ -437,12 +432,20 @@ pub(super) fn query_records(
         records.push(read_record_row(row)?);
     }
 
-    let next_cursor = records.last().map(|record| {
-        encode_cursor(ListCursor {
-            created_at_ms: record.created_at_ms,
-            id: record.id,
+    let has_more = records.len() > query.limit;
+    if has_more {
+        records.truncate(query.limit);
+    }
+    let next_cursor = if has_more {
+        records.last().map(|record| {
+            encode_cursor(ListCursor {
+                created_at_ms: record.created_at_ms,
+                id: record.id,
+            })
         })
-    });
+    } else {
+        None
+    };
     Ok((records, next_cursor))
 }
 
@@ -674,7 +677,7 @@ impl PluginStatsKind {
 fn read_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecordRow> {
     Ok(RecordRow {
         id: row.get(0)?,
-        created_at_ms: row.get::<_, i64>(1).and_then(non_negative_u64)?,
+        created_at_ms: row.get::<_, i64>(1)?,
         elapsed_ms: row.get::<_, i64>(2).and_then(non_negative_u64)?,
         request_id: row.get::<_, i64>(3).and_then(non_negative_u16)?,
         client_ip: row.get(4)?,

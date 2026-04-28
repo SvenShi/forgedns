@@ -23,7 +23,7 @@ impl PendingRecord {
     pub(super) fn new(
         request: Message,
         response: Option<Message>,
-        created_at_ms: u64,
+        created_at_ms: i64,
         elapsed_ms: u64,
         exec_path: ExecutionPath,
         step_start_index: usize,

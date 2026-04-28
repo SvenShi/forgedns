@@ -33,7 +33,7 @@ pub(super) struct RecorderBackend {
 #[derive(Debug, Clone)]
 pub(super) enum WriterCommand {
     Insert(Box<PendingRecord>),
-    Cleanup { cutoff_ms: u64 },
+    Cleanup { cutoff_ms: i64 },
 }
 
 #[derive(Debug)]
@@ -131,7 +131,7 @@ impl RecorderBackend {
         }
     }
 
-    pub(super) fn cleanup(&self, cutoff_ms: u64) {
+    pub(super) fn cleanup(&self, cutoff_ms: i64) {
         if let Err(err) = self.queue_tx.try_send(WriterCommand::Cleanup { cutoff_ms }) {
             warn!("query_recorder cleanup skipped: {}", err);
         }

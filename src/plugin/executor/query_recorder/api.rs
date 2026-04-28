@@ -385,7 +385,7 @@ fn parse_cursor(raw: &str) -> std::result::Result<ListCursor, String> {
         .ok_or_else(|| "cursor must be formatted as <created_at_ms>:<id>".to_string())?;
     Ok(ListCursor {
         created_at_ms: created_at_ms
-            .parse::<u64>()
+            .parse::<i64>()
             .map_err(|err| format!("invalid cursor created_at_ms: {err}"))?,
         id: id
             .parse::<i64>()

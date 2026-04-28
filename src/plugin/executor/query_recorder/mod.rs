@@ -30,6 +30,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use jiff::Timestamp;
 use serde_yaml_ng::Value as YamlValue;
 
 use self::backend::RecorderBackend;
@@ -74,16 +75,14 @@ impl Plugin for QueryRecorder {
         api::register(&backend, self.api_register.as_ref())?;
 
         let recorder_backend = backend.clone();
-        let retention_days = self.config.retention_days;
+        let retention_ms = self.config.retention_days.saturating_mul(ONE_DAY_MS) as i64;
         self.cleanup_task_id = Some(task_center::spawn_fixed(
             format!("query_recorder:{}:cleanup", self.tag),
             Duration::from_secs(self.config.cleanup_interval_hours * 60 * 60),
             move || {
                 let recorder_backend = recorder_backend.clone();
                 async move {
-                    let retention_ms = retention_days.saturating_mul(ONE_DAY_MS);
-                    let cutoff_ms = AppClock::elapsed_millis().saturating_sub(retention_ms);
-                    recorder_backend.cleanup(cutoff_ms);
+                    recorder_backend.cleanup(Timestamp::now().as_millisecond() - retention_ms);
                 }
             },
         ));
@@ -140,12 +139,12 @@ impl Executor for QueryRecorder {
         context.enable_execution_path();
         let step_start_index = context.execution_path_len();
         let instant = AppClock::now();
-        let timestamp = AppClock::now_timestamp();
+        let timestamp = Timestamp::now();
         let result = continue_next!(next, context);
         let pending_record = PendingRecord::new(
             request,
             context.response.clone(),
-            timestamp,
+            timestamp.as_millisecond(),
             instant.elapsed().as_millis() as u64,
             context.execution_path.clone(),
             step_start_index,

@@ -169,6 +169,88 @@ async fn test_query_recorder_execute_enqueues_record() {
     plugin.destroy().await.unwrap();
 }
 
+#[tokio::test]
+async fn test_query_recorder_list_cursor_only_when_more_records_exist() {
+    AppClock::start();
+
+    let temp = NamedTempFile::new().unwrap();
+    let config = resolve_config(Some(
+        serde_yaml_ng::to_value(QueryRecorderConfig {
+            path: temp.path().display().to_string(),
+            queue_size: Some(16),
+            batch_size: Some(1),
+            flush_interval_ms: Some(10),
+            memory_tail: Some(8),
+            retention_days: Some(7),
+            cleanup_interval_hours: Some(1),
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+
+    let mut plugin = QueryRecorder::new("rec".to_string(), config.clone(), None);
+    plugin.init().await.unwrap();
+
+    for request_id in 1..=3 {
+        let mut request = Message::new();
+        request.set_id(request_id);
+        let mut ctx = DnsContext::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
+            request,
+            test_registry(),
+        );
+        plugin.execute_with_next(&mut ctx, None).await.unwrap();
+    }
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let backend = plugin.backend.as_ref().unwrap().clone();
+    let (first_page, first_cursor) = tokio::task::spawn_blocking(move || {
+        query_records(
+            backend,
+            ListQuery {
+                cursor: None,
+                limit: 2,
+                since_ms: None,
+                until_ms: None,
+            },
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(first_page.len(), 2);
+    assert!(first_cursor.is_some());
+
+    let cursor_record = first_page.last().unwrap();
+    let backend = plugin.backend.as_ref().unwrap().clone();
+    let (second_page, second_cursor) = tokio::task::spawn_blocking({
+        let cursor = super::model::ListCursor {
+            created_at_ms: cursor_record.created_at_ms,
+            id: cursor_record.id,
+        };
+        move || {
+            query_records(
+                backend,
+                ListQuery {
+                    cursor: Some(cursor),
+                    limit: 2,
+                    since_ms: None,
+                    until_ms: None,
+                },
+            )
+        }
+    })
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(second_page.len(), 1);
+    assert!(second_cursor.is_none());
+
+    plugin.destroy().await.unwrap();
+}
+
 #[test]
 fn test_factory_rejects_quick_setup() {
     let factory = QueryRecorderFactory;
