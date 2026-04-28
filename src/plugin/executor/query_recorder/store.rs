@@ -423,6 +423,7 @@ pub(super) fn query_records(
     let mut rows = stmt.query(params![
         query.since_ms.map(as_i64).transpose()?,
         query.until_ms.map(as_i64).transpose()?,
+        query.cursor.map(|cursor| cursor.created_at_ms),
         query.cursor.map(|cursor| cursor.id),
         query.limit.saturating_add(1) as i64,
     ])?;
