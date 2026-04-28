@@ -11,7 +11,22 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 
 <div className="release-stack">
 
-  <ReleaseCard version="v0.5.0" badge="Minor Release" date="2026-04-27" defaultOpen>
+  <ReleaseCard version="v0.5.1" badge="Patch Release" date="2026-04-28" defaultOpen>
+      **Fixes**
+
+      - 修复 `any_match` 在依赖分析阶段会丢失 quick setup 表达式的问题。现在 `qname $provider`、`qtype 1` 等 quick setup matcher 会按原表达式解析并展开依赖，避免启动和 quick setup 分析时遗漏 provider 或内联 matcher 依赖。
+      - 修复 `query_recorder` 的保留期清理与分页游标边界：清理截止时间改为基于真实时间戳计算，分页列表会多取一条记录判断是否还有下一页，避免最后一页继续返回无效 `next_cursor`。
+      - 调整 `query_recorder` 记录时间字段的存取类型，避免时间戳在写入、读取和清理路径中发生不必要的无符号转换。
+      - 同步修正 `upgrade` CLI 默认缓存和备份目录为 `./upgrade-cache` 与 `./upgrade-backups`，并修复对应默认值测试。
+
+      **Upgrade Notes**
+
+      - 本次发布不引入新的配置字段，`v0.5.0` 配置可直接升级。
+      - 如果已经启用 `query_recorder` 或在 `any_match` 中使用 quick setup 表达式，建议升级到 `v0.5.1`。
+      - `query_recorder` 仍处于 **Experimental** 阶段，其 API 与配置字段后续仍可能调整。
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.5.0" badge="Minor Release" date="2026-04-27">
       **Highlights**
 
       - 新增 `query_recorder` executor：支持将查询记录落盘、按保留策略清理，并通过插件 API 查询统计、分页读取和单条记录详情，方便审计与排障。

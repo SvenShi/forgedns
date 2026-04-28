@@ -10,7 +10,22 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.5.0" badge="Minor Release" date="2026-04-27" defaultOpen>
+  <ReleaseCard version="v0.5.1" badge="Patch Release" date="2026-04-28" defaultOpen>
+      **Fixes**
+
+      - Fixed `any_match` dependency analysis so quick-setup matcher expressions are preserved and expanded correctly. Expressions such as `qname $provider` and `qtype 1` now keep their original meaning during startup and dependency analysis.
+      - Fixed `query_recorder` retention cleanup and pagination cursor boundaries. Cleanup cutoff time now uses real timestamps, and paginated listing fetches one extra row to detect whether another page exists before returning `next_cursor`.
+      - Adjusted `query_recorder` timestamp storage and read paths to avoid unnecessary unsigned conversions around record creation time.
+      - Updated the `upgrade` CLI default cache and backup directories to `./upgrade-cache` and `./upgrade-backups`, and fixed the matching default-value tests.
+
+      **Upgrade Notes**
+
+      - This release does not introduce new configuration fields. Existing `v0.5.0` configurations can be upgraded directly.
+      - Upgrading is recommended if you use `query_recorder` or quick-setup expressions inside `any_match`.
+      - `query_recorder` remains **Experimental**, and its API surface or configuration fields may still change in future releases.
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.5.0" badge="Minor Release" date="2026-04-27">
       **Highlights**
 
       - Added the `query_recorder` executor for persisted query logging with retention cleanup, plus plugin API endpoints for stats, paginated record listing, and single-record details to improve auditing and troubleshooting workflows.
