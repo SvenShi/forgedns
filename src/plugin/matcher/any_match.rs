@@ -15,15 +15,17 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde_yaml_ng::Value;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::dependency::DependencySpec;
-use crate::plugin::matcher::matcher_utils::{parse_rules_from_value, validate_non_empty_rules};
+use crate::plugin::matcher::matcher_utils::validate_non_empty_rules;
 use crate::plugin::matcher::{Matcher, MatcherRef, parse_matcher_expr};
 use crate::plugin::{
     Plugin, PluginFactory, PluginHolder, PluginRef, PluginRegistry, UninitializedPlugin,
+    expand_quick_setup_dependency_specs,
 };
 use crate::register_plugin_factory;
 
@@ -34,26 +36,31 @@ register_plugin_factory!("any_match", AnyMatchFactory {});
 
 impl PluginFactory for AnyMatchFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {
-        let Ok(matchers) = parse_rules_from_value(plugin_config.args.clone()) else {
+        let Ok(matchers) = parse_matcher_exprs_from_value(plugin_config.args.clone()) else {
             return vec![];
         };
 
-        matchers
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, matcher_ref)| {
-                parse_matcher_expr(matcher_ref)
-                    .ok()
-                    .and_then(|(_, matcher_expr)| PluginRef::from_str(matcher_expr).ok())
-                    .and_then(|plugin| match plugin {
-                        PluginRef::PluginTag(tag) => Some(DependencySpec::matcher(
-                            format!("args.matchers[{idx}]"),
-                            tag,
-                        )),
-                        _ => None,
-                    })
-            })
-            .collect()
+        let mut result = Vec::new();
+        for (idx, matcher_ref) in matchers.iter().enumerate() {
+            let field = format!("args.matchers[{idx}]");
+            let Ok((_, matcher_expr)) = parse_matcher_expr(matcher_ref) else {
+                continue;
+            };
+            match PluginRef::from_str(matcher_expr) {
+                Ok(PluginRef::PluginTag(tag)) => {
+                    result.push(DependencySpec::matcher(field, tag));
+                }
+                Ok(PluginRef::QuickSetup { plugin_type, param }) => {
+                    result.extend(expand_quick_setup_dependency_specs(
+                        &field,
+                        &plugin_type,
+                        param.as_deref(),
+                    ));
+                }
+                Err(_) => {}
+            }
+        }
+        result
     }
 
     fn create(
@@ -62,9 +69,49 @@ impl PluginFactory for AnyMatchFactory {
         registry: Arc<PluginRegistry>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
-        let matchers = parse_rules_from_value(plugin_config.args.clone())?;
+        let matchers = parse_matcher_exprs_from_value(plugin_config.args.clone())?;
         build_any_match(plugin_config.tag.clone(), matchers, registry)
     }
+}
+
+fn parse_matcher_exprs_from_value(args: Option<Value>) -> DnsResult<Vec<String>> {
+    let args = args.ok_or_else(|| DnsError::plugin("any_match requires args"))?;
+    let expressions = match args {
+        Value::String(s) => s
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Value::Sequence(seq) => {
+            let mut out = Vec::with_capacity(seq.len());
+            for item in seq {
+                match item {
+                    Value::String(s) => {
+                        let expression = s.trim();
+                        if !expression.is_empty() {
+                            out.push(expression.to_string());
+                        }
+                    }
+                    other => {
+                        return Err(DnsError::plugin(format!(
+                            "any_match args must be string list, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            out
+        }
+        other => {
+            return Err(DnsError::plugin(format!(
+                "any_match args must be string or string array, got {:?}",
+                other
+            )));
+        }
+    };
+    validate_non_empty_rules("any_match", &expressions)?;
+    Ok(expressions)
 }
 
 fn build_any_match(
@@ -162,11 +209,13 @@ mod tests {
     use crate::config::types::PluginConfig;
     use crate::plugin::dependency::{DependencyKind, DependencySpec};
     use crate::plugin::matcher::false_matcher::FalseMatcherFactory;
+    use crate::plugin::matcher::qtype::QtypeFactory;
     use crate::plugin::matcher::true_matcher::TrueMatcherFactory;
     use crate::plugin::test_utils::test_context;
+    use crate::proto::{DNSClass, Name, Question, RecordType};
 
     #[test]
-    fn test_dependency_specs_extract_only_tag_references() {
+    fn test_dependency_specs_extract_tag_and_quick_setup_references() {
         let config = PluginConfig {
             tag: "any".to_string(),
             plugin_type: "any_match".to_string(),
@@ -177,6 +226,7 @@ mod tests {
 - "!$b"
 - "_false"
 - "qtype 1"
+- "qname $domains"
 "#,
                 )
                 .expect("args should parse"),
@@ -189,6 +239,10 @@ mod tests {
             vec![
                 DependencySpec::matcher("args.matchers[0]", "a"),
                 DependencySpec::matcher("args.matchers[1]", "b"),
+                DependencySpec::provider(
+                    "args.matchers[4] -> quick_setup(qname).domain_set_tags[0]",
+                    "domains"
+                ),
             ]
         );
     }
@@ -223,6 +277,7 @@ mod tests {
             DependencyKind::Matcher,
             Box::new(AnyMatchFactory {}),
         );
+        registry.register_factory("qtype", DependencyKind::Matcher, Box::new(QtypeFactory {}));
         let registry = Arc::new(registry);
 
         let configs = vec![
@@ -245,6 +300,18 @@ mod tests {
                     .expect("args should parse"),
                 ),
             },
+            PluginConfig {
+                tag: "any_qtype".to_string(),
+                plugin_type: "any_match".to_string(),
+                args: Some(
+                    serde_yaml_ng::from_str::<Value>(
+                        r#"
+- "qtype 1"
+"#,
+                    )
+                    .expect("args should parse"),
+                ),
+            },
         ];
 
         registry
@@ -257,6 +324,15 @@ mod tests {
             .get_plugin("any")
             .expect("any matcher should be registered");
         let mut ctx = test_context();
+        assert!(plugin.matcher().is_match(&mut ctx));
+        let plugin = registry
+            .get_plugin("any_qtype")
+            .expect("any qtype matcher should be registered");
+        ctx.request.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
         assert!(plugin.matcher().is_match(&mut ctx));
 
         registry.destory().await;
