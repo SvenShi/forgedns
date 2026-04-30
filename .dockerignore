@@ -3,6 +3,7 @@
 .idea
 target
 docs
+webui
 benchmarks
 *.log
 *.tmp
