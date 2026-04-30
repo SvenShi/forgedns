@@ -22,16 +22,11 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import type { ConfigField, ConfigFieldChild } from "@/lib/plugin-definitions";
 import type { PluginInstance, PluginType } from "@/lib/types";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
 import { ChevronDown, Info, Minus, Plus, Search } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 
 type ArrayItemSyntax = "value" | "plugin" | "quick" | "domain";
 
@@ -229,13 +224,15 @@ export function PluginConfigFieldsEditor({
 }
 
 function ConfigFieldLabel({ field }: { field: ConfigField }) {
+  const docs = field.docs ?? field.description;
+
   return (
     <FieldLabel className="flex items-center gap-1.5">
       <span>{field.label}</span>
       {field.required && <span className="text-destructive">*</span>}
-      {field.description && (
-        <Tooltip>
-          <TooltipTrigger asChild>
+      {docs && (
+        <Popover>
+          <PopoverTrigger asChild>
             <button
               type="button"
               className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -243,18 +240,173 @@ function ConfigFieldLabel({ field }: { field: ConfigField }) {
             >
               <Info className="h-3.5 w-3.5" />
             </button>
-          </TooltipTrigger>
-          <TooltipContent
+          </PopoverTrigger>
+          <PopoverContent
             side="top"
             align="start"
-            className="max-w-80 text-xs leading-relaxed"
+            className="max-h-[min(30rem,70vh)] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto p-3"
           >
-            {field.description}
-          </TooltipContent>
-        </Tooltip>
+            <FieldDocsContent docs={docs} />
+          </PopoverContent>
+        </Popover>
       )}
     </FieldLabel>
   );
+}
+
+function FieldDocsContent({ docs }: { docs: string }) {
+  const sections = parseFieldDocs(docs);
+
+  return (
+    <div className="space-y-3 text-xs leading-relaxed text-popover-foreground">
+      {sections.spec.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {sections.spec.map((item) => (
+            <span
+              key={item}
+              className="rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground"
+            >
+              {renderInlineCode(item)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {sections.summary.length > 0 && (
+        <div className="space-y-1.5">
+          {sections.summary.map((line) => (
+            <p key={line}>{renderInlineCode(line)}</p>
+          ))}
+        </div>
+      )}
+
+      {sections.groups.map((group) => (
+        <div key={group.title} className="space-y-1.5">
+          <div className="text-[0.7rem] font-medium text-muted-foreground">
+            {group.title}
+          </div>
+          <div className="space-y-1">
+            {group.items.map((item, index) => (
+              <FieldDocsBullet
+                key={`${group.title}-${index}-${item.text}`}
+                item={item}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface FieldDocsBulletItem {
+  text: string;
+  depth: number;
+}
+
+interface FieldDocsGroup {
+  title: string;
+  items: FieldDocsBulletItem[];
+}
+
+function FieldDocsBullet({ item }: { item: FieldDocsBulletItem }) {
+  return (
+    <div
+      className="grid grid-cols-[0.55rem_1fr] gap-1"
+      style={{ paddingLeft: `${Math.min(item.depth, 3) * 0.75}rem` }}
+    >
+      <span className="pt-[0.42rem]">
+        <span className="block h-1 w-1 rounded-full bg-muted-foreground/70" />
+      </span>
+      <span>{renderInlineCode(item.text)}</span>
+    </div>
+  );
+}
+
+function parseFieldDocs(docs: string): {
+  spec: string[];
+  summary: string[];
+  groups: FieldDocsGroup[];
+} {
+  const spec: string[] = [];
+  const summary: string[] = [];
+  const groups: FieldDocsGroup[] = [];
+  let currentGroup: FieldDocsGroup | null = null;
+
+  for (const rawLine of docs.split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+
+    const bullet = trimmed.startsWith("- ") ? trimmed.slice(2) : trimmed;
+    const depth = Math.max(
+      0,
+      Math.floor((rawLine.length - rawLine.trimStart().length) / 2),
+    );
+    const labelMatch = bullet.match(/^([^：:]{2,12})[：:](.*)$/);
+
+    if (depth === 0 && labelMatch) {
+      const [, label, value] = labelMatch;
+      const normalizedValue = value.trim();
+
+      if (label === "类型") {
+        spec.push(
+          ...normalizedValue
+            .split("；")
+            .map((item) => item.trim())
+            .filter(Boolean),
+        );
+        currentGroup = null;
+        continue;
+      }
+
+      if (label === "必填" || label === "默认值" || label === "单位") {
+        if (normalizedValue) spec.push(`${label}：${normalizedValue}`);
+        currentGroup = null;
+        continue;
+      }
+
+      if (label === "作用") {
+        if (normalizedValue) summary.push(normalizedValue);
+        currentGroup = null;
+        continue;
+      }
+
+      currentGroup = {
+        title: label,
+        items: normalizedValue ? [{ text: normalizedValue, depth: 0 }] : [],
+      };
+      groups.push(currentGroup);
+      continue;
+    }
+
+    if (!currentGroup) {
+      currentGroup = { title: "说明", items: [] };
+      groups.push(currentGroup);
+    }
+
+    currentGroup.items.push({ text: bullet, depth });
+  }
+
+  return { spec, summary, groups };
+}
+
+function renderInlineCode(text: string): ReactNode {
+  const parts = text.split(/(`[^`]+`)/g);
+
+  return parts.map((part, index) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return (
+        <code
+          key={index}
+          className="rounded bg-muted px-1 py-0.5 font-mono text-[0.72rem]"
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+
+    return <Fragment key={index}>{part}</Fragment>;
+  });
 }
 
 function ConfigFieldControl({
