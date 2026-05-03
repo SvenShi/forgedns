@@ -40,6 +40,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
 name = "anes"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1097,6 +1103,8 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -1725,14 +1733,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
-name = "mikrotik-rs"
-version = "0.6.1"
+name = "mikrotik-proto"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bff1b9091de1705c0081e13ee7b5df31d494cad4a73d3cfd5a43fc8104124ca"
+checksum = "5dda0dde0f7cf87dcf49effafc6a1dd8129676cdf3e6b18dcf4b4ca3102f140a"
 dependencies = [
+ "hashbrown 0.15.5",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "mikrotik-rs"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e02ac13d86e3e33af5fdcd431b38aab0ad54184b04caf8d7a173968232aab81"
+dependencies = [
+ "mikrotik-proto",
+ "mikrotik-tokio",
+]
+
+[[package]]
+name = "mikrotik-tokio"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c6f2e6135cf49ce4784ea96dd49ea9d54e875f33a784b4045a290c00f25f5ff"
+dependencies = [
+ "mikrotik-proto",
  "thiserror 2.0.18",
  "tokio",
- "uuid",
 ]
 
 [[package]]

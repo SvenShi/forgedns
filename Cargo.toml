@@ -81,7 +81,7 @@ regex = "1.12.2"
 # Executor plugin dependencies
 cronexpr = "1.5.0"
 fast-socks5 = "1.0.0"
-mikrotik-rs = "0.6.1"
+mikrotik-rs = "0.7.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 
 # Service management
