@@ -34,7 +34,6 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 # Core data structures and utility crates
-hashbrown = "0.15.5"
 ahash = "0.8.12"
 arc-swap = "1.9.1"
 bytes = "1.11"
@@ -82,7 +81,7 @@ regex = "1.12.2"
 # Executor plugin dependencies
 cronexpr = "1.5.0"
 fast-socks5 = "1.0.0"
-mikrotik-rs = "0.7.0"
+mikrotik-rs = "0.8.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 
 # Service management

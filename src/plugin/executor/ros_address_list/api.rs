@@ -5,11 +5,11 @@
 //! The business layer only sees normalized address-list keys, ownership-aware
 //! upsert behavior, and stable plugin errors.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use hashbrown::HashMap;
 use mikrotik_rs::{Command, CommandBuilder, Event, MikrotikDevice};
 
 use super::manager::{
