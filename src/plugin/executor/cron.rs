@@ -796,6 +796,7 @@ mod tests {
         log: Arc<StdMutex<Vec<String>>>,
         destroyed: Arc<AtomicBool>,
         started: Arc<AtomicUsize>,
+        started_notify: Option<Arc<Notify>>,
         blocker: Option<Arc<Notify>>,
     }
 
@@ -807,8 +808,14 @@ mod tests {
                 log,
                 destroyed: Arc::new(AtomicBool::new(false)),
                 started: Arc::new(AtomicUsize::new(0)),
+                started_notify: None,
                 blocker: None,
             }
+        }
+
+        fn with_started_notify(mut self, started_notify: Arc<Notify>) -> Self {
+            self.started_notify = Some(started_notify);
+            self
         }
 
         fn with_blocker(mut self, blocker: Arc<Notify>) -> Self {
@@ -837,6 +844,9 @@ mod tests {
     impl Executor for StubExecutor {
         async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
             self.started.fetch_add(1, Ordering::Relaxed);
+            if let Some(started_notify) = &self.started_notify {
+                started_notify.notify_one();
+            }
             self.log.lock().unwrap().push(self.tag.clone());
             if let Some(blocker) = &self.blocker {
                 blocker.notified().await;
@@ -1054,22 +1064,19 @@ jobs:
     async fn test_scheduler_skips_overlapping_job_runs() {
         AppClock::start();
         let log = Arc::new(StdMutex::new(Vec::new()));
+        let started = Arc::new(Notify::new());
         let blocker = Arc::new(Notify::new());
         let executor = Arc::new(
             StubExecutor::new("probe", StubBehavior::Next, log.clone())
+                .with_started_notify(started.clone())
                 .with_blocker(blocker.clone()),
         );
         let interval = Duration::from_millis(20);
-        let first_run_at = compute_next_run_ms(
-            &JobTrigger::Interval { interval },
-            AppClock::now_timestamp() as i64,
-        )
-        .unwrap();
 
         let job = RuntimeJob {
             name: "job".to_string(),
             trigger: JobTrigger::Interval { interval },
-            next_run_ms: first_run_at,
+            next_run_ms: AppClock::now_timestamp() as i64,
             executors: vec![executor.clone()],
             handle: None,
         };
@@ -1081,14 +1088,20 @@ jobs:
             stop_rx,
         ));
 
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("first cron job run should start");
         assert_eq!(executor.started.load(Ordering::Relaxed), 1);
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(executor.started.load(Ordering::Relaxed), 1);
 
+        let second_run = started.notified();
         blocker.notify_waiters();
-        tokio::task::yield_now().await;
+        tokio::time::timeout(Duration::from_secs(1), second_run)
+            .await
+            .expect("cron job should run again after the blocking run finishes");
+        assert_eq!(executor.started.load(Ordering::Relaxed), 2);
 
         let _ = stop_tx.send(());
         scheduler.await.unwrap();
