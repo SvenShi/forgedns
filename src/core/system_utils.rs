@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use jiff::tz::TimeZone;
+use serde::{Deserialize, Deserializer, de};
 use tokio::fs;
 
 use crate::core::app_clock::AppClock;
@@ -44,8 +45,7 @@ pub async fn file_len_if_exists(path: impl AsRef<Path>) -> std::io::Result<Optio
         Err(err) => Err(err),
     }
 }
-
-/// Parse an integer duration string with a unit suffix.
+/// Parse an integer duration string with an optional unit suffix.
 ///
 /// Supported units:
 /// - `ms`
@@ -53,20 +53,33 @@ pub async fn file_len_if_exists(path: impl AsRef<Path>) -> std::io::Result<Optio
 /// - `m`
 /// - `h`
 /// - `d`
+///
+/// If no unit is provided, seconds are used by default.
 pub fn parse_simple_duration(raw: &str) -> Result<Duration, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("duration cannot be empty".to_string());
     }
 
-    let unit_start = raw
-        .find(|c: char| !c.is_ascii_digit())
-        .ok_or_else(|| "duration must include a unit".to_string())?;
-    let value = raw[..unit_start]
-        .trim()
-        .parse::<u64>()
-        .map_err(|e| format!("invalid duration '{}': {}", raw, e))?;
-    let unit = raw[unit_start..].trim().to_ascii_lowercase();
+    let (value, unit) = match raw.find(|c: char| !c.is_ascii_digit()) {
+        None => {
+            let value = raw
+                .parse::<u64>()
+                .map_err(|e| format!("invalid duration '{}': {}", raw, e))?;
+
+            (value, "s".to_string())
+        }
+        Some(unit_start) => {
+            let value = raw[..unit_start]
+                .trim()
+                .parse::<u64>()
+                .map_err(|e| format!("invalid duration '{}': {}", raw, e))?;
+
+            let unit = raw[unit_start..].trim().to_ascii_lowercase();
+
+            (value, unit)
+        }
+    };
 
     let duration = match unit.as_str() {
         "ms" => Duration::from_millis(value),
@@ -78,6 +91,36 @@ pub fn parse_simple_duration(raw: &str) -> Result<Duration, String> {
     };
 
     Ok(duration)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum DurationValue {
+    String(String),
+    U64(u64),
+}
+
+/// Deserialize optional duration from either a number or a string.
+///
+/// Supported examples:
+/// - `null`
+/// - `3`
+/// - `"3"`
+/// - `"3s"`
+/// - `"500ms"`
+///
+/// Bare numbers are interpreted as seconds.
+pub fn deserialize_duration_option<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<DurationValue>::deserialize(deserializer)?;
+    value
+        .map(|value| match value {
+            DurationValue::U64(seconds) => Ok(Duration::from_secs(seconds)),
+            DurationValue::String(raw) => parse_simple_duration(&raw).map_err(de::Error::custom),
+        })
+        .transpose()
 }
 
 /// Parse a file-size string such as `1k`, `2m`, or `3g`.
@@ -156,8 +199,12 @@ mod tests {
             parse_simple_duration("1d").unwrap(),
             Duration::from_secs(86_400)
         );
-        assert!(parse_simple_duration("10").is_err());
+        assert_eq!(
+            parse_simple_duration("10").unwrap(),
+            Duration::from_secs(10)
+        );
         assert!(parse_simple_duration("10w").is_err());
+        assert!(parse_simple_duration("fuck").is_err());
     }
 
     #[test]
@@ -167,5 +214,6 @@ mod tests {
         assert_eq!(parse_byte_size("2M").unwrap(), 2 * MIB);
         assert_eq!(parse_byte_size("3gb").unwrap(), 3 * GIB);
         assert!(parse_byte_size("5p").is_err());
+        assert!(parse_byte_size("fuck").is_err());
     }
 }

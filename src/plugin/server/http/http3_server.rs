@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use http::header::CONTENT_LENGTH;
@@ -12,8 +13,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
+use crate::plugin::server::http::extract_client_ip;
 use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
-use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
 use crate::plugin::server::{ConnectionGuard, quic};
 
 const MAX_HTTP3_BODY_SIZE: usize = 64 * 1024;
@@ -42,7 +43,7 @@ pub async fn run_server(
     addr: SocketAddr,
     dispatcher: Arc<HttpDispatcher>,
     mut server_config: ServerConfig,
-    idle_timeout: Option<u64>,
+    idle_timeout: Duration,
     src_ip_header: Option<String>,
     mut shutdown_rx: watch::Receiver<bool>,
     startup_tx: Option<oneshot::Sender<Result<(), String>>>,
@@ -67,7 +68,7 @@ pub async fn run_server(
 
     info!(
         listen = %addr,
-        idle_timeout_secs = idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT),
+        idle_timeout_secs = idle_timeout.as_secs(),
         "HTTP/3 server listening"
     );
 

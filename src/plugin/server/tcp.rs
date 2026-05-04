@@ -30,17 +30,17 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::core::system_utils::deserialize_duration_option;
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::dependency::DependencySpec;
+use crate::plugin::server::http::DEFAULT_SERVER_IDLE_TIMEOUT;
 use crate::plugin::server::{
     ConnectionGuard, RequestHandle, RequestMeta, Server, parse_listen_addr,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::proto::Message;
 use crate::register_plugin_factory;
-
-const DEFAULT_IDLE_TIMEOUT: u64 = 10;
 
 const TCP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
 
@@ -77,7 +77,8 @@ pub struct TcpServerConfig {
     ///
     /// - Default: 10 seconds if omitted.
     /// - Applied as TCP keepalive interval for long-lived connections.
-    idle_timeout: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_duration_option")]
+    idle_timeout: Option<Duration>,
 }
 
 /// TCP DNS server plugin
@@ -87,7 +88,7 @@ pub struct TcpServer {
     listen: SocketAddr,
     request_handle: Arc<RequestHandle>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
-    idle_timeout: Option<u64>,
+    idle_timeout: Option<Duration>,
     shutdown_tx: watch::Sender<bool>,
     task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -123,7 +124,7 @@ impl TcpServer {
         let addr = self.listen;
         let handler = self.request_handle.clone();
         let tls_acceptor = self.tls_acceptor.clone();
-        let idle_timeout = self.idle_timeout;
+        let idle_timeout = self.idle_timeout.unwrap_or(DEFAULT_SERVER_IDLE_TIMEOUT);
         let shutdown_rx = self.shutdown_tx.subscribe();
         *task_slot = Some(tokio::spawn(run_server(
             addr,
@@ -191,13 +192,12 @@ async fn run_server(
     addr: SocketAddr,
     handler: Arc<RequestHandle>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
-    idle_timeout: Option<u64>,
+    idle_timeout: Duration,
     mut shutdown_rx: watch::Receiver<bool>,
     startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
 ) {
     let mut startup_tx = startup_tx;
-    let timeout = Duration::from_secs(idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT));
-    let listener = match build_tcp_listener(addr, timeout) {
+    let listener = match build_tcp_listener(addr, idle_timeout) {
         Ok(s) => s,
         Err(e) => {
             if let Some(tx) = startup_tx.take() {
@@ -213,7 +213,7 @@ async fn run_server(
     }
     info!(
         listen = %addr,
-        idle_timeout_secs = timeout.as_secs(),
+        idle_timeout_secs = idle_timeout.as_secs(),
         tls = %tls_acceptor.is_some(),
         "TCP server bound successfully"
     );

@@ -23,12 +23,14 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::core::system_utils::deserialize_duration_option;
 use crate::network::listen::parse_listen_addr;
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::quic_transport::{
     QuicTransport, QuicTransportReader, QuicTransportWriter,
 };
 use crate::plugin::dependency::DependencySpec;
+use crate::plugin::server::http::DEFAULT_SERVER_IDLE_TIMEOUT;
 use crate::plugin::server::{ConnectionGuard, RequestHandle, RequestMeta, Server, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
 use crate::register_plugin_factory;
@@ -65,7 +67,8 @@ pub struct QuicServerConfig {
     /// QUIC transport-level idle timeout in seconds (optional).
     ///
     /// - Applies to QUIC transport. When absent, quinn's default is used.
-    idle_timeout: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_duration_option")]
+    idle_timeout: Option<Duration>,
 }
 
 /// QUIC DNS server plugin
@@ -75,8 +78,7 @@ pub struct QuicServer {
     listen: SocketAddr,
     /// TLS acceptor for HTTPS support (None for plain HTTP)
     server_config: ServerConfig,
-    idle_timeout: Option<u64>,
-
+    idle_timeout: Option<Duration>,
     request_handle: Arc<RequestHandle>,
     shutdown_tx: watch::Sender<bool>,
     task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -118,7 +120,7 @@ impl QuicServer {
             addr,
             handler,
             server_config,
-            idle_timeout,
+            idle_timeout.unwrap_or(DEFAULT_SERVER_IDLE_TIMEOUT),
             shutdown_rx,
             startup_tx,
         )));
@@ -175,7 +177,7 @@ async fn run_server(
     addr: SocketAddr,
     handler: Arc<RequestHandle>,
     server_config: ServerConfig,
-    idle_timeout: Option<u64>,
+    idle_timeout: Duration,
     mut shutdown_rx: watch::Receiver<bool>,
     startup_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
 ) {
@@ -335,19 +337,17 @@ fn extract_tls_server_name(connection: &quinn::Connection) -> Option<String> {
 pub fn build_quic_endpoint(
     addr: SocketAddr,
     server_config: ServerConfig,
-    timeout: Option<u64>,
+    timeout: Duration,
 ) -> Result<Endpoint> {
     let socket = udp::build_udp_socket(addr)?;
 
     let quic_crypto = quinn::crypto::rustls::QuicServerConfig::try_from(Arc::new(server_config))?;
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_crypto));
 
-    if let Some(timeout) = timeout {
-        let mut config = TransportConfig::default();
-        let timeout = IdleTimeout::try_from(Duration::from_secs(timeout))?;
-        config.max_idle_timeout(Some(timeout));
-        server_config.transport = Arc::new(config);
-    }
+    let mut config = TransportConfig::default();
+    let timeout = IdleTimeout::try_from(timeout)?;
+    config.max_idle_timeout(Some(timeout));
+    server_config.transport = Arc::new(config);
 
     Ok(Endpoint::new(
         EndpointConfig::default(),

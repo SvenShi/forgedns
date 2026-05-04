@@ -16,6 +16,7 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use http::{HeaderValue, Method};
@@ -26,6 +27,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::core::system_utils::deserialize_duration_option;
 use crate::network::tls_config::load_tls_config;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
@@ -37,7 +39,7 @@ mod http2_server;
 mod http3_server;
 mod http_dispatcher;
 
-pub(crate) const DEFAULT_IDLE_TIMEOUT: u64 = 30;
+pub(crate) const DEFAULT_SERVER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// HTTP server configuration
 #[derive(Deserialize)]
@@ -81,7 +83,8 @@ pub struct HttpServerConfig {
     /// - Default: 30 seconds if omitted.
     /// - Applies to HTTP/2 connections; HTTP/3 uses QUIC transport idle
     ///   timeout.
-    idle_timeout: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_duration_option")]
+    idle_timeout: Option<Duration>,
 
     /// Enable HTTP/3 (QUIC) for DoH connections.
     ///
@@ -125,7 +128,7 @@ pub struct HttpServer {
     /// TLS acceptor for HTTPS support (None for plain HTTP)
     server_config: Option<ServerConfig>,
     /// Connection idle timeout in seconds
-    idle_timeout: Option<u64>,
+    idle_timeout: Duration,
     /// Enable HTTP/3 for DoH connections
     enable_http3: Option<bool>,
     /// Prebuilt Alt-Svc header for HTTP/2 responses when HTTP/3 is enabled
@@ -391,7 +394,9 @@ impl PluginFactory for HttpServerFactory {
                 src_ip_header: http_config.src_ip_header,
                 dispatcher: Arc::new(dispatcher),
                 server_config,
-                idle_timeout: http_config.idle_timeout,
+                idle_timeout: http_config
+                    .idle_timeout
+                    .unwrap_or(DEFAULT_SERVER_IDLE_TIMEOUT),
                 enable_http3: http_config.enable_http3,
                 http2_alt_svc: http2_alt_svc_for_config(http_config.enable_http3, listen)?,
                 shutdown_tx: watch::channel(false).0,
