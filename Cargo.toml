@@ -34,6 +34,7 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 # Core data structures and utility crates
+hashbrown = "0.15.5"
 ahash = "0.8.12"
 arc-swap = "1.9.1"
 bytes = "1.11"

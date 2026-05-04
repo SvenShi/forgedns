@@ -812,6 +812,7 @@ dependencies = [
  "h2",
  "h3",
  "h3-quinn",
+ "hashbrown 0.15.5",
  "hex",
  "hotpath",
  "http",

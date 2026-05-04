@@ -5,14 +5,12 @@
 //! The business layer only sees normalized address-list keys, ownership-aware
 //! upsert behavior, and stable plugin errors.
 
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mikrotik_rs::MikrotikDevice;
-use mikrotik_rs::protocol::CommandResponse;
-use mikrotik_rs::protocol::command::CommandBuilder;
+use hashbrown::HashMap;
+use mikrotik_rs::{Command, CommandBuilder, Event, MikrotikDevice};
 
 use super::manager::{
     AddressListFamily, AddressListKey, decode_owned_comment, parse_router_address,
@@ -196,11 +194,7 @@ impl MikrotikRsClient {
         Ok(device)
     }
 
-    async fn send_rows(
-        &self,
-        action: &str,
-        command: mikrotik_rs::protocol::command::Command,
-    ) -> Result<Vec<RouterReply>> {
+    async fn send_rows(&self, action: &str, command: Command) -> Result<Vec<RouterReply>> {
         // All network/protocol details are normalized into `DnsError::plugin`
         // here so the manager only sees semantic success/failure.
         let device = self.get_or_connect().await?;
@@ -230,7 +224,7 @@ impl MikrotikRsClient {
         loop {
             let recv_result =
                 tokio::time::timeout(Duration::from_secs(RECV_TIMEOUT_SECS), rx.recv()).await;
-            let Some(item) = (match recv_result {
+            let Some(event) = (match recv_result {
                 Ok(item) => item,
                 Err(_) => {
                     self.invalidate_connection().await;
@@ -243,34 +237,24 @@ impl MikrotikRsClient {
                 break;
             };
 
-            let response = match item {
-                Ok(resp) => resp,
-                Err(e) => {
-                    self.invalidate_connection().await;
-                    return Err(DnsError::plugin(format!(
-                        "ros_address_list {action} receive failed: {e}"
-                    )));
-                }
-            };
-
-            match response {
-                CommandResponse::Reply(reply) => rows.push(RouterReply {
-                    attributes: reply.attributes,
+            match event {
+                Event::Reply { response, .. } => rows.push(RouterReply {
+                    attributes: response.attributes,
                 }),
-                CommandResponse::Done(_) | CommandResponse::Empty(_) => {}
-                CommandResponse::Trap(trap) => {
+                Event::Done { .. } | Event::Empty { .. } => {}
+                Event::Trap { response, .. } => {
                     return Err(DnsError::plugin(format!(
                         "ros_address_list {action} trap: {}",
-                        trap.message
+                        response.message
                     )));
                 }
-                CommandResponse::Fatal(reason) => {
+                Event::Fatal { reason } => {
                     self.invalidate_connection().await;
                     return Err(DnsError::plugin(format!(
                         "ros_address_list {action} fatal: {reason}"
                     )));
                 }
-            }
+            };
         }
 
         Ok(rows)
