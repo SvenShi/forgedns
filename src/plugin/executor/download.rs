@@ -28,7 +28,7 @@ use url::Url;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
-use crate::core::system_utils::parse_simple_duration;
+use crate::core::system_utils::deserialize_duration_option;
 use crate::network::http_client::{HttpClient, HttpClientOptions, HttpRequestOptions};
 use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
 use crate::plugin::executor::{ExecStep, Executor};
@@ -40,7 +40,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct DownloadConfig {
-    timeout: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_duration_option")]
+    timeout: Option<Duration>,
     insecure_skip_verify: Option<bool>,
     socks5: Option<String>,
     startup_if_missing: Option<bool>,
@@ -302,7 +303,7 @@ fn build_download_runtime_config(plugin_config: &PluginConfig) -> Result<Downloa
         .and_then(parse_download_config)?;
 
     Ok(DownloadRuntimeConfig {
-        timeout: parse_timeout(cfg.timeout.as_deref())?,
+        timeout: cfg.timeout.unwrap_or(DEFAULT_TIMEOUT),
         parsed_socks5: parse_socks5(cfg.socks5.as_deref())?,
         downloads: resolve_download_targets(&plugin_config.tag, cfg.downloads)?,
         insecure_skip_verify: cfg.insecure_skip_verify.unwrap_or(false),
@@ -314,14 +315,6 @@ fn build_download_runtime_config(plugin_config: &PluginConfig) -> Result<Downloa
 fn parse_download_config(args: Value) -> Result<DownloadConfig> {
     serde_yaml_ng::from_value::<DownloadConfig>(args)
         .map_err(|e| DnsError::plugin(format!("failed to parse download config: {}", e)))
-}
-
-fn parse_timeout(raw: Option<&str>) -> Result<Duration> {
-    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
-        return Ok(DEFAULT_TIMEOUT);
-    };
-    parse_simple_duration(raw)
-        .map_err(|e| DnsError::plugin(format!("invalid download timeout '{}': {}", raw, e)))
 }
 
 fn parse_quick_setup(raw: &str) -> Result<(String, String)> {

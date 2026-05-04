@@ -45,6 +45,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::core::error::{DnsError, Result};
+use crate::core::system_utils::deserialize_duration_option;
 use crate::network::upstream::bootstrap::Bootstrap;
 use crate::network::upstream::pool::conn_h2::{H2Connection, H2ConnectionBuilder};
 use crate::network::upstream::pool::conn_h3::{H3Connection, H3ConnectionBuilder};
@@ -192,7 +193,15 @@ pub struct UpstreamConfig {
     ///
     /// Used by connection pools to recycle idle connections and bound
     /// long-lived unused sockets.
-    pub idle_timeout: Option<u64>,
+    ///
+    /// The value accepts a duration string or a number. When a bare number is
+    /// provided, it is interpreted as seconds.
+    ///
+    /// Examples:
+    /// - `"5s"`
+    /// - `"5"` // equivalent to `"5s"`
+    #[serde(default, deserialize_with = "deserialize_duration_option")]
+    pub idle_timeout: Option<Duration>,
 
     /// Maximum number of connections in the pool
     ///
@@ -210,7 +219,17 @@ pub struct UpstreamConfig {
     /// DNS query timeout duration
     ///
     /// Maximum time to wait for a DNS response before considering the query
-    /// failed. Defaults to 5 seconds if not specified.
+    /// failed.
+    ///
+    /// The value accepts a duration string or a number. When a bare number is
+    /// provided, it is interpreted as seconds.
+    ///
+    /// Defaults to 5 seconds if not specified.
+    ///
+    /// Examples:
+    /// - `"5s"`
+    /// - `"5"` // equivalent to `"5s"`
+    #[serde(default, deserialize_with = "deserialize_duration_option")]
     pub timeout: Option<Duration>,
 
     /// Enable request pipelining for TCP/DoT connections
@@ -391,7 +410,7 @@ pub struct ConnectionInfo {
     pub insecure_skip_verify: bool,
 
     /// Connection idle timeout in seconds
-    pub idle_timeout: Option<u64>,
+    pub idle_timeout: Duration,
 
     /// Maximum number of connections in the pool
     pub max_conns: Option<usize>,
@@ -413,10 +432,10 @@ pub struct ConnectionInfo {
 }
 
 impl ConnectionInfo {
-    const DEFAULT_IDLE_TIME: u64 = 10;
+    const DEFAULT_CONN_IDLE_TIME: Duration = Duration::from_secs(10);
     const DEFAULT_MAX_CONNS_LOAD: u16 = 64;
     const DEFAULT_MAX_CONNS_SIZE: usize = 64;
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+    const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
     pub fn with_addr(addr: &str) -> Result<Self> {
         let (connection_type, host, port, path, _) = detect_connection_type(addr)?;
@@ -437,10 +456,10 @@ impl ConnectionInfo {
             connection_type,
             bootstrap: None,
             path,
-            timeout: Self::DEFAULT_TIMEOUT,
+            timeout: Self::DEFAULT_QUERY_TIMEOUT,
             server_name: host,
             insecure_skip_verify: false,
-            idle_timeout: None,
+            idle_timeout: Self::DEFAULT_CONN_IDLE_TIME,
             raw_addr: addr.to_string(),
             enable_pipeline: None,
             enable_http3: false,
@@ -535,10 +554,10 @@ impl TryFrom<UpstreamConfig> for ConnectionInfo {
             connection_type,
             bootstrap,
             path,
-            timeout: timeout.unwrap_or(Self::DEFAULT_TIMEOUT),
+            timeout: timeout.unwrap_or(Self::DEFAULT_QUERY_TIMEOUT),
             server_name: host,
             insecure_skip_verify: insecure_skip_verify.unwrap_or(false),
-            idle_timeout,
+            idle_timeout: idle_timeout.unwrap_or(Self::DEFAULT_CONN_IDLE_TIME),
             raw_addr: addr,
             enable_pipeline,
             enable_http3,
@@ -691,9 +710,7 @@ impl UpstreamBuilder {
                             .max_conns
                             .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
                         ConnectionInfo::DEFAULT_MAX_CONNS_LOAD,
-                        connection_info
-                            .idle_timeout
-                            .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME),
+                        connection_info.idle_timeout,
                         Box::new(builder),
                     );
 
@@ -704,9 +721,7 @@ impl UpstreamBuilder {
                         connection_info
                             .max_conns
                             .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
-                        connection_info
-                            .idle_timeout
-                            .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME),
+                        connection_info.idle_timeout,
                         Box::new(tcp_builder),
                     );
 
@@ -795,6 +810,7 @@ impl UpstreamBuilder {
     /// Build an upstream instance from configuration
     pub fn with_upstream_config(upstream_config: UpstreamConfig) -> Result<Box<dyn Upstream>> {
         let connection_info = ConnectionInfo::try_from(upstream_config)?;
+        debug!("create upstream, connection info: {:?}", connection_info);
         Ok(Self::with_connection_info(connection_info))
     }
 }
@@ -821,9 +837,7 @@ fn create_pipeline_pool<C: Connection>(
                 .max_conns
                 .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
             ConnectionInfo::DEFAULT_MAX_CONNS_LOAD,
-            connection_info
-                .idle_timeout
-                .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME),
+            connection_info.idle_timeout,
             builder,
         ),
         connection_info,
@@ -841,9 +855,7 @@ fn create_reuse_pool<C: Connection>(
             connection_info
                 .max_conns
                 .unwrap_or(ConnectionInfo::DEFAULT_MAX_CONNS_SIZE),
-            connection_info
-                .idle_timeout
-                .unwrap_or(ConnectionInfo::DEFAULT_IDLE_TIME),
+            connection_info.idle_timeout,
             builder,
         ),
         connection_info,
@@ -1057,8 +1069,12 @@ impl<C: Connection> BootstrapUpstream<C> {
     /// Create a new domain upstream with the given connection info and optional
     /// bootstrap server
     fn new(connection_info: ConnectionInfo) -> Self {
-        let pool: Arc<dyn ConnectionPool<C>> =
-            ReusePool::<C>::new(0, 1, 10, Box::new(DummyConnectionBuilder {}));
+        let pool: Arc<dyn ConnectionPool<C>> = ReusePool::<C>::new(
+            0,
+            1,
+            ConnectionInfo::DEFAULT_CONN_IDLE_TIME,
+            Box::new(DummyConnectionBuilder {}),
+        );
 
         let conn_info = connection_info.clone();
         let builder_factory = ConnectionBuilderFactory::new(conn_info.clone());
@@ -1134,19 +1150,33 @@ impl<C: Connection> BootstrapUpstream<C> {
 
         // Create appropriate pool type based on protocol
         let new_pool: Arc<dyn ConnectionPool<C>> = match self.connection_info.connection_type {
-            ConnectionType::UDP => {
-                PipelinePool::new(0, 1, ConnectionInfo::DEFAULT_MAX_CONNS_LOAD, 10, builder)
-            }
+            ConnectionType::UDP => PipelinePool::new(
+                0,
+                1,
+                ConnectionInfo::DEFAULT_MAX_CONNS_LOAD,
+                ConnectionInfo::DEFAULT_CONN_IDLE_TIME,
+                builder,
+            ),
             ConnectionType::TCP | ConnectionType::DoT => {
                 if self.connection_info.enable_pipeline.unwrap_or(false) {
-                    PipelinePool::new(0, 1, ConnectionInfo::DEFAULT_MAX_CONNS_LOAD, 10, builder)
+                    PipelinePool::new(
+                        0,
+                        1,
+                        ConnectionInfo::DEFAULT_MAX_CONNS_LOAD,
+                        ConnectionInfo::DEFAULT_CONN_IDLE_TIME,
+                        builder,
+                    )
                 } else {
-                    ReusePool::new(0, 1, 10, builder)
+                    ReusePool::new(0, 1, ConnectionInfo::DEFAULT_CONN_IDLE_TIME, builder)
                 }
             }
-            ConnectionType::DoQ | ConnectionType::DoH => {
-                PipelinePool::new(0, 1, ConnectionInfo::DEFAULT_MAX_CONNS_LOAD, 10, builder)
-            }
+            ConnectionType::DoQ | ConnectionType::DoH => PipelinePool::new(
+                0,
+                1,
+                ConnectionInfo::DEFAULT_MAX_CONNS_LOAD,
+                ConnectionInfo::DEFAULT_CONN_IDLE_TIME,
+                builder,
+            ),
         };
 
         // Atomically swap to new pool (lock-free, readers see old or new pool

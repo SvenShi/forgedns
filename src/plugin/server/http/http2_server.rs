@@ -15,8 +15,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
+use crate::plugin::server::http::extract_client_ip;
 use crate::plugin::server::http::http_dispatcher::HttpDispatcher;
-use crate::plugin::server::http::{DEFAULT_IDLE_TIMEOUT, extract_client_ip};
 use crate::plugin::server::{ConnectionGuard, tcp};
 
 /// Main HTTP/2 server loop (over TCP)
@@ -45,15 +45,14 @@ pub async fn run_server(
     dispatcher: Arc<HttpDispatcher>,
     server_config: Option<ServerConfig>,
     alt_svc: Option<http::HeaderValue>,
-    idle_timeout: Option<u64>,
+    idle_timeout: Duration,
     src_ip_header: Option<String>,
     mut shutdown_rx: watch::Receiver<bool>,
     startup_tx: Option<oneshot::Sender<Result<(), String>>>,
 ) {
     let mut startup_tx = startup_tx;
-    let timeout = Duration::from_secs(idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT));
 
-    let listener = match tcp::build_tcp_listener(addr, timeout) {
+    let listener = match tcp::build_tcp_listener(addr, idle_timeout) {
         Ok(s) => s,
         Err(e) => {
             if let Some(tx) = startup_tx.take() {
@@ -73,7 +72,7 @@ pub async fn run_server(
 
     info!(
         listen = %addr,
-        idle_timeout_secs = timeout.as_secs(),
+        idle_timeout_secs = idle_timeout.as_secs(),
         has_tls = %server_config.is_some(),
         alt_svc = alt_svc.as_ref().and_then(|value| value.to_str().ok()),
         "HTTP/2 server listening"
