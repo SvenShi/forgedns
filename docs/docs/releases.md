@@ -7,11 +7,37 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 
 # 版本更新
 
+## 2026-05
+
+<div className="release-stack">
+
+  <ReleaseCard version="v0.5.2" badge="Patch Release" date="2026-05-04" defaultOpen>
+      **Fixes**
+
+      - 修复 DoH（HTTP/2）和 DoH3（HTTP/3）上游连接池可能复用已关闭连接的问题。此前当远端关闭空闲连接后，连接池仍可能将失效连接视为可用，导致后续查询持续出现 `H2 send_request error` 或 `H3 send_request error`。现在连接池会在连接不可用时及时淘汰并重建连接，提升长时间运行场景下 DoH / DoH3 上游的稳定性（Closed #78）。
+      - 修复 upstream `timeout` 字段无法从配置文件正确解析的问题。此前 `timeout: 3` 和 `timeout: "3s"` 都可能在配置反序列化阶段失败，导致 forward 插件初始化失败。现在 duration 类型配置支持数字和字符串两种写法，裸数字默认按秒解析，例如 `timeout: 3` 等价于 `timeout: "3s"`（Closed #79）。
+      - 补充统一的 duration 配置解析逻辑，支持 `ms`、`s`、`m`、`h`、`d` 等单位，并让未带单位的数字默认按秒处理，减少文档示例与实际配置行为不一致的问题。
+
+      **Behavior Notes**
+
+      - `timeout`、`idle_timeout` 等 duration 配置项现在可以使用更宽松的写法，例如 `3`、`"3"`、`"3s"`、`"500ms"`。
+      - 未带单位的 duration 数字会按秒解析；如需毫秒级配置，请显式使用 `ms` 后缀。
+      - DoH / DoH3 上游在长连接空闲、远端主动关闭或连接失效后，会更稳定地回收旧连接并重新建立可用连接。
+
+      **Upgrade Notes**
+
+      - 本次发布不引入新的必填配置字段，`v0.5.1` 配置可直接升级。
+      - 如果你在 upstream 中配置了 `timeout`，或者使用 DoH / DoH3 上游并遇到长时间运行后持续请求失败的问题，建议升级到 `v0.5.2`。
+      - 原先无法生效的 `timeout: 3`、`timeout: "3s"` 等配置现在可以正常使用；裸数字默认表示秒。
+
+  </ReleaseCard>
+</div>
+
 ## 2026-04
 
 <div className="release-stack">
 
-  <ReleaseCard version="v0.5.1" badge="Patch Release" date="2026-04-28" defaultOpen>
+  <ReleaseCard version="v0.5.1" badge="Patch Release" date="2026-04-28">
       **Fixes**
 
       - 修复 `any_match` 在依赖分析阶段会丢失 quick setup 表达式的问题。现在 `qname $provider`、`qtype 1` 等 quick setup matcher 会按原表达式解析并展开依赖，避免启动和 quick setup 分析时遗漏 provider 或内联 matcher 依赖。

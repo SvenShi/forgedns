@@ -7,10 +7,34 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 
 # Release Notes
 
+## 2026-05
+
+<div className="release-stack">
+  <ReleaseCard version="v0.5.2" badge="Patch Release" date="2026-05-04" defaultOpen>
+      **Fixes**
+
+      - Fixed an issue where DoH (HTTP/2) and DoH3 (HTTP/3) upstream connection pools could reuse already closed connections. Previously, after the remote peer closed an idle connection, the pool could still treat the stale connection as reusable, causing subsequent queries to repeatedly fail with `H2 send_request error` or `H3 send_request error`. The pool now evicts unavailable connections and recreates fresh ones more reliably, improving DoH / DoH3 upstream stability during long-running deployments (Closed #78).
+      - Fixed upstream `timeout` configuration parsing. Previously, values such as `timeout: 3` and `timeout: "3s"` could fail during config deserialization, causing the forward plugin to fail during initialization. Duration-based configuration values now support both numeric and string formats. Bare numbers are interpreted as seconds, so `timeout: 3` is equivalent to `timeout: "3s"` (Closed #79).
+      - Added unified duration config parsing for duration-based fields, supporting units such as `ms`, `s`, `m`, `h`, and `d`. Bare numeric values are interpreted as seconds by default, making documented examples and actual config behavior consistent.
+
+      **Behavior Notes**
+
+      - Duration-based fields such as `timeout` and `idle_timeout` now support more flexible formats, including `3`, `"3"`, `"3s"`, and `"500ms"`.
+      - Bare duration numbers are interpreted as seconds. Use an explicit `ms` suffix for millisecond-level values.
+      - DoH / DoH3 upstreams now recover more reliably from idle connection closure, remote peer shutdown, and stale pooled connections.
+
+      **Upgrade Notes**
+
+      - This release does not introduce any new required configuration fields. Existing `v0.5.1` configurations can be upgraded directly.
+      - Users who configure upstream `timeout`, or who use DoH / DoH3 upstreams and have seen repeated request failures after long runtimes, are encouraged to upgrade to `v0.5.2`.
+      - Previously failing values such as `timeout: 3` and `timeout: "3s"` are now supported. Bare numbers are interpreted as seconds.
+  </ReleaseCard>
+</div>
+
 ## 2026-04
 
 <div className="release-stack">
-  <ReleaseCard version="v0.5.1" badge="Patch Release" date="2026-04-28" defaultOpen>
+  <ReleaseCard version="v0.5.1" badge="Patch Release" date="2026-04-28">
       **Fixes**
 
       - Fixed `any_match` dependency analysis so quick-setup matcher expressions are preserved and expanded correctly. Expressions such as `qname $provider` and `qtype 1` now keep their original meaning during startup and dependency analysis.
