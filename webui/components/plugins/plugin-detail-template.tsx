@@ -36,11 +36,7 @@ import { cn } from "@/lib/utils";
 import type { PluginDetailTemplateProps, PluginSummaryItem } from "./types";
 import { pluginTypeColors, pluginTypeIcons } from "./display";
 import { getPluginCatalogItem, renderPluginKindIcon } from "./catalog";
-import {
-  createPluginConfigFormValues,
-  PluginConfigFieldsEditor,
-  serializePluginConfigValues,
-} from "./plugin-config-fields-editor";
+import { PluginConfigModeEditor } from "./plugin-config-mode-editor";
 
 export function PluginDetailTemplate({
   plugin,
@@ -68,10 +64,7 @@ export function PluginDetailTemplate({
     JSON.stringify(plugin.config, null, 2),
   );
   const [configValues, setConfigValues] = useState<Record<string, unknown>>(
-    () =>
-      definition
-        ? createPluginConfigFormValues(definition.configSchema, plugin.config)
-        : {},
+    () => (definition ? plugin.config : {}),
   );
   const [editingName, setEditingName] = useState(false);
   const [editingConfig, setEditingConfig] = useState(false);
@@ -79,10 +72,7 @@ export function PluginDetailTemplate({
 
   const handleSaveConfig = () => {
     if (definition) {
-      updatePluginConfig(
-        plugin.id,
-        serializePluginConfigValues(definition.configSchema, configValues),
-      );
+      updatePluginConfig(plugin.id, configValues);
       setEditingConfig(false);
       return;
     }
@@ -98,9 +88,7 @@ export function PluginDetailTemplate({
   const handleCancelConfigEdit = () => {
     setConfigJson(JSON.stringify(plugin.config, null, 2));
     setConfigValues(
-      definition
-        ? createPluginConfigFormValues(definition.configSchema, plugin.config)
-        : {},
+      definition ? plugin.config : {},
     );
     setEditingConfig(false);
   };
@@ -258,7 +246,7 @@ export function PluginDetailTemplate({
               </CardHeader>
               <CardContent className="space-y-4 p-4 pt-0">
                 {definition ? (
-                  <PluginConfigFieldsEditor
+                  <PluginConfigModeEditor
                     fields={definition.configSchema}
                     plugins={plugins}
                     values={configValues}

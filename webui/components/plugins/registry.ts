@@ -19,6 +19,7 @@ import { redisPlugin } from "./kinds/redis";
 import { filePlugin } from "./kinds/file";
 import { prometheusPlugin } from "./kinds/prometheus";
 import { httpPlugin } from "./kinds/http";
+import { sequencePlugin } from "./kinds/sequence";
 
 // Optional card/detail overrides live here. If a kind is omitted or exports an
 // empty definition, the plugin center falls back to the generic templates.
@@ -26,6 +27,7 @@ export const pluginComponentRegistry: Record<
   string,
   PluginComponentDefinition
 > = {
+  sequence: sequencePlugin,
   udp: udpPlugin,
   tcp: tcpPlugin,
   doh: dohPlugin,

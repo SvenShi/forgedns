@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "@xyflow/react/dist/style.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -129,4 +130,62 @@
 body {
   @apply bg-background text-foreground;
 }
+}
+
+@layer components {
+  .sequence-flow .react-flow__pane {
+    z-index: 0;
+    cursor: grab;
+  }
+
+  .sequence-flow .react-flow__viewport,
+  .sequence-flow .react-flow__renderer {
+    pointer-events: none;
+  }
+
+  .sequence-flow .react-flow__edges,
+  .sequence-flow .react-flow__edge,
+  .sequence-flow .react-flow__handle,
+  .sequence-flow .react-flow__connection {
+    pointer-events: none;
+  }
+
+  .sequence-flow .react-flow__nodes {
+    z-index: 30;
+    pointer-events: none;
+  }
+
+  .sequence-flow .react-flow__node {
+    z-index: 40 !important;
+    pointer-events: auto;
+  }
+
+  .sequence-flow .react-flow__pane.dragging,
+  .sequence-flow .react-flow__pane.selection {
+    cursor: grabbing;
+  }
+
+  .sequence-flow .react-flow__node,
+  .sequence-flow .react-flow__node *,
+  .sequence-flow-interactive,
+  .sequence-flow-interactive * {
+    pointer-events: auto;
+  }
+
+  .sequence-flow .react-flow__node,
+  .sequence-flow-interactive {
+    cursor: default;
+  }
+
+  .sequence-flow-interactive button,
+  .sequence-flow-interactive select,
+  .sequence-flow-interactive [role="button"],
+  .sequence-flow-interactive [role="combobox"] {
+    cursor: pointer;
+  }
+
+  .sequence-flow-interactive input,
+  .sequence-flow-interactive textarea {
+    cursor: text;
+  }
 }

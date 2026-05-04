@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@xyflow/react": "^12.10.2",
     "class-variance-authority": "latest",
     "clsx": "^2.1.1",
     "lucide-react": "latest",

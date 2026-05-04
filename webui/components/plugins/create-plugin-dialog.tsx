@@ -36,9 +36,9 @@ import {
 import {
   createDefaultPluginConfigValues,
   isPluginConfigFormValid,
-  PluginConfigFieldsEditor,
-  serializePluginConfigValues,
 } from "@/components/plugins/plugin-config-fields-editor";
+import { PluginConfigModeEditor } from "@/components/plugins/plugin-config-mode-editor";
+import { SequenceComposer } from "@/components/plugins/sequence-composer";
 
 const typeIcons: Record<PluginType, React.ReactNode> = {
   server: <Server className="h-4 w-4" />,
@@ -125,10 +125,7 @@ export function CreatePluginDialog({
   const handleCreate = () => {
     if (!selectedKind || !instanceName.trim()) return;
 
-    const processedConfig = serializePluginConfigValues(
-      selectedKind.configSchema,
-      configValues,
-    );
+    const processedConfig = configValues;
 
     addPlugin({
       name: instanceName.trim(),
@@ -182,6 +179,7 @@ export function CreatePluginDialog({
     <Dialog
       open={open}
       onOpenChange={(isOpen) => {
+        if (!isOpen && isSequenceFullscreenOpen()) return;
         if (!isOpen) handleClose();
         else setOpen(true);
       }}
@@ -192,7 +190,15 @@ export function CreatePluginDialog({
           新建插件
         </Button>
       </DialogTrigger>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:!max-w-[920px] lg:!max-w-[1080px] max-h-[90vh] p-4 gap-0 overflow-hidden">
+      <DialogContent
+        className="w-[calc(100vw-2rem)] sm:!max-w-[920px] lg:!max-w-[1080px] max-h-[90vh] p-4 gap-0 overflow-hidden"
+        onPointerDownOutside={(event) => {
+          if (isSequenceFullscreenEvent(event)) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (isSequenceFullscreenEvent(event)) event.preventDefault();
+        }}
+      >
         {!selectedKind ? (
           <>
             <DialogHeader className="px-6 pt-6 pb-4">
@@ -300,12 +306,21 @@ export function CreatePluginDialog({
 
                   <div className="border-t pt-4 mt-2">
                     <h4 className="text-sm font-medium mb-3">插件配置</h4>
-                    <PluginConfigFieldsEditor
-                      fields={selectedKind.configSchema}
-                      plugins={plugins}
-                      values={configValues}
-                      onChange={setConfigValues}
-                    />
+                    {selectedKind.kind === "sequence" ? (
+                      <SequenceComposer
+                        value={configValues}
+                        onChange={setConfigValues}
+                        plugins={plugins}
+                        currentSequenceName={instanceName.trim() || undefined}
+                      />
+                    ) : (
+                      <PluginConfigModeEditor
+                        fields={selectedKind.configSchema}
+                        plugins={plugins}
+                        values={configValues}
+                        onChange={setConfigValues}
+                      />
+                    )}
                   </div>
                 </FieldGroup>
               </div>
@@ -323,4 +338,16 @@ export function CreatePluginDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function isSequenceFullscreenEvent(event: Event) {
+  const target = event.target;
+  return (
+    target instanceof Element &&
+    Boolean(target.closest("[data-sequence-fullscreen='true']"))
+  );
+}
+
+function isSequenceFullscreenOpen() {
+  return Boolean(document.querySelector("[data-sequence-fullscreen='true']"));
 }
