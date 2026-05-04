@@ -161,7 +161,7 @@ impl Plugin for AnyMatchMatcher {
                 )?,
 
                 PluginRef::QuickSetup { plugin_type, param } => {
-                    let quick_tag = format!("@qs:match:{}:{}:{}", &self.tag, idx, plugin_type);
+                    let quick_tag = format!("@qs:match:{}:{}:{}", self.tag, idx, plugin_type);
 
                     let uninitialized: UninitializedPlugin =
                         self.registry
