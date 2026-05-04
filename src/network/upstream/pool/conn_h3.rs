@@ -27,6 +27,11 @@ use crate::network::upstream::utils::{
 use crate::network::upstream::{Connection, ConnectionInfo};
 use crate::proto::Message;
 
+enum H3RecvError {
+    Transport(DnsError),
+    HttpStatus(DnsError),
+}
+
 pub struct H3Connection {
     id: u16,
     sender: SendRequest<OpenStreams, Bytes>,
@@ -61,6 +66,26 @@ impl Connection for H3Connection {
         self.last_used
             .store(AppClock::elapsed_millis(), Ordering::Relaxed);
 
+        let result = self.query_inner(request).await;
+        self.using_count.fetch_sub(1, Ordering::Relaxed);
+        result
+    }
+
+    fn using_count(&self) -> u16 {
+        self.using_count.load(Ordering::Relaxed)
+    }
+
+    fn available(&self) -> bool {
+        !self.closed.load(Ordering::Relaxed)
+    }
+
+    fn last_used(&self) -> u64 {
+        self.last_used.load(Ordering::Relaxed)
+    }
+}
+
+impl H3Connection {
+    async fn query_inner(&self, request: Message) -> Result<Message> {
         let raw_id = request.id();
         let mut body_bytes = wire_buffer_pool().acquire();
         request.append_to_with_id(0, &mut body_bytes)?;
@@ -77,46 +102,34 @@ impl Connection for H3Connection {
             .send_request(request)
             .await
             .map_err(|e| {
-                self.using_count.fetch_sub(1, Ordering::Relaxed);
+                self.close();
                 DnsError::protocol(format!("H3 send_request error: {e}"))
             })?;
 
-        request_stream
-            .finish()
-            .await
-            .map_err(|err| DnsError::protocol(format!("H3 received a stream error: {err}")))?;
+        request_stream.finish().await.map_err(|err| {
+            self.close();
+            DnsError::protocol(format!("H3 received a stream error: {err}"))
+        })?;
 
-        let result = match timeout(self.timeout, recv(request_stream)).await {
+        match timeout(self.timeout, recv(request_stream)).await {
             Ok(Ok(bytes)) => {
                 let mut resp = Message::from_bytes(&bytes)?;
                 resp.set_id(raw_id);
                 trace!(conn_id = self.id, raw_id, "Received H3 response");
                 Ok(resp)
             }
-            Ok(Err(e)) => {
+            Ok(Err(H3RecvError::Transport(e))) => {
+                self.close();
                 warn!(conn_id = self.id, raw_id, ?e, "H3 request error");
                 Err(e)
             }
+            Ok(Err(H3RecvError::HttpStatus(e))) => Err(e),
             Err(_) => {
+                self.close();
                 warn!(conn_id = self.id, raw_id, "H3 request timeout");
                 Err(DnsError::protocol("dns query timeout"))
             }
-        };
-
-        self.using_count.fetch_sub(1, Ordering::Relaxed);
-        result
-    }
-
-    fn using_count(&self) -> u16 {
-        self.using_count.load(Ordering::Relaxed)
-    }
-
-    fn available(&self) -> bool {
-        !self.closed.load(Ordering::Relaxed)
-    }
-
-    fn last_used(&self) -> u64 {
-        self.last_used.load(Ordering::Relaxed)
+        }
     }
 }
 
@@ -190,6 +203,7 @@ impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
         let _driver_handle = tokio::spawn(async move {
             select! {
                 _ = poll_fn(|cx| driver.poll_close(cx)) => {
+                    _conn.close();
                     debug!(conn_id, "H3 connection poll closed");
                 }
                 _ = _conn.close_notify.notified()=>{
@@ -203,19 +217,18 @@ impl ConnectionBuilder<H3Connection> for H3ConnectionBuilder {
     }
 }
 
-async fn recv(mut request_stream: RequestStream<BidiStream<Bytes>, Bytes>) -> Result<Bytes> {
-    let mut response = request_stream
-        .recv_response()
-        .await
-        .map_err(|e| DnsError::protocol(format!("H3 response error: {}", e)))?;
+async fn recv(
+    mut request_stream: RequestStream<BidiStream<Bytes>, Bytes>,
+) -> std::result::Result<Bytes, H3RecvError> {
+    let mut response = request_stream.recv_response().await.map_err(|e| {
+        H3RecvError::Transport(DnsError::protocol(format!("H3 response error: {}", e)))
+    })?;
 
     let mut response_bytes = get_cap_buf_with_context_len(&mut response);
 
-    while let Some(partial_bytes) = request_stream
-        .recv_data()
-        .await
-        .map_err(|e| DnsError::protocol(format!("h3 recv_data error: {e}")))?
-    {
+    while let Some(partial_bytes) = request_stream.recv_data().await.map_err(|e| {
+        H3RecvError::Transport(DnsError::protocol(format!("h3 recv_data error: {e}")))
+    })? {
         response_bytes.put(partial_bytes);
     }
 
@@ -223,11 +236,11 @@ async fn recv(mut request_stream: RequestStream<BidiStream<Bytes>, Bytes>) -> Re
     if !response.status().is_success() {
         let error_string = String::from_utf8_lossy(response_bytes.as_ref());
 
-        Err(DnsError::protocol(format!(
+        Err(H3RecvError::HttpStatus(DnsError::protocol(format!(
             "http unsuccessful code: {}, message: {}",
             response.status(),
             error_string
-        )))
+        ))))
     } else {
         Ok(response_bytes.freeze())
     }

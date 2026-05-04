@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes};
@@ -25,6 +26,11 @@ use crate::network::upstream::utils::{
 use crate::network::upstream::{Connection, ConnectionInfo, Socks5Opt};
 use crate::proto::Message;
 
+enum H2RecvError {
+    Transport(DnsError),
+    HttpStatus(DnsError),
+}
+
 #[derive(Debug)]
 pub struct H2Connection {
     id: u16,
@@ -32,7 +38,7 @@ pub struct H2Connection {
     using_count: AtomicU16,
     closed: AtomicBool,
     last_used: AtomicU64,
-    timeout: std::time::Duration,
+    timeout: Duration,
     request_uri: String,
     close_notify: Notify,
 }
@@ -55,6 +61,26 @@ impl Connection for H2Connection {
         self.last_used
             .store(AppClock::elapsed_millis(), Ordering::Relaxed);
 
+        let result = self.query_inner(request).await;
+        self.using_count.fetch_sub(1, Ordering::Relaxed);
+        result
+    }
+
+    fn using_count(&self) -> u16 {
+        self.using_count.load(Ordering::Relaxed)
+    }
+
+    fn available(&self) -> bool {
+        !self.closed.load(Ordering::Relaxed)
+    }
+
+    fn last_used(&self) -> u64 {
+        self.last_used.load(Ordering::Relaxed)
+    }
+}
+
+impl H2Connection {
+    async fn query_inner(&self, request: Message) -> Result<Message> {
         let raw_id = request.id();
         let mut body_bytes = wire_buffer_pool().acquire();
         request.append_to_with_id(0, &mut body_bytes)?;
@@ -73,40 +99,29 @@ impl Connection for H2Connection {
             // will wait for an end-of-stream signal and never produce a response.
             .send_request(request, true)
             .map_err(|e| {
-                self.using_count.fetch_sub(1, Ordering::Relaxed);
+                self.close();
                 DnsError::protocol(format!("H2 send_request error: {e}"))
             })?;
 
-        let result = match timeout(self.timeout, recv(response_future)).await {
+        match timeout(self.timeout, recv(response_future)).await {
             Ok(Ok(bytes)) => {
                 let mut resp = Message::from_bytes(&bytes)?;
                 resp.set_id(raw_id);
                 trace!(conn_id = self.id, raw_id, "Received H2 response");
                 Ok(resp)
             }
-            Ok(Err(e)) => {
+            Ok(Err(H2RecvError::Transport(e))) => {
+                self.close();
                 warn!(conn_id = self.id, raw_id, ?e, "H2 request error");
                 Err(e)
             }
+            Ok(Err(H2RecvError::HttpStatus(e))) => Err(e),
             Err(_) => {
+                self.close();
                 warn!(conn_id = self.id, raw_id, "H2 request timeout");
                 Err(DnsError::protocol("dns query timeout"))
             }
-        };
-        self.using_count.fetch_sub(1, Ordering::Relaxed);
-        result
-    }
-
-    fn using_count(&self) -> u16 {
-        self.using_count.load(Ordering::Relaxed)
-    }
-
-    fn available(&self) -> bool {
-        !self.closed.load(Ordering::Relaxed)
-    }
-
-    fn last_used(&self) -> u64 {
-        self.last_used.load(Ordering::Relaxed)
+        }
     }
 }
 
@@ -115,7 +130,7 @@ impl Connection for H2Connection {
 pub struct H2ConnectionBuilder {
     remote_ip: Option<IpAddr>,
     port: u16,
-    timeout: std::time::Duration,
+    timeout: Duration,
     server_name: String,
     request_uri: String,
     insecure_skip_verify: bool,
@@ -182,9 +197,10 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
         tokio::spawn(async move {
             select! {
                 res = connection => {
-                    if let Err(e) = res {
-                        _conn.close();
-                        debug!(conn_id, ?e, "H2 connection error");
+                    _conn.close();
+                    match res {
+                        Ok(()) => debug!(conn_id, "H2 connection closed"),
+                        Err(e) => debug!(conn_id, ?e, "H2 connection error"),
                     }
                 }
                 _ = _conn.close_notify.notified() => {
@@ -197,25 +213,28 @@ impl ConnectionBuilder<H2Connection> for H2ConnectionBuilder {
     }
 }
 
-async fn recv(response_future: ResponseFuture) -> Result<Bytes> {
-    let mut response = response_future
-        .await
-        .map_err(|e| DnsError::protocol(format!("H2 response error: {}", e)))?;
+async fn recv(response_future: ResponseFuture) -> std::result::Result<Bytes, H2RecvError> {
+    let mut response = response_future.await.map_err(|e| {
+        H2RecvError::Transport(DnsError::protocol(format!("H2 response error: {}", e)))
+    })?;
 
     let status_code = response.status();
     let mut response_bytes = get_cap_buf_with_context_len(&mut response);
     let mut body = response.into_body();
 
-    while let Some(Ok(partial_bytes)) = body.data().await {
+    while let Some(partial_bytes) = body.data().await {
+        let partial_bytes = partial_bytes.map_err(|e| {
+            H2RecvError::Transport(DnsError::protocol(format!("H2 body error: {}", e)))
+        })?;
         response_bytes.put_slice(&partial_bytes);
     }
 
     if !status_code.is_success() {
         let error_string = String::from_utf8_lossy(response_bytes.as_ref());
-        Err(DnsError::protocol(format!(
+        Err(H2RecvError::HttpStatus(DnsError::protocol(format!(
             "http unsuccessful code: {}, message: {}",
             status_code, error_string
-        )))
+        ))))
     } else {
         Ok(response_bytes.freeze())
     }
