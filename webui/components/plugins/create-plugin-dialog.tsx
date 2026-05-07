@@ -315,6 +315,7 @@ export function CreatePluginDialog({
                       />
                     ) : (
                       <PluginConfigModeEditor
+                        key={selectedKind.kind}
                         fields={selectedKind.configSchema}
                         plugins={plugins}
                         values={configValues}

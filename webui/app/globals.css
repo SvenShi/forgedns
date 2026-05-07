@@ -138,11 +138,6 @@ body {
     cursor: grab;
   }
 
-  .sequence-flow .react-flow__viewport,
-  .sequence-flow .react-flow__renderer {
-    pointer-events: none;
-  }
-
   .sequence-flow .react-flow__edges,
   .sequence-flow .react-flow__edge,
   .sequence-flow .react-flow__handle,
@@ -160,16 +155,16 @@ body {
     pointer-events: auto;
   }
 
-  .sequence-flow .react-flow__pane.dragging,
-  .sequence-flow .react-flow__pane.selection {
-    cursor: grabbing;
-  }
-
   .sequence-flow .react-flow__node,
   .sequence-flow .react-flow__node *,
   .sequence-flow-interactive,
   .sequence-flow-interactive * {
     pointer-events: auto;
+  }
+
+  .sequence-flow .react-flow__pane.dragging,
+  .sequence-flow .react-flow__pane.selection {
+    cursor: grabbing;
   }
 
   .sequence-flow .react-flow__node,

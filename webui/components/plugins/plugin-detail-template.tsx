@@ -247,6 +247,7 @@ export function PluginDetailTemplate({
               <CardContent className="space-y-4 p-4 pt-0">
                 {definition ? (
                   <PluginConfigModeEditor
+                    key={plugin.id}
                     fields={definition.configSchema}
                     plugins={plugins}
                     values={configValues}

@@ -5,7 +5,7 @@
 
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { AlertCircle } from "lucide-react";
 import { YamlEditor } from "@/components/config/yaml-editor";
 import { Badge } from "@/components/ui/badge";
@@ -48,20 +48,24 @@ export function PluginConfigModeEditor({
     stringifyPluginConfigYaml(values),
   );
   const [yamlError, setYamlError] = useState<string | null>(null);
-  const schemaValues = useMemo(
-    () => createPluginConfigFormValues(fields, values),
-    [fields, values],
+  const [fieldValues, setFieldValues] = useState(() =>
+    createPluginConfigFormValues(fields, values),
   );
 
   const handleModeChange = (nextMode: "fields" | "yaml") => {
     if (nextMode === "yaml") {
-      setYamlText(stringifyPluginConfigYaml(values));
+      setYamlText(
+        stringifyPluginConfigYaml(
+          serializePluginConfigValues(fields, fieldValues),
+        ),
+      );
       setYamlError(null);
     }
     setMode(nextMode);
   };
 
   const handleFieldChange = (nextValues: Record<string, unknown>) => {
+    setFieldValues(nextValues);
     onChange(serializePluginConfigValues(fields, nextValues));
   };
 
@@ -81,7 +85,9 @@ export function PluginConfigModeEditor({
       !Array.isArray(parsed.value)
     ) {
       setYamlError(null);
-      onChange(parsed.value as Record<string, unknown>);
+      const parsedValues = parsed.value as Record<string, unknown>;
+      setFieldValues(createPluginConfigFormValues(fields, parsedValues));
+      onChange(parsedValues);
       return;
     }
 
@@ -109,7 +115,7 @@ export function PluginConfigModeEditor({
         <PluginConfigFieldsEditor
           fields={fields}
           plugins={plugins}
-          values={schemaValues}
+          values={fieldValues}
           onChange={handleFieldChange}
           defaultArrayObjectCollapsed={defaultArrayObjectCollapsed}
           readOnly={readOnly}

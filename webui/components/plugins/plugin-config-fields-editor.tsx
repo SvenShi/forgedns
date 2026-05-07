@@ -22,6 +22,11 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ConfigField, ConfigFieldChild } from "@/lib/plugin-definitions";
 import type { PluginInstance, PluginType } from "@/lib/types";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
@@ -65,6 +70,37 @@ const arraySyntaxLabels: Record<ArrayItemSyntax, string> = {
   quick: "表达式",
   domain: "域名规则",
 };
+
+function InvertCheckbox({
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={`flex h-8 w-6 shrink-0 items-center justify-center rounded-md border font-mono text-sm font-bold leading-none ${
+            checked
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-input bg-background text-transparent"
+          } disabled:cursor-not-allowed disabled:opacity-50`}
+          aria-label="取反匹配"
+          disabled={disabled}
+          onClick={() => onCheckedChange(!checked)}
+        >
+          !
+        </button>
+      </TooltipTrigger>
+      <TooltipContent sideOffset={6}>取反匹配</TooltipContent>
+    </Tooltip>
+  );
+}
 
 export function createDefaultPluginConfigValues(fields: ConfigField[]) {
   const defaults: Record<string, unknown> = {};
@@ -562,6 +598,17 @@ function ConfigFieldControl({
 
       return (
         <div className="flex items-center gap-2">
+          {referenceCanInvert && (
+            <InvertCheckbox
+              checked={referenceInverted}
+              disabled={readOnly || !referenceValue}
+              onCheckedChange={(checked) =>
+                onChange(
+                  `${checked ? "!" : ""}${field.referencePrefix ?? ""}${stripReferencePrefix(referenceValue)}`,
+                )
+              }
+            />
+          )}
           <PluginReferencePicker
             plugins={plugins}
             value={referenceValue}
@@ -574,20 +621,6 @@ function ConfigFieldControl({
               )
             }
           />
-          {referenceCanInvert && (
-            <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-              <Switch
-                checked={referenceInverted}
-                disabled={readOnly || !referenceValue}
-                onCheckedChange={(checked) =>
-                  onChange(
-                    `${checked ? "!" : ""}${field.referencePrefix ?? ""}${stripReferencePrefix(referenceValue)}`,
-                  )
-                }
-              />
-              取反
-            </label>
-          )}
         </div>
       );
     default:
@@ -1075,6 +1108,20 @@ function ArrayItemInput({
 
     return (
       <div className="flex min-w-0 items-center gap-2">
+        {canInvert && (
+          <InvertCheckbox
+            checked={!!item.invert}
+            disabled={readOnly || !stripInvertPrefix(item.value)}
+            onCheckedChange={(checked) =>
+              onChange({
+                invert: checked,
+                value: checked
+                  ? `!$${stripInvertPrefix(item.value)}`
+                  : `$${stripInvertPrefix(item.value)}`,
+              })
+            }
+          />
+        )}
         <PluginReferencePicker
           plugins={plugins}
           value={stripInvertPrefix(item.value)}
@@ -1087,23 +1134,6 @@ function ArrayItemInput({
             })
           }
         />
-        {canInvert && (
-          <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            <Switch
-              checked={!!item.invert}
-              disabled={readOnly || !stripInvertPrefix(item.value)}
-              onCheckedChange={(checked) =>
-                onChange({
-                  invert: checked,
-                  value: checked
-                    ? `!$${stripInvertPrefix(item.value)}`
-                    : `$${stripInvertPrefix(item.value)}`,
-                })
-              }
-            />
-            取反
-          </label>
-        )}
       </div>
     );
   }

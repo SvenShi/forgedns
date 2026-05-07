@@ -5,12 +5,7 @@
 
 "use client";
 
-import {
-  useMemo,
-  useState,
-  type ReactNode,
-  type SyntheticEvent,
-} from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   Background,
@@ -60,8 +55,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   getPluginCatalogItem,
   getPluginCatalogItemsByType,
@@ -201,9 +200,21 @@ export function SequenceComposer({
   );
   const [yamlError, setYamlError] = useState<string | null>(null);
   const rules = useMemo(() => parseSequenceRules(value.args), [value.args]);
-  const sequenceTags = plugins
-    .filter((plugin) => plugin.type === "executor" && plugin.pluginKind === "sequence")
-    .map((plugin) => plugin.name);
+
+  const sequenceTags = useMemo(() => {
+    const tags = new Set(
+      plugins
+        .filter(
+          (plugin) =>
+            plugin.type === "executor" && plugin.pluginKind === "sequence",
+        )
+        .map((plugin) => plugin.name),
+    );
+    if (currentSequenceName?.trim()) {
+      tags.add(currentSequenceName.trim());
+    }
+    return Array.from(tags).sort((left, right) => left.localeCompare(right));
+  }, [currentSequenceName, plugins]);
 
   const updateRules = (nextRules: SequenceRule[]) => {
     onChange({ ...value, args: serializeSequenceRules(nextRules) });
@@ -513,7 +524,7 @@ function SequenceCanvas({
         noDragClassName="sequence-flow-interactive"
         noPanClassName="sequence-flow-interactive"
         noWheelClassName="sequence-flow-interactive"
-        panOnDrag={[1]}
+        panOnDrag={[0]}
         zoomOnScroll
         zoomOnPinch
         zoomOnDoubleClick={false}
@@ -550,13 +561,15 @@ function buildSequenceFlow({
   const baseVisited = currentSequenceName
     ? new Set([currentSequenceName])
     : new Set<string>();
+  let currentY = 0;
 
   rules.forEach((rule, index) => {
     const ruleId = `rule-${rule.id}`;
+    const ruleY = currentY;
     nodes.push({
       id: ruleId,
       type: "rule",
-      position: { x: 0, y: index * 260 },
+      position: { x: 0, y: ruleY },
       data: {
         rule,
         index,
@@ -592,7 +605,7 @@ function buildSequenceFlow({
       nodes.push({
         id: previewId,
         type: "preview",
-        position: { x: 900, y: index * 260 },
+        position: { x: 1120, y: ruleY },
         data: {
           action: rule.action,
           plugins,
@@ -615,9 +628,18 @@ function buildSequenceFlow({
         },
       });
     }
+
+    currentY += estimateRuleNodeHeight(rule) + 40;
   });
 
   return { nodes, edges };
+}
+
+function estimateRuleNodeHeight(rule: SequenceRule) {
+  const baseHeight = 176;
+  const conditionCount = Math.max(rule.matches.length, 1);
+  const extraConditions = Math.max(conditionCount - 1, 0);
+  return baseHeight + extraConditions * 94;
 }
 
 function SequenceRuleFlowNode({ data }: NodeProps<Node<RuleNodeData, "rule">>) {
@@ -647,18 +669,7 @@ function SequencePreviewFlowNode({
 }
 
 function InteractiveNodeFrame({ children }: { children: ReactNode }) {
-  return (
-    <div
-      className={sequenceNodeInteractionClass}
-      onWheel={stopCanvasEvent}
-    >
-      {children}
-    </div>
-  );
-}
-
-function stopCanvasEvent(event: SyntheticEvent) {
-  event.stopPropagation();
+  return <div className={sequenceNodeInteractionClass}>{children}</div>;
 }
 
 function InlineSelect({
@@ -666,25 +677,31 @@ function InlineSelect({
   options,
   disabled,
   onChange,
+  placeholder,
+  className,
 }: {
   value: string;
   options: Array<{ value: string; label: string }>;
   disabled: boolean;
   onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
 }) {
   return (
-    <select
-      value={value}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-      className="h-8 min-w-0 rounded-lg border border-input bg-background px-2 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
+    <Select value={value} onValueChange={onChange} disabled={disabled}>
+      <SelectTrigger
+        className={`h-8 min-w-0 bg-background ${className ?? ""}`}
+      >
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent className="z-[1200]">
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -731,8 +748,8 @@ function SequenceRuleNode({
   };
 
   return (
-    <div className="nodrag nopan nowheel">
-      <Card className="w-[760px] rounded-lg bg-background py-0 shadow-sm">
+    <div className={sequenceNodeInteractionClass}>
+      <Card className="w-[980px] max-w-[94vw] rounded-lg bg-background py-0 shadow-sm">
         <CardHeader className="grid grid-cols-[1fr_auto] items-center gap-2 border-b px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
             <Badge variant="secondary" className="font-mono">
@@ -776,7 +793,7 @@ function SequenceRuleNode({
             </div>
           )}
         </CardHeader>
-        <CardContent className="grid gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <CardContent className="grid gap-4 p-3 lg:grid-cols-[minmax(20rem,1fr)_auto_minmax(27rem,1fr)]">
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium text-muted-foreground">
@@ -851,45 +868,67 @@ function ConditionEditor({
 }) {
   return (
     <div className="rounded-md border bg-muted/20 p-2">
-      <div className="grid gap-2 sm:grid-cols-[7.5rem_1fr_auto]">
-        <InlineSelect
-          value={condition.mode}
-          onChange={(mode) =>
-            onChange({
-              mode: mode as ConditionMode,
-              value: condition.value || defaultConditionValue(mode as ConditionMode),
-            })
-          }
-          disabled={readOnly}
-          options={Object.entries(conditionModeLabels).map(([value, label]) => ({
-            value,
-            label,
-          }))}
-        />
-        {condition.mode === "reference" ? (
-          <ReferenceCreatePicker
-            plugins={plugins}
-            value={stripReferencePrefix(condition.value)}
-            referenceTypes={["matcher"]}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1">
+          <InlineSelect
+            value={condition.mode}
+            onChange={(mode) => {
+              const nextMode = mode as ConditionMode;
+              const currentValue = condition.value.trim();
+              const nextValue =
+                nextMode === "reference"
+                  ? stripReferencePrefix(currentValue) || "has_resp"
+                  : nextMode === condition.mode
+                    ? currentValue
+                    : defaultConditionValue(nextMode);
+
+              onChange({
+                mode: nextMode,
+                value:
+                  nextMode === "reference" ? `$${stripReferencePrefix(nextValue)}` : nextValue,
+              });
+            }}
             disabled={readOnly}
-            placeholder="选择 matcher"
-            onChange={(tag) => onChange({ value: `$${tag}` })}
+            className={condition.mode === "reference" ? "w-[5rem]" : "w-[5.5rem]"}
+            options={Object.entries(conditionModeLabels).map(([value, label]) => ({
+              value,
+              label,
+            }))}
           />
-        ) : (
-          <Input
-            value={condition.value}
-            onChange={(event) => onChange({ value: event.target.value })}
-            placeholder="has_resp / qname domain:example.com"
-            className="h-8 font-mono text-xs"
-            disabled={readOnly}
-          />
-        )}
+          {condition.mode === "reference" && (
+            <InvertCheckbox
+              checked={condition.invert}
+              disabled={readOnly}
+              onCheckedChange={(invert) => onChange({ invert })}
+            />
+          )}
+        </div>
+        <div className="min-w-[14rem] flex-1">
+          {condition.mode === "reference" ? (
+            <ReferenceCreatePicker
+              plugins={plugins}
+              value={stripReferencePrefix(condition.value)}
+              referenceTypes={["matcher"]}
+              disabled={readOnly}
+              placeholder="选择 matcher"
+              onChange={(tag) => onChange({ value: `$${tag}` })}
+            />
+          ) : (
+            <Input
+              value={condition.value}
+              onChange={(event) => onChange({ value: event.target.value })}
+              placeholder="has_resp / qname domain:example.com"
+              className="h-8 w-full font-mono text-xs"
+              disabled={readOnly}
+            />
+          )}
+        </div>
         {!readOnly && (
           <Button
             type="button"
             variant="outline"
             size="icon"
-            className="h-8 w-8"
+            className="h-8 w-8 shrink-0"
             onClick={onDelete}
             aria-label="删除条件"
           >
@@ -897,15 +936,38 @@ function ConditionEditor({
           </Button>
         )}
       </div>
-      <div className="mt-2 flex items-center gap-2">
-        <Switch
-          checked={condition.invert}
-          disabled={readOnly}
-          onCheckedChange={(invert) => onChange({ invert })}
-        />
-        <span className="text-xs text-muted-foreground">取反</span>
-      </div>
     </div>
+  );
+}
+
+function InvertCheckbox({
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={`flex h-8 w-6 shrink-0 items-center justify-center rounded-md border font-mono text-sm font-bold leading-none ${
+            checked
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-input bg-background text-transparent"
+          } disabled:cursor-not-allowed disabled:opacity-50`}
+          aria-label="取反匹配"
+          disabled={disabled}
+          onClick={() => onCheckedChange(!checked)}
+        >
+          !
+        </button>
+      </TooltipTrigger>
+      <TooltipContent sideOffset={6}>取反匹配</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -960,7 +1022,7 @@ function SequenceReferencePreview({
           <span>
             {action.control} 到{" "}
             <span className="font-mono text-foreground">{target}</span>{" "}
-            的只读执行链
+            执行链
           </span>
         </div>
         <div className="space-y-3">
@@ -1014,9 +1076,18 @@ function ActionEditor({
       return;
     }
 
+    const nextValue =
+      mode === action.mode
+        ? action.value
+        : mode === "text"
+          ? action.mode === "text"
+            ? action.value
+            : ""
+          : action.value || defaultActionValue(mode);
+
     onChange({
       mode,
-      value: action.value || defaultActionValue(mode),
+      value: nextValue,
       control: "accept",
     });
   };
@@ -1030,12 +1101,13 @@ function ActionEditor({
   };
 
   return (
-    <div className="rounded-md border bg-muted/20 p-2">
-      <div className="grid gap-2 sm:grid-cols-[7.5rem_1fr]">
+    <div className="w-full rounded-md border bg-muted/20 p-2">
+      <div className="grid min-w-0 gap-2 sm:grid-cols-[8rem_8rem_minmax(8rem,1fr)]">
         <InlineSelect
           value={action.mode}
           onChange={(mode) => updateMode(mode as ActionMode)}
           disabled={readOnly}
+          className="w-full"
           options={Object.entries(actionModeLabels).map(([value, label]) => ({
             value,
             label,
@@ -1043,45 +1115,48 @@ function ActionEditor({
         />
 
         {action.mode === "reference" && (
-          <ReferenceCreatePicker
-            plugins={plugins}
-            value={stripReferencePrefix(action.value)}
-            referenceTypes={["executor"]}
-            disabled={readOnly}
-            placeholder="选择 executor"
-            onChange={(tag) =>
-              onChange({ mode: "reference", value: `$${tag}`, control: action.control })
-            }
-          />
+          <div className="min-w-0 sm:col-span-2">
+            <ReferenceCreatePicker
+              plugins={plugins}
+              value={stripReferencePrefix(action.value)}
+              referenceTypes={["executor"]}
+              disabled={readOnly}
+              placeholder="选择 executor"
+              onChange={(tag) =>
+                onChange({ mode: "reference", value: `$${tag}`, control: action.control })
+              }
+            />
+          </div>
         )}
 
         {action.mode === "text" && (
-          <Input
-            value={action.value}
-            onChange={(event) =>
-              onChange({ ...action, value: event.target.value })
-            }
-            placeholder="forward 1.1.1.1 / ttl 300 / debug_print hit"
-            className="h-8 font-mono text-xs"
-            disabled={readOnly}
-          />
+          <div className="min-w-0 sm:col-span-2">
+            <Input
+              value={action.value}
+              onChange={(event) =>
+                onChange({ ...action, value: event.target.value })
+              }
+              placeholder="forward 1.1.1.1 / ttl 300 / debug_print hit"
+              className="h-8 w-full font-mono text-xs"
+              disabled={readOnly}
+            />
+          </div>
         )}
 
         {action.mode === "control" && (
-          <div className="grid gap-2 sm:grid-cols-[8rem_1fr]">
+          <div className="contents">
             <InlineSelect
               value={action.control}
               onChange={(control) => updateControl(control as ControlKind)}
               disabled={readOnly}
+              className="w-full"
               options={builtinControls.map((control) => ({
                 value: control,
                 label: controlLabels[control],
               }))}
             />
             {action.control === "accept" || action.control === "return" ? (
-              <div className="flex h-8 items-center rounded-md border bg-background px-2 font-mono text-xs text-muted-foreground">
-                {action.control}
-              </div>
+              <div className="hidden sm:block" />
             ) : action.control === "jump" || action.control === "goto" ? (
               <SequenceTargetInput
                 value={controlArg}
@@ -1106,7 +1181,7 @@ function ActionEditor({
                   })
                 }
                 placeholder={action.control === "reject" ? "3" : "1,2,3"}
-                className="h-8 font-mono text-xs"
+                className="h-8 max-w-[16rem] w-full font-mono text-xs"
                 disabled={readOnly}
               />
             )}
@@ -1121,29 +1196,42 @@ function SequenceTargetInput({
   value,
   sequenceTags,
   disabled,
+  className,
   onChange,
 }: {
   value: string;
   sequenceTags: string[];
   disabled: boolean;
+  className?: string;
   onChange: (value: string) => void;
 }) {
+  if (sequenceTags.length === 0) {
+    return (
+      <div className="min-w-0 max-w-[16rem]">
+        <Input
+          value=""
+          placeholder="暂无 sequence"
+          className={`h-8 w-full min-w-0 max-w-full font-mono text-xs ${className ?? ""}`}
+          disabled
+        />
+      </div>
+    );
+  }
+
   return (
-    <>
-      <Input
+    <div className="min-w-0 max-w-[16rem]">
+      <InlineSelect
         value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="seq_tag"
-        className="h-8 font-mono text-xs"
+        onChange={onChange}
+        placeholder="选择 sequence"
+        className={`w-full min-w-0 font-mono text-xs ${className ?? ""}`}
         disabled={disabled}
-        list="sequence-targets"
+        options={sequenceTags.map((tag) => ({
+          value: tag,
+          label: tag,
+        }))}
       />
-      <datalist id="sequence-targets">
-        {sequenceTags.map((tag) => (
-          <option key={tag} value={tag} />
-        ))}
-      </datalist>
-    </>
+    </div>
   );
 }
 
@@ -1191,7 +1279,7 @@ function ReferenceCreatePicker({
           <Button
             type="button"
             variant="outline"
-            className="h-8 min-w-0 justify-between bg-background font-normal"
+            className="h-8 w-full min-w-0 justify-between bg-background font-normal"
             disabled={disabled}
           >
             {selectedPlugin ? (
@@ -1403,14 +1491,15 @@ function QuickCreatePluginDialog({
 
 export function parseSequenceRules(value: unknown): SequenceRule[] {
   if (!Array.isArray(value)) return [];
-  return value.map((entry) => {
+  return value.map((entry, index) => {
     const record: Record<string, unknown> =
       entry && typeof entry === "object" && !Array.isArray(entry)
         ? (entry as Record<string, unknown>)
         : { exec: entry };
+    const ruleId = createStableItemId("rule", index);
     return {
-      id: createItemId(),
-      matches: parseMatches(record.matches),
+      id: ruleId,
+      matches: parseMatches(record.matches, ruleId),
       action: parseAction(record.exec),
     };
   });
@@ -1423,13 +1512,13 @@ export function serializeSequenceRules(rules: SequenceRule[]) {
       const matches = serializeMatches(rule.matches);
       const exec = serializeAction(rule.action);
       if (matches !== undefined) entry.matches = matches;
-      if (exec) entry.exec = exec;
+      if (exec || rule.action.mode === "text") entry.exec = exec;
       return entry;
     })
     .filter((entry) => Object.keys(entry).length > 0);
 }
 
-function parseMatches(value: unknown): SequenceCondition[] {
+function parseMatches(value: unknown, ruleId: string): SequenceCondition[] {
   const entries = Array.isArray(value)
     ? value
     : typeof value === "string" && value.trim()
@@ -1439,22 +1528,24 @@ function parseMatches(value: unknown): SequenceCondition[] {
   return entries
     .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
     .filter(Boolean)
-    .map(parseCondition);
+    .map((entry, index) =>
+      parseCondition(entry, createStableItemId(`${ruleId}_condition`, index)),
+    );
 }
 
-function parseCondition(value: string): SequenceCondition {
+function parseCondition(value: string, conditionId: string): SequenceCondition {
   const inverted = value.startsWith("!");
   const withoutInvert = inverted ? value.slice(1) : value;
   if (withoutInvert.startsWith("$")) {
     return {
-      id: createItemId(),
+      id: conditionId,
       mode: "reference",
       value: withoutInvert,
       invert: inverted,
     };
   }
   return {
-    id: createItemId(),
+    id: conditionId,
     mode: "text",
     value: withoutInvert,
     invert: inverted,
@@ -1581,4 +1672,8 @@ function summarizeRule(rule: SequenceRule) {
 
 function createItemId() {
   return `seq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createStableItemId(scope: string, index: number) {
+  return `${scope}_${index}`;
 }
