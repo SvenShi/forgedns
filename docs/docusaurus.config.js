@@ -85,6 +85,12 @@ const config = {
       },
       navbar: {
         title: 'ForgeDNS',
+        logo: {
+          alt: 'ForgeDNS Logo',
+          src: 'img/logo.png',
+          width: 32,
+          height: 32,
+        },
         items: [
           {
             type: 'localeDropdown',

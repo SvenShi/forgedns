@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -18,7 +19,6 @@ import {
   LayoutDashboard,
   Puzzle,
   Settings,
-  Server,
   BookOpen,
   GitBranch,
 } from "lucide-react";
@@ -51,8 +51,14 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton asChild className="h-9 rounded-lg px-2">
               <Link href="/">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                  <Server className="size-4" />
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground overflow-hidden">
+                  <Image
+                    src="/logo.png"
+                    alt="ForgeDNS"
+                    width={32}
+                    height={32}
+                    className="size-8"
+                  />
                 </div>
                 <div className="flex flex-col gap-0.5 leading-none">
                   <span className="font-semibold">ForgeDNS</span>
