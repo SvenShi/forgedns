@@ -38,7 +38,7 @@ use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use serde::Serialize;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::sync::{Mutex, oneshot, watch};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
@@ -46,7 +46,7 @@ use tracing::{debug, info, warn};
 use crate::api::health::HealthState;
 use crate::config::types::{ApiAuthConfig, ApiConfig, ResolvedApiHttpConfig};
 use crate::core::error::{DnsError, Result};
-use crate::network::listen::parse_listen_addr;
+use crate::network::listen::{self, parse_listen_addr};
 use crate::network::tls_config::load_server_tls_config;
 
 pub mod control;
@@ -318,7 +318,7 @@ impl ApiHub {
             return Ok(());
         }
 
-        let listen = self.config.listen.clone();
+        let listen = parse_listen_addr(&self.config.listen)?;
         let routes = self
             .routes
             .lock()
@@ -463,7 +463,7 @@ fn build_tls_acceptor(config: &ResolvedApiHttpConfig) -> Result<Option<Arc<TlsAc
 }
 
 struct ApiServerContext {
-    listen: String,
+    listen: SocketAddr,
     routes: AHashMap<RouteKey, Arc<dyn ApiHandler>>,
     prefix_routes: Vec<PrefixRoute>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
@@ -485,8 +485,7 @@ async fn run_api_server(
         auth,
         health,
     } = context;
-
-    let listener = match TcpListener::bind(&listen).await {
+    let listener = match listen::build_tcp_listener(listen, 512, |_| {}) {
         Ok(listener) => listener,
         Err(err) => {
             let _ = startup_tx.send(Err(format!(

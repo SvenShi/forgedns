@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
+use socket2::{Socket, TcpKeepalive};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch};
 use tokio_rustls::TlsAcceptor;
@@ -31,6 +31,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::deserialize_duration_option;
+use crate::network::listen;
 use crate::network::tls_config::load_tls_config;
 use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::dependency::DependencySpec;
@@ -57,7 +58,7 @@ pub struct TcpServerConfig {
     /// TCP listen address in `ip:port` or `:port` format.
     ///
     /// - Example: "0.0.0.0:53" (DNS over TCP), ":853" (DNS over TLS/DoT)
-    /// - `:port` binds on `0.0.0.0:port`.
+    /// - `:port` binds on `[::]:port` with dual-stack sockets enabled.
     /// - Must be a valid listen address or validation will fail.
     listen: String,
 
@@ -346,10 +347,10 @@ async fn handle_dns_stream<S>(
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
 pub fn build_tcp_listener(addr: SocketAddr, idle_timeout: Duration) -> Result<TcpListener> {
-    let sock = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    listen::build_tcp_listener(addr, 512, |sock| configure_tcp_socket(sock, idle_timeout))
+}
 
-    let _ = sock.set_nonblocking(true);
-    let _ = sock.set_reuse_address(true);
+fn configure_tcp_socket(sock: &Socket, idle_timeout: Duration) {
     let _ = sock.set_tcp_nodelay(true);
     let keepalive = TcpKeepalive::new().with_interval(idle_timeout);
     let _ = sock.set_tcp_keepalive(&keepalive);
@@ -364,11 +365,6 @@ pub fn build_tcp_listener(addr: SocketAddr, idle_timeout: Duration) -> Result<Tc
     ))]
     let _ = sock.set_reuse_port(true);
     let _ = sock.set_recv_buffer_size(TCP_SOCKET_BUFFER_SIZE);
-
-    sock.bind(&addr.into())?;
-    sock.listen(512)?;
-
-    Ok(TcpListener::from_std(sock.into())?)
 }
 
 /// Factory for creating TCP server plugin instances
@@ -445,7 +441,7 @@ impl PluginFactory for TcpServerFactory {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv6Addr};
 
     use serde_yaml_ng::from_str;
     use tokio::time::Duration;
@@ -472,7 +468,7 @@ mod tests {
             .local_addr()
             .expect("listener should expose local address");
 
-        assert_eq!(addr.ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(addr.ip(), IpAddr::V6(Ipv6Addr::UNSPECIFIED));
         assert_ne!(addr.port(), 0);
     }
 

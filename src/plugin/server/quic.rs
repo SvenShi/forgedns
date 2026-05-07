@@ -48,7 +48,7 @@ pub struct QuicServerConfig {
     /// QUIC listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:853",
     /// ":853").
     ///
-    /// - `:port` binds on `0.0.0.0:port`.
+    /// - `:port` binds on `[::]:port` with dual-stack sockets enabled.
     /// - Must be a valid listen address or validation will fail.
     /// - QUIC runs over UDP; ensure the port is not occupied by UDP listeners.
     listen: String,

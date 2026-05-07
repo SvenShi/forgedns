@@ -122,7 +122,8 @@ api:
 字段说明：
 
 - `http.listen`
-  - API 监听地址。
+  - API 监听地址，支持 `ip:port`、`[ipv6]:port` 和 `:port`。
+  - `:port` 会绑定为双栈 `[::]:port`；仅监听 IPv4 时请显式写 `0.0.0.0:port`。
 - `http.ssl.cert`
   - API 证书文件。
 - `http.ssl.key`

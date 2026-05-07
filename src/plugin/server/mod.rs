@@ -195,6 +195,7 @@ impl RequestHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv6Addr;
     use std::sync::Mutex;
 
     use async_trait::async_trait;
@@ -209,7 +210,7 @@ mod tests {
     fn test_parse_listen_addr_accepts_port_only_shorthand() {
         let addr = parse_listen_addr(":5337").expect("port-only shorthand should parse");
 
-        assert_eq!(addr, SocketAddr::from(([0, 0, 0, 0], 5337)));
+        assert_eq!(addr, SocketAddr::from((Ipv6Addr::UNSPECIFIED, 5337)));
     }
 
     #[test]

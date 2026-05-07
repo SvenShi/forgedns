@@ -24,9 +24,11 @@ Every server plugin depends on an `entry`. It must reference an existing executo
   args:
     # Must reference an existing executor, usually a sequence
     entry: "seq_main"
-    # Standard UDP DNS bind address
-    listen: "0.0.0.0:53"
+    # Standard UDP DNS bind address; :port binds [::]:port as dual-stack
+    listen: ":53"
 ```
+
+Listen addresses support `ip:port`, `[ipv6]:port`, and `:port`. The `:port` shorthand resolves to `[::]:port`, and the listener socket clears `IPV6_V6ONLY` so one listener can accept both IPv6 and IPv4 traffic. To listen on IPv4 only, explicitly use `0.0.0.0:port` or a concrete IPv4 address.
 
 ---
 
@@ -44,8 +46,8 @@ Listens for DNS over UDP and forwards requests to `entry`.
   args:
     # Entry executor for this listener
     entry: "seq_main"
-    # Can be written as ip:port or :port
-    listen: "0.0.0.0:53"
+    # Can be written as ip:port, [ipv6]:port, or :port
+    listen: ":53"
 ```
 
 ### Configuration Details
@@ -71,9 +73,11 @@ Listens for DNS over UDP and forwards requests to `entry`.
   - `listen: ":5353"`
 - Supported forms:
   - `ip:port`
+  - `[ipv6]:port`
   - `:port`
 - Runtime impact:
   - Determines the bound address and port.
+  - `:port` means dual-stack `[::]:port`; use `0.0.0.0:port` for IPv4-only.
   - Invalid addresses, port conflicts, or bind failures prevent startup.
 
 ### Behavior
@@ -150,9 +154,11 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
   - `listen: "127.0.0.1:853"`
 - Supported forms:
   - `ip:port`
+  - `[ipv6]:port`
   - `:port`
 - Runtime impact:
   - Controls the bind address for plaintext TCP or DoT.
+  - `:port` means dual-stack `[::]:port`; use `0.0.0.0:port` for IPv4-only.
 
 #### `cert`
 
@@ -266,6 +272,12 @@ Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
 - Examples:
   - `listen: ":80"`
   - `listen: ":443"`
+- Supported forms:
+  - `ip:port`
+  - `[ipv6]:port`
+  - `:port`
+- Runtime impact:
+  - `:port` means dual-stack `[::]:port`; use `0.0.0.0:port` for IPv4-only.
 
 #### `src_ip_header`
 
@@ -369,6 +381,7 @@ Provides DNS over QUIC.
 - Example: `listen: ":853"`
 - Runtime impact:
   - Occupies a UDP port.
+  - `:port` means dual-stack `[::]:port`; use `0.0.0.0:port` for IPv4-only.
 
 #### `cert`
 

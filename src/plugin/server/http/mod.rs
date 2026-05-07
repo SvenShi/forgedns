@@ -54,7 +54,7 @@ pub struct HttpServerConfig {
     /// HTTP listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:443",
     /// ":443").
     ///
-    /// - `:port` binds on `0.0.0.0:port`.
+    /// - `:port` binds on `[::]:port`.
     /// - Must be a valid listen address or validation will fail.
     /// - When TLS is configured, server runs HTTPS (HTTP/2) and optional
     ///   HTTP/3.
@@ -119,7 +119,7 @@ pub struct HttpServer {
     tag: String,
     /// Route configurations mapping paths to executors
     entries: Vec<Entry>,
-    /// Listen address (e.g., "0.0.0.0:443")
+    /// Listen address (e.g., "[::]:443")
     listen: SocketAddr,
     /// HTTP header name to extract real client IP from reverse proxy
     src_ip_header: Option<String>,

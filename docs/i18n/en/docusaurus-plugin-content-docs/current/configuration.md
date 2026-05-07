@@ -121,7 +121,8 @@ api:
 Field notes:
 
 - `http.listen`
-  - API listen address.
+  - API listen address. Supports `ip:port`, `[ipv6]:port`, and `:port`.
+  - `:port` binds as dual-stack `[::]:port`; use `0.0.0.0:port` for IPv4-only.
 - `http.ssl.cert`
   - API certificate file.
 - `http.ssl.key`

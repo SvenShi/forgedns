@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::Socket;
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, watch};
 use tokio_util::task::TaskTracker;
@@ -21,6 +21,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::types::PluginConfig;
 use crate::core::context::RequestMeta;
 use crate::core::error::{DnsError, Result};
+use crate::network::listen;
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
@@ -43,7 +44,7 @@ pub struct UdpServerConfig {
     /// UDP listen address in `ip:port` or `:port` format (e.g., "0.0.0.0:53",
     /// ":53").
     ///
-    /// - `:port` binds on `0.0.0.0:port`.
+    /// - `:port` binds on `[::]:port` with dual-stack sockets enabled.
     /// - Must be a valid listen address or validation will fail.
     /// - Ensure the port is not occupied by other UDP listeners.
     listen: String,
@@ -213,10 +214,10 @@ async fn run_server(
 ///
 /// Creates a socket optimized for DNS server workloads with port reuse enabled.
 pub fn build_udp_socket(addr: SocketAddr) -> Result<StdUdpSocket> {
-    let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
+    listen::build_udp_socket(addr, configure_udp_socket)
+}
 
-    let _ = sock.set_nonblocking(true);
-    let _ = sock.set_reuse_address(true);
+fn configure_udp_socket(sock: &Socket) {
     #[cfg(all(
         unix,
         not(any(
@@ -228,10 +229,6 @@ pub fn build_udp_socket(addr: SocketAddr) -> Result<StdUdpSocket> {
     ))]
     let _ = sock.set_reuse_port(true);
     let _ = sock.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
-
-    sock.bind(&addr.into())?;
-
-    Ok(sock.into())
 }
 
 /// Factory for creating UDP server plugin instances
@@ -296,7 +293,7 @@ impl PluginFactory for UdpServerFactory {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv6Addr};
 
     use super::*;
     use crate::plugin::test_utils::{plugin_config, test_registry};
@@ -320,7 +317,7 @@ mod tests {
             .local_addr()
             .expect("socket should expose local address");
 
-        assert_eq!(addr.ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(addr.ip(), IpAddr::V6(Ipv6Addr::UNSPECIFIED));
         assert_ne!(addr.port(), 0);
     }
 }

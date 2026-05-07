@@ -24,9 +24,11 @@ sidebar_position: 2
   args:
     # 必须引用一个已存在的执行器，通常是 sequence
     entry: "seq_main"
-    # 标准 UDP DNS 监听地址
-    listen: "0.0.0.0:53"
+    # 标准 UDP DNS 监听地址；:port 会绑定 [::]:port 并启用双栈
+    listen: ":53"
 ```
+
+监听地址支持 `ip:port`、`[ipv6]:port` 和 `:port`。其中 `:port` 会解析为 `[::]:port`，监听 socket 会关闭 `IPV6_V6ONLY`，用于在同一个监听器上同时接收 IPv6 和 IPv4 流量；如只想监听 IPv4，请显式写 `0.0.0.0:port` 或具体 IPv4 地址。
 
 ---
 
@@ -44,8 +46,8 @@ sidebar_position: 2
   args:
     # 当前监听器的入口执行器
     entry: "seq_main"
-    # 可写成 ip:port 或 :port
-    listen: "0.0.0.0:53"
+    # 可写成 ip:port、[ipv6]:port 或 :port
+    listen: ":53"
 ```
 
 ### 配置项
@@ -71,9 +73,11 @@ sidebar_position: 2
   - `listen: ":5353"`
 - 支持格式：
   - `ip:port`
+  - `[ipv6]:port`
   - `:port`
 - 运行影响：
   - 决定监听器绑定的地址与端口。
+  - `:port` 等价于双栈监听 `[::]:port`；如需 IPv4-only，请写 `0.0.0.0:port`。
   - 地址无效、端口冲突或绑定失败时，监听器无法启动。
 
 ### 行为说明
@@ -150,9 +154,11 @@ sidebar_position: 2
   - `listen: "127.0.0.1:853"`
 - 支持格式：
   - `ip:port`
+  - `[ipv6]:port`
   - `:port`
 - 运行影响：
   - 影响明文 TCP 或 DoT 服务的绑定地址。
+  - `:port` 等价于双栈监听 `[::]:port`；如需 IPv4-only，请写 `0.0.0.0:port`。
 
 #### `cert`
 
@@ -267,6 +273,12 @@ sidebar_position: 2
 - 示例：
   - `listen: ":80"`
   - `listen: ":443"`
+- 支持格式：
+  - `ip:port`
+  - `[ipv6]:port`
+  - `:port`
+- 运行影响：
+  - `:port` 等价于双栈监听 `[::]:port`；如需 IPv4-only，请写 `0.0.0.0:port`。
 
 #### `src_ip_header`
 
@@ -370,6 +382,7 @@ sidebar_position: 2
 - 示例：`listen: ":853"`
 - 运行影响：
   - 实际占用 UDP 端口。
+  - `:port` 等价于双栈监听 `[::]:port`；如需 IPv4-only，请写 `0.0.0.0:port`。
 
 #### `cert`
 

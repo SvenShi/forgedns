@@ -22,6 +22,8 @@ api:
   http: "127.0.0.1:9088"
 ```
 
+Listen addresses support `ip:port`, `[ipv6]:port`, and `:port`. `http: ":9088"` binds as dual-stack `[::]:9088`; use `0.0.0.0:9088` for IPv4-only.
+
 ### Expanded Form
 
 ```yaml
