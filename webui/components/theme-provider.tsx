@@ -16,6 +16,7 @@ function ThemeProvider({
       {...props}
     >
       <ThemeHotkey />
+      <ThemeFavicon />
       {children}
     </NextThemesProvider>
   );
@@ -64,6 +65,35 @@ function ThemeHotkey() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [resolvedTheme, setTheme]);
+
+  return null;
+}
+
+function ThemeFavicon() {
+  const { resolvedTheme } = useTheme();
+
+  React.useEffect(() => {
+    if (!resolvedTheme) {
+      return;
+    }
+
+    const href =
+      resolvedTheme === "dark" ? "/logo-dark.png" : "/logo-light.png";
+    let icon = document.querySelector<HTMLLinkElement>(
+      "link[data-forgedns-theme-icon]",
+    );
+
+    if (!icon) {
+      icon = document.createElement("link");
+      icon.rel = "icon";
+      icon.dataset.forgednsThemeIcon = "true";
+      document.head.appendChild(icon);
+    }
+
+    icon.type = "image/png";
+    icon.media = "";
+    icon.href = href;
+  }, [resolvedTheme]);
 
   return null;
 }

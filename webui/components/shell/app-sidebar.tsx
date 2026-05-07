@@ -49,15 +49,24 @@ export function AppSidebar() {
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-3 py-1">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild className="h-9 rounded-lg px-2">
+            <SidebarMenuButton asChild className="h-9 rounded-md px-2">
               <Link href="/">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground overflow-hidden">
+                <div className="relative size-8 shrink-0">
                   <Image
-                    src="/logo.png"
+                    src="/logo-light.png"
                     alt="ForgeDNS"
                     width={32}
                     height={32}
-                    className="size-8"
+                    className="size-8 object-contain dark:hidden"
+                    priority
+                  />
+                  <Image
+                    src="/logo-dark.png"
+                    alt="ForgeDNS"
+                    width={32}
+                    height={32}
+                    className="hidden size-8 object-contain dark:block"
+                    priority
                   />
                 </div>
                 <div className="flex flex-col gap-0.5 leading-none">

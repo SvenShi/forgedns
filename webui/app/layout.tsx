@@ -12,6 +12,20 @@ const fontMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "ForgeDNS - 控制台",
   description: "ForgeDNS 可编排 DNS 系统管理控制台",
+  icons: {
+    icon: [
+      {
+        url: "/logo-light.png",
+        media: "(prefers-color-scheme: light)",
+        type: "image/png",
+      },
+      {
+        url: "/logo-dark.png",
+        media: "(prefers-color-scheme: dark)",
+        type: "image/png",
+      },
+    ],
+  },
 };
 
 export const viewport: Viewport = {

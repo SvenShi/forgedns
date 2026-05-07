@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(find . -maxdepth 2 -type f \\\\\\( -iname \"*.png\" -o -iname \"*.jpg\" -o -iname \"*.jpeg\" -o -iname \"*.svg\" -o -iname \"*.webp\" -o -iname \"*logo*\" -o -iname \"*banner*\" \\\\\\) 2>/dev/null | grep -v node_modules | grep -v \".git\" | head -30)",
+      "Bash(ls -la docs/ && ls -la docs/static/img/ 2>/dev/null)",
+      "Bash(ls -la webui/public/ 2>/dev/null && ls -la webui/app/ 2>/dev/null)",
+      "Bash(find webui -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" -o -name \"*.css\" \\\\\\) | grep -iE \"\\(nav|header|logo|sidebar|app-bar|top-bar\\)\" | head -20)",
+      "Bash(ls -la webui/app/ && ls -la webui/public/ 2>/dev/null || echo \"no public dir\")",
+      "Bash(find docs/src -type f | head -20)",
+      "Bash(find webui/components -maxdepth 2 -type f -name \"*.tsx\" | grep -v node_modules | head -40)",
+      "Bash(grep:*)",
+      "Bash(ls -la webui/app/ && find webui -name \"favicon*\" -o -name \"icon*\" | grep -v node_modules)",
+      "Bash(find docs/static -type f | head -20)",
+      "Bash(file:*)",
+      "Bash(mkdir -p webui/public && cp logo.png webui/public/logo.png && cp logo.png webui/app/icon.png && cp logo.png docs/static/img/logo.png)",
+      "Bash(find docs/docs -type f -name \"*.md\" -o -name \"*.mdx\" | head -40)",
+      "Bash(find docs/docs -type f \\\\\\( -name \"index*\" -o -name \"intro*\" -o -name \"overview*\" \\\\\\) | head -20)",
+      "Bash(find docs/docs -type d | head -30)",
+      "Bash(find docs/i18n -type f -name \"*.md\" -o -name \"*.mdx\" | head -20)",
+      "Bash(head -5 README.md && head -5 README_EN.md)"
+    ]
+  }
+}

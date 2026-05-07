@@ -4,7 +4,14 @@ import {themes as prismThemes} from 'prism-react-renderer';
 const config = {
   title: 'ForgeDNS',
   tagline: 'A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability.',
-  favicon: 'img/favicon.png',
+  favicon: 'img/logo-light.png',
+
+  scripts: [
+    {
+      src: '/js/theme-favicon.js',
+      defer: true,
+    },
+  ],
 
   future: {
     v4: true,
@@ -81,13 +88,14 @@ const config = {
       colorMode: {
         defaultMode: 'light',
         disableSwitch: false,
-        respectPrefersColorScheme: true,
+        respectPrefersColorScheme: false,
       },
       navbar: {
         title: 'ForgeDNS',
         logo: {
           alt: 'ForgeDNS Logo',
-          src: 'img/logo.png',
+          src: 'img/logo-light.png',
+          srcDark: 'img/logo-dark.png',
           width: 32,
           height: 32,
         },
