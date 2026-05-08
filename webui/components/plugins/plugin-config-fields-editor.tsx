@@ -924,7 +924,7 @@ function SchemaArrayFieldEditor({
               className="rounded-lg border border-border bg-background/60 px-3 py-2"
             >
               <div
-                className={`flex items-center justify-between gap-3 ${
+                className={`flex min-h-8 items-center justify-between gap-3 ${
                   isCollapsed ? "" : "mb-2"
                 }`}
               >
