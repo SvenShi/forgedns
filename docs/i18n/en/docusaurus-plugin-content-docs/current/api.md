@@ -221,6 +221,55 @@ Fields include:
 
 ## Config Check Endpoints
 
+### `GET /config`
+
+Purpose:
+
+* Reads the config file referenced by the current startup options.
+* Returns the raw YAML text, config path, content version, and file update time.
+
+Example response:
+
+```json
+{
+  "ok": true,
+  "path": "/etc/oxidns/config.yaml",
+  "format": "yaml",
+  "content": "plugins:\n  - tag: forward\n    type: forward\n",
+  "version": "sha256-hex",
+  "updated_at_ms": 1760000000000
+}
+```
+
+### `PUT /config`
+
+Purpose:
+
+* Saves the full YAML config file.
+* Runs the same validation as `POST /config/validate` before writing by default.
+* Can request an application-level reload after a successful save.
+
+Request body:
+
+```json
+{
+  "format": "yaml",
+  "content": "plugins:\n  - tag: debug_main\n    type: debug_print\n",
+  "base_version": "sha256-hex",
+  "validate": true,
+  "reload": false
+}
+```
+
+Responses:
+
+* `200 OK`
+  * The config was saved. The response includes the new version, plugin count, and init order.
+* `400 Bad Request`
+  * The YAML cannot be parsed, validation failed, or `format` is not `yaml`.
+* `409 Conflict`
+  * `base_version` does not match the current file version, or a reload was requested while another reload is already running.
+
 ### `GET /config/check`
 
 Purpose:
@@ -236,11 +285,12 @@ Good fit:
 Purpose:
 
 * Validates YAML config text sent directly in the request body.
+* Also accepts the JSON envelope used by `PUT /config`.
 
 Request body requirements:
 
-* UTF-8 text
-* Non-empty
+* Non-empty UTF-8 YAML text; or
+* JSON: `{"format":"yaml","content":"...yaml..."}`
 
 Good fit:
 

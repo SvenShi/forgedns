@@ -20,8 +20,14 @@ import {
   parseSequenceRules,
 } from "@/components/plugins/sequence-composer";
 
-function SequenceDetail({ plugin, chartData, onClose }: PluginDetailComponentProps) {
+function SequenceDetail({
+  plugin,
+  chartData,
+  onClose,
+}: PluginDetailComponentProps) {
   const updatePluginConfig = useAppStore((state) => state.updatePluginConfig);
+  const saveConfig = useAppStore((state) => state.saveConfig);
+  const isConfigSaving = useAppStore((state) => state.isConfigSaving);
   const plugins = useAppStore((state) => state.plugins);
   const [editing, setEditing] = useState(false);
   const [configValues, setConfigValues] = useState<Record<string, unknown>>(
@@ -33,9 +39,14 @@ function SequenceDetail({ plugin, chartData, onClose }: PluginDetailComponentPro
     setEditing(false);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     updatePluginConfig(plugin.id, configValues);
-    setEditing(false);
+    try {
+      await saveConfig();
+      setEditing(false);
+    } catch {
+      // Store-level config errors are surfaced in the full config editor.
+    }
   };
 
   return (
@@ -59,9 +70,13 @@ function SequenceDetail({ plugin, chartData, onClose }: PluginDetailComponentPro
                   <Button variant="outline" size="sm" onClick={handleCancel}>
                     取消
                   </Button>
-                  <Button size="sm" onClick={handleSave}>
+                  <Button
+                    size="sm"
+                    onClick={handleSave}
+                    disabled={isConfigSaving}
+                  >
                     <Save className="h-4 w-4" />
-                    保存配置
+                    {isConfigSaving ? "保存中" : "保存配置"}
                   </Button>
                 </>
               ) : (

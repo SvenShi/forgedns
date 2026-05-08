@@ -15,9 +15,14 @@ export default function ConsoleLayout({
   children: React.ReactNode;
 }) {
   const editorMode = useAppStore((s) => s.editorMode);
+  const loadConfig = useAppStore((s) => s.loadConfig);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const sidebarStateBeforeEditor = useRef(sidebarOpen);
   const previousEditorMode = useRef(editorMode);
+
+  useEffect(() => {
+    void loadConfig();
+  }, [loadConfig]);
 
   useEffect(() => {
     if (!previousEditorMode.current && editorMode) {

@@ -3,6 +3,25 @@
 import { create } from "zustand";
 import type { PluginInstance } from "./types";
 import { mockPlugins, mockSystemMetrics, mockSystemInfo } from "./mock-data";
+import {
+  configFromPlugins,
+  createDefaultOxiDnsConfig,
+  parseOxiDnsYaml,
+  pluginsFromConfig,
+  stringifyOxiDnsConfig,
+  type OxiDnsConfig,
+} from "./oxidns-config";
+import {
+  apiHeaders,
+  apiUrl,
+  fetchConfigFile,
+  saveConfigFile,
+  type ConfigFileResponse,
+} from "./oxidns-api";
+
+type StoreSet = (
+  partial: Partial<AppState> | ((state: AppState) => Partial<AppState>),
+) => void;
 
 interface AppState {
   plugins: PluginInstance[];
@@ -12,12 +31,21 @@ interface AppState {
   detailOpen: boolean;
   editorMode: boolean;
   isRestarting: boolean;
+  isConfigLoading: boolean;
+  isConfigSaving: boolean;
+  configModel: OxiDnsConfig;
+  configText: string;
+  configVersion: string | null;
+  configPath: string;
+  configError: string | null;
   yamlConfig: string;
 
   setSelectedPlugin: (plugin: PluginInstance | null) => void;
   setDetailOpen: (open: boolean) => void;
   setEditorMode: (mode: boolean) => void;
   setYamlConfig: (config: string) => void;
+  loadConfig: () => Promise<void>;
+  saveConfig: (options?: { reload?: boolean }) => Promise<void>;
   restartService: () => Promise<void>;
   togglePluginPin: (id: string) => void;
   togglePluginEnabled: (id: string) => void;
@@ -29,36 +57,13 @@ interface AppState {
   renamePlugin: (id: string, name: string) => void;
 }
 
-const defaultYamlConfig = `# OxiDNS Configuration
-plugins:
-  - tag: seq_main
-    type: sequence
-    args:
-      - exec: "$cache_main"
-      - matches: "has_resp"
-        exec: "accept"
-      - matches: "!has_resp"
-        exec: "$forward_main"
-  - tag: udp_in
-    type: udp_server
-    args:
-      entry: "seq_main"
-      listen: "0.0.0.0:53"
-  - tag: cache_main
-    type: cache
-    args:
-      size: 8192
-      short_circuit: false
-  - tag: forward_main
-    type: forward
-    args:
-      upstreams:
-        - tag: "cloudflare"
-          addr: "udp://1.1.1.1:53"
-          timeout: 3s
-`;
+const initialConfigModel = configFromPlugins(
+  createDefaultOxiDnsConfig(),
+  mockPlugins,
+);
+const initialConfigText = stringifyOxiDnsConfig(initialConfigModel);
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   plugins: mockPlugins,
   systemMetrics: mockSystemMetrics,
   systemInfo: mockSystemInfo,
@@ -66,33 +71,108 @@ export const useAppStore = create<AppState>((set) => ({
   detailOpen: false,
   editorMode: false,
   isRestarting: false,
-  yamlConfig: defaultYamlConfig,
+  isConfigLoading: false,
+  isConfigSaving: false,
+  configModel: initialConfigModel,
+  configText: initialConfigText,
+  configVersion: null,
+  configPath: "/etc/oxidns/config.yaml",
+  configError: null,
+  yamlConfig: initialConfigText,
 
   setSelectedPlugin: (plugin) => set({ selectedPlugin: plugin }),
   setDetailOpen: (open) => set({ detailOpen: open }),
   setEditorMode: (mode) => set({ editorMode: mode }),
-  setYamlConfig: (config) => set({ yamlConfig: config }),
+  setYamlConfig: (config) => {
+    const parsed = parseOxiDnsYaml(config);
+    if (!parsed.config) {
+      set({
+        configText: config,
+        yamlConfig: config,
+        configError: parsed.diagnostics[0] ?? "配置解析失败",
+      });
+      return;
+    }
+
+    const plugins = pluginsFromConfig(parsed.config);
+    set({
+      configModel: parsed.config,
+      configText: config,
+      yamlConfig: config,
+      plugins,
+      selectedPlugin: syncSelectedPlugin(get().selectedPlugin, plugins),
+      configError: parsed.diagnostics[0] ?? null,
+    });
+  },
+
+  loadConfig: async () => {
+    set({ isConfigLoading: true, configError: null });
+    try {
+      const response = await fetchConfigFile();
+      applyConfigFileResponse(response, set);
+    } catch (error) {
+      set({
+        configError:
+          error instanceof Error ? error.message : "读取配置文件失败",
+      });
+    } finally {
+      set({ isConfigLoading: false });
+    }
+  },
+
+  saveConfig: async (options) => {
+    const state = get();
+    if (state.configError) throw new Error(state.configError);
+
+    set({ isConfigSaving: true, configError: null });
+    try {
+      const response = await saveConfigFile({
+        content: state.configText,
+        baseVersion: state.configVersion,
+        validate: true,
+        reload: options?.reload ?? false,
+      });
+      set({
+        configVersion: response.version,
+        configPath: response.path,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "保存配置文件失败";
+      set({ configError: message });
+      throw error;
+    } finally {
+      set({ isConfigSaving: false });
+    }
+  },
+
   restartService: async () => {
     set({ isRestarting: true });
-    // Simulate restart delay
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    set({ isRestarting: false });
+    try {
+      const response = await fetch(apiUrl("/reload"), {
+        method: "POST",
+        headers: apiHeaders(),
+      });
+      if (!response.ok) throw new Error(await response.text());
+    } finally {
+      set({ isRestarting: false });
+    }
   },
 
   togglePluginPin: (id) =>
-    set((state) => ({
-      plugins: state.plugins.map((p) =>
+    set((state) => {
+      const plugins = state.plugins.map((p) =>
         p.id === id ? { ...p, pinned: !p.pinned } : p,
-      ),
-      selectedPlugin:
-        state.selectedPlugin?.id === id
-          ? { ...state.selectedPlugin, pinned: !state.selectedPlugin.pinned }
-          : state.selectedPlugin,
-    })),
+      );
+      return {
+        plugins,
+        selectedPlugin: syncSelectedPlugin(state.selectedPlugin, plugins),
+      };
+    }),
 
   togglePluginEnabled: (id) =>
-    set((state) => ({
-      plugins: state.plugins.map((p) =>
+    set((state) => {
+      const plugins: PluginInstance[] = state.plugins.map((p) =>
         p.id === id
           ? {
               ...p,
@@ -100,66 +180,113 @@ export const useAppStore = create<AppState>((set) => ({
               status: !p.enabled ? "running" : "stopped",
             }
           : p,
-      ),
-      selectedPlugin:
-        state.selectedPlugin?.id === id
-          ? {
-              ...state.selectedPlugin,
-              enabled: !state.selectedPlugin.enabled,
-              status: !state.selectedPlugin.enabled ? "running" : "stopped",
-            }
-          : state.selectedPlugin,
-    })),
+      );
+      return {
+        plugins,
+        selectedPlugin: syncSelectedPlugin(state.selectedPlugin, plugins),
+      };
+    }),
 
   updatePluginConfig: (id, config) =>
-    set((state) => ({
-      plugins: state.plugins.map((p) =>
-        p.id === id ? { ...p, config, updatedAt: new Date().toISOString() } : p,
+    set((state) =>
+      syncPluginsToConfig(state, (plugins) =>
+        plugins.map((p) =>
+          p.id === id
+            ? { ...p, config, updatedAt: new Date().toISOString() }
+            : p,
+        ),
       ),
-      selectedPlugin:
-        state.selectedPlugin?.id === id
-          ? {
-              ...state.selectedPlugin,
-              config,
-              updatedAt: new Date().toISOString(),
-            }
-          : state.selectedPlugin,
-    })),
+    ),
 
   deletePlugin: (id) =>
-    set((state) => ({
-      plugins: state.plugins.filter((p) => p.id !== id),
-      selectedPlugin:
-        state.selectedPlugin?.id === id ? null : state.selectedPlugin,
-      detailOpen: state.selectedPlugin?.id === id ? false : state.detailOpen,
-    })),
+    set((state) => {
+      const next = syncPluginsToConfig(state, (plugins) =>
+        plugins.filter((p) => p.id !== id),
+      );
+      return {
+        ...next,
+        selectedPlugin:
+          state.selectedPlugin?.id === id ? null : next.selectedPlugin,
+        detailOpen: state.selectedPlugin?.id === id ? false : state.detailOpen,
+      };
+    }),
 
   addPlugin: (plugin) =>
-    set((state) => ({
-      plugins: [
-        ...state.plugins,
+    set((state) =>
+      syncPluginsToConfig(state, (plugins) => [
+        ...plugins,
         {
           ...plugin,
-          id: String(Date.now()),
+          id: plugin.name,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           metrics: { calls: 0, avgLatency: 0, errorRate: 0, qps: 0 },
         },
-      ],
-    })),
+      ]),
+    ),
 
   renamePlugin: (id, name) =>
-    set((state) => ({
-      plugins: state.plugins.map((p) =>
-        p.id === id ? { ...p, name, updatedAt: new Date().toISOString() } : p,
+    set((state) =>
+      syncPluginsToConfig(state, (plugins) =>
+        plugins.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                id: name,
+                name,
+                updatedAt: new Date().toISOString(),
+              }
+            : p,
+        ),
       ),
-      selectedPlugin:
-        state.selectedPlugin?.id === id
-          ? {
-              ...state.selectedPlugin,
-              name,
-              updatedAt: new Date().toISOString(),
-            }
-          : state.selectedPlugin,
-    })),
+    ),
 }));
+
+function applyConfigFileResponse(response: ConfigFileResponse, set: StoreSet) {
+  const parsed = parseOxiDnsYaml(response.content);
+  if (!parsed.config) {
+    set({
+      configText: response.content,
+      yamlConfig: response.content,
+      configVersion: response.version,
+      configPath: response.path,
+      configError: parsed.diagnostics[0] ?? "配置解析失败",
+    });
+    return;
+  }
+
+  set({
+    configModel: parsed.config,
+    configText: response.content,
+    yamlConfig: response.content,
+    configVersion: response.version,
+    configPath: response.path,
+    plugins: pluginsFromConfig(parsed.config),
+    configError: parsed.diagnostics[0] ?? null,
+  });
+}
+
+function syncPluginsToConfig(
+  state: AppState,
+  update: (plugins: PluginInstance[]) => PluginInstance[],
+) {
+  const plugins = update(state.plugins);
+  const configModel = configFromPlugins(state.configModel, plugins);
+  const configText = stringifyOxiDnsConfig(configModel);
+  return {
+    plugins,
+    configModel,
+    configText,
+    yamlConfig: configText,
+    selectedPlugin: syncSelectedPlugin(state.selectedPlugin, plugins),
+    configError: null,
+  };
+}
+
+function syncSelectedPlugin(
+  selectedPlugin: PluginInstance | null,
+  plugins: PluginInstance[],
+) {
+  if (!selectedPlugin) return null;
+  return plugins.find((plugin) => plugin.id === selectedPlugin.id) ?? null;
+}

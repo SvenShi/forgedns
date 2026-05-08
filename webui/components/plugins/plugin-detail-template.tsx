@@ -52,6 +52,8 @@ export function PluginDetailTemplate({
     deletePlugin,
     updatePluginConfig,
     renamePlugin,
+    saveConfig,
+    isConfigSaving,
     plugins,
   } = useAppStore();
   const definition = getPluginCatalogItem(plugin.pluginKind);
@@ -68,17 +70,25 @@ export function PluginDetailTemplate({
   );
   const [editingName, setEditingName] = useState(false);
   const [editingConfig, setEditingConfig] = useState(false);
+  const [configValid, setConfigValid] = useState(true);
   const [newName, setNewName] = useState(plugin.name);
 
-  const handleSaveConfig = () => {
+  const handleSaveConfig = async () => {
+    if (!configValid) return;
     if (definition) {
       updatePluginConfig(plugin.id, configValues);
-      setEditingConfig(false);
+      try {
+        await saveConfig();
+        setEditingConfig(false);
+      } catch {
+        // Store-level error badge is shown in the full config editor.
+      }
       return;
     }
 
     try {
       updatePluginConfig(plugin.id, JSON.parse(configJson));
+      await saveConfig();
       setEditingConfig(false);
     } catch {
       // Invalid JSON. Validation UI can be added once backend config errors are wired in.
@@ -87,9 +97,8 @@ export function PluginDetailTemplate({
 
   const handleCancelConfigEdit = () => {
     setConfigJson(JSON.stringify(plugin.config, null, 2));
-    setConfigValues(
-      definition ? plugin.config : {},
-    );
+    setConfigValues(definition ? plugin.config : {});
+    setConfigValid(true);
     setEditingConfig(false);
   };
 
@@ -252,6 +261,7 @@ export function PluginDetailTemplate({
                     plugins={plugins}
                     values={configValues}
                     onChange={setConfigValues}
+                    onValidityChange={setConfigValid}
                     defaultArrayObjectCollapsed={!editingConfig}
                     readOnly={!editingConfig}
                   />
@@ -273,9 +283,13 @@ export function PluginDetailTemplate({
                       >
                         取消
                       </Button>
-                      <Button key="save-config-edit" onClick={handleSaveConfig}>
+                      <Button
+                        key="save-config-edit"
+                        onClick={handleSaveConfig}
+                        disabled={!configValid || isConfigSaving}
+                      >
                         <Save className="mr-1.5 h-4 w-4" />
-                        保存配置
+                        {isConfigSaving ? "保存中" : "保存配置"}
                       </Button>
                     </>
                   ) : (

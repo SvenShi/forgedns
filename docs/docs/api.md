@@ -221,6 +221,55 @@ API 路由分成三类：
 
 ## 配置检查接口
 
+### `GET /config`
+
+作用：
+
+* 读取当前启动参数指向的配置文件原文。
+* 返回 YAML 文本、配置路径、内容版本和文件更新时间。
+
+返回示例：
+
+```json
+{
+  "ok": true,
+  "path": "/etc/oxidns/config.yaml",
+  "format": "yaml",
+  "content": "plugins:\n  - tag: forward\n    type: forward\n",
+  "version": "sha256-hex",
+  "updated_at_ms": 1760000000000
+}
+```
+
+### `PUT /config`
+
+作用：
+
+* 保存完整 YAML 配置文件。
+* 保存前默认执行与 `POST /config/validate` 相同的校验。
+* 可在保存成功后触发一次应用级 reload。
+
+请求体：
+
+```json
+{
+  "format": "yaml",
+  "content": "plugins:\n  - tag: debug_main\n    type: debug_print\n",
+  "base_version": "sha256-hex",
+  "validate": true,
+  "reload": false
+}
+```
+
+返回：
+
+* `200 OK`
+  * 配置已保存，返回新版本、插件数量和初始化顺序。
+* `400 Bad Request`
+  * YAML 无法解析、配置校验失败，或 `format` 不是 `yaml`。
+* `409 Conflict`
+  * `base_version` 与当前文件版本不一致，或保存后请求 reload 时已有 reload 正在进行。
+
 ### `GET /config/check`
 
 作用：
@@ -236,11 +285,12 @@ API 路由分成三类：
 作用：
 
 * 直接校验请求体中的 YAML 配置文本。
+* 同时支持 `PUT /config` 使用的 JSON 包装格式。
 
 请求体要求：
 
-* UTF-8 文本
-* 非空
+* UTF-8 YAML 文本且非空；或
+* JSON：`{"format":"yaml","content":"...yaml..."}`
 
 适用场景：
 

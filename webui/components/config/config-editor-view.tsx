@@ -18,36 +18,58 @@ import {
   CheckCircle2,
   AlertCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Spinner } from "@/components/ui/spinner";
 
 export function ConfigEditorView() {
-  const yamlConfig = useAppStore((s) => s.yamlConfig);
+  const yamlConfig = useAppStore((s) => s.configText);
   const setYamlConfig = useAppStore((s) => s.setYamlConfig);
-  const restartService = useAppStore((s) => s.restartService);
+  const loadConfig = useAppStore((s) => s.loadConfig);
+  const saveConfig = useAppStore((s) => s.saveConfig);
   const isRestarting = useAppStore((s) => s.isRestarting);
+  const isConfigLoading = useAppStore((s) => s.isConfigLoading);
+  const isConfigSaving = useAppStore((s) => s.isConfigSaving);
+  const configError = useAppStore((s) => s.configError);
+  const configPath = useAppStore((s) => s.configPath);
+  const configVersion = useAppStore((s) => s.configVersion);
 
-  const [originalConfig] = useState(yamlConfig);
-  const [isSaving, setIsSaving] = useState(false);
+  const [originalConfig, setOriginalConfig] = useState(yamlConfig);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">(
     "idle",
   );
 
   const hasChanges = yamlConfig !== originalConfig;
 
+  useEffect(() => {
+    void loadConfig();
+  }, [loadConfig]);
+
+  useEffect(() => {
+    if (configVersion) setOriginalConfig(yamlConfig);
+  }, [configVersion]);
+
   const handleSave = async () => {
-    setIsSaving(true);
     setSaveStatus("idle");
-    // Simulate save
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    setIsSaving(false);
-    setSaveStatus("success");
-    setTimeout(() => setSaveStatus("idle"), 3000);
+    try {
+      await saveConfig();
+      setOriginalConfig(yamlConfig);
+      setSaveStatus("success");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    } catch {
+      setSaveStatus("error");
+    }
   };
 
   const handleSaveAndRestart = async () => {
-    await handleSave();
-    await restartService();
+    setSaveStatus("idle");
+    try {
+      await saveConfig({ reload: true });
+      setOriginalConfig(yamlConfig);
+      setSaveStatus("success");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    } catch {
+      setSaveStatus("error");
+    }
   };
 
   const handleReset = () => {
@@ -62,9 +84,7 @@ export function ConfigEditorView() {
           <FileCode2 className="h-5 w-5 text-muted-foreground" />
           <div>
             <h2 className="text-lg font-semibold">配置文件编辑器</h2>
-            <p className="text-sm text-muted-foreground">
-              /etc/oxidns/config.yaml
-            </p>
+            <p className="text-sm text-muted-foreground">{configPath}</p>
           </div>
           {hasChanges && (
             <Badge
@@ -89,13 +109,19 @@ export function ConfigEditorView() {
               保存失败
             </Badge>
           )}
+          {configError && (
+            <Badge variant="destructive" className="max-w-md truncate">
+              <AlertCircle className="h-3 w-3 mr-1" />
+              {configError}
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
             onClick={handleReset}
-            disabled={!hasChanges || isSaving}
+            disabled={!hasChanges || isConfigSaving}
           >
             <RotateCcw className="h-4 w-4 mr-1.5" />
             重置
@@ -104,9 +130,9 @@ export function ConfigEditorView() {
             variant="outline"
             size="sm"
             onClick={handleSave}
-            disabled={!hasChanges || isSaving}
+            disabled={!hasChanges || isConfigSaving || Boolean(configError)}
           >
-            {isSaving ? (
+            {isConfigSaving ? (
               <Spinner className="h-4 w-4 mr-1.5" />
             ) : (
               <Save className="h-4 w-4 mr-1.5" />
@@ -116,9 +142,9 @@ export function ConfigEditorView() {
           <Button
             size="sm"
             onClick={handleSaveAndRestart}
-            disabled={isSaving || isRestarting}
+            disabled={isConfigSaving || isRestarting || Boolean(configError)}
           >
-            {isRestarting ? (
+            {isRestarting || isConfigSaving ? (
               <Spinner className="h-4 w-4 mr-1.5" />
             ) : (
               <Save className="h-4 w-4 mr-1.5" />
@@ -135,6 +161,7 @@ export function ConfigEditorView() {
               value={yamlConfig}
               onChange={setYamlConfig}
               className="h-full"
+              readOnly={isConfigLoading}
             />
           </div>
 

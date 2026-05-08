@@ -26,6 +26,7 @@
     "shadcn": "latest",
     "tailwind-merge": "^3.5.0",
     "tw-animate-css": "latest",
+    "yaml": "^2.8.4",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

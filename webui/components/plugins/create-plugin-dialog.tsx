@@ -66,7 +66,10 @@ export function CreatePluginDialog({
   const [instanceName, setInstanceName] = useState("");
   const [search, setSearch] = useState("");
   const [configValues, setConfigValues] = useState<Record<string, unknown>>({});
+  const [configValid, setConfigValid] = useState(true);
   const addPlugin = useAppStore((s) => s.addPlugin);
+  const saveConfig = useAppStore((s) => s.saveConfig);
+  const isConfigSaving = useAppStore((s) => s.isConfigSaving);
   const plugins = useAppStore((s) => s.plugins);
 
   const pluginsByType = useMemo(() => {
@@ -113,16 +116,18 @@ export function CreatePluginDialog({
   const handleSelectKind = (kind: PluginCatalogItem) => {
     setSelectedKind(kind);
     setConfigValues(createDefaultPluginConfigValues(kind.configSchema));
+    setConfigValid(true);
     setInstanceName("");
   };
 
   const handleBack = () => {
     setSelectedKind(null);
     setConfigValues({});
+    setConfigValid(true);
     setInstanceName("");
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!selectedKind || !instanceName.trim()) return;
 
     const processedConfig = configValues;
@@ -137,13 +142,19 @@ export function CreatePluginDialog({
       config: processedConfig,
     });
 
-    handleClose();
+    try {
+      await saveConfig();
+      handleClose();
+    } catch {
+      // Store-level config error remains visible in the config editor.
+    }
   };
 
   const handleClose = () => {
     setOpen(false);
     setSelectedKind(null);
     setConfigValues({});
+    setConfigValid(true);
     setInstanceName("");
     setSearch("");
     setActiveTab(defaultType || "server");
@@ -151,7 +162,10 @@ export function CreatePluginDialog({
 
   const isValid = () => {
     if (!selectedKind || !instanceName.trim()) return false;
-    return isPluginConfigFormValid(selectedKind.configSchema, configValues);
+    return (
+      configValid &&
+      isPluginConfigFormValid(selectedKind.configSchema, configValues)
+    );
   };
 
   const renderPluginKindCard = (kind: PluginCatalogItem) => {
@@ -320,6 +334,7 @@ export function CreatePluginDialog({
                         plugins={plugins}
                         values={configValues}
                         onChange={setConfigValues}
+                        onValidityChange={setConfigValid}
                       />
                     )}
                   </div>
@@ -330,8 +345,11 @@ export function CreatePluginDialog({
               <Button variant="outline" onClick={handleBack}>
                 返回
               </Button>
-              <Button onClick={handleCreate} disabled={!isValid()}>
-                创建插件
+              <Button
+                onClick={handleCreate}
+                disabled={!isValid() || isConfigSaving}
+              >
+                {isConfigSaving ? "保存中" : "创建插件"}
               </Button>
             </DialogFooter>
           </>
