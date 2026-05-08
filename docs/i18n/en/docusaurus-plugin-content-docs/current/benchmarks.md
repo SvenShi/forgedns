@@ -196,7 +196,7 @@ The table below shows the average of three runs for each scenario:
 
 ## Raw Materials
 
-* Benchmark directory: [`benchmarks/mosdns_compare/README.md`](https://github.com/SvenShi/oxidns/tree/main/benchmarks/mosdns_compare)
-* Scenario list: [`benchmarks/mosdns_compare/scenarios.tsv`](https://github.com/SvenShi/oxidns/blob/main/benchmarks/mosdns_compare/scenarios.tsv)
-* Higher-concurrency script: [`benchmarks/mosdns_compare/run_dnsperf_compare.sh`](https://github.com/SvenShi/oxidns/blob/main/benchmarks/mosdns_compare/run_dnsperf_compare.sh)
-* Low-concurrency latency script: [`benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh`](https://github.com/SvenShi/oxidns/blob/main/benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh)
+* Benchmark directory: [`benchmarks/mosdns_compare/README.md`](https://github.com/svenshi/oxidns/tree/main/benchmarks/mosdns_compare)
+* Scenario list: [`benchmarks/mosdns_compare/scenarios.tsv`](https://github.com/svenshi/oxidns/blob/main/benchmarks/mosdns_compare/scenarios.tsv)
+* Higher-concurrency script: [`benchmarks/mosdns_compare/run_dnsperf_compare.sh`](https://github.com/svenshi/oxidns/blob/main/benchmarks/mosdns_compare/run_dnsperf_compare.sh)
+* Low-concurrency latency script: [`benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh`](https://github.com/svenshi/oxidns/blob/main/benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh)

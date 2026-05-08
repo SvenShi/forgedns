@@ -24,7 +24,7 @@ Requirements:
 Build and run:
 
 ```bash
-git clone https://github.com/SvenShi/oxidns.git
+git clone https://github.com/svenshi/oxidns.git
 cd oxidns
 
 cargo build --release
@@ -47,7 +47,7 @@ The release workflow generates standalone binaries for multiple platforms. Each 
 
 Release page:
 
-- [https://github.com/SvenShi/oxidns/releases](https://github.com/SvenShi/oxidns/releases)
+- [https://github.com/svenshi/oxidns/releases](https://github.com/svenshi/oxidns/releases)
 
 ### Supported Archive Targets
 
@@ -119,7 +119,7 @@ Replace `TAG` below with the actual release tag, for example `v0.1.0`. The Linux
 
 ```bash
 curl -L -o oxidns.tar.gz \
-  https://github.com/SvenShi/oxidns/releases/download/TAG/oxidns-x86_64-unknown-linux-musl.tar.gz
+  https://github.com/svenshi/oxidns/releases/download/TAG/oxidns-x86_64-unknown-linux-musl.tar.gz
 
 mkdir -p oxidns
 tar -xzf oxidns.tar.gz -C oxidns

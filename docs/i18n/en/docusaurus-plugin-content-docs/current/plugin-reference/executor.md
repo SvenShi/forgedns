@@ -1998,7 +1998,7 @@ Runs the OxiDNS upgrade flow from the executor pipeline. It is suitable for main
 - tag: upgrade_auto
   type: upgrade
   args:
-      repository: SvenShi/oxidns
+      repository: svenshi/oxidns
       asset: auto
       cache_dir: ./upgrade/cache
       backup_dir: ./upgrade/backups
@@ -2019,7 +2019,7 @@ Runs the OxiDNS upgrade flow from the executor pipeline. It is suitable for main
     - Boolean. Default: `true`.
     - Cleans `cache_dir` and `backup_dir` after a successful upgrade.
 - `repository`
-    - GitHub repository. Default: `SvenShi/oxidns`.
+    - GitHub repository. Default: `svenshi/oxidns`.
 - `asset`
     - Release asset name. `auto` selects the current platform archive.
 - `cache_dir` / `backup_dir`

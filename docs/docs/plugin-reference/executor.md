@@ -2126,7 +2126,7 @@ sidebar_position: 3
 - tag: upgrade_auto
   type: upgrade
   args:
-      repository: SvenShi/oxidns
+      repository: svenshi/oxidns
       asset: auto
       cache_dir: ./upgrade/cache
       backup_dir: ./upgrade/backups
@@ -2149,7 +2149,7 @@ sidebar_position: 3
     - 默认值：`true`
     - 升级成功后清理 `cache_dir` 和 `backup_dir`。
 - `repository`
-    - GitHub 仓库，默认 `SvenShi/oxidns`。
+    - GitHub 仓库，默认 `svenshi/oxidns`。
 - `asset`
     - Release asset 名称；`auto` 会按当前平台选择 archive。
 - `cache_dir` / `backup_dir`

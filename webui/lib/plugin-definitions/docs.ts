@@ -316,7 +316,7 @@ export const pluginFieldDocs = {
       "- 类型：`bool`；必填：否；默认值：`true`\n- 作用：控制插件退出时是否清理由其管理的条目。启用后，插件在正常关闭阶段会删除自身写入并可识别归属的 RouterOS 地址项。\n- 影响：关闭该选项后，已写入条目会继续保留在 RouterOS 中，适合要求策略状态跨进程重启保留的场景。",
   },
   upgrade: {
-    args: "- `force`\n    - 类型：`bool`\n    - 默认值：`false`\n    - 即使目标 release 不比当前版本更新，也继续下载、校验并替换。\n- `cleanup`\n    - 类型：`bool`\n    - 默认值：`true`\n    - 升级成功后清理 `cache_dir` 和 `backup_dir`。\n- `repository`\n    - GitHub 仓库，默认 `SvenShi/oxidns`。\n- `asset`\n    - Release asset 名称；`auto` 会按当前平台选择 archive。\n- `cache_dir` / `backup_dir`\n    - 下载缓存目录和替换前备份目录。\n- `restart`\n    - 可选值为 `none` 或 `service`。设置为 `service` 时，升级成功替换二进制文件后，应用会主动退出并返回错误码，以便 systemd 自动重启。因此，对应的 service 必须将 `Restart` 设置为 `always` 或 `on-failure`。\n- `timeout`、`socks5`、`insecure_skip_verify`\n    - 与 CLI `upgrade` 参数含义一致。",
+    args: "- `force`\n    - 类型：`bool`\n    - 默认值：`false`\n    - 即使目标 release 不比当前版本更新，也继续下载、校验并替换。\n- `cleanup`\n    - 类型：`bool`\n    - 默认值：`true`\n    - 升级成功后清理 `cache_dir` 和 `backup_dir`。\n- `repository`\n    - GitHub 仓库，默认 `svenshi/oxidns`。\n- `asset`\n    - Release asset 名称；`auto` 会按当前平台选择 archive。\n- `cache_dir` / `backup_dir`\n    - 下载缓存目录和替换前备份目录。\n- `restart`\n    - 可选值为 `none` 或 `service`。设置为 `service` 时，升级成功替换二进制文件后，应用会主动退出并返回错误码，以便 systemd 自动重启。因此，对应的 service 必须将 `Restart` 设置为 `always` 或 `on-failure`。\n- `timeout`、`socks5`、`insecure_skip_verify`\n    - 与 CLI `upgrade` 参数含义一致。",
   },
   cron: {
     jobs: "- 类型：`array`；必填：是；默认值：无\n- 作用：定义一个或多个后台任务。\n- 运行影响：\n  - 数组不能为空。\n  - 每个任务独立维护自己的调度状态和重叠保护。",

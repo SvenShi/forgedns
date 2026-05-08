@@ -331,14 +331,14 @@ mod tests {
         let config = parse_quick_setup(None).unwrap();
         assert!(!config.force);
         assert!(config.cleanup_after_apply);
-        assert_eq!(config.repository, "SvenShi/oxidns");
+        assert_eq!(config.repository, "svenshi/oxidns");
     }
 
     #[test]
     fn quick_setup_accepts_apply_options() {
         let config = parse_quick_setup(Some("force=true".to_string())).unwrap();
         assert!(config.force);
-        assert_eq!(config.repository, "SvenShi/oxidns");
+        assert_eq!(config.repository, "svenshi/oxidns");
     }
 
     #[test]

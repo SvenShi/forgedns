@@ -25,7 +25,7 @@ use crate::network::http_client::{
 use crate::network::upstream::parse_socks5_opt;
 use crate::service;
 
-const DEFAULT_REPOSITORY: &str = "SvenShi/oxidns";
+const DEFAULT_REPOSITORY: &str = "svenshi/oxidns";
 const DEFAULT_TARGET: &str = "latest";
 const DEFAULT_CACHE_DIR: &str = "./upgrade-cache";
 const DEFAULT_BACKUP_DIR: &str = "./upgrade-backups";

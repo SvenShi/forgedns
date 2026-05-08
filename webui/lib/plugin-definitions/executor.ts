@@ -1189,7 +1189,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         description: "GitHub 仓库。",
         label: "GitHub 仓库",
         type: "text",
-        default: "SvenShi/oxidns",
+        default: "svenshi/oxidns",
       },
       {
         key: "asset",

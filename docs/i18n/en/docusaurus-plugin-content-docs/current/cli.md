@@ -273,7 +273,7 @@ Common arguments:
   - Default: `latest`
 - `--repository <OWNER/REPO>`
   - GitHub repository.
-  - Default: `SvenShi/oxidns`
+  - Default: `svenshi/oxidns`
 - `--asset <NAME|auto>`
   - Release asset name. `auto` selects the current platform archive.
   - Default: `auto`

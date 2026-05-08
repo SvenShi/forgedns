@@ -6,7 +6,7 @@ authors = ["Sven Shi <isvenshi@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 description = "Vendored zonefile parser adapted for OxiDNS"
-repository = "https://github.com/SvenShi/oxidns"
+repository = "https://github.com/svenshi/oxidns"
 keywords = ["dns", "zonefile", "parser"]
 categories = ["parser-implementations", "network-programming"]
 

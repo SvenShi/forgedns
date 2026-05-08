@@ -123,7 +123,7 @@ pub struct UpgradeOptions {
     pub target: String,
 
     /// GitHub repository in owner/name form.
-    #[arg(long = "repository", default_value = "SvenShi/oxidns", global = true)]
+    #[arg(long = "repository", default_value = "svenshi/oxidns", global = true)]
     pub repository: String,
 
     /// Release asset name, or auto for the current platform archive.
@@ -325,7 +325,7 @@ mod tests {
             "--target",
             "v0.4.2",
             "--repository",
-            "SvenShi/oxidns",
+            "svenshi/oxidns",
             "--asset",
             "oxidns-x86_64-unknown-linux-gnu.tar.gz",
             "--cache-dir",
@@ -348,7 +348,7 @@ mod tests {
             Command::Upgrade(UpgradeOptions {
                 action: Some(UpgradeAction::Apply),
                 target: "v0.4.2".to_string(),
-                repository: "SvenShi/oxidns".to_string(),
+                repository: "svenshi/oxidns".to_string(),
                 asset: "oxidns-x86_64-unknown-linux-gnu.tar.gz".to_string(),
                 cache_dir: PathBuf::from("./cache"),
                 backup_dir: PathBuf::from("./backups"),
@@ -372,7 +372,7 @@ mod tests {
             Command::Upgrade(UpgradeOptions {
                 action: None,
                 target: "latest".to_string(),
-                repository: "SvenShi/oxidns".to_string(),
+                repository: "svenshi/oxidns".to_string(),
                 asset: "auto".to_string(),
                 cache_dir: PathBuf::from("./upgrade-cache"),
                 backup_dir: PathBuf::from("./upgrade-backups"),

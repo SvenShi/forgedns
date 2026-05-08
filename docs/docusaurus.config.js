@@ -20,7 +20,7 @@ const config = {
   url: 'https://oxidns.cn',
   baseUrl: '/',
 
-  organizationName: 'SvenShi',
+  organizationName: 'svenshi',
   projectName: 'oxidns',
 
   onBrokenLinks: 'throw',
@@ -74,7 +74,7 @@ const config = {
           path: './docs',
           routeBasePath: '/',
           sidebarPath: './sidebars.js',
-          editUrl: 'https://github.com/SvenShi/oxidns/tree/main/docs/',
+          editUrl: 'https://github.com/svenshi/oxidns/tree/main/docs/',
         },
         blog: false,
         theme: {
@@ -105,7 +105,7 @@ const config = {
             position: 'right',
           },
           {
-            href: 'https://github.com/SvenShi/oxidns',
+            href: 'https://github.com/svenshi/oxidns',
             'aria-label': 'GitHub repository',
             className: 'header-github-link',
             position: 'right',

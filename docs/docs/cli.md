@@ -273,7 +273,7 @@ sudo oxidns upgrade apply --restart service
   - 默认值：`latest`
 - `--repository <OWNER/REPO>`
   - GitHub 仓库。
-  - 默认值：`SvenShi/oxidns`
+  - 默认值：`svenshi/oxidns`
 - `--asset <NAME|auto>`
   - Release asset 名称；`auto` 会按当前平台选择 archive。
   - 默认值：`auto`
