@@ -37,6 +37,7 @@ fn make_config(plugin: PluginConfig) -> Config {
         api: ApiConfig::default(),
         log: LogConfig::default(),
         plugins: vec![plugin],
+        include: Vec::new(),
     }
 }
 

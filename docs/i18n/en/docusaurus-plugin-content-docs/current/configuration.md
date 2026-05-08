@@ -5,7 +5,7 @@ sidebar_position: 2
 
 ## Before You Start
 
-ForgeDNS uses YAML configuration. The current top-level layout has four parts:
+ForgeDNS uses YAML configuration. The current top-level layout has five parts:
 
 ```yaml
 runtime:
@@ -17,6 +17,8 @@ api:
 log:
   level: info
   file: ./forgedns.log
+
+include: []
 
 plugins:
   - tag: seq_main
@@ -33,10 +35,30 @@ Where:
   - Management API settings.
 - `log`
   - Log output settings.
+- `include`
+  - Load plugin definitions from other configuration files.
 - `plugins`
   - All plugin instance definitions. ForgeDNS composes the full DNS pipeline from plugins.
 
 ## Top-Level Fields
+
+### `include`
+
+```yaml
+# []string, load plugin settings from other configuration files.
+include:
+  - ./plugins/common.yaml
+  - ./plugins/server.yaml
+```
+
+Field notes:
+
+- `include`
+  - Loads only `plugins` from included files. It does not merge included `runtime`, `api`, or `log` settings.
+  - Merge order is include-first: recursively load each `include` in array order, then append the current file's `plugins`.
+  - Relative paths are resolved from the directory of the configuration file that declares the `include`.
+  - Includes may recurse up to 8 levels.
+  - All merged plugin `tag` values must still be globally unique.
 
 ### `runtime`
 

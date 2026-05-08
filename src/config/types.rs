@@ -54,6 +54,10 @@ pub enum ConfigError {
 /// Main server configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// Additional configuration files whose plugins should be loaded first.
+    #[serde(default)]
+    pub include: Vec<String>,
+
     /// Tokio runtime configuration.
     #[serde(default)]
     pub runtime: RuntimeConfig,
@@ -67,6 +71,7 @@ pub struct Config {
     pub log: LogConfig,
 
     /// List of plugins to load and their configurations
+    #[serde(default)]
     pub plugins: Vec<PluginConfig>,
 }
 
@@ -321,6 +326,7 @@ mod tests {
     #[test]
     fn test_validate_rejects_duplicate_plugin_tags() {
         let config = Config {
+            include: Vec::new(),
             runtime: RuntimeConfig::default(),
             api: ApiConfig::default(),
             log: LogConfig::default(),
@@ -336,6 +342,7 @@ mod tests {
     #[test]
     fn test_validate_rejects_empty_plugin_type() {
         let config = Config {
+            include: Vec::new(),
             runtime: RuntimeConfig::default(),
             api: ApiConfig::default(),
             log: LogConfig::default(),
@@ -351,6 +358,7 @@ mod tests {
     #[test]
     fn test_validate_accepts_basic_valid_config() {
         let config = Config {
+            include: Vec::new(),
             runtime: RuntimeConfig::default(),
             api: ApiConfig::default(),
             log: LogConfig::default(),
@@ -363,6 +371,7 @@ mod tests {
     #[test]
     fn test_validate_rejects_zero_runtime_worker_threads() {
         let config = Config {
+            include: Vec::new(),
             runtime: RuntimeConfig {
                 worker_threads: Some(0),
             },
@@ -392,6 +401,7 @@ mod tests {
     #[test]
     fn test_validate_accepts_api_http_string_shorthand() {
         let config = Config {
+            include: Vec::new(),
             runtime: RuntimeConfig::default(),
             api: ApiConfig {
                 http: Some(ApiHttpConfig::Listen("0.0.0.0:8080".to_string())),
@@ -406,6 +416,7 @@ mod tests {
     #[test]
     fn test_validate_rejects_api_mtls_without_client_ca() {
         let config = Config {
+            include: Vec::new(),
             runtime: RuntimeConfig::default(),
             api: ApiConfig {
                 http: Some(ApiHttpConfig::Detailed(ApiHttpDetailedConfig {

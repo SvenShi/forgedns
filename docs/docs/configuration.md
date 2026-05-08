@@ -5,7 +5,7 @@ sidebar_position: 2
 
 ## 写在最前
 
-ForgeDNS 的配置文件是 YAML。当前顶层结构由四部分组成：
+ForgeDNS 的配置文件是 YAML。当前顶层结构由五部分组成：
 
 ```yaml
 runtime:
@@ -17,6 +17,8 @@ api:
 log:
   level: info
   file: ./forgedns.log
+
+include: []
 
 plugins:
   - tag: seq_main
@@ -33,10 +35,30 @@ plugins:
   - 管理 API。
 - `log`
   - 日志输出。
+- `include`
+  - 从其他配置文件载入插件定义。
 - `plugins`
   - 所有插件实例定义。ForgeDNS 通过插件组合完成完整 DNS 流程。
 
 ## 顶层字段
+
+### `include`
+
+```yaml
+# []string, 从其他配置文件载入 plugins 插件设置。
+include:
+  - ./plugins/common.yaml
+  - ./plugins/server.yaml
+```
+
+字段说明：
+
+- `include`
+  - 只载入被包含文件中的 `plugins`，不会合并被包含文件的 `runtime`、`api` 或 `log`。
+  - 插件合并顺序为：先按数组顺序递归载入 `include`，再追加当前文件的 `plugins`。
+  - 相对路径以声明该 `include` 的配置文件所在目录为基准。
+  - 最多递归 8 层。
+  - 合并后的所有插件 `tag` 仍必须全局唯一。
 
 ### `runtime`
 
