@@ -1,4 +1,4 @@
-![OxiDNS Banner](.github/img/logo-banner.png)
+![OxiDNS Banner](.github/img/logo-banner.png) 
 
 [中文](README.md) | [English](README_EN.md)
 
