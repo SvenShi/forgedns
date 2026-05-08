@@ -4,7 +4,7 @@
 //! `debug_print` executor plugin.
 //!
 //! This plugin logs request/response objects at info level for debugging.
-//! It mirrors mosdns `debug_print` quick setup semantics in ForgeDNS.
+//! It mirrors mosdns `debug_print` quick setup semantics in OxiDNS.
 
 use std::sync::Arc;
 

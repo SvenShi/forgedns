@@ -1,7 +1,7 @@
-# ForgeDNS default configuration file
+# OxiDNS default configuration file
 #
 # See full documentation at:
-# https://forgedns.cn
+# https://oxidns.cn
 
 log:
   level: info

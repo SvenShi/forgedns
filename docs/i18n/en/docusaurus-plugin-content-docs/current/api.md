@@ -3,7 +3,7 @@ title: Management API
 sidebar_position: 4
 ---
 
-ForgeDNS exposes a standalone control plane for:
+OxiDNS exposes a standalone control plane for:
 
 * Process and startup health checks
 * Config checks and raw config text validation
@@ -31,9 +31,9 @@ api:
   http:
     listen: "127.0.0.1:9443"
     ssl:
-      cert: "/etc/forgedns/api.crt"
-      key: "/etc/forgedns/api.key"
-      client_ca: "/etc/forgedns/client-ca.crt"
+      cert: "/etc/oxidns/api.crt"
+      key: "/etc/oxidns/api.key"
+      client_ca: "/etc/oxidns/client-ca.crt"
       require_client_cert: true
     auth:
       type: basic
@@ -456,11 +456,11 @@ This endpoint is registered when the API is enabled and at least one `metrics_co
 
 Current exported metrics include:
 
-* `forgedns_query_total`
-* `forgedns_query_error_total`
-* `forgedns_query_inflight`
-* `forgedns_query_latency_count`
-* `forgedns_query_latency_sum_ms`
+* `oxidns_query_total`
+* `oxidns_query_error_total`
+* `oxidns_query_inflight`
+* `oxidns_query_latency_count`
+* `oxidns_query_latency_sum_ms`
 
 These metrics carry plugin-level labels so you can distinguish different observation points in the policy graph.
 
@@ -486,8 +486,8 @@ api:
   http:
     listen: "0.0.0.0:9443"
     ssl:
-      cert: "/etc/forgedns/api.crt"
-      key: "/etc/forgedns/api.key"
+      cert: "/etc/oxidns/api.crt"
+      key: "/etc/oxidns/api.key"
     auth:
       type: basic
       username: "admin"
@@ -506,9 +506,9 @@ api:
   http:
     listen: "0.0.0.0:9443"
     ssl:
-      cert: "/etc/forgedns/api.crt"
-      key: "/etc/forgedns/api.key"
-      client_ca: "/etc/forgedns/client-ca.crt"
+      cert: "/etc/oxidns/api.crt"
+      key: "/etc/oxidns/api.key"
+      client_ca: "/etc/oxidns/client-ca.crt"
       require_client_cert: true
 ```
 

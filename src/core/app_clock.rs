@@ -1,6 +1,6 @@
 //! Application monotonic clock.
 //!
-//! ForgeDNS mainly needs elapsed-time reads relative to process start for
+//! OxiDNS mainly needs elapsed-time reads relative to process start for
 //! metrics, cache expiry, and connection lifetime tracking. The previous
 //! version maintained a dedicated updater task and cached elapsed time in an
 //! atomic, but the measured gain did not justify an always-running runtime

@@ -1,4 +1,4 @@
-# label|forgedns_config|mosdns_config|query_file|mode|family|warmup_query_file|tags|description|notes
+# label|oxidns_config|mosdns_config|query_file|mode|family|warmup_query_file|tags|description|notes
 # Core macro scenarios with the highest selection value.
 01-baseline-udp-forward|01-baseline-udp-forward.yaml|01-baseline-udp-forward.yaml|queries/forward.txt|udp|macro-forward|-|core,macro,stable|Pure UDP forward baseline|Closest to a real recursive or proxy hot path.
 02-cache-hotpath|02-cache-hotpath.yaml|02-cache-hotpath.yaml|queries/cache-hotpath.txt|udp|macro-cache|-|core,macro,stable|Warm cache hit path|Use with 01 to separate in-memory hit cost from network forward cost.

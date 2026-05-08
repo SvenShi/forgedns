@@ -3,7 +3,7 @@ title: 管理 API
 sidebar_position: 4
 ---
 
-ForgeDNS 的管理 API 是独立控制平面，负责：
+OxiDNS 的管理 API 是独立控制平面，负责：
 
 * 进程与启动健康检查
 * 配置检查与配置文本校验
@@ -31,9 +31,9 @@ api:
   http:
     listen: "127.0.0.1:9443"
     ssl:
-      cert: "/etc/forgedns/api.crt"
-      key: "/etc/forgedns/api.key"
-      client_ca: "/etc/forgedns/client-ca.crt"
+      cert: "/etc/oxidns/api.crt"
+      key: "/etc/oxidns/api.key"
+      client_ca: "/etc/oxidns/client-ca.crt"
       require_client_cert: true
     auth:
       type: basic
@@ -456,11 +456,11 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 
 当前导出的指标包括：
 
-* `forgedns_query_total`
-* `forgedns_query_error_total`
-* `forgedns_query_inflight`
-* `forgedns_query_latency_count`
-* `forgedns_query_latency_sum_ms`
+* `oxidns_query_total`
+* `oxidns_query_error_total`
+* `oxidns_query_inflight`
+* `oxidns_query_latency_count`
+* `oxidns_query_latency_sum_ms`
 
 这些指标带有插件级标签信息，可用于区分不同流水线观测点。
 
@@ -486,8 +486,8 @@ api:
   http:
     listen: "0.0.0.0:9443"
     ssl:
-      cert: "/etc/forgedns/api.crt"
-      key: "/etc/forgedns/api.key"
+      cert: "/etc/oxidns/api.crt"
+      key: "/etc/oxidns/api.key"
     auth:
       type: basic
       username: "admin"
@@ -506,9 +506,9 @@ api:
   http:
     listen: "0.0.0.0:9443"
     ssl:
-      cert: "/etc/forgedns/api.crt"
-      key: "/etc/forgedns/api.key"
-      client_ca: "/etc/forgedns/client-ca.crt"
+      cert: "/etc/oxidns/api.crt"
+      key: "/etc/oxidns/api.key"
+      client_ca: "/etc/oxidns/client-ca.crt"
       require_client_cert: true
 ```
 

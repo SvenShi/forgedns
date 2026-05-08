@@ -5,7 +5,7 @@ sidebar_position: 2
 
 ## 写在最前
 
-ForgeDNS 的配置文件是 YAML。当前顶层结构由五部分组成：
+OxiDNS 的配置文件是 YAML。当前顶层结构由五部分组成：
 
 ```yaml
 runtime:
@@ -16,7 +16,7 @@ api:
 
 log:
   level: info
-  file: ./forgedns.log
+  file: ./oxidns.log
 
 include: []
 
@@ -38,7 +38,7 @@ plugins:
 - `include`
   - 从其他配置文件载入插件定义。
 - `plugins`
-  - 所有插件实例定义。ForgeDNS 通过插件组合完成完整 DNS 流程。
+  - 所有插件实例定义。OxiDNS 通过插件组合完成完整 DNS 流程。
 
 ## 顶层字段
 
@@ -79,7 +79,7 @@ runtime:
 ```yaml
 log:
   level: info
-  file: ./forgedns.log
+  file: ./oxidns.log
   rotation:
     type: daily
     max_files: 7
@@ -93,7 +93,7 @@ log:
 - `file`
   - 含义：可选日志文件路径。
   - 不配置时仅输出到标准输出。
-  - 配置后，ForgeDNS 会同时输出到标准输出和日志文件。
+  - 配置后，OxiDNS 会同时输出到标准输出和日志文件。
   - 日志文件内容为 UTF-8 纯文本格式，不写入终端 ANSI 颜色控制码。
 - `rotation`
   - 含义：日志文件轮转策略。
@@ -131,9 +131,9 @@ api:
   http:
     listen: "127.0.0.1:9443"
     ssl:
-      cert: "/etc/forgedns/api.crt"
-      key: "/etc/forgedns/api.key"
-      client_ca: "/etc/forgedns/client-ca.crt"
+      cert: "/etc/oxidns/api.crt"
+      key: "/etc/oxidns/api.key"
+      client_ca: "/etc/oxidns/client-ca.crt"
       require_client_cert: true
     auth:
       type: basic
@@ -243,7 +243,7 @@ api:
 
 ## sequence 编排模型
 
-`sequence` 是 ForgeDNS 的策略中枢。绝大多数非平凡配置都会以它作为总入口。
+`sequence` 是 OxiDNS 的策略中枢。绝大多数非平凡配置都会以它作为总入口。
 
 示例：
 
@@ -284,7 +284,7 @@ api:
 
 ### quick setup
 
-如果 `sequence` 中写的不是 `$tag`，而是 `type + 参数` 形式，ForgeDNS 会即时构造临时插件。
+如果 `sequence` 中写的不是 `$tag`，而是 `type + 参数` 形式，OxiDNS 会即时构造临时插件。
 
 示例：
 
@@ -465,7 +465,7 @@ api:
 args:
   - "domain:example.com"
   - "$core_domains"
-  - "&/etc/forgedns/domains.txt"
+  - "&/etc/oxidns/domains.txt"
 ```
 
 ## 上游统一结构

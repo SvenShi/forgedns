@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use forgedns::core::rule_matcher::IpPrefixMatcher;
+use oxidns::core::rule_matcher::IpPrefixMatcher;
 
 fn make_ip_rules() -> Vec<String> {
     let mut rules = Vec::with_capacity(3_000);

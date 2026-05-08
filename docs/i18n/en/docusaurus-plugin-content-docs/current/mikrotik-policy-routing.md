@@ -3,11 +3,11 @@ title: MikroTik Policy Routing
 sidebar_position: 5
 ---
 
-This chapter explains how the ForgeDNS `ros_address_list` executor works with RouterOS `address-list`, `mangle`, and policy-routing mechanisms to build a system where DNS resolution results drive later egress selection.
+This chapter explains how the OxiDNS `ros_address_list` executor works with RouterOS `address-list`, `mangle`, and policy-routing mechanisms to build a system where DNS resolution results drive later egress selection.
 
 The core idea is not to match domains directly inside RouterOS. Instead, the workflow is:
 
-1. ForgeDNS resolves the domain first.
+1. OxiDNS resolves the domain first.
 2. It extracts the target IPs from the DNS response.
 3. Matching target IPs are synced into RouterOS `address-list`.
 4. During connection setup, RouterOS decides whether to apply policy marks based on whether the target IP matches that `address-list`.
@@ -17,17 +17,17 @@ This design matters because:
 
 * RouterOS does not need to repeat domain-resolution logic.
 * The routing decision happens at the IP layer, which maps naturally to RouterOS primitives.
-* ForgeDNS maintains the dynamic mapping from domain to target IP.
+* OxiDNS maintains the dynamic mapping from domain to target IP.
 * RouterOS remains responsible for mapping target IPs to egress policy.
 
 ## Overall Workflow
 
-### ForgeDNS-Side Flow
+### OxiDNS-Side Flow
 
 ```mermaid
 flowchart TD
-    A["User accesses a domain"] --> B["Request enters ForgeDNS"]
-    B --> C["ForgeDNS resolves the domain"]
+    A["User accesses a domain"] --> B["Request enters OxiDNS"]
+    B --> C["OxiDNS resolves the domain"]
     C --> D["Gets target IPs"]
     D --> E["Checks whether the IPs belong to policy_set"]
 
@@ -62,7 +62,7 @@ flowchart TD
 
 ## Division of Responsibilities
 
-### What ForgeDNS Does
+### What OxiDNS Does
 
 * Receives DNS requests.
 * Resolves names according to policy.
@@ -125,7 +125,7 @@ plugins:
       async: true
       address_list4: "policy_set_v4"
       address_list6: "policy_set_v6"
-      comment_prefix: "forgedns"
+      comment_prefix: "oxidns"
       min_ttl: 60
       max_ttl: 1800
 
@@ -148,7 +148,7 @@ address: "172.16.1.1:8728"
 Meaning:
 
 * RouterOS API address.
-* ForgeDNS uses it to connect to RouterOS and manage address-list entries.
+* OxiDNS uses it to connect to RouterOS and manage address-list entries.
 
 ### `address_list4` / `address_list6`
 
@@ -235,7 +235,7 @@ persistent:
     - "1.1.1.1"
     - "203.0.113.0/24"
   files:
-    - "/etc/forgedns/persistent_policy_ips.txt"
+    - "/etc/oxidns/persistent_policy_ips.txt"
 ```
 
 Meaning:
@@ -249,7 +249,7 @@ Good fits:
 
 ## RouterOS Policy-Routing Model
 
-ForgeDNS only writes target IPs into `address-list`. The actual policy routing still happens on the RouterOS side.
+OxiDNS only writes target IPs into `address-list`. The actual policy routing still happens on the RouterOS side.
 
 The standard pattern has three steps:
 
@@ -261,7 +261,7 @@ The standard pattern has three steps:
 
 #### Step 1: Identify Whether the Destination Hits the Policy Set
 
-RouterOS reads the destination IP and checks whether it belongs to the `address-list` maintained by ForgeDNS.
+RouterOS reads the destination IP and checks whether it belongs to the `address-list` maintained by OxiDNS.
 
 This corresponds to:
 
@@ -307,7 +307,7 @@ This design relies on one practical assumption:
 * The client usually sends a DNS query first.
 * It then starts the network connection shortly afterward using the returned address.
 
-So as long as ForgeDNS writes the target IP to RouterOS quickly after answering DNS, the following connection will usually hit the expected address-list entry.
+So as long as OxiDNS writes the target IP to RouterOS quickly after answering DNS, the following connection will usually hit the expected address-list entry.
 
 There are still boundary conditions:
 
@@ -318,7 +318,7 @@ There are still boundary conditions:
 
 You can improve it from three angles:
 
-1. Keep the ForgeDNS-to-RouterOS API path stable and low-latency.
+1. Keep the OxiDNS-to-RouterOS API path stable and low-latency.
 2. Do not set `min_ttl` too low, which reduces RouterOS churn.
 3. Use `persistent` for critical targets so the first dynamic write is not the only protection.
 
@@ -438,7 +438,7 @@ On RouterOS, you can then map:
 
 ## Debugging and Troubleshooting
 
-### Confirm Three Things on the ForgeDNS Side
+### Confirm Three Things on the OxiDNS Side
 
 1. The domain really matches the intended policy branch.
 2. The DNS response really contains `A` or `AAAA`.
@@ -463,7 +463,7 @@ Useful tools:
 If a client:
 
 * Caches DNS for a long time
-* Does not use ForgeDNS
+* Does not use OxiDNS
 * Uses some other resolver result
 
 then the RouterOS-side policy set may no longer cover the actual connection target.
@@ -503,7 +503,7 @@ and validate the full loop first.
 
 ### Recommendation 2: Keep DNS Decisions and Routing Decisions Layered
 
-ForgeDNS is responsible for:
+OxiDNS is responsible for:
 
 * Which domains belong to which policy class
 * Which resolution results should be synced
@@ -526,17 +526,17 @@ So:
 
 ## Summary
 
-The ForgeDNS `ros_address_list` plugin is essentially a DNS-result synchronizer:
+The OxiDNS `ros_address_list` plugin is essentially a DNS-result synchronizer:
 
 * It converts domain resolution results into target IP sets that RouterOS can consume.
 * RouterOS then performs the actual policy routing based on those target IP sets.
 
 The full loop looks like this:
 
-1. ForgeDNS decides how a domain should be resolved.
-2. ForgeDNS writes target IPs that match policy into `policy_set`.
+1. OxiDNS decides how a domain should be resolved.
+2. OxiDNS writes target IPs that match policy into `policy_set`.
 3. RouterOS marks new connections based on `policy_set`.
 4. RouterOS derives routing marks from connection marks.
 5. Traffic leaves through the selected egress.
 
-For the goal of "make later connections to specific domains consistently use a specific egress path", this is one of the most representative and practical ways to use the current ForgeDNS `ros_address_list` plugin.
+For the goal of "make later connections to specific domains consistently use a specific egress path", this is one of the most representative and practical ways to use the current OxiDNS `ros_address_list` plugin.

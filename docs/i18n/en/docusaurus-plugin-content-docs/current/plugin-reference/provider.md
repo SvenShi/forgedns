@@ -9,7 +9,7 @@ Providers with domain or IP match capability can be referenced directly by match
 
 Every live provider also registers `POST /plugins/<provider_tag>/reload`, and the `reload_provider` executor can refresh that provider's snapshot in place with the same startup configuration without rebuilding unrelated plugins.
 
-At runtime, ForgeDNS only initializes providers that are actually consumed. If a provider is not referenced directly or indirectly by any `server`, `executor`, or `matcher`, it is skipped during startup, does not appear in the runtime registry, and emits a warning log so the unused configuration is visible.
+At runtime, OxiDNS only initializes providers that are actually consumed. If a provider is not referenced directly or indirectly by any `server`, `executor`, or `matcher`, it is skipped during startup, does not appear in the runtime registry, and emits a warning log so the unused configuration is visible.
 
 ---
 
@@ -38,7 +38,7 @@ Provides a high-performance domain rule set that can be referenced by plugins su
       - "static.example.org"
     files:
       # Merge additional rules from files
-      - "/etc/forgedns/domains.txt"
+      - "/etc/oxidns/domains.txt"
     sets:
       # Reuse another domain-capable provider
       - "shared_domains"
@@ -68,7 +68,7 @@ Provides a high-performance domain rule set that can be referenced by plugins su
 
 - Type: `array`; Required: no; Default: empty array
 - Purpose: Lists external rule files.
-- Example: `- "/etc/forgedns/domains.txt"`
+- Example: `- "/etc/oxidns/domains.txt"`
 - File requirements:
   - One rule per line.
   - Empty lines and comment lines are ignored.
@@ -124,7 +124,7 @@ Loads reusable domain rules from v2ray-rules-dat `geosite.dat`.
 - tag: geosite_cn
   type: geosite
   args:
-    file: "/etc/forgedns/geosite.dat"
+    file: "/etc/oxidns/geosite.dat"
     selectors:
       - "cn"
       - "geolocation-!cn"
@@ -150,7 +150,7 @@ Loads reusable domain rules from v2ray-rules-dat `geosite.dat`.
 - `Full` becomes `full:`.
 - Can be referenced directly by `qname`, `cname`, and `question`, or aggregated by `domain_set`.
 - Supports independent refresh through `reload_provider` or `POST /plugins/<tag>/reload`.
-- If you want to pre-export selected rules into text files before runtime, use `forgedns export-dat --kind geosite`.
+- If you want to pre-export selected rules into text files before runtime, use `oxidns export-dat --kind geosite`.
 
 ---
 
@@ -180,7 +180,7 @@ This provider exposes two semantics:
       - "||cdn.example.com^$dnstype=A|AAAA,important,denyallow=cdn-safe.example.com"
     files:
       # External AdGuard-format rule files
-      - "/etc/forgedns/adguard.txt"
+      - "/etc/oxidns/adguard.txt"
 ```
 
 ### Behavior
@@ -232,7 +232,7 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
       - "fd00::/8"
     files:
       # Merge more IP / CIDR entries from files
-      - "/etc/forgedns/ips.txt"
+      - "/etc/oxidns/ips.txt"
     sets:
       # Reuse another IP-capable provider
       - "shared_ip_set"
@@ -261,7 +261,7 @@ Provides IP and CIDR rule sets that can be referenced by matchers such as `clien
 
 - Type: `array`; Required: no; Default: empty array
 - Purpose: Lists external IP rule files.
-- Example: `- "/etc/forgedns/ips.txt"`
+- Example: `- "/etc/oxidns/ips.txt"`
 - File requirements:
   - One IP or CIDR rule per line.
   - Empty lines and comment lines are ignored.
@@ -316,7 +316,7 @@ Loads reusable IP and CIDR rules from v2ray-rules-dat `geoip.dat`.
 - tag: geoip_cn
   type: geoip
   args:
-    file: "/etc/forgedns/geoip.dat"
+    file: "/etc/oxidns/geoip.dat"
     selectors:
       - "cn"
 ```
@@ -337,4 +337,4 @@ Loads reusable IP and CIDR rules from v2ray-rules-dat `geoip.dat`.
 - Exposes IP-only membership checks.
 - Can be referenced directly by `client_ip`, `resp_ip`, and `ptr_ip`, or composed by `ip_set`.
 - Supports independent refresh through `reload_provider` or `POST /plugins/<tag>/reload`.
-- If you want to pre-export selected rules into text files before runtime, use `forgedns export-dat --kind geoip`.
+- If you want to pre-export selected rules into text files before runtime, use `oxidns export-dat --kind geoip`.

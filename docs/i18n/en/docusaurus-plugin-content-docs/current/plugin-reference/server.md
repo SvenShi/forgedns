@@ -126,9 +126,9 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
     # Typical DoT port
     listen: ":853"
     # PEM certificate chain
-    cert: "/etc/forgedns/server.crt"
+    cert: "/etc/oxidns/server.crt"
     # PEM private key
-    key: "/etc/forgedns/server.key"
+    key: "/etc/oxidns/server.key"
     # Keep DoT connections alive a bit longer for reuse
     idle_timeout: 30
 ```
@@ -164,7 +164,7 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
 
 - Type: `string`; Required: no; Default: none
 - Purpose: Path to the TLS certificate file.
-- Example: `cert: "/etc/forgedns/server.crt"`
+- Example: `cert: "/etc/oxidns/server.crt"`
 - Usage:
   - Enables TLS when paired with `key`.
 - Runtime impact:
@@ -174,7 +174,7 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
 
 - Type: `string`; Required: no; Default: none
 - Purpose: Path to the TLS private key file.
-- Example: `key: "/etc/forgedns/server.key"`
+- Example: `key: "/etc/oxidns/server.key"`
 - Usage:
   - Enables TLS when paired with `cert`.
 - Runtime impact:
@@ -224,9 +224,9 @@ Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
     # HTTPS / DoH bind address
     listen: ":443"
     # Certificate required for HTTPS and HTTP/3
-    cert: "/etc/forgedns/server.crt"
+    cert: "/etc/oxidns/server.crt"
     # Private key required for HTTPS and HTTP/3
-    key: "/etc/forgedns/server.key"
+    key: "/etc/oxidns/server.key"
     # Also enable DoH over HTTP/3 when TLS is present
     enable_http3: true
     # Restore the real client IP from a reverse-proxy header
@@ -291,7 +291,7 @@ Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
 
 - Type: `string`; Required: no; Default: none
 - Purpose: HTTPS certificate file path.
-- Example: `cert: "/etc/forgedns/server.crt"`
+- Example: `cert: "/etc/oxidns/server.crt"`
 - Runtime impact:
   - HTTPS is enabled only when `cert` and `key` are both present.
 
@@ -299,7 +299,7 @@ Provides DNS over HTTPS and can serve HTTP/2 plus optional HTTP/3.
 
 - Type: `string`; Required: no; Default: none
 - Purpose: HTTPS private key file path.
-- Example: `key: "/etc/forgedns/server.key"`
+- Example: `key: "/etc/oxidns/server.key"`
 - Runtime impact:
   - HTTPS is enabled only when `cert` and `key` are both present.
 
@@ -357,9 +357,9 @@ Provides DNS over QUIC.
     # Common DoQ port
     listen: ":853"
     # TLS certificate is mandatory for DoQ
-    cert: "/etc/forgedns/server.crt"
+    cert: "/etc/oxidns/server.crt"
     # TLS private key is mandatory for DoQ
-    key: "/etc/forgedns/server.key"
+    key: "/etc/oxidns/server.key"
     # QUIC transport idle timeout in seconds
     idle_timeout: 30
 ```
@@ -387,7 +387,7 @@ Provides DNS over QUIC.
 
 - Type: `string`; Required: yes; Default: none
 - Purpose: Path to the TLS certificate required by DoQ.
-- Example: `cert: "/etc/forgedns/server.crt"`
+- Example: `cert: "/etc/oxidns/server.crt"`
 - Runtime impact:
   - The listener cannot start if the certificate is invalid.
 
@@ -395,7 +395,7 @@ Provides DNS over QUIC.
 
 - Type: `string`; Required: yes; Default: none
 - Purpose: Path to the TLS private key required by DoQ.
-- Example: `key: "/etc/forgedns/server.key"`
+- Example: `key: "/etc/oxidns/server.key"`
 - Runtime impact:
   - The listener cannot start if the private key is invalid.
 

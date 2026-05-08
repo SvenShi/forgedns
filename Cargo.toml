@@ -1,13 +1,13 @@
 [workspace]
-members = [".", "crates/ripset", "crates/forgedns-proto", "crates/zoneparser"]
+members = [".", "crates/ripset", "crates/oxidns-proto", "crates/zoneparser"]
 
 [package]
-name = "forgedns"
+name = "oxidns"
 version = "0.5.2"
 edition = "2024"
 authors = ["Sven Shi <isvenshi@gmail.com>"]
 description = "A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability."
-repository = "https://github.com/SvenShi/forgedns"
+repository = "https://github.com/SvenShi/oxidns"
 license = "GPL-3.0-or-later"
 readme = "README_EN.md"
 keywords = ["dns", "rustdns", "pipeline", "flow", "dns-server"]
@@ -51,7 +51,7 @@ sha2 = "0.11.0"
 flate2 = "1.1"
 tar = "0.4"
 wincode = { version = "0.5", features = ["derive"] }
-forgedns-proto = { version = "0.1.1", path = "crates/forgedns-proto" }
+oxidns-proto = { version = "0.1.1", path = "crates/oxidns-proto" }
 hotpath = "0.15"
 
 # DNS transport and TLS stack used by server plugins and upstream clients
@@ -86,10 +86,10 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 
 # Service management
 service-manager = "0.11.0"
-zoneparser = { package = "forgedns-zoneparser", version = "0.1.0", path = "crates/zoneparser" }
+zoneparser = { package = "oxidns-zoneparser", version = "0.1.0", path = "crates/zoneparser" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ripset = { package = "forgedns-ripset", version = "0.1.0", path = "crates/ripset" }
+ripset = { package = "oxidns-ripset", version = "0.1.0", path = "crates/ripset" }
 
 
 [features]
@@ -118,11 +118,11 @@ harness = false
 
 
 [[bin]]
-name = "forgedns"
+name = "oxidns"
 path = "src/main.rs"
 
 [lib]
-name = "forgedns"
+name = "oxidns"
 path = "src/lib.rs"
 doctest = false
 
@@ -138,8 +138,8 @@ extended-description = """\
 A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability.
 """
 assets = [
-    ["target/release/forgedns", "usr/bin/forgedns", "755"],
-    ["config.yaml", "etc/forgedns/config.yaml", "644"],
+    ["target/release/oxidns", "usr/bin/oxidns", "755"],
+    ["config.yaml", "etc/oxidns/config.yaml", "644"],
 ]
 maintainer-scripts = "packaging/debian"
 

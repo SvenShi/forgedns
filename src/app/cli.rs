@@ -20,7 +20,7 @@ pub struct Cli {
 /// Supported top-level commands.
 #[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// Start ForgeDNS in the foreground.
+    /// Start OxiDNS in the foreground.
     Start(StartOptions),
     /// Check whether a configuration file is valid.
     Check(CheckOptions),
@@ -28,7 +28,7 @@ pub enum Command {
     ExportDat(ExportDatOptions),
     /// Manage the operating system service.
     Service(ServiceOptions),
-    /// Check, download, or apply ForgeDNS release upgrades.
+    /// Check, download, or apply OxiDNS release upgrades.
     Upgrade(UpgradeOptions),
 }
 
@@ -39,7 +39,7 @@ pub struct StartOptions {
     #[arg(short = 'c', long = "config", default_value = "config.yaml")]
     pub config: PathBuf,
 
-    /// Working directory for ForgeDNS
+    /// Working directory for OxiDNS
     #[arg(short = 'd', long = "working-dir")]
     pub working_dir: Option<PathBuf>,
 
@@ -76,8 +76,8 @@ pub struct ExportDatOptions {
     #[arg(long = "kind", value_enum, default_value_t = DatKind::Auto)]
     pub kind: DatKind,
 
-    /// Output text format: forgedns or original
-    #[arg(long = "format", value_enum, default_value_t = ExportFormat::Forgedns)]
+    /// Output text format: oxidns or original
+    #[arg(long = "format", value_enum, default_value_t = ExportFormat::Oxidns)]
     pub format: ExportFormat,
 
     /// Selector to export; repeat this flag to export multiple selectors
@@ -108,7 +108,7 @@ pub enum DatKind {
 /// Supported export text formats.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportFormat {
-    Forgedns,
+    Oxidns,
     Original,
 }
 
@@ -123,7 +123,7 @@ pub struct UpgradeOptions {
     pub target: String,
 
     /// GitHub repository in owner/name form.
-    #[arg(long = "repository", default_value = "SvenShi/forgedns", global = true)]
+    #[arg(long = "repository", default_value = "SvenShi/oxidns", global = true)]
     pub repository: String,
 
     /// Release asset name, or auto for the current platform archive.
@@ -221,7 +221,7 @@ pub struct ServiceInstallOptions {
     pub config: PathBuf,
 }
 
-/// Parse command-line options for ForgeDNS.
+/// Parse command-line options for OxiDNS.
 pub fn parse_cli() -> Cli {
     <Cli as clap::Parser>::parse()
 }
@@ -235,12 +235,12 @@ mod tests {
     #[test]
     fn parse_start_command_with_explicit_flags() {
         let args = [
-            "forgedns",
+            "oxidns",
             "start",
             "-c",
             "custom.yaml",
             "-d",
-            "/tmp/forgedns",
+            "/tmp/oxidns",
             "-l",
             "debug",
         ];
@@ -250,7 +250,7 @@ mod tests {
             cli.command,
             Command::Start(StartOptions {
                 config: PathBuf::from("custom.yaml"),
-                working_dir: Some(PathBuf::from("/tmp/forgedns")),
+                working_dir: Some(PathBuf::from("/tmp/oxidns")),
                 log_level: Some("debug".to_string()),
             })
         );
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn parse_start_command_uses_default_config() {
-        let args = ["forgedns", "start"];
+        let args = ["oxidns", "start"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn parse_check_command_uses_default_config() {
-        let args = ["forgedns", "check"];
+        let args = ["oxidns", "check"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn parse_check_command_with_explicit_config() {
-        let args = ["forgedns", "check", "-c", "custom.yaml"];
+        let args = ["oxidns", "check", "-c", "custom.yaml"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
@@ -303,21 +303,14 @@ mod tests {
 
     #[test]
     fn parse_check_command_with_working_dir() {
-        let args = [
-            "forgedns",
-            "check",
-            "-c",
-            "custom.yaml",
-            "-d",
-            "/tmp/forgedns",
-        ];
+        let args = ["oxidns", "check", "-c", "custom.yaml", "-d", "/tmp/oxidns"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
             cli.command,
             Command::Check(CheckOptions {
                 config: PathBuf::from("custom.yaml"),
-                working_dir: Some(PathBuf::from("/tmp/forgedns")),
+                working_dir: Some(PathBuf::from("/tmp/oxidns")),
                 graph: false,
             })
         );
@@ -326,15 +319,15 @@ mod tests {
     #[test]
     fn parse_upgrade_apply_with_options() {
         let args = [
-            "forgedns",
+            "oxidns",
             "upgrade",
             "apply",
             "--target",
             "v0.4.2",
             "--repository",
-            "SvenShi/forgedns",
+            "SvenShi/oxidns",
             "--asset",
-            "forgedns-x86_64-unknown-linux-gnu.tar.gz",
+            "oxidns-x86_64-unknown-linux-gnu.tar.gz",
             "--cache-dir",
             "./cache",
             "--backup-dir",
@@ -355,8 +348,8 @@ mod tests {
             Command::Upgrade(UpgradeOptions {
                 action: Some(UpgradeAction::Apply),
                 target: "v0.4.2".to_string(),
-                repository: "SvenShi/forgedns".to_string(),
-                asset: "forgedns-x86_64-unknown-linux-gnu.tar.gz".to_string(),
+                repository: "SvenShi/oxidns".to_string(),
+                asset: "oxidns-x86_64-unknown-linux-gnu.tar.gz".to_string(),
                 cache_dir: PathBuf::from("./cache"),
                 backup_dir: PathBuf::from("./backups"),
                 restart: RestartMode::Service,
@@ -371,7 +364,7 @@ mod tests {
 
     #[test]
     fn parse_upgrade_defaults_to_apply_and_accepts_force() {
-        let args = ["forgedns", "upgrade", "--force"];
+        let args = ["oxidns", "upgrade", "--force"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
@@ -379,7 +372,7 @@ mod tests {
             Command::Upgrade(UpgradeOptions {
                 action: None,
                 target: "latest".to_string(),
-                repository: "SvenShi/forgedns".to_string(),
+                repository: "SvenShi/oxidns".to_string(),
                 asset: "auto".to_string(),
                 cache_dir: PathBuf::from("./upgrade-cache"),
                 backup_dir: PathBuf::from("./upgrade-backups"),
@@ -395,7 +388,7 @@ mod tests {
 
     #[test]
     fn parse_check_command_with_graph() {
-        let args = ["forgedns", "check", "--graph"];
+        let args = ["oxidns", "check", "--graph"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
@@ -411,13 +404,13 @@ mod tests {
     #[test]
     fn parse_service_install_command() {
         let args = [
-            "forgedns",
+            "oxidns",
             "service",
             "install",
             "-d",
-            "/opt/forgedns",
+            "/opt/oxidns",
             "-c",
-            "/etc/forgedns/config.yaml",
+            "/etc/oxidns/config.yaml",
         ];
 
         let cli = Cli::parse_from(args);
@@ -425,8 +418,8 @@ mod tests {
             cli.command,
             Command::Service(ServiceOptions {
                 command: ServiceCommand::Install(ServiceInstallOptions {
-                    working_dir: PathBuf::from("/opt/forgedns"),
-                    config: PathBuf::from("/etc/forgedns/config.yaml"),
+                    working_dir: PathBuf::from("/opt/oxidns"),
+                    config: PathBuf::from("/etc/oxidns/config.yaml"),
                 }),
             })
         );
@@ -434,7 +427,7 @@ mod tests {
 
     #[test]
     fn parse_service_start_command() {
-        let args = ["forgedns", "service", "start"];
+        let args = ["oxidns", "service", "start"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
@@ -447,7 +440,7 @@ mod tests {
 
     #[test]
     fn parse_service_stop_command() {
-        let args = ["forgedns", "service", "stop"];
+        let args = ["oxidns", "service", "stop"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
@@ -460,7 +453,7 @@ mod tests {
 
     #[test]
     fn parse_service_uninstall_command() {
-        let args = ["forgedns", "service", "uninstall"];
+        let args = ["oxidns", "service", "uninstall"];
 
         let cli = Cli::parse_from(args);
         assert_eq!(
@@ -474,7 +467,7 @@ mod tests {
     #[test]
     fn parse_export_dat_command() {
         let args = [
-            "forgedns",
+            "oxidns",
             "export-dat",
             "--file",
             "rules/geosite.dat",
@@ -487,7 +480,7 @@ mod tests {
             "--kind",
             "geosite",
             "--format",
-            "original",
+            "oxidns",
             "--merged-file",
             "all.txt",
             "--overwrite",
@@ -499,7 +492,7 @@ mod tests {
             Command::ExportDat(ExportDatOptions {
                 file: PathBuf::from("rules/geosite.dat"),
                 kind: DatKind::Geosite,
-                format: ExportFormat::Original,
+                format: ExportFormat::Oxidns,
                 selectors: vec!["cn".to_string(), "geolocation-!cn".to_string()],
                 out_dir: PathBuf::from("/tmp/out"),
                 merged_file: Some("all.txt".to_string()),
@@ -511,7 +504,7 @@ mod tests {
     #[test]
     fn parse_export_dat_command_without_selectors() {
         let args = [
-            "forgedns",
+            "oxidns",
             "export-dat",
             "--file",
             "rules/geoip.dat",
@@ -525,7 +518,7 @@ mod tests {
             Command::ExportDat(ExportDatOptions {
                 file: PathBuf::from("rules/geoip.dat"),
                 kind: DatKind::Auto,
-                format: ExportFormat::Forgedns,
+                format: ExportFormat::Oxidns,
                 selectors: Vec::new(),
                 out_dir: PathBuf::from("/tmp/out"),
                 merged_file: None,

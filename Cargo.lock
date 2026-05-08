@@ -788,98 +788,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
-name = "forgedns"
-version = "0.5.2"
-dependencies = [
- "ahash",
- "aho-corasick",
- "arc-swap",
- "async-trait",
- "base64",
- "bytes",
- "clap",
- "criterion",
- "cronexpr",
- "crossbeam-queue",
- "dashmap",
- "fast-socks5",
- "flate2",
- "forgedns-proto",
- "forgedns-ripset",
- "forgedns-zoneparser",
- "fs2",
- "futures",
- "h2",
- "h3",
- "h3-quinn",
- "hex",
- "hotpath",
- "http",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "inventory",
- "jiff",
- "lazy_static",
- "libc",
- "mikrotik-rs",
- "prost",
- "quinn",
- "rand 0.10.1",
- "regex",
- "rusqlite",
- "rustls",
- "rustls-pemfile",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "service-manager",
- "sha2",
- "socket2 0.6.3",
- "tar",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "tower-service",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "webpki-roots",
- "wincode",
-]
-
-[[package]]
-name = "forgedns-proto"
-version = "0.1.1"
-dependencies = [
- "ahash",
- "hotpath",
- "smallvec",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "forgedns-ripset"
-version = "0.1.0"
-dependencies = [
- "libc",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "forgedns-zoneparser"
-version = "0.1.0"
-dependencies = [
- "forgedns-proto",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "form_urlencoded"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1835,6 +1743,98 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "oxidns"
+version = "0.5.2"
+dependencies = [
+ "ahash",
+ "aho-corasick",
+ "arc-swap",
+ "async-trait",
+ "base64",
+ "bytes",
+ "clap",
+ "criterion",
+ "cronexpr",
+ "crossbeam-queue",
+ "dashmap",
+ "fast-socks5",
+ "flate2",
+ "fs2",
+ "futures",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "hex",
+ "hotpath",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "inventory",
+ "jiff",
+ "lazy_static",
+ "libc",
+ "mikrotik-rs",
+ "oxidns-proto",
+ "oxidns-ripset",
+ "oxidns-zoneparser",
+ "prost",
+ "quinn",
+ "rand 0.10.1",
+ "regex",
+ "rusqlite",
+ "rustls",
+ "rustls-pemfile",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "service-manager",
+ "sha2",
+ "socket2 0.6.3",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tower-service",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "webpki-roots",
+ "wincode",
+]
+
+[[package]]
+name = "oxidns-proto"
+version = "0.1.1"
+dependencies = [
+ "ahash",
+ "hotpath",
+ "smallvec",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "oxidns-ripset"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "oxidns-zoneparser"
+version = "0.1.0"
+dependencies = [
+ "oxidns-proto",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "page_size"

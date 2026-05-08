@@ -36,7 +36,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::dependency::DependencyKind;
 use crate::{config, core};
 
-/// Start ForgeDNS in the foreground using the provided CLI options.
+/// Start OxiDNS in the foreground using the provided CLI options.
 pub fn run(start: StartOptions) -> Result<()> {
     AppClock::start();
     prepare_working_dir(start.working_dir.as_ref())?;
@@ -243,7 +243,7 @@ fn init_runtime(options: StartOptions, config: Config) -> Result<()> {
     let mut tokio_runtime = runtime::Builder::new_multi_thread();
     tokio_runtime
         .enable_all()
-        .thread_name("forgedns-worker")
+        .thread_name("oxidns-worker")
         .worker_threads(worker_threads);
     let tokio_runtime = tokio_runtime
         .build()
@@ -490,13 +490,13 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
             "Log level overridden by CLI option"
         );
     }
-    info!(log_level = %effective_log_level, "ForgeDNS server initializing");
+    info!(log_level = %effective_log_level, "OxiDNS server initializing");
 
     let mut current_config = config;
     let mut assembly =
         match bootstrap::assemble(&current_config, Some(app_controller.clone())).await {
             Ok(assembly) => {
-                info!("ForgeDNS server started successfully");
+                info!("OxiDNS server started successfully");
                 assembly
             }
             Err(err) => {

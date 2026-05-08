@@ -1,11 +1,11 @@
 ---
 id: intro
-title: ForgeDNS
+title: OxiDNS
 sidebar_position: 1
 slug: /
 ---
 
-本文档重点说明 ForgeDNS 的配置结构、插件体系、管理 API、常见策略组合，以及架构与性能说明。
+本文档重点说明 OxiDNS 的配置结构、插件体系、管理 API、常见策略组合，以及架构与性能说明。
 
 建议按照以下顺序阅读本文档：
 

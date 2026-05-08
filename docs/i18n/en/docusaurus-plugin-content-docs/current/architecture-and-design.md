@@ -7,7 +7,7 @@ This page expands on the architectural background that is only summarized in the
 
 ## Core Request Path
 
-ForgeDNS is organized around this path:
+OxiDNS is organized around this path:
 
 `server -> DnsContext -> matcher / executor / provider -> upstream or side effects -> response`
 
@@ -53,7 +53,7 @@ F --> G
 
 ## Why This Layering
 
-ForgeDNS avoids scattering policy logic across listeners or transports. It centralizes decision making in the policy layer for several reasons:
+OxiDNS avoids scattering policy logic across listeners or transports. It centralizes decision making in the policy layer for several reasons:
 
 - The hot path is shorter and easier to optimize.
 - Features compose naturally across protocols.
@@ -73,7 +73,7 @@ The target is not to pile up switches. The target is to keep complex policies op
 
 ### 2. Policy as a First-Class Capability
 
-ForgeDNS is not just a forwarder. It is a composable policy engine.
+OxiDNS is not just a forwarder. It is a composable policy engine.
 
 - `sequence` orders execution.
 - `matcher` determines branch conditions.
@@ -93,9 +93,9 @@ DNS answers can also drive:
 
 That is why side-effect isolation and post-response execution are treated as architectural concerns, not bolt-ons.
 
-## Why ForgeDNS Uses Its Own DNS Message Layer
+## Why OxiDNS Uses Its Own DNS Message Layer
 
-ForgeDNS keeps its own DNS model and wire codec instead of building the full path on top of opaque third-party message objects.
+OxiDNS keeps its own DNS model and wire codec instead of building the full path on top of opaque third-party message objects.
 
 Main reasons:
 

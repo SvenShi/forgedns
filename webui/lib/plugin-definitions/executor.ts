@@ -340,7 +340,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "files",
         "hosts 文件",
-        "/etc/forgedns/hosts.txt",
+        "/etc/oxidns/hosts.txt",
         false,
         "指定外部 hosts 规则文件列表。",
       ),
@@ -370,7 +370,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "files",
         "记录文件",
-        "/etc/forgedns/zone.txt",
+        "/etc/oxidns/zone.txt",
         false,
         "指定静态记录文件列表。",
       ),
@@ -400,7 +400,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "files",
         "规则文件",
-        "/etc/forgedns/redirect.txt",
+        "/etc/oxidns/redirect.txt",
         false,
         "指定外部重定向规则文件列表。",
       ),
@@ -885,7 +885,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "args",
         "命令参数",
-        "/opt/forgedns/notify.sh\n${qname}",
+        "/opt/oxidns/notify.sh\n${qname}",
         false,
         "传给命令的参数数组。",
       ),
@@ -902,7 +902,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         description: "指定脚本运行时的工作目录。",
         label: "工作目录",
         type: "text",
-        placeholder: "/opt/forgedns",
+        placeholder: "/opt/oxidns",
       },
       {
         key: "timeout",
@@ -1122,13 +1122,13 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
           stringArrayField(
             "files",
             "文件",
-            "/etc/forgedns/persistent_ips.txt",
+            "/etc/oxidns/persistent_ips.txt",
             false,
             "从外部文件加载常驻地址集合。",
             {
               type: "text",
               label: "输入值",
-              placeholder: "/etc/forgedns/persistent_ips.txt",
+              placeholder: "/etc/oxidns/persistent_ips.txt",
             },
           ),
         ],
@@ -1166,7 +1166,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     kind: "upgrade",
     type: "executor",
     name: "Upgrade",
-    description: "执行 ForgeDNS 升级流程",
+    description: "执行 OxiDNS 升级流程",
     icon: "ArrowUpRight",
     configSchema: [
       {
@@ -1189,7 +1189,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         description: "GitHub 仓库。",
         label: "GitHub 仓库",
         type: "text",
-        default: "SvenShi/forgedns",
+        default: "SvenShi/oxidns",
       },
       {
         key: "asset",
@@ -1261,7 +1261,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         type: "array",
         required: true,
         placeholder:
-          '[{"url":"https://example.com/geosite.dat","dir":"/etc/forgedns","filename":"geosite.dat"}]',
+          '[{"url":"https://example.com/geosite.dat","dir":"/etc/oxidns","filename":"geosite.dat"}]',
         item: {
           type: "object",
           label: "下载项",
@@ -1281,7 +1281,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
               label: "目录",
               type: "text",
               required: true,
-              placeholder: "/etc/forgedns",
+              placeholder: "/etc/oxidns",
             },
             {
               key: "filename",

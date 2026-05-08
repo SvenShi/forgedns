@@ -3,9 +3,9 @@ title: 命令行工具
 sidebar_position: 3
 ---
 
-本页介绍 ForgeDNS 当前所有实际支持的命令行工具。
+本页介绍 OxiDNS 当前所有实际支持的命令行工具。
 
-当前主程序只有一个二进制：`forgedns`。
+当前主程序只有一个二进制：`oxidns`。
 
 可用顶层命令如下：
 
@@ -20,29 +20,29 @@ sidebar_position: 3
 可先查看顶层帮助：
 
 ```bash
-forgedns --help
+oxidns --help
 ```
 
 查看某个子命令的帮助：
 
 ```bash
-forgedns start --help
-forgedns check --help
-forgedns export-dat --help
-forgedns service --help
-forgedns upgrade --help
+oxidns start --help
+oxidns check --help
+oxidns export-dat --help
+oxidns service --help
+oxidns upgrade --help
 ```
 
 ## `start`
 
-前台启动 ForgeDNS 服务。
+前台启动 OxiDNS 服务。
 
 典型用法：
 
 ```bash
-forgedns start -c config.yaml
-forgedns start -c config.yaml -l debug
-forgedns start -c /etc/forgedns/config.yaml -d /etc/forgedns
+oxidns start -c config.yaml
+oxidns start -c config.yaml -l debug
+oxidns start -c /etc/oxidns/config.yaml -d /etc/oxidns
 ```
 
 参数说明：
@@ -64,15 +64,15 @@ forgedns start -c /etc/forgedns/config.yaml -d /etc/forgedns
 
 ## `check`
 
-静态检查配置文件是否有效，但不会真正启动 ForgeDNS。
+静态检查配置文件是否有效，但不会真正启动 OxiDNS。
 
 典型用法：
 
 ```bash
-forgedns check -c config.yaml
-forgedns check -c /etc/forgedns/config.yaml
-forgedns check -c config.yaml -d /etc/forgedns
-forgedns check -c config.yaml --graph
+oxidns check -c config.yaml
+oxidns check -c /etc/oxidns/config.yaml
+oxidns check -c config.yaml -d /etc/oxidns
+oxidns check -c config.yaml --graph
 ```
 
 参数说明：
@@ -106,7 +106,7 @@ forgedns check -c config.yaml --graph
 典型用法：
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geosite.dat \
   --selector cn \
   --selector geolocation-\!cn \
@@ -116,7 +116,7 @@ forgedns export-dat \
 额外生成并集文件：
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geosite.dat \
   --kind geosite \
   --selector cn \
@@ -128,7 +128,7 @@ forgedns export-dat \
 导出 `geoip.dat`：
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geoip.dat \
   --kind geoip \
   --selector cn \
@@ -138,7 +138,7 @@ forgedns export-dat \
 不传 selector，直接导出整份 dat：
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geosite.dat \
   --kind geosite \
   --out-dir ./rules/exported
@@ -147,7 +147,7 @@ forgedns export-dat \
 指定原始格式导出：
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geosite.dat \
   --kind geosite \
   --format original \
@@ -165,8 +165,8 @@ forgedns export-dat \
   - 默认值：`auto`
 - `--format <FORMAT>`
   - 指定文本导出格式。
-  - 可选值：`forgedns` `original`
-  - 默认值：`forgedns`
+  - 可选值：`oxidns` `original`
+  - 默认值：`oxidns`
 - `--selector <SELECTOR>`
   - 要导出的 selector。
   - 可重复传入多个，按输入顺序分别导出。
@@ -185,12 +185,12 @@ forgedns export-dat \
 
 - 默认按 selector 分别生成文件，例如 `cn.txt`、`geolocation-!cn.txt`。
 - 不传 selector 时，会直接生成单个整表导出文件；默认文件名分别为 `geosite.txt` 或 `geoip.txt`。
-- `geosite` 输出为 ForgeDNS 域名规则格式，例如 `full:`、`domain:`、`keyword:`、`regexp:`。
-- `forgedns` 格式会在导出文件头加入注释行，例如 `# selector: cn`；不传 selector 时为 `# selector: all`。
+- `geosite` 输出为 OxiDNS 域名规则格式，例如 `full:`、`domain:`、`keyword:`、`regexp:`。
+- `oxidns` 格式会在导出文件头加入注释行，例如 `# selector: cn`；不传 selector 时为 `# selector: all`。
 - `geosite` 在 `original` 格式下会保留原始类型语义，输出如 `plain:`、`regex:`、`root_domain:`、`full:`。
 - `geosite` 的 `original` 格式会按 code 分组输出；如果域名带 attribute，会追加在域名后面，例如 `@cn`、`@ads=1`。
 - `geoip` 输出为 IP / CIDR 纯文本规则。
-- `geoip` 的 `forgedns` 格式同样会加入 selector 注释行。
+- `geoip` 的 `oxidns` 格式同样会加入 selector 注释行。
 - `geoip` 的 `original` 格式会按 code 分组输出，组头形式为 `[code]`。
 - `geosite` selector 支持 `code@attribute`，例如 `mastercard@cn`。
 - 任一 selector 没有匹配结果时，命令会直接失败，不会静默跳过。
@@ -211,7 +211,7 @@ forgedns export-dat \
 安装系统服务定义，但不会立即启动。
 
 ```bash
-sudo forgedns service install -d /etc/forgedns -c /etc/forgedns/config.yaml
+sudo oxidns service install -d /etc/oxidns -c /etc/oxidns/config.yaml
 ```
 
 参数说明：
@@ -227,7 +227,7 @@ sudo forgedns service install -d /etc/forgedns -c /etc/forgedns/config.yaml
 启动已安装的系统服务。
 
 ```bash
-sudo forgedns service start
+sudo oxidns service start
 ```
 
 ### `service stop`
@@ -235,7 +235,7 @@ sudo forgedns service start
 停止已安装的系统服务。
 
 ```bash
-sudo forgedns service stop
+sudo oxidns service stop
 ```
 
 ### `service uninstall`
@@ -243,12 +243,12 @@ sudo forgedns service stop
 卸载已安装的系统服务。
 
 ```bash
-sudo forgedns service uninstall
+sudo oxidns service uninstall
 ```
 
 ## `upgrade`
 
-检查、下载或应用 GitHub Release 中的 ForgeDNS 升级包。
+检查、下载或应用 GitHub Release 中的 OxiDNS 升级包。
 
 当前支持以下子命令：
 
@@ -259,11 +259,11 @@ sudo forgedns service uninstall
 典型用法：
 
 ```bash
-forgedns upgrade
-forgedns upgrade --force
-forgedns upgrade check
-forgedns upgrade download --target latest
-sudo forgedns upgrade apply --restart service
+oxidns upgrade
+oxidns upgrade --force
+oxidns upgrade check
+oxidns upgrade download --target latest
+sudo oxidns upgrade apply --restart service
 ```
 
 通用参数：
@@ -273,7 +273,7 @@ sudo forgedns upgrade apply --restart service
   - 默认值：`latest`
 - `--repository <OWNER/REPO>`
   - GitHub 仓库。
-  - 默认值：`SvenShi/forgedns`
+  - 默认值：`SvenShi/oxidns`
 - `--asset <NAME|auto>`
   - Release asset 名称；`auto` 会按当前平台选择 archive。
   - 默认值：`auto`

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Sven Shi
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared runtime primitives used across the whole ForgeDNS process.
+//! Shared runtime primitives used across the whole OxiDNS process.
 //!
 //! This module contains the small set of foundational types that most other
 //! subsystems depend on:
@@ -25,5 +25,5 @@ pub mod system_utils;
 pub mod task_center;
 pub mod ttl_cache;
 
-/// ForgeDNS version shared by CLI and management APIs.
+/// OxiDNS version shared by CLI and management APIs.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

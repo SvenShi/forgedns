@@ -2,7 +2,7 @@
 
 ## Project Focus
 
-- ForgeDNS is a high-performance, plugin-driven DNS server written in Rust.
+- OxiDNS is a high-performance, plugin-driven DNS server written in Rust.
 - The current project already includes UDP/TCP/DoT/DoQ/DoH server and upstream support, sequence-based policy orchestration, TTL-aware cache with negative caching, fallback chains, local and synthetic answers, query/response rewriting, ECS handling, dual-stack selection, provider-backed domain/IP rule sets, management APIs, health endpoints, metrics, and system integrations such as `ipset`, `nftset`, and MikroTik route sync.
 - Prefer designs that preserve the core request path: `server -> DnsContext -> matcher/executor/provider pipeline -> upstream or side effects -> response`.
 
@@ -12,7 +12,7 @@
 - `src/lib.rs` exposes the library surface used by tests and embedding scenarios, including `api`, `app`, `config`, `core`, `message`, `network`, `plugin`, and `service`.
 - `src/app/` contains bootstrap and logging setup for wiring the runtime from config to live services.
 - `src/api/` contains the management/control and health HTTP endpoints.
-- `src/message/` contains ForgeDNS's DNS message model and wire codec implementation.
+- `src/message/` contains OxiDNS's DNS message model and wire codec implementation.
 - `src/core/` contains shared runtime types such as `DnsContext`, errors, rule matching helpers, task orchestration, and TTL cache primitives.
 - `src/config/` defines the YAML schema and validation for runtime configuration.
 - `src/network/` contains listeners, protocol transports, TLS setup, upstream resolution, bootstrap logic, pooling, and Linux-specific networking helpers.
@@ -21,7 +21,7 @@
 - `src/plugin/executor/` contains request processors such as `sequence`, `forward`, `cache`, `fallback`, `hosts`, `arbitrary`, `redirect`, `ecs_handler`, `ttl`, `dual_selector`, observability plugins, and system-integration plugins.
 - `src/plugin/matcher/` contains rule matchers for qname/qtype/qclass, client IP, response IP, CNAME, response presence, RCODE, marks, env, random rollout, rate limits, and related predicates.
 - `src/plugin/provider/` contains reusable domain/IP datasets consumed by matchers and executors.
-- `src/service.rs` contains service-management integration for installing or controlling ForgeDNS as a system service.
+- `src/service.rs` contains service-management integration for installing or controlling OxiDNS as a system service.
 - `tests/plugin_integration.rs` covers config parsing, plugin registry wiring, sequence quick-setup, and live server integration.
 - `tests/message_hickory_compat.rs` validates message codec compatibility behavior against Hickory.
 - `config.yaml` is the canonical runnable default configuration for the current plugin composition.
@@ -32,7 +32,7 @@
 
 - `cargo check` is the fastest default sanity check during iteration.
 - `cargo build --release` builds the optimized binary used for realistic performance testing.
-- `cargo run -- -c config.yaml` runs ForgeDNS with the default config.
+- `cargo run -- -c config.yaml` runs OxiDNS with the default config.
 - `cargo run --release -- -c config.yaml` is the preferred way to validate real runtime behavior or performance-sensitive changes.
 - `cargo run -- -c config.yaml -l debug` overrides the configured log level for local debugging.
 - `cargo test` runs unit tests and integration tests.

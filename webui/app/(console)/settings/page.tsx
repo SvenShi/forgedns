@@ -95,7 +95,7 @@ export default function SettingsPage() {
                     后台服务
                   </CardTitle>
                   <CardDescription className="mt-1.5">
-                    配置 WebUI 连接的 ForgeDNS 管理服务地址和认证信息
+                    配置 WebUI 连接的 OxiDNS 管理服务地址和认证信息
                   </CardDescription>
                 </div>
                 <Badge
@@ -217,7 +217,7 @@ export default function SettingsPage() {
                     服务信息
                   </CardTitle>
                   <CardDescription className="mt-1.5">
-                    ForgeDNS 服务版本和更新状态
+                    OxiDNS 服务版本和更新状态
                   </CardDescription>
                 </div>
                 {hasUpdate && (
@@ -393,16 +393,16 @@ export default function SettingsPage() {
                 <div className="bg-muted/50 rounded-lg p-4 font-mono text-sm overflow-x-auto">
                   <div className="space-y-1.5 text-muted-foreground">
                     <p>
-                      <span className="text-foreground">FORGEDNS_CONFIG</span>=
-                      /etc/forgedns/config.yaml
+                      <span className="text-foreground">OXIDNS_CONFIG</span>=
+                      /etc/oxidns/config.yaml
                     </p>
                     <p>
-                      <span className="text-foreground">FORGEDNS_DATA_DIR</span>
-                      = /var/lib/forgedns
+                      <span className="text-foreground">OXIDNS_DATA_DIR</span>
+                      = /var/lib/oxidns
                     </p>
                     <p>
-                      <span className="text-foreground">FORGEDNS_LOG_DIR</span>=
-                      /var/log/forgedns
+                      <span className="text-foreground">OXIDNS_LOG_DIR</span>=
+                      /var/log/oxidns
                     </p>
                     <p>
                       <span className="text-foreground">RUST_LOG</span>=

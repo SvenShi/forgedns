@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Sven Shi
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Public library surface for ForgeDNS.
+//! Public library surface for OxiDNS.
 //!
 //! This crate exposes the runtime building blocks used by the CLI binary,
 //! integration tests, and embedding scenarios. The architecture is organized
@@ -32,4 +32,4 @@ pub mod plugin;
 pub mod service;
 pub mod upgrade;
 
-pub use forgedns_proto as proto;
+pub use oxidns_proto as proto;

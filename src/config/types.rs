@@ -3,7 +3,7 @@
 
 //! Configuration structure definitions
 //!
-//! Defines the schema for ForgeDNS configuration files (YAML format).
+//! Defines the schema for OxiDNS configuration files (YAML format).
 
 use std::collections::HashMap;
 
@@ -214,7 +214,7 @@ pub struct ResolvedApiHttpConfig {
 pub struct RuntimeConfig {
     /// Number of Tokio worker threads for the multi-thread runtime.
     ///
-    /// When omitted, ForgeDNS uses the system's available CPU parallelism.
+    /// When omitted, OxiDNS uses the system's available CPU parallelism.
     pub worker_threads: Option<usize>,
 }
 

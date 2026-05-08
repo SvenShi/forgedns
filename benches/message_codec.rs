@@ -3,14 +3,14 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use forgedns::proto::rdata::{self};
-use forgedns::proto::{
+use oxidns::proto::rdata::{self};
+use oxidns::proto::{
     DNSClass, EdnsCode, EdnsOption, Message, MessageType, Opcode, Question, RData, Rcode, Record,
     RecordType,
 };
 
-fn forgedns_name(raw: &str) -> forgedns::proto::Name {
-    forgedns::proto::Name::from_ascii(raw).expect("fixture name should be valid")
+fn oxidns_name(raw: &str) -> oxidns::proto::Name {
+    oxidns::proto::Name::from_ascii(raw).expect("fixture name should be valid")
 }
 
 fn txt_wire(parts: &[&[u8]]) -> Box<[u8]> {
@@ -37,7 +37,7 @@ fn build_base_response(qname: &str, qtype: RecordType) -> Message {
     message.set_authentic_data(true);
     message.set_checking_disabled(true);
     message.set_compress(true);
-    message.add_question(Question::new(forgedns_name(qname), qtype, DNSClass::IN));
+    message.add_question(Question::new(oxidns_name(qname), qtype, DNSClass::IN));
     message
 }
 
@@ -61,7 +61,7 @@ fn add_standard_edns(message: &mut Message, payload_size: u16) {
 fn build_small_response_message() -> Message {
     let mut message = build_base_response("example.com.", RecordType::A);
     message.add_answer(Record::from_rdata(
-        forgedns_name("example.com."),
+        oxidns_name("example.com."),
         300,
         RData::A(rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
     ));
@@ -75,23 +75,23 @@ fn build_compression_heavy_message() -> Message {
         let owner = format!("edge-{idx}.service.prod.example.com.");
         let target = format!("pool-{idx}.service.prod.example.com.");
         message.add_answer(Record::from_rdata(
-            forgedns_name(&owner),
+            oxidns_name(&owner),
             60,
-            RData::CNAME(rdata::CNAME(forgedns_name(&target))),
+            RData::CNAME(rdata::CNAME(oxidns_name(&target))),
         ));
         message.add_answer(Record::from_rdata(
-            forgedns_name(&target),
+            oxidns_name(&target),
             60,
             RData::A(rdata::A(Ipv4Addr::new(10, 0, 1, idx + 1))),
         ));
     }
 
     message.add_authority(Record::from_rdata(
-        forgedns_name("prod.example.com."),
+        oxidns_name("prod.example.com."),
         300,
         RData::SOA(rdata::SOA::new(
-            forgedns_name("ns1.prod.example.com."),
-            forgedns_name("hostmaster.prod.example.com."),
+            oxidns_name("ns1.prod.example.com."),
+            oxidns_name("hostmaster.prod.example.com."),
             2026031901,
             7200,
             3600,
@@ -111,7 +111,7 @@ fn build_large_payload_message() -> Message {
     for idx in 0..8u8 {
         let owner = format!("chunk-{idx}.bulk.example.com.");
         message.add_answer(Record::from_rdata(
-            forgedns_name(&owner),
+            oxidns_name(&owner),
             120,
             RData::TXT(rdata::TXT::new(txt_wire(&[
                 b"forge-benchmark-payload-segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -122,7 +122,7 @@ fn build_large_payload_message() -> Message {
     }
 
     message.add_answer(Record::from_rdata(
-        forgedns_name("bulk.example.com."),
+        oxidns_name("bulk.example.com."),
         120,
         RData::AAAA(rdata::AAAA(Ipv6Addr::new(
             0x2001, 0xDB8, 0, 0, 0, 0, 0, 0x42,
@@ -130,9 +130,9 @@ fn build_large_payload_message() -> Message {
     ));
 
     message.add_additional(Record::from_rdata(
-        forgedns_name("bulk.example.com."),
+        oxidns_name("bulk.example.com."),
         60,
-        RData::MX(rdata::MX::new(10, forgedns_name("mail.bulk.example.com."))),
+        RData::MX(rdata::MX::new(10, oxidns_name("mail.bulk.example.com."))),
     ));
 
     add_standard_edns(&mut message, 4096);
@@ -145,37 +145,37 @@ fn build_compat_fixture_message() -> Message {
     message.set_opcode(Opcode::Update);
 
     message.add_answer(Record::from_rdata(
-        forgedns_name("example.com."),
+        oxidns_name("example.com."),
         300,
         RData::A(rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
     ));
     message.add_answer(Record::from_rdata(
-        forgedns_name("example.com."),
+        oxidns_name("example.com."),
         301,
         RData::AAAA(rdata::AAAA(Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 1))),
     ));
     message.add_answer(Record::from_rdata(
-        forgedns_name("alias.example.com."),
+        oxidns_name("alias.example.com."),
         302,
-        RData::CNAME(rdata::CNAME(forgedns_name("target.example.com."))),
+        RData::CNAME(rdata::CNAME(oxidns_name("target.example.com."))),
     ));
     message.add_answer(Record::from_rdata(
-        forgedns_name("1.0.0.127.in-addr.arpa."),
+        oxidns_name("1.0.0.127.in-addr.arpa."),
         303,
-        RData::PTR(rdata::PTR(forgedns_name("localhost."))),
+        RData::PTR(rdata::PTR(oxidns_name("localhost."))),
     ));
 
     message.add_authority(Record::from_rdata(
-        forgedns_name("example.com."),
+        oxidns_name("example.com."),
         600,
-        RData::NS(rdata::NS(forgedns_name("ns1.example.com."))),
+        RData::NS(rdata::NS(oxidns_name("ns1.example.com."))),
     ));
     message.add_authority(Record::from_rdata(
-        forgedns_name("example.com."),
+        oxidns_name("example.com."),
         601,
         RData::SOA(rdata::SOA::new(
-            forgedns_name("ns1.example.com."),
-            forgedns_name("hostmaster.example.com."),
+            oxidns_name("ns1.example.com."),
+            oxidns_name("hostmaster.example.com."),
             2026031201,
             7200,
             3600,
@@ -185,14 +185,14 @@ fn build_compat_fixture_message() -> Message {
     ));
 
     message.add_additional(Record::from_rdata(
-        forgedns_name("example.com."),
+        oxidns_name("example.com."),
         120,
-        RData::MX(rdata::MX::new(10, forgedns_name("mail.example.com."))),
+        RData::MX(rdata::MX::new(10, oxidns_name("mail.example.com."))),
     ));
     let mut chaos_txt = Record::from_rdata(
-        forgedns_name("version.bind."),
+        oxidns_name("version.bind."),
         0,
-        RData::TXT(rdata::TXT::new(txt_wire(&[b"ForgeDNS", b"benchmark"]))),
+        RData::TXT(rdata::TXT::new(txt_wire(&[b"OxiDNS", b"benchmark"]))),
     );
     chaos_txt.set_class(DNSClass::CH);
     message.add_additional(chaos_txt);
@@ -241,7 +241,7 @@ fn build_query_with_edns() -> Message {
     query.set_opcode(Opcode::Query);
     query.set_recursion_desired(true);
     query.add_question(Question::new(
-        forgedns_name("bench.example.com."),
+        oxidns_name("bench.example.com."),
         RecordType::A,
         DNSClass::IN,
     ));
@@ -268,7 +268,7 @@ fn build_query_without_edns() -> Message {
     query.set_opcode(Opcode::Query);
     query.set_recursion_desired(true);
     query.add_question(Question::new(
-        forgedns_name("bench.example.com."),
+        oxidns_name("bench.example.com."),
         RecordType::A,
         DNSClass::IN,
     ));
@@ -276,7 +276,7 @@ fn build_query_without_edns() -> Message {
 }
 
 fn build_question(qname: &str, qtype: RecordType) -> Question {
-    Question::new(forgedns_name(qname), qtype, DNSClass::IN)
+    Question::new(oxidns_name(qname), qtype, DNSClass::IN)
 }
 
 fn bench_response_builders(c: &mut Criterion) {
@@ -391,7 +391,7 @@ fn bench_response_builders(c: &mut Criterion) {
         b.iter(|| {
             let mut response = query.response(Rcode::NoError);
             response.add_answer(Record::from_rdata(
-                forgedns_name("bench.example.com."),
+                oxidns_name("bench.example.com."),
                 60,
                 RData::TXT(rdata::TXT::new(txt_wire(&[
                     b"forge-benchmark-payload-segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

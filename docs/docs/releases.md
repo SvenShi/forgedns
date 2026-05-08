@@ -153,7 +153,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 
       **Packaging And Ecosystem**
 
-      - 为 `forgedns-proto`、`forgedns-zoneparser`、`forgedns-ripset` 补齐 crates.io 发布所需的包元数据、README、仓库信息和依赖版本声明，方便 workspace 内部 crate 独立发布与复用。
+      - 为 `oxidns-proto`、`oxidns-zoneparser`、`oxidns-ripset` 补齐 crates.io 发布所需的包元数据、README、仓库信息和依赖版本声明，方便 workspace 内部 crate 独立发布与复用。
       - 主包依赖声明同步改为显式引用这些内部 crate 的版本，便于 release、打包和后续生态集成保持一致。
 
       **Docs**
@@ -171,14 +171,14 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
       **Highlights**
 
       - 新增 `http_request` executor，支持在 `before/after` 两个阶段向外部 `http/https` 服务发起同步或异步回调，并支持模板变量、`json/form/body`、SOCKS5、重定向和错误策略。
-      - CLI 新增 `check` 与 `export-dat` 命令；`check --graph` 可静态校验配置并输出插件依赖图，`export-dat` 可把 `geosite.dat` / `geoip.dat` 按 selector 导出为 ForgeDNS 或原始文本规则。
+      - CLI 新增 `check` 与 `export-dat` 命令；`check --graph` 可静态校验配置并输出插件依赖图，`export-dat` 可把 `geosite.dat` / `geoip.dat` 按 selector 导出为 OxiDNS 或原始文本规则。
       - `hosts` 语义向 mosdns 对齐；`arbitrary` 引入更完整的 zone parser，支持 `$ORIGIN`、`$TTL`、`$INCLUDE`、`$GENERATE`、RFC3597 等更丰富记录语法。
       - 继续补充和统一多个 executor 的 `short_circuit` 说明与行为边界，便于在命中本地响应、缓存或分支胜出后显式停止后续 executor 链；`hosts` 在空本地答复场景下的短路语义也更明确。
       - Linux `ipset` / `nftset` executor 改为内置 Rust netlink 后端，不再依赖运行时 `ipset` / `nft` 命令。
 
       **Core And Performance**
 
-      - workspace 新增 `forgedns-proto`、`zoneparser`、`ripset` 三个内部 crate，明确协议编解码、zone 解析和 Linux 集成边界。
+      - workspace 新增 `oxidns-proto`、`zoneparser`、`ripset` 三个内部 crate，明确协议编解码、zone 解析和 Linux 集成边界。
       - 网络热路径引入可复用 wire buffer 池，并优化 UDP/TCP/上游 socket 参数，减少短生命周期分配与连接侧开销。
       - 新增低并发延迟基准脚本，补充 `v0.3.0` 公布基准快照，并系统整理 benchmark 文档。
       - 修复 Windows 构建兼容性以及若干 benchmark / CI 配置问题。
@@ -266,7 +266,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
   <ReleaseCard version="v0.1.0" badge="First Public Release" date="2026-03-28">
       **Highlights**
 
-      - 建立了 ForgeDNS 的插件化主架构：`server -> DnsContext -> matcher / executor / provider -> upstream or side effects`。
+      - 建立了 OxiDNS 的插件化主架构：`server -> DnsContext -> matcher / executor / provider -> upstream or side effects`。
       - 完成 UDP、TCP、DoT、DoQ、DoH 的 server 与 upstream 支持。
       - 提供与 MosDNS 风格接近的 `sequence` 编排、`jump/goto/return` 控制流和 `$tag` 引用方式。
       - 提供 `cache`、`forward`、`fallback`、`hosts`、`redirect`、`ecs_handler`、`dual_selector` 等核心 executor。

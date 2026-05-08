@@ -247,7 +247,7 @@ plugins:
       username: "api-user"
       password: "secret"
       async: true
-      address_list4: "forgedns_ipv4"
+      address_list4: "oxidns_ipv4"
 
   - tag: seq_main
     type: sequence
@@ -275,7 +275,7 @@ plugins:
     type: adguard_rule
     args:
       files:
-        - "/etc/forgedns/adguard.txt"
+        - "/etc/oxidns/adguard.txt"
 
   - tag: blocked
     type: sequence

@@ -33,12 +33,12 @@ pub fn start_logging(log: LogConfig) -> WorkerGuard {
     };
 
     let console_layer = tracing_fmt::layer()
-        .event_format(ForgeDnsLogFormatter)
+        .event_format(OxiDnsLogFormatter)
         .with_writer(std::io::stdout);
     let file_layer = file_writer.map(|writer| {
         tracing_fmt::layer()
             .with_ansi(false)
-            .event_format(ForgeDnsLogFormatter)
+            .event_format(OxiDnsLogFormatter)
             .with_writer(writer)
     });
 
@@ -124,10 +124,10 @@ fn build_official_appender(
         .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
-/// Custom log formatter for ForgeDNS.
-pub struct ForgeDnsLogFormatter;
+/// Custom log formatter for OxiDNS.
+pub struct OxiDnsLogFormatter;
 
-impl<S, N> FormatEvent<S, N> for ForgeDnsLogFormatter
+impl<S, N> FormatEvent<S, N> for OxiDnsLogFormatter
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,

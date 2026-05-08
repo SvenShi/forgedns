@@ -25,13 +25,13 @@ use crate::network::http_client::{
 use crate::network::upstream::parse_socks5_opt;
 use crate::service;
 
-const DEFAULT_REPOSITORY: &str = "SvenShi/forgedns";
+const DEFAULT_REPOSITORY: &str = "SvenShi/oxidns";
 const DEFAULT_TARGET: &str = "latest";
 const DEFAULT_CACHE_DIR: &str = "./upgrade-cache";
 const DEFAULT_BACKUP_DIR: &str = "./upgrade-backups";
 
 const EXIT_RESTART_REQUIRED: i32 = 75;
-const GITHUB_USER_AGENT: &str = "ForgeDNS";
+const GITHUB_USER_AGENT: &str = "OxiDNS";
 
 #[derive(Debug, Clone)]
 pub struct UpgradeConfig {
@@ -216,7 +216,7 @@ pub fn run_cli(action: UpgradeAction, config: UpgradeConfig) -> Result<()> {
 }
 
 fn print_cli_plan(action: &str, config: &UpgradeConfig) {
-    println!("ForgeDNS upgrade {action}");
+    println!("OxiDNS upgrade {action}");
     println!("Repository: {}", config.repository);
     println!("Target: {}", config.target);
     println!("Asset: {}", config.asset);
@@ -412,7 +412,7 @@ async fn apply_unchecked(
             .map_err(|err| DnsError::runtime(format!("failed to resolve current exe: {err}")))?;
         fs::create_dir_all(&config.backup_dir)?;
         let backup_path = config.backup_dir.join(format!(
-            "forgedns-{}-{}",
+            "oxidns-{}-{}",
             VERSION,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -728,7 +728,7 @@ fn current_archive_name() -> Result<String> {
         }
     };
     let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
-    Ok(format!("forgedns-{target}.{ext}"))
+    Ok(format!("oxidns-{target}.{ext}"))
 }
 
 fn sha256_from_asset_digest(asset: &ReleaseAsset) -> Result<String> {
@@ -807,19 +807,19 @@ fn unpack_tar_gz(archive: &Path, out_dir: &Path) -> Result<()> {
 
 #[cfg(not(windows))]
 fn find_extracted_binary(unpack_dir: &Path) -> Result<PathBuf> {
-    let candidate = unpack_dir.join("forgedns");
+    let candidate = unpack_dir.join("oxidns");
     if candidate.is_file() {
         return Ok(candidate);
     }
     Err(DnsError::runtime(format!(
-        "archive did not contain forgedns binary at '{}'",
+        "archive did not contain oxidns binary at '{}'",
         candidate.display()
     )))
 }
 
 #[cfg(not(windows))]
 fn replace_binary(source: &Path, target: &Path) -> Result<()> {
-    let tmp = target.with_extension("forgedns-upgrade-new");
+    let tmp = target.with_extension("oxidns-upgrade-new");
     fs::copy(source, &tmp).map_err(|err| {
         DnsError::runtime(format!(
             "failed to stage upgraded binary '{}': {}",
@@ -878,8 +878,8 @@ mod tests {
     #[test]
     fn parses_asset_sha256_digest() {
         let asset = ReleaseAsset {
-            name: "forgedns.tar.gz".to_string(),
-            browser_download_url: "https://example.com/forgedns.tar.gz".to_string(),
+            name: "oxidns.tar.gz".to_string(),
+            browser_download_url: "https://example.com/oxidns.tar.gz".to_string(),
             digest: Some(
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     .to_string(),

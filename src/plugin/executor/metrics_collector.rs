@@ -252,16 +252,18 @@ fn render_prometheus_metrics(exporter: &MetricsExporter) -> String {
         .lock()
         .expect("metrics collectors poisoned");
     let mut out = String::new();
-    out.push_str("# HELP forgedns_query_total Total DNS queries observed by metrics_collector.\n");
-    out.push_str("# TYPE forgedns_query_total counter\n");
-    out.push_str("# HELP forgedns_query_error_total Total DNS queries without a response.\n");
-    out.push_str("# TYPE forgedns_query_error_total counter\n");
-    out.push_str("# HELP forgedns_query_inflight Current number of inflight DNS queries.\n");
-    out.push_str("# TYPE forgedns_query_inflight gauge\n");
-    out.push_str("# HELP forgedns_query_latency_count Total completed queries included in latency statistics.\n");
-    out.push_str("# TYPE forgedns_query_latency_count counter\n");
-    out.push_str("# HELP forgedns_query_latency_sum_ms Total latency in milliseconds for completed queries.\n");
-    out.push_str("# TYPE forgedns_query_latency_sum_ms counter\n");
+    out.push_str("# HELP oxidns_query_total Total DNS queries observed by metrics_collector.\n");
+    out.push_str("# TYPE oxidns_query_total counter\n");
+    out.push_str("# HELP oxidns_query_error_total Total DNS queries without a response.\n");
+    out.push_str("# TYPE oxidns_query_error_total counter\n");
+    out.push_str("# HELP oxidns_query_inflight Current number of inflight DNS queries.\n");
+    out.push_str("# TYPE oxidns_query_inflight gauge\n");
+    out.push_str("# HELP oxidns_query_latency_count Total completed queries included in latency statistics.\n");
+    out.push_str("# TYPE oxidns_query_latency_count counter\n");
+    out.push_str(
+        "# HELP oxidns_query_latency_sum_ms Total latency in milliseconds for completed queries.\n",
+    );
+    out.push_str("# TYPE oxidns_query_latency_sum_ms counter\n");
 
     for collector in collectors.iter() {
         let labels = format!(
@@ -271,27 +273,27 @@ fn render_prometheus_metrics(exporter: &MetricsExporter) -> String {
         );
         let _ = writeln!(
             out,
-            "forgedns_query_total{{{labels}}} {}",
+            "oxidns_query_total{{{labels}}} {}",
             collector.query_total.load(Ordering::Relaxed)
         );
         let _ = writeln!(
             out,
-            "forgedns_query_error_total{{{labels}}} {}",
+            "oxidns_query_error_total{{{labels}}} {}",
             collector.err_total.load(Ordering::Relaxed)
         );
         let _ = writeln!(
             out,
-            "forgedns_query_inflight{{{labels}}} {}",
+            "oxidns_query_inflight{{{labels}}} {}",
             collector.inflight.load(Ordering::Relaxed)
         );
         let _ = writeln!(
             out,
-            "forgedns_query_latency_count{{{labels}}} {}",
+            "oxidns_query_latency_count{{{labels}}} {}",
             collector.latency_count.load(Ordering::Relaxed)
         );
         let _ = writeln!(
             out,
-            "forgedns_query_latency_sum_ms{{{labels}}} {}",
+            "oxidns_query_latency_sum_ms{{{labels}}} {}",
             collector.latency_sum_ms.load(Ordering::Relaxed)
         );
     }
@@ -412,15 +414,16 @@ mod tests {
 
         let output = render_prometheus_metrics(&exporter);
         assert!(
-            output.contains("forgedns_query_total{plugin_tag=\"metrics_main\",name=\"default\"} 3")
+            output.contains("oxidns_query_total{plugin_tag=\"metrics_main\",name=\"default\"} 3")
         );
-        assert!(output.contains(
-            "forgedns_query_error_total{plugin_tag=\"metrics_main\",name=\"default\"} 1"
-        ));
         assert!(
             output.contains(
-                "forgedns_query_inflight{plugin_tag=\"metrics_main\",name=\"default\"} 2"
+                "oxidns_query_error_total{plugin_tag=\"metrics_main\",name=\"default\"} 1"
             )
+        );
+        assert!(
+            output
+                .contains("oxidns_query_inflight{plugin_tag=\"metrics_main\",name=\"default\"} 2")
         );
     }
 }

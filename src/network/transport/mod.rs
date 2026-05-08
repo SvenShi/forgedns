@@ -4,7 +4,7 @@
 //! DNS transport helpers for stream and socket oriented protocols.
 //!
 //! This module provides minimal, dependency-light helpers that convert between
-//! ForgeDNS `Message` and wire bytes, and perform framed I/O for stream-based
+//! OxiDNS `Message` and wire bytes, and perform framed I/O for stream-based
 //! transports (length-prefixed), as well as QUIC stream helpers.
 //!
 //! It is intentionally lower level than server and upstream plugins:

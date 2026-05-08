@@ -9,7 +9,7 @@
 //! - all matched questions in the request contribute answers;
 //! - the executor sets the response and, by default, keeps the chain running.
 //!
-//! ForgeDNS keeps a `short_circuit` switch as an explicit extension so callers
+//! OxiDNS keeps a `short_circuit` switch as an explicit extension so callers
 //! can stop the executor chain after a synthetic response when needed.
 
 use std::sync::Arc;

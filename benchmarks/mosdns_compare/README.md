@@ -1,6 +1,6 @@
-# ForgeDNS vs mosdns dnsperf Compare Pack
+# OxiDNS vs mosdns dnsperf Compare Pack
 
-This directory keeps a compare pack for ForgeDNS vs mosdns.
+This directory keeps a compare pack for OxiDNS vs mosdns.
 
 There are now two runners with different goals:
 
@@ -26,7 +26,7 @@ mosdns examples.
 
 ## How to use
 
-1. Put `forgedns` and `mosdns` binaries into this directory.
+1. Put `oxidns` and `mosdns` binaries into this directory.
 2. Make sure `dnsperf` is available in `PATH`.
 3. Run `./run_dnsperf_compare.sh`.
 
@@ -67,9 +67,9 @@ Useful commands:
 
 ## Scenario Catalog
 
-- [scenarios.tsv](/Users/sven/Documents/Codes/Rust/forgedns/benchmarks/mosdns_compare/scenarios.tsv)
+- [scenarios.tsv](/Users/sven/Documents/Codes/Rust/oxidns/benchmarks/mosdns_compare/scenarios.tsv)
   - columns:
-    `label | forgedns_config | mosdns_config | query_file | mode | family | warmup_query_file | tags | description | notes`
+    `label | oxidns_config | mosdns_config | query_file | mode | family | warmup_query_file | tags | description | notes`
   - `warmup_query_file` falls back to `query_file` when set to `-`
   - selectors match any of:
     `label`, `family`, or one tag from `tags`
@@ -119,7 +119,7 @@ Important artifacts:
 - `summary.tsv`
   - per-engine aggregated metrics using median over repeats plus spread
 - `pair_summary.tsv`
-  - head-to-head ForgeDNS vs mosdns table for each selected scenario
+  - head-to-head OxiDNS vs mosdns table for each selected scenario
 - `report.md`
   - ready-to-read Markdown report with parameters, environment, and pair table
 
@@ -130,9 +130,9 @@ jitter ahead of QPS.
 Interpretation rules:
 
 - `QPS diff` uses mosdns as the baseline:
-  `(ForgeDNS - mosdns) / mosdns`
+  `(OxiDNS - mosdns) / mosdns`
 - `Latency diff` also uses mosdns as the baseline:
-  a negative value means ForgeDNS has lower latency
+  a negative value means OxiDNS has lower latency
 - `run_dnsperf_compare.sh` is the better choice when you want to compare
   saturated throughput or higher-concurrency queueing behavior
 - `run_dnsperf_latency_compare.sh` is the better choice when you want to compare
@@ -179,7 +179,7 @@ Interpretation rules:
 
 ## Reports
 
-- [reports/20260311-152028.md](/Users/sven/Documents/Codes/Rust/forgedns/benchmarks/mosdns_compare/reports/20260311-152028.md)
+- [reports/20260311-152028.md](/Users/sven/Documents/Codes/Rust/oxidns/benchmarks/mosdns_compare/reports/20260311-152028.md)
   - detailed manual analysis for the Debian / Intel N100 / 4-core / 512 MB run
     on 2026-03-11
 

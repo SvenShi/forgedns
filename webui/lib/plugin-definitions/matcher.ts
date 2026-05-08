@@ -25,7 +25,7 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "args",
         "域名规则",
-        "domain:example.com\n$core_domains\n&/etc/forgedns/domains.txt",
+        "domain:example.com\n$core_domains\n&/etc/oxidns/domains.txt",
         true,
         "定义域名匹配规则来源。",
         undefined,
@@ -164,7 +164,7 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "args",
         "CNAME 规则",
-        "domain:example.com\n$core_domains\n&/etc/forgedns/cnames.txt",
+        "domain:example.com\n$core_domains\n&/etc/oxidns/cnames.txt",
         true,
         "定义响应 CNAME 目标域名匹配规则来源。",
         undefined,

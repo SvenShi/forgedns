@@ -15,12 +15,12 @@
     var href =
       currentTheme() === 'dark' ? '/img/logo-dark.png' : '/img/logo-light.png';
     var icons = document.querySelectorAll("link[rel~='icon']");
-    var icon = document.querySelector('link[data-forgedns-theme-icon]');
+    var icon = document.querySelector('link[data-oxidns-theme-icon]');
 
     if (icons.length === 0) {
       icon = document.createElement('link');
       icon.setAttribute('rel', 'icon');
-      icon.setAttribute('data-forgedns-theme-icon', 'true');
+      icon.setAttribute('data-oxidns-theme-icon', 'true');
       document.head.appendChild(icon);
       icons = [icon];
     }

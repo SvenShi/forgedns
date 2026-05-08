@@ -3,9 +3,9 @@ title: CLI Tools
 sidebar_position: 3
 ---
 
-This page documents every CLI command currently supported by ForgeDNS.
+This page documents every CLI command currently supported by OxiDNS.
 
-ForgeDNS currently ships a single executable: `forgedns`.
+OxiDNS currently ships a single executable: `oxidns`.
 
 Available top-level commands:
 
@@ -20,29 +20,29 @@ Available top-level commands:
 Show top-level help:
 
 ```bash
-forgedns --help
+oxidns --help
 ```
 
 Show help for a specific subcommand:
 
 ```bash
-forgedns start --help
-forgedns check --help
-forgedns export-dat --help
-forgedns service --help
-forgedns upgrade --help
+oxidns start --help
+oxidns check --help
+oxidns export-dat --help
+oxidns service --help
+oxidns upgrade --help
 ```
 
 ## `start`
 
-Starts ForgeDNS in the foreground.
+Starts OxiDNS in the foreground.
 
 Typical usage:
 
 ```bash
-forgedns start -c config.yaml
-forgedns start -c config.yaml -l debug
-forgedns start -c /etc/forgedns/config.yaml -d /etc/forgedns
+oxidns start -c config.yaml
+oxidns start -c config.yaml -l debug
+oxidns start -c /etc/oxidns/config.yaml -d /etc/oxidns
 ```
 
 Arguments:
@@ -64,15 +64,15 @@ Common use cases:
 
 ## `check`
 
-Statically validates a configuration file without starting ForgeDNS.
+Statically validates a configuration file without starting OxiDNS.
 
 Typical usage:
 
 ```bash
-forgedns check -c config.yaml
-forgedns check -c /etc/forgedns/config.yaml
-forgedns check -c config.yaml -d /etc/forgedns
-forgedns check -c config.yaml --graph
+oxidns check -c config.yaml
+oxidns check -c /etc/oxidns/config.yaml
+oxidns check -c config.yaml -d /etc/oxidns
+oxidns check -c config.yaml --graph
 ```
 
 Arguments:
@@ -106,7 +106,7 @@ These exported files can be referenced directly from `domain_set.files` or `ip_s
 Typical usage:
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geosite.dat \
   --selector cn \
   --selector geolocation-\!cn \
@@ -116,7 +116,7 @@ forgedns export-dat \
 Generate an additional merged union file:
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geosite.dat \
   --kind geosite \
   --selector cn \
@@ -128,7 +128,7 @@ forgedns export-dat \
 Export from `geoip.dat`:
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geoip.dat \
   --kind geoip \
   --selector cn \
@@ -138,7 +138,7 @@ forgedns export-dat \
 Export the entire dat file without selectors:
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geosite.dat \
   --kind geosite \
   --out-dir ./rules/exported
@@ -147,7 +147,7 @@ forgedns export-dat \
 Export using the original text format:
 
 ```bash
-forgedns export-dat \
+oxidns export-dat \
   --file ./rules/geosite.dat \
   --kind geosite \
   --format original \
@@ -165,8 +165,8 @@ Arguments:
   - Default: `auto`
 - `--format <FORMAT>`
   - Output text format.
-  - Values: `forgedns` `original`
-  - Default: `forgedns`
+  - Values: `oxidns` `original`
+  - Default: `oxidns`
 - `--selector <SELECTOR>`
   - Selector to export.
   - Repeat the flag to export multiple selectors.
@@ -183,14 +183,14 @@ Arguments:
 
 Behavior:
 
-- By default, ForgeDNS writes one file per selector, for example `cn.txt` or `geolocation-!cn.txt`.
-- When no selector is provided, ForgeDNS writes one full-export file named `geosite.txt` or `geoip.txt` by default.
-- `geosite` exports ForgeDNS domain rule expressions such as `full:`, `domain:`, `keyword:`, and `regexp:`.
-- In `forgedns` format, exported files add a header comment such as `# selector: cn`; when no selector is provided, the header becomes `# selector: all`.
+- By default, OxiDNS writes one file per selector, for example `cn.txt` or `geolocation-!cn.txt`.
+- When no selector is provided, OxiDNS writes one full-export file named `geosite.txt` or `geoip.txt` by default.
+- `geosite` exports OxiDNS domain rule expressions such as `full:`, `domain:`, `keyword:`, and `regexp:`.
+- In `oxidns` format, exported files add a header comment such as `# selector: cn`; when no selector is provided, the header becomes `# selector: all`.
 - In `original` format, `geosite` preserves the source type names and writes values such as `plain:`, `regex:`, `root_domain:`, and `full:`.
 - In `original` format, `geosite` output is grouped by code, and domain attributes are appended after the domain text, for example `@cn` or `@ads=1`.
 - `geoip` exports plain IP / CIDR lines.
-- In `forgedns` format, `geoip` exports also include selector header comments.
+- In `oxidns` format, `geoip` exports also include selector header comments.
 - In `original` format, `geoip` output is grouped by code with section headers like `[code]`.
 - `geosite` selectors support `code@attribute`, for example `mastercard@cn`.
 - If any selector matches no rules, the command fails instead of silently skipping it.
@@ -211,7 +211,7 @@ Supported subcommands:
 Installs the service definition without starting it immediately.
 
 ```bash
-sudo forgedns service install -d /etc/forgedns -c /etc/forgedns/config.yaml
+sudo oxidns service install -d /etc/oxidns -c /etc/oxidns/config.yaml
 ```
 
 Arguments:
@@ -227,7 +227,7 @@ Arguments:
 Starts the installed system service.
 
 ```bash
-sudo forgedns service start
+sudo oxidns service start
 ```
 
 ### `service stop`
@@ -235,7 +235,7 @@ sudo forgedns service start
 Stops the installed system service.
 
 ```bash
-sudo forgedns service stop
+sudo oxidns service stop
 ```
 
 ### `service uninstall`
@@ -243,12 +243,12 @@ sudo forgedns service stop
 Removes the installed system service.
 
 ```bash
-sudo forgedns service uninstall
+sudo oxidns service uninstall
 ```
 
 ## `upgrade`
 
-Checks, downloads, or applies ForgeDNS upgrades from GitHub Releases.
+Checks, downloads, or applies OxiDNS upgrades from GitHub Releases.
 
 Supported subcommands:
 
@@ -259,11 +259,11 @@ Supported subcommands:
 Common usage:
 
 ```bash
-forgedns upgrade
-forgedns upgrade --force
-forgedns upgrade check
-forgedns upgrade download --target latest
-sudo forgedns upgrade apply --restart service
+oxidns upgrade
+oxidns upgrade --force
+oxidns upgrade check
+oxidns upgrade download --target latest
+sudo oxidns upgrade apply --restart service
 ```
 
 Common arguments:
@@ -273,7 +273,7 @@ Common arguments:
   - Default: `latest`
 - `--repository <OWNER/REPO>`
   - GitHub repository.
-  - Default: `SvenShi/forgedns`
+  - Default: `SvenShi/oxidns`
 - `--asset <NAME|auto>`
   - Release asset name. `auto` selects the current platform archive.
   - Default: `auto`

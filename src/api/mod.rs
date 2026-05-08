@@ -607,7 +607,7 @@ async fn handle_hyper_request(
             simple_response(StatusCode::UNAUTHORIZED, Bytes::from("401 Unauthorized"));
         response.headers_mut().insert(
             http::header::WWW_AUTHENTICATE,
-            http::HeaderValue::from_static("Basic realm=\"forgedns\""),
+            http::HeaderValue::from_static("Basic realm=\"oxidns\""),
         );
         response
     } else {

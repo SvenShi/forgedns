@@ -3,7 +3,7 @@
 
 //! Shared wire buffer pooling for short-lived network payloads.
 //!
-//! ForgeDNS encodes DNS messages on several hot paths, especially UDP reply
+//! OxiDNS encodes DNS messages on several hot paths, especially UDP reply
 //! writes where each request may need a fresh `Vec<u8>` only for the duration
 //! of one send call. A global fixed-capacity pool lets these transient buffers
 //! be reused across tasks without tying reuse to a specific server worker

@@ -3,11 +3,11 @@ title: Performance and Benchmarks
 sidebar_position: 8
 ---
 
-This page collects the performance notes moved out of the README and keeps public benchmark snapshots by version. The goal is not to claim an absolute winner, but to show the performance profile of ForgeDNS under different levels of policy complexity, concurrency, and transport-path pressure.
+This page collects the performance notes moved out of the README and keeps public benchmark snapshots by version. The goal is not to claim an absolute winner, but to show the performance profile of OxiDNS under different levels of policy complexity, concurrency, and transport-path pressure.
 
-## What ForgeDNS Cares About
+## What OxiDNS Cares About
 
-ForgeDNS is not only interested in peak numbers for the simplest possible case. The more relevant questions are:
+OxiDNS is not only interested in peak numbers for the simplest possible case. The more relevant questions are:
 
 * Is the hot path still controlled when cache, rules, fallback, and rewrites are enabled?
 * Is overall latency acceptable when several upstreams race concurrently?
@@ -25,7 +25,7 @@ ForgeDNS is not only interested in peak numbers for the simplest possible case. 
 
 Legend:
 
-* <span className="benchmark-delta benchmark-delta--up">Green</span> means ForgeDNS performs better on that metric
+* <span className="benchmark-delta benchmark-delta--up">Green</span> means OxiDNS performs better on that metric
 * <span className="benchmark-delta benchmark-delta--down">Red</span> means mosdns performs better on that metric
 * <span className="benchmark-delta benchmark-delta--neutral">Neutral</span> means the gap is small and shown only as a reading aid, not as a claim of statistical significance
 
@@ -38,7 +38,7 @@ Test environment:
 * Date: 2026-04-13
 * System: Linux `6.8.12-2-pve` `x86_64`
 * Selector: `core`
-* Compared versions: ForgeDNS `v0.3.0`, mosdns `v5.3.4-0-gb732318`
+* Compared versions: OxiDNS `v0.3.0`, mosdns `v5.3.4-0-gb732318`
 
 Load-test parameters:
 
@@ -59,7 +59,7 @@ How to read these results:
 
 The table below shows the per-scenario medians aggregated from repeats:
 
-| Scenario | ForgeDNS QPS | mosdns QPS | QPS Delta | ForgeDNS Avg Latency | mosdns Avg Latency |
+| Scenario | OxiDNS QPS | mosdns QPS | QPS Delta | OxiDNS Avg Latency | mosdns Avg Latency |
 | ------------------------ | -----------: | ---------: | --------: | -------------------: | -----------------: |
 | baseline UDP forward     |     35,498.1 |   36,883.2 | <span className="benchmark-delta benchmark-delta--neutral">-3.8%</span> | <span className="benchmark-latency benchmark-latency--better">7.735 ms</span> | <span className="benchmark-latency benchmark-latency--worse">11.244 ms</span> |
 | cache hotpath            |    139,133.9 |  134,881.6 | <span className="benchmark-delta benchmark-delta--neutral">+3.1%</span> | <span className="benchmark-latency benchmark-latency--better">0.637 ms</span> | <span className="benchmark-latency benchmark-latency--worse">0.721 ms</span> |
@@ -78,7 +78,7 @@ Test environment:
 * Date: 2026-04-13
 * System: Linux `6.8.12-2-pve` `x86_64`
 * Selector: `latency-core`
-* Compared versions: ForgeDNS `v0.3.0`, mosdns `v5.3.4-0-gb732318`
+* Compared versions: OxiDNS `v0.3.0`, mosdns `v5.3.4-0-gb732318`
 
 Load-test parameters:
 
@@ -95,7 +95,7 @@ The three tables below focus on average latency and jitter first, while `QPS` re
 
 #### clients=1, outstanding=1
 
-| Scenario | ForgeDNS Avg Latency | mosdns Avg Latency | Latency Delta | ForgeDNS Jitter | mosdns Jitter | Jitter Delta |
+| Scenario | OxiDNS Avg Latency | mosdns Avg Latency | Latency Delta | OxiDNS Jitter | mosdns Jitter | Jitter Delta |
 | ------------------------ | -------------------: | -----------------: | ------------: | ---------------: | -------------: | -----------: |
 | baseline UDP forward     | <span className="benchmark-latency benchmark-latency--worse">6.716 ms</span> | <span className="benchmark-latency benchmark-latency--better">5.708 ms</span> | <span className="benchmark-latency benchmark-latency--worse">+17.66%</span> | <span className="benchmark-latency benchmark-latency--better">0.170 ms</span> | <span className="benchmark-latency benchmark-latency--worse">1.140 ms</span> | <span className="benchmark-latency benchmark-latency--better">-85.09%</span> |
 | cache hotpath            | <span className="benchmark-latency benchmark-latency--better">0.029 ms</span> | <span className="benchmark-latency benchmark-latency--worse">0.031 ms</span> | <span className="benchmark-latency benchmark-latency--better">-6.45%</span> | <span className="benchmark-latency benchmark-latency--better">0.017 ms</span> | <span className="benchmark-latency benchmark-latency--worse">0.021 ms</span> | <span className="benchmark-latency benchmark-latency--better">-19.05%</span> |
@@ -109,7 +109,7 @@ The three tables below focus on average latency and jitter first, while `QPS` re
 
 #### clients=2, outstanding=2
 
-| Scenario | ForgeDNS Avg Latency | mosdns Avg Latency | Latency Delta | ForgeDNS Jitter | mosdns Jitter | Jitter Delta |
+| Scenario | OxiDNS Avg Latency | mosdns Avg Latency | Latency Delta | OxiDNS Jitter | mosdns Jitter | Jitter Delta |
 | ------------------------ | -------------------: | -----------------: | ------------: | ---------------: | -------------: | -----------: |
 | baseline UDP forward     | <span className="benchmark-latency benchmark-latency--better">6.001 ms</span> | <span className="benchmark-latency benchmark-latency--worse">7.382 ms</span> | <span className="benchmark-latency benchmark-latency--better">-18.71%</span> | <span className="benchmark-latency benchmark-latency--better">0.262 ms</span> | <span className="benchmark-latency benchmark-latency--worse">0.858 ms</span> | <span className="benchmark-latency benchmark-latency--better">-69.46%</span> |
 | cache hotpath            | <span className="benchmark-latency benchmark-latency--better">0.033 ms</span> | <span className="benchmark-latency benchmark-latency--worse">0.037 ms</span> | <span className="benchmark-latency benchmark-latency--better">-10.81%</span> | <span className="benchmark-latency benchmark-latency--better">0.050 ms</span> | <span className="benchmark-latency benchmark-latency--worse">0.053 ms</span> | <span className="benchmark-latency benchmark-latency--better">-5.66%</span> |
@@ -123,7 +123,7 @@ The three tables below focus on average latency and jitter first, while `QPS` re
 
 #### clients=4, outstanding=4
 
-| Scenario | ForgeDNS Avg Latency | mosdns Avg Latency | Latency Delta | ForgeDNS Jitter | mosdns Jitter | Jitter Delta |
+| Scenario | OxiDNS Avg Latency | mosdns Avg Latency | Latency Delta | OxiDNS Jitter | mosdns Jitter | Jitter Delta |
 | ------------------------ | -------------------: | -----------------: | ------------: | ---------------: | -------------: | -----------: |
 | baseline UDP forward     | <span className="benchmark-latency benchmark-latency--worse">5.977 ms</span> | <span className="benchmark-latency benchmark-latency--better">5.910 ms</span> | <span className="benchmark-latency benchmark-latency--worse">+1.13%</span> | <span className="benchmark-latency benchmark-latency--better">0.355 ms</span> | <span className="benchmark-latency benchmark-latency--worse">2.700 ms</span> | <span className="benchmark-latency benchmark-latency--better">-86.85%</span> |
 | cache hotpath            | <span className="benchmark-latency benchmark-latency--better">0.044 ms</span> | <span className="benchmark-latency benchmark-latency--worse">0.060 ms</span> | <span className="benchmark-latency benchmark-latency--better">-26.67%</span> | <span className="benchmark-latency benchmark-latency--better">0.028 ms</span> | <span className="benchmark-latency benchmark-latency--worse">0.063 ms</span> | <span className="benchmark-latency benchmark-latency--better">-55.56%</span> |
@@ -137,9 +137,9 @@ The three tables below focus on average latency and jitter first, while `QPS` re
 
 ### v0.3.0 Result Readout
 
-* If your real deployment relies on complex rule sets, large datasets, or multi-upstream racing, ForgeDNS is in a stronger position in `v0.3.0`; `domain set`, `composite provider chain`, and `concurrent upstreams` are all clearly ahead.
-* `cache hotpath` now shows a small lead for ForgeDNS, which means the gap on high-frequency cache-hit traffic has narrowed substantially.
-* In local-answer workloads, the gap between ForgeDNS and mosdns is already fairly small; the `ip set` result is also more constrained by the local-answer performance ceiling than by a completely separate bottleneck.
+* If your real deployment relies on complex rule sets, large datasets, or multi-upstream racing, OxiDNS is in a stronger position in `v0.3.0`; `domain set`, `composite provider chain`, and `concurrent upstreams` are all clearly ahead.
+* `cache hotpath` now shows a small lead for OxiDNS, which means the gap on high-frequency cache-hit traffic has narrowed substantially.
+* In local-answer workloads, the gap between OxiDNS and mosdns is already fairly small; the `ip set` result is also more constrained by the local-answer performance ceiling than by a completely separate bottleneck.
 * For `forward`, `dual-entry`, and `concurrent upstreams`, the numbers should be read as end-to-end proxy behavior. Upstream latency and upstream response stability are the dominant factors there, not just local implementation overhead.
 * In the low-concurrency latency sweep, `domain set`, `composite provider chain`, `cache hotpath`, and `server local TCP` are the most stable strong areas; `dual-entry UDP` shows noticeably higher jitter at `clients=4`, so that scenario still needs more stability work.
 
@@ -156,7 +156,7 @@ Test environment:
 * Environment: LXC inside a PVE VM
 * System: Linux `6.8.12-2-pve` `x86_64`
 * Date: 2026-03-26
-* Compared versions: `forgedns v0.1.0`, mosdns `v5.3.4-0-gb732318`
+* Compared versions: `oxidns v0.1.0`, mosdns `v5.3.4-0-gb732318`
 
 Load-test parameters:
 
@@ -171,7 +171,7 @@ Load-test parameters:
 
 The table below shows the average of three runs for each scenario:
 
-| Scenario               | ForgeDNS QPS | mosdns QPS | QPS Delta | ForgeDNS Avg Latency | mosdns Avg Latency |
+| Scenario               | OxiDNS QPS | mosdns QPS | QPS Delta | OxiDNS Avg Latency | mosdns Avg Latency |
 | ---------------------- | -----------: | ---------: | --------: | -------------------: | -----------------: |
 | baseline UDP forward   |     37,789.6 |   37,269.2 | <span className="benchmark-delta benchmark-delta--neutral">+1.4%</span> | <span className="benchmark-latency benchmark-latency--better">9.142 ms</span> | <span className="benchmark-latency benchmark-latency--worse">12.312 ms</span> |
 | cache hotpath          |    131,982.3 |  133,380.3 | <span className="benchmark-delta benchmark-delta--neutral">-1.0%</span> | <span className="benchmark-latency benchmark-latency--worse">1.235 ms</span> | <span className="benchmark-latency benchmark-latency--better">0.696 ms</span> |
@@ -190,13 +190,13 @@ The table below shows the average of three runs for each scenario:
 
 ### v0.1.0 Historical Readout
 
-* ForgeDNS was stronger in concurrent upstream races, DoH upstreams, dual-entry UDP, and large `domain_set` scenarios
+* OxiDNS was stronger in concurrent upstream races, DoH upstreams, dual-entry UDP, and large `domain_set` scenarios
 * mosdns was still faster in cache-hit paths, local answers, basic `sequence`, and lighter matcher scenarios
 * `fallback standby` still showed room for further optimization
 
 ## Raw Materials
 
-* Benchmark directory: [`benchmarks/mosdns_compare/README.md`](https://github.com/SvenShi/forgedns/tree/main/benchmarks/mosdns_compare)
-* Scenario list: [`benchmarks/mosdns_compare/scenarios.tsv`](https://github.com/SvenShi/forgedns/blob/main/benchmarks/mosdns_compare/scenarios.tsv)
-* Higher-concurrency script: [`benchmarks/mosdns_compare/run_dnsperf_compare.sh`](https://github.com/SvenShi/forgedns/blob/main/benchmarks/mosdns_compare/run_dnsperf_compare.sh)
-* Low-concurrency latency script: [`benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh`](https://github.com/SvenShi/forgedns/blob/main/benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh)
+* Benchmark directory: [`benchmarks/mosdns_compare/README.md`](https://github.com/SvenShi/oxidns/tree/main/benchmarks/mosdns_compare)
+* Scenario list: [`benchmarks/mosdns_compare/scenarios.tsv`](https://github.com/SvenShi/oxidns/blob/main/benchmarks/mosdns_compare/scenarios.tsv)
+* Higher-concurrency script: [`benchmarks/mosdns_compare/run_dnsperf_compare.sh`](https://github.com/SvenShi/oxidns/blob/main/benchmarks/mosdns_compare/run_dnsperf_compare.sh)
+* Low-concurrency latency script: [`benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh`](https://github.com/SvenShi/oxidns/blob/main/benchmarks/mosdns_compare/run_dnsperf_latency_compare.sh)

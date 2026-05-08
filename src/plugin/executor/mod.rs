@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Executor plugin category.
 //!
-//! Executors are the active stages in a ForgeDNS sequence pipeline. They can:
+//! Executors are the active stages in a OxiDNS sequence pipeline. They can:
 //!
 //! - mutate the request before upstream resolution;
 //! - call upstream resolvers and populate a response;

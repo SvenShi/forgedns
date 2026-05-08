@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: 2025 Sven Shi
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Unified error handling module for ForgeDNS
+//! Unified error handling module for OxiDNS
 //!
 //! Provides a centralized error type that can represent various error
 //! conditions throughout the application, making error handling more consistent
 //! and easier to maintain.
 
-use forgedns_proto::ProtoError;
+use oxidns_proto::ProtoError;
 use thiserror::Error;
 
 use crate::config::types::ConfigError;
 
-/// Main error type for ForgeDNS
+/// Main error type for OxiDNS
 ///
 /// This enum represents all possible errors that can occur in the application.
 /// It can be constructed from various error types using the `From` trait

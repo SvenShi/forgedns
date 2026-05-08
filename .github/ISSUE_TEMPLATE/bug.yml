@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in ForgeDNS
+description: Report a bug in OxiDNS
 title: "[Bug] "
 labels: ["bug"]
 body:
@@ -11,7 +11,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: ForgeDNS Version
+      label: OxiDNS Version
       placeholder: e.g. v0.1.0 / commit hash
     validations:
       required: true

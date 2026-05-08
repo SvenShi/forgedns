@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Sven Shi
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Networking primitives and protocol-facing infrastructure for ForgeDNS.
+//! Networking primitives and protocol-facing infrastructure for OxiDNS.
 //!
 //! This module contains the transport and connection-building pieces that sit
 //! underneath the server and upstream plugins. In the main request path, these

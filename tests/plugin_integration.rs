@@ -8,21 +8,21 @@ use std::process::Command;
 use std::sync::{Arc as StdArc, Arc};
 
 use bytes::Bytes;
-use forgedns::config::types::Config;
-use forgedns::core::app_clock::AppClock;
-use forgedns::core::context::{DnsContext, RequestMeta};
-use forgedns::core::error::{DnsError, Result};
-use forgedns::network::transport::udp_transport::UdpTransport;
-use forgedns::plugin;
-use forgedns::plugin::executor::ExecStep;
-use forgedns::plugin::{PluginRegistry, PluginType};
-use forgedns::proto::{DNSClass, Message, Name, Question, Rcode, RecordType};
 use http_body_util::{BodyExt, Full};
 use hyper::header::LOCATION;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use oxidns::config::types::Config;
+use oxidns::core::app_clock::AppClock;
+use oxidns::core::context::{DnsContext, RequestMeta};
+use oxidns::core::error::{DnsError, Result};
+use oxidns::network::transport::udp_transport::UdpTransport;
+use oxidns::plugin;
+use oxidns::plugin::executor::ExecStep;
+use oxidns::plugin::{PluginRegistry, PluginType};
+use oxidns::proto::{DNSClass, Message, Name, Question, Rcode, RecordType};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -3208,10 +3208,10 @@ plugins:
     context.marks_mut().insert(1);
     context.set_attr("cron.job_name", "nightly".to_string());
     let mut response = context.request().response(Rcode::NoError);
-    response.add_answer(forgedns::proto::Record::from_rdata(
+    response.add_answer(oxidns::proto::Record::from_rdata(
         Name::from_ascii("example.com.").unwrap(),
         60,
-        forgedns::proto::RData::A(forgedns::proto::rdata::A(Ipv4Addr::new(192, 0, 2, 1))),
+        oxidns::proto::RData::A(oxidns::proto::rdata::A(Ipv4Addr::new(192, 0, 2, 1))),
     ));
     context.set_response(response);
 
@@ -3465,10 +3465,10 @@ plugins:
         .to_executor();
     let mut context = make_context(registry.clone(), "example.com.");
     let mut response = context.request().response(Rcode::NoError);
-    response.add_answer(forgedns::proto::Record::from_rdata(
+    response.add_answer(oxidns::proto::Record::from_rdata(
         Name::from_ascii("example.com.").unwrap(),
         60,
-        forgedns::proto::RData::A(forgedns::proto::rdata::A(Ipv4Addr::new(192, 0, 2, 1))),
+        oxidns::proto::RData::A(oxidns::proto::rdata::A(Ipv4Addr::new(192, 0, 2, 1))),
     ));
     context.set_response(response);
 
@@ -3840,7 +3840,7 @@ async fn test_linux_ipset_executor_writes_masked_prefix_to_kernel_set() -> Resul
         return Ok(());
     }
 
-    let set_name = unique_system_object_name("forgedns_test_ipset");
+    let set_name = unique_system_object_name("oxidns_test_ipset");
     let _cleanup = CommandCleanup::new(vec![(
         "ipset".to_string(),
         vec!["destroy".to_string(), set_name.clone()],
@@ -3899,8 +3899,8 @@ async fn test_linux_nftset_executor_writes_masked_prefix_to_kernel_set() -> Resu
         return Ok(());
     }
 
-    let table_name = unique_system_object_name("forgedns_test_nft");
-    let set_name = "forgedns_test_v4".to_string();
+    let table_name = unique_system_object_name("oxidns_test_nft");
+    let set_name = "oxidns_test_v4".to_string();
     let _cleanup = CommandCleanup::new(vec![(
         "nft".to_string(),
         vec![

@@ -80,13 +80,13 @@ function ThemeFavicon() {
     const href =
       resolvedTheme === "dark" ? "/logo-dark.png" : "/logo-light.png";
     let icon = document.querySelector<HTMLLinkElement>(
-      "link[data-forgedns-theme-icon]",
+      "link[data-oxidns-theme-icon]",
     );
 
     if (!icon) {
       icon = document.createElement("link");
       icon.rel = "icon";
-      icon.dataset.forgednsThemeIcon = "true";
+      icon.dataset.oxidnsThemeIcon = "true";
       document.head.appendChild(icon);
     }
 

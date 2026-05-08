@@ -3,7 +3,7 @@ title: Plugin Overview
 sidebar_position: 1
 ---
 
-ForgeDNS plugins are organized into four layers:
+OxiDNS plugins are organized into four layers:
 
 - `server`
   - Network ingress. Accepts traffic and hands it to the policy entrypoint.

@@ -358,7 +358,7 @@ mod tests {
     }
 }
 
-/// DNS class values supported by ForgeDNS.
+/// DNS class values supported by OxiDNS.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 #[allow(dead_code)]
 pub enum DNSClass {

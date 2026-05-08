@@ -63,7 +63,7 @@ export function ConfigEditorView() {
           <div>
             <h2 className="text-lg font-semibold">配置文件编辑器</h2>
             <p className="text-sm text-muted-foreground">
-              /etc/forgedns/config.yaml
+              /etc/oxidns/config.yaml
             </p>
           </div>
           {hasChanges && (

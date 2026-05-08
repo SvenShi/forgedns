@@ -1,4 +1,4 @@
-![ForgeDNS Banner](.github/img/logo-banner.png)
+![OxiDNS Banner](.github/img/logo-banner.png)
 
 [中文](README.md) | [English](README_EN.md)
 
@@ -6,7 +6,7 @@
 
 **⚡ 一个面向现代网络的高性能、可编排 DNS 服务器。**
 
-ForgeDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor / provider -> upstream` 这条主路径构建。它的目标不是堆功能，而是在缓存、过滤、回退、重写、本地应答和系统联动这些真实需求下，依然保持清晰结构和稳定性能。
+OxiDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor / provider -> upstream` 这条主路径构建。它的目标不是堆功能，而是在缓存、过滤、回退、重写、本地应答和系统联动这些真实需求下，依然保持清晰结构和稳定性能。
 
 项目仍在持续开发中。
 
@@ -36,18 +36,18 @@ ForgeDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor
 
 | 系统 / 环境 | 推荐 release 文件 |
 | --- | --- |
-| Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` |
-| Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` |
+| Linux x86_64 | `oxidns-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `oxidns-aarch64-unknown-linux-musl.tar.gz` |
 | Debian / Ubuntu x86_64 服务安装 | `*_amd64.deb` |
 | Debian / Ubuntu ARM64 服务安装 | `*_arm64.deb` |
-| Alpine Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` |
-| Alpine Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` |
-| 32 位 ARM Linux（如部分树莓派） | `forgedns-arm-unknown-linux-musleabihf.tar.gz` |
-| macOS Intel | `forgedns-x86_64-apple-darwin.tar.gz` |
-| macOS Apple Silicon | `forgedns-aarch64-apple-darwin.tar.gz` |
-| Windows x64 | `forgedns-x86_64-pc-windows-msvc.zip` |
-| Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` |
-| FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` |
+| Alpine Linux x86_64 | `oxidns-x86_64-unknown-linux-musl.tar.gz` |
+| Alpine Linux ARM64 | `oxidns-aarch64-unknown-linux-musl.tar.gz` |
+| 32 位 ARM Linux（如部分树莓派） | `oxidns-arm-unknown-linux-musleabihf.tar.gz` |
+| macOS Intel | `oxidns-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `oxidns-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `oxidns-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `oxidns-aarch64-pc-windows-msvc.zip` |
+| FreeBSD x86_64 | `oxidns-x86_64-unknown-freebsd.tar.gz` |
 
 Linux 下如果不确定兼容性，尽量优先选 `musl` 版本，不要默认选 `gnu`。
 

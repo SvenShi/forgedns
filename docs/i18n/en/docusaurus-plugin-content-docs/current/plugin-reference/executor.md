@@ -3,7 +3,7 @@ title: Executor Plugins
 sidebar_position: 3
 ---
 
-Executors are the core action layer in ForgeDNS. They can read or write requests, set responses, query upstreams, cache results, perform fallback logic, emit logs, or trigger system integrations.
+Executors are the core action layer in OxiDNS. They can read or write requests, set responses, query upstreams, cache results, perform fallback logic, emit logs, or trigger system integrations.
 
 When reading this chapter, keep two questions in mind:
 
@@ -548,7 +548,7 @@ Returns local static answers using host-style entries.
       - "regexp:^api[0-9]+\\.corp\\.local$ 10.10.0.5"
     files:
       # Merge more hosts rules from files
-      - "/etc/forgedns/hosts.txt"
+      - "/etc/oxidns/hosts.txt"
     short_circuit: true
 ```
 
@@ -620,7 +620,7 @@ Injects arbitrary DNS records from zone-style rule strings.
       - "10.2.0.192.in-addr.arpa. 300 IN PTR host.example.com."
     files:
       # Load more static records from files
-      - "/etc/forgedns/zone.txt"
+      - "/etc/oxidns/zone.txt"
     short_circuit: false
 ```
 
@@ -693,7 +693,7 @@ Rewrites matching names toward different target names or answer destinations.
       - "keyword:staging staging-gateway.example.net"
     files:
       # Merge more redirect rules from files
-      - "/etc/forgedns/redirect.txt"
+      - "/etc/oxidns/redirect.txt"
 ```
 
 ### Configuration Details
@@ -1425,7 +1425,7 @@ Sends callback requests to external `http/https` services. It can trigger before
       X-Client-IP: "${client_ip}"
       X-Qname: "${qname}"
     query_params:
-      source: "forgedns"
+      source: "oxidns"
       qname: "${qname}"
     json:
       qname: "${qname}"
@@ -1570,7 +1570,7 @@ Runs an explicitly configured external command and injects a stable subset of th
   args:
     command: "bash"
     args:
-      - "/opt/forgedns/notify.sh"
+      - "/opt/oxidns/notify.sh"
       - "${qname}"
       - "${client_ip}"
     env:
@@ -1663,9 +1663,9 @@ Writes response IPs into Linux `ipset` through the embedded Rust netlink backend
   type: ipset
   args:
     # ipset used for A answers
-    set_name4: "forgedns_v4"
+    set_name4: "oxidns_v4"
     # ipset used for AAAA answers
-    set_name6: "forgedns_v6"
+    set_name6: "oxidns_v6"
     # Aggregate IPv4 writes to /24 prefixes
     mask4: 24
     # Aggregate IPv6 writes to /64 prefixes
@@ -1697,7 +1697,7 @@ Writes response IPs into Linux `ipset` through the embedded Rust netlink backend
 ### quick setup
 
 ```yaml
-- exec: "ipset forgedns_v4,4,24 forgedns_v6,6,64"
+- exec: "ipset oxidns_v4,4,24 oxidns_v6,6,64"
 ```
 
 Format:
@@ -1862,11 +1862,11 @@ Writes response IPs into MikroTik RouterOS address lists, with dynamic entries, 
     # Use asynchronous writes to avoid blocking the DNS hot path
     async: true
     # Address list used for A records
-    address_list4: "forgedns_ipv4"
+    address_list4: "oxidns_ipv4"
     # Address list used for AAAA records
-    address_list6: "forgedns_ipv6"
-    # Prefix for comments on ForgeDNS-managed entries
-    comment_prefix: "forgedns"
+    address_list6: "oxidns_ipv6"
+    # Prefix for comments on OxiDNS-managed entries
+    comment_prefix: "oxidns"
     # Lower bound for dynamic-entry TTL
     min_ttl: 60
     # Upper bound for dynamic-entry TTL
@@ -1885,7 +1885,7 @@ Writes response IPs into MikroTik RouterOS address lists, with dynamic entries, 
         - "2001:db8::/64"
       files:
         # Load more persistent items from files
-        - "/etc/forgedns/persistent_ips.txt"
+        - "/etc/oxidns/persistent_ips.txt"
 ```
 
 ### Configuration Details
@@ -1990,7 +1990,7 @@ Writes response IPs into MikroTik RouterOS address lists, with dynamic entries, 
 
 ### Purpose
 
-Runs the ForgeDNS upgrade flow from the executor pipeline. It is suitable for maintenance tasks triggered by `cron`, `sequence`, or another executor.
+Runs the OxiDNS upgrade flow from the executor pipeline. It is suitable for maintenance tasks triggered by `cron`, `sequence`, or another executor.
 
 ### Example Configuration
 
@@ -1998,7 +1998,7 @@ Runs the ForgeDNS upgrade flow from the executor pipeline. It is suitable for ma
 - tag: upgrade_auto
   type: upgrade
   args:
-      repository: SvenShi/forgedns
+      repository: SvenShi/oxidns
       asset: auto
       cache_dir: ./upgrade/cache
       backup_dir: ./upgrade/backups
@@ -2019,7 +2019,7 @@ Runs the ForgeDNS upgrade flow from the executor pipeline. It is suitable for ma
     - Boolean. Default: `true`.
     - Cleans `cache_dir` and `backup_dir` after a successful upgrade.
 - `repository`
-    - GitHub repository. Default: `SvenShi/forgedns`.
+    - GitHub repository. Default: `SvenShi/oxidns`.
 - `asset`
     - Release asset name. `auto` selects the current platform archive.
 - `cache_dir` / `backup_dir`
@@ -2067,16 +2067,16 @@ Downloads one or more `http/https` files into a local directory and overwrites t
     socks5: "127.0.0.1:1080"
     downloads:
       - url: "https://example.com/geosite.dat"
-        dir: "/etc/forgedns"
+        dir: "/etc/oxidns"
       - url: "https://example.com/geoip.dat"
-        dir: "/etc/forgedns"
+        dir: "/etc/oxidns"
         filename: "geoip.dat"
 ```
 
 ### Quick Setup
 
 ```yaml
-- exec: "download https://example.com/rules.txt /etc/forgedns"
+- exec: "download https://example.com/rules.txt /etc/oxidns"
 ```
 
 ### Behavior
@@ -2086,7 +2086,7 @@ Downloads one or more `http/https` files into a local directory and overwrites t
 - Missing target directories are created automatically.
 - Files are written to a temporary path first and then moved into place.
 - When `socks5` is set, all download connections are routed through that SOCKS5 proxy using the same format as `upstream[].socks5`.
-- By default, ForgeDNS checks target files during startup and downloads any missing ones before other plugins initialize. A bootstrap failure aborts startup.
+- By default, OxiDNS checks target files during startup and downloads any missing ones before other plugins initialize. A bootstrap failure aborts startup.
 - Set `startup_if_missing: false` to disable that bootstrap behavior.
 
 ### Notes
@@ -2111,12 +2111,12 @@ Downloads one or more `http/https` files into a local directory and overwrites t
   args:
     downloads:
       - url: "https://example.com/geosite.dat"
-        dir: "/etc/forgedns"
+        dir: "/etc/oxidns"
 
 - tag: provider_geosite
   type: geosite
   args:
-    file: "/etc/forgedns/geosite.dat"
+    file: "/etc/oxidns/geosite.dat"
 
 - tag: reload_rules
   type: reload_provider
@@ -2156,10 +2156,10 @@ plugins:
       startup_if_missing: true
       downloads:
         - url: "https://example.com/geosite.dat"
-          dir: "/etc/forgedns/rules"
+          dir: "/etc/oxidns/rules"
           filename: "geosite.dat"
         - url: "https://example.com/geoip.dat"
-          dir: "/etc/forgedns/rules"
+          dir: "/etc/oxidns/rules"
           filename: "geoip.dat"
 
   # 4. Reload only the affected providers after download completes
@@ -2173,12 +2173,12 @@ plugins:
   - tag: provider_geosite
     type: geosite
     args:
-      file: "/etc/forgedns/rules/geosite.dat"
+      file: "/etc/oxidns/rules/geosite.dat"
 
   - tag: provider_geoip
     type: geoip
     args:
-      file: "/etc/forgedns/rules/geoip.dat"
+      file: "/etc/oxidns/rules/geoip.dat"
 ```
 
 Notes:
@@ -2280,7 +2280,7 @@ Triggers the same application-level full reload as the management API `POST /rel
 
 ### Notes
 
-- It must run inside a normal ForgeDNS process with application control context attached.
+- It must run inside a normal OxiDNS process with application control context attached.
 - Execution fails when another reload is already `pending` or `in_progress`.
 - Using it in a live request `sequence` triggers a full application reload and is usually not appropriate for latency-sensitive request paths.
 
@@ -2330,7 +2330,7 @@ Schedules a list of executors in the background. It does not participate in the 
 - Purpose: Overrides the time zone used by all `schedule` jobs in this `cron` plugin.
 - Notes:
   - Only affects `schedule`.
-  - When omitted, ForgeDNS uses the system local time zone and falls back to `UTC` if unavailable.
+  - When omitted, OxiDNS uses the system local time zone and falls back to `UTC` if unavailable.
   - Use IANA names such as `Asia/Shanghai`, `UTC`, or `America/Los_Angeles`.
 
 #### `args.jobs[].name`

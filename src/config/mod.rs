@@ -3,7 +3,7 @@
 
 //! Runtime configuration loading and validation entry points.
 //!
-//! ForgeDNS configuration is defined as YAML and deserialized into
+//! OxiDNS configuration is defined as YAML and deserialized into
 //! [`types::Config`]. This module keeps the file-loading boundary small:
 //!
 //! - read the configuration file from disk;

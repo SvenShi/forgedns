@@ -88,7 +88,7 @@ sidebar_position: 4
     # 复用已有 domain_set
     - "$core_domains"
     # 从文件加载规则
-    - "&/etc/forgedns/domains.txt"
+    - "&/etc/oxidns/domains.txt"
 ```
 
 ### 配置项
@@ -366,7 +366,7 @@ sidebar_position: 4
   args:
     - "domain:example.com"
     - "$core_domains"
-    - "&/etc/forgedns/cnames.txt"
+    - "&/etc/oxidns/cnames.txt"
 ```
 
 ### 配置项

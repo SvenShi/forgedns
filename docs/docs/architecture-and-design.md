@@ -3,11 +3,11 @@ title: 架构与设计
 sidebar_position: 7
 ---
 
-本文档补充 README 没有展开的设计背景，重点解释 ForgeDNS 的请求路径、分层方式，以及为什么项目会把性能边界当作架构约束。
+本文档补充 README 没有展开的设计背景，重点解释 OxiDNS 的请求路径、分层方式，以及为什么项目会把性能边界当作架构约束。
 
 ## 核心请求路径
 
-ForgeDNS 围绕下面这条主路径工作：
+OxiDNS 围绕下面这条主路径工作：
 
 `server -> DnsContext -> matcher / executor / provider -> upstream or side effects -> response`
 
@@ -50,7 +50,7 @@ F --> G
 
 ## 为什么这样分层
 
-ForgeDNS 不把复杂行为散落在监听器或 transport 分支里，而是尽量统一收敛到策略层。这样做有几个直接收益：
+OxiDNS 不把复杂行为散落在监听器或 transport 分支里，而是尽量统一收敛到策略层。这样做有几个直接收益：
 
 * 请求主路径更短，更容易优化
 * 功能组合更自然，不需要为每个协议写一套特殊逻辑
@@ -70,17 +70,17 @@ ForgeDNS 不把复杂行为散落在监听器或 transport 分支里，而是尽
 
 ### 2. 策略是第一等能力
 
-ForgeDNS 的核心不是单一 forwarder，而是一个可编排的策略系统。`sequence` 负责组织执行顺序，`matcher` 决定命中条件，`executor` 负责动作，`provider` 负责共享数据。
+OxiDNS 的核心不是单一 forwarder，而是一个可编排的策略系统。`sequence` 负责组织执行顺序，`matcher` 决定命中条件，`executor` 负责动作，`provider` 负责共享数据。
 
 这种结构比把规则硬编码在监听器或上游模块里更容易维护，也更适合长期扩展。
 
 ### 3. 系统联动是架构内能力
 
-ForgeDNS 不把 DNS 只看作“收到请求然后返回响应”。解析结果还可以驱动 `ipset`、`nftset`、MikroTik 路由同步、反向缓存等系统行为，因此请求路径设计时就考虑了副作用隔离和 post-stage 执行。
+OxiDNS 不把 DNS 只看作“收到请求然后返回响应”。解析结果还可以驱动 `ipset`、`nftset`、MikroTik 路由同步、反向缓存等系统行为，因此请求路径设计时就考虑了副作用隔离和 post-stage 执行。
 
 ## 自研消息层的原因
 
-ForgeDNS 使用自己的 DNS 消息模型和 wire 编解码层，而不是把整条数据路径都建立在第三方消息对象之上。主要原因有三点：
+OxiDNS 使用自己的 DNS 消息模型和 wire 编解码层，而不是把整条数据路径都建立在第三方消息对象之上。主要原因有三点：
 
 * 更容易围绕实际热点做定向优化
 * 更方便让策略层直接读写消息语义
@@ -93,7 +93,7 @@ ForgeDNS 使用自己的 DNS 消息模型和 wire 编解码层，而不是把整
 
 ## 性能设计原则
 
-ForgeDNS 当前的性能思路可以概括为：
+OxiDNS 当前的性能思路可以概括为：
 
 1. 监听器尽量薄，策略统一进入 `sequence`
 2. 能在初始化完成的工作，不放到每个请求里重复做

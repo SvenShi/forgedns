@@ -4,7 +4,7 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$BASE_DIR"
 
-FORGEDNS_BIN="${FORGEDNS_BIN_PATH:-$BASE_DIR/forgedns}"
+OXIDNS_BIN="${OXIDNS_BIN_PATH:-$BASE_DIR/oxidns}"
 MOSDNS_BIN="${MOSDNS_BIN_PATH:-$BASE_DIR/mosdns}"
 DNSPERF_BIN="${DNSPERF_BIN_PATH:-dnsperf}"
 
@@ -206,8 +206,8 @@ start_server() {
   local config_file="$2"
   local startup_log="$3"
 
-  if [[ "$engine" == "forgedns" ]]; then
-    "$FORGEDNS_BIN" start -c "$config_file" >"$startup_log" 2>&1 &
+  if [[ "$engine" == "oxidns" ]]; then
+    "$OXIDNS_BIN" start -c "$config_file" >"$startup_log" 2>&1 &
   else
     if [[ "$MOSDNS_LAUNCHER" == "start" ]]; then
       "$MOSDNS_BIN" start -c "$config_file" >"$startup_log" 2>&1 &
@@ -571,9 +571,9 @@ write_environment_snapshot() {
     echo "dnsperf_timeout=$DNSPERF_TIMEOUT"
     echo "dnsperf_outstanding=matches_client_count"
     echo "dnsperf_max_qps=${DNSPERF_MAX_QPS:-unlimited}"
-    echo "forgedns_bin=$FORGEDNS_BIN"
-    echo "forgedns_sha256=$(hash_file "$FORGEDNS_BIN")"
-    echo "forgedns_version=$(capture_version "$FORGEDNS_BIN" --version)"
+    echo "oxidns_bin=$OXIDNS_BIN"
+    echo "oxidns_sha256=$(hash_file "$OXIDNS_BIN")"
+    echo "oxidns_version=$(capture_version "$OXIDNS_BIN" --version)"
     echo "mosdns_bin=$MOSDNS_BIN"
     echo "mosdns_sha256=$(hash_file "$MOSDNS_BIN")"
     echo "mosdns_version=$(capture_mosdns_version)"
@@ -583,10 +583,10 @@ write_environment_snapshot() {
 }
 
 load_selected_scenarios() {
-  local label forgedns_config_rel mosdns_config_rel query_rel mode family
+  local label oxidns_config_rel mosdns_config_rel query_rel mode family
   local warmup_query_rel tags description notes
 
-  while IFS='|' read -r label forgedns_config_rel mosdns_config_rel query_rel mode family warmup_query_rel tags description notes; do
+  while IFS='|' read -r label oxidns_config_rel mosdns_config_rel query_rel mode family warmup_query_rel tags description notes; do
     if [[ -z "$label" || "$label" == \#* ]]; then
       continue
     fi
@@ -596,7 +596,7 @@ load_selected_scenarios() {
     fi
 
     SELECTED_ROWS+=(
-      "$label|$forgedns_config_rel|$mosdns_config_rel|$query_rel|$mode|$family|$warmup_query_rel|$tags|$description|$notes"
+      "$label|$oxidns_config_rel|$mosdns_config_rel|$query_rel|$mode|$family|$warmup_query_rel|$tags|$description|$notes"
     )
     SCENARIO_ORDER+=("$label")
     SCENARIO_FAMILY["$label"]="$family"
@@ -722,13 +722,13 @@ build_aggregated_summary() {
 
 build_pair_summary() {
   local scenario mode family tags query_count description notes clients
-  local forgedns_key mosdns_key repeats
-  local forgedns_qps mosdns_qps qps_diff qps_ratio
-  local forgedns_lat mosdns_lat lat_diff lat_ratio
-  local forgedns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio
-  local forgedns_loss mosdns_loss
+  local oxidns_key mosdns_key repeats
+  local oxidns_qps mosdns_qps qps_diff qps_ratio
+  local oxidns_lat mosdns_lat lat_diff lat_ratio
+  local oxidns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio
+  local oxidns_loss mosdns_loss
 
-  printf "scenario\tmode\tfamily\ttags\tclients\toutstanding\tquery_count\trepeats\tforgedns_avg_latency_ms\tmosdns_avg_latency_ms\tlatency_diff_pct\tlatency_ratio\tforgedns_latency_stddev_ms\tmosdns_latency_stddev_ms\tlatency_stddev_diff_pct\tlatency_stddev_ratio\tforgedns_qps\tmosdns_qps\tqps_diff_pct\tqps_ratio\tforgedns_loss_rate_pct\tmosdns_loss_rate_pct\tdescription\tnotes\n" \
+  printf "scenario\tmode\tfamily\ttags\tclients\toutstanding\tquery_count\trepeats\toxidns_avg_latency_ms\tmosdns_avg_latency_ms\tlatency_diff_pct\tlatency_ratio\toxidns_latency_stddev_ms\tmosdns_latency_stddev_ms\tlatency_stddev_diff_pct\tlatency_stddev_ratio\toxidns_qps\tmosdns_qps\tqps_diff_pct\tqps_ratio\toxidns_loss_rate_pct\tmosdns_loss_rate_pct\tdescription\tnotes\n" \
     >"$PAIR_SUMMARY_FILE"
 
   for scenario in "${SCENARIO_ORDER[@]}"; do
@@ -740,31 +740,31 @@ build_pair_summary() {
     notes="${SCENARIO_NOTES[$scenario]}"
 
     for clients in "${LATENCY_CLIENT_LEVELS[@]}"; do
-      forgedns_key="${scenario}|forgedns|${mode}|${clients}"
+      oxidns_key="${scenario}|oxidns|${mode}|${clients}"
       mosdns_key="${scenario}|mosdns|${mode}|${clients}"
 
-      if [[ -z "${AGG_LATENCY[$forgedns_key]:-}" || -z "${AGG_LATENCY[$mosdns_key]:-}" ]]; then
+      if [[ -z "${AGG_LATENCY[$oxidns_key]:-}" || -z "${AGG_LATENCY[$mosdns_key]:-}" ]]; then
         continue
       fi
 
-      repeats="${AGG_REPEATS[$forgedns_key]}"
+      repeats="${AGG_REPEATS[$oxidns_key]}"
 
-      forgedns_lat="${AGG_LATENCY[$forgedns_key]}"
+      oxidns_lat="${AGG_LATENCY[$oxidns_key]}"
       mosdns_lat="${AGG_LATENCY[$mosdns_key]}"
-      lat_diff="$(pct_diff_or_na "$forgedns_lat" "$mosdns_lat")"
-      lat_ratio="$(ratio_or_na "$forgedns_lat" "$mosdns_lat")"
+      lat_diff="$(pct_diff_or_na "$oxidns_lat" "$mosdns_lat")"
+      lat_ratio="$(ratio_or_na "$oxidns_lat" "$mosdns_lat")"
 
-      forgedns_lat_stddev="${AGG_LATENCY_STDDEV[$forgedns_key]}"
+      oxidns_lat_stddev="${AGG_LATENCY_STDDEV[$oxidns_key]}"
       mosdns_lat_stddev="${AGG_LATENCY_STDDEV[$mosdns_key]}"
-      lat_stddev_diff="$(pct_diff_or_na "$forgedns_lat_stddev" "$mosdns_lat_stddev")"
-      lat_stddev_ratio="$(ratio_or_na "$forgedns_lat_stddev" "$mosdns_lat_stddev")"
+      lat_stddev_diff="$(pct_diff_or_na "$oxidns_lat_stddev" "$mosdns_lat_stddev")"
+      lat_stddev_ratio="$(ratio_or_na "$oxidns_lat_stddev" "$mosdns_lat_stddev")"
 
-      forgedns_qps="${AGG_QPS[$forgedns_key]}"
+      oxidns_qps="${AGG_QPS[$oxidns_key]}"
       mosdns_qps="${AGG_QPS[$mosdns_key]}"
-      qps_diff="$(pct_diff_or_na "$forgedns_qps" "$mosdns_qps")"
-      qps_ratio="$(ratio_or_na "$forgedns_qps" "$mosdns_qps")"
+      qps_diff="$(pct_diff_or_na "$oxidns_qps" "$mosdns_qps")"
+      qps_ratio="$(ratio_or_na "$oxidns_qps" "$mosdns_qps")"
 
-      forgedns_loss="${AGG_LOSS_RATE[$forgedns_key]}"
+      oxidns_loss="${AGG_LOSS_RATE[$oxidns_key]}"
       mosdns_loss="${AGG_LOSS_RATE[$mosdns_key]}"
 
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
@@ -776,19 +776,19 @@ build_pair_summary() {
         "$clients" \
         "$query_count" \
         "$repeats" \
-        "$forgedns_lat" \
+        "$oxidns_lat" \
         "$mosdns_lat" \
         "$lat_diff" \
         "$lat_ratio" \
-        "$forgedns_lat_stddev" \
+        "$oxidns_lat_stddev" \
         "$mosdns_lat_stddev" \
         "$lat_stddev_diff" \
         "$lat_stddev_ratio" \
-        "$forgedns_qps" \
+        "$oxidns_qps" \
         "$mosdns_qps" \
         "$qps_diff" \
         "$qps_ratio" \
-        "$forgedns_loss" \
+        "$oxidns_loss" \
         "$mosdns_loss" \
         "$description" \
         "$notes" \
@@ -799,17 +799,17 @@ build_pair_summary() {
 
 print_pair_summary_table() {
   local scenario mode family tags clients outstanding query_count repeats
-  local forgedns_lat mosdns_lat lat_diff lat_ratio
-  local forgedns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio
-  local forgedns_qps mosdns_qps qps_diff qps_ratio
-  local forgedns_loss mosdns_loss description notes
+  local oxidns_lat mosdns_lat lat_diff lat_ratio
+  local oxidns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio
+  local oxidns_qps mosdns_qps qps_diff qps_ratio
+  local oxidns_loss mosdns_loss description notes
 
   printf "\n%-24s %-4s %-5s %-9s %-9s %-10s %-9s %-9s %-9s %-9s\n" \
     "scenario" "c" "runs" "fd_ms" "mo_ms" "lat_diff%" "fd_jit" "mo_jit" "fd_loss%" "mo_loss%"
   printf "%-24s %-4s %-5s %-9s %-9s %-10s %-9s %-9s %-9s %-9s\n" \
     "--------" "-" "----" "-----" "-----" "---------" "------" "------" "--------" "--------"
 
-  while IFS=$'\t' read -r scenario mode family tags clients outstanding query_count repeats forgedns_lat mosdns_lat lat_diff lat_ratio forgedns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio forgedns_qps mosdns_qps qps_diff qps_ratio forgedns_loss mosdns_loss description notes; do
+  while IFS=$'\t' read -r scenario mode family tags clients outstanding query_count repeats oxidns_lat mosdns_lat lat_diff lat_ratio oxidns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio oxidns_qps mosdns_qps qps_diff qps_ratio oxidns_loss mosdns_loss description notes; do
     if [[ "$scenario" == "scenario" ]]; then
       continue
     fi
@@ -818,12 +818,12 @@ print_pair_summary_table() {
       "$scenario" \
       "$clients" \
       "$repeats" \
-      "$forgedns_lat" \
+      "$oxidns_lat" \
       "$mosdns_lat" \
       "$lat_diff" \
-      "$forgedns_lat_stddev" \
+      "$oxidns_lat_stddev" \
       "$mosdns_lat_stddev" \
-      "$forgedns_loss" \
+      "$oxidns_loss" \
       "$mosdns_loss"
   done <"$PAIR_SUMMARY_FILE"
 }
@@ -831,18 +831,18 @@ print_pair_summary_table() {
 generate_report_markdown() {
   local key value
   local scenario mode family tags clients outstanding query_count repeats
-  local forgedns_lat mosdns_lat lat_diff lat_ratio
-  local forgedns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio
-  local forgedns_qps mosdns_qps qps_diff qps_ratio
-  local forgedns_loss mosdns_loss description notes
+  local oxidns_lat mosdns_lat lat_diff lat_ratio
+  local oxidns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio
+  local oxidns_qps mosdns_qps qps_diff qps_ratio
+  local oxidns_loss mosdns_loss description notes
 
   {
-    echo "# ForgeDNS vs mosdns low-concurrency latency compare report"
+    echo "# OxiDNS vs mosdns low-concurrency latency compare report"
     echo
     echo "This runner keeps dnsperf in a closed-loop low-concurrency profile:"
     echo "each sweep point uses the same value for client count and outstanding query count."
-    echo "Latency diff is calculated against mosdns, so a negative value means ForgeDNS has lower latency."
-    echo "Latency stddev diff also uses mosdns as the baseline, so a negative value means ForgeDNS has lower jitter."
+    echo "Latency diff is calculated against mosdns, so a negative value means OxiDNS has lower latency."
+    echo "Latency stddev diff also uses mosdns as the baseline, so a negative value means OxiDNS has lower jitter."
     echo "QPS is kept as a secondary sanity metric instead of the main headline."
     echo
     echo "## Run parameters"
@@ -866,10 +866,10 @@ generate_report_markdown() {
     echo
     echo "## Pair summary"
     echo
-    echo "| Scenario | Family | Clients | Queries | Runs | ForgeDNS avg ms | mosdns avg ms | Lat diff | ForgeDNS jitter ms | mosdns jitter ms | Jitter diff | ForgeDNS QPS | mosdns QPS | ForgeDNS loss % | mosdns loss % | Purpose |"
+    echo "| Scenario | Family | Clients | Queries | Runs | OxiDNS avg ms | mosdns avg ms | Lat diff | OxiDNS jitter ms | mosdns jitter ms | Jitter diff | OxiDNS QPS | mosdns QPS | OxiDNS loss % | mosdns loss % | Purpose |"
     echo "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
 
-    while IFS=$'\t' read -r scenario mode family tags clients outstanding query_count repeats forgedns_lat mosdns_lat lat_diff lat_ratio forgedns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio forgedns_qps mosdns_qps qps_diff qps_ratio forgedns_loss mosdns_loss description notes; do
+    while IFS=$'\t' read -r scenario mode family tags clients outstanding query_count repeats oxidns_lat mosdns_lat lat_diff lat_ratio oxidns_lat_stddev mosdns_lat_stddev lat_stddev_diff lat_stddev_ratio oxidns_qps mosdns_qps qps_diff qps_ratio oxidns_loss mosdns_loss description notes; do
       if [[ "$scenario" == "scenario" ]]; then
         continue
       fi
@@ -880,15 +880,15 @@ generate_report_markdown() {
         "$clients" \
         "$query_count" \
         "$repeats" \
-        "$forgedns_lat" \
+        "$oxidns_lat" \
         "$mosdns_lat" \
         "$lat_diff" \
-        "$forgedns_lat_stddev" \
+        "$oxidns_lat_stddev" \
         "$mosdns_lat_stddev" \
         "$lat_stddev_diff" \
-        "$forgedns_qps" \
+        "$oxidns_qps" \
         "$mosdns_qps" \
-        "$forgedns_loss" \
+        "$oxidns_loss" \
         "$mosdns_loss" \
         "$description"
     done <"$PAIR_SUMMARY_FILE"
@@ -904,7 +904,7 @@ generate_report_markdown() {
   } >"$REPORT_FILE"
 }
 
-require_binary "$FORGEDNS_BIN"
+require_binary "$OXIDNS_BIN"
 require_binary "$MOSDNS_BIN"
 require_binary "$DNSPERF_BIN"
 
@@ -940,15 +940,15 @@ echo "BENCH_PLUGIN_FLAG: $BENCH_PLUGIN_FLAG"
 print_selected_scenarios
 
 for row in "${SELECTED_ROWS[@]}"; do
-  IFS='|' read -r label forgedns_config_rel mosdns_config_rel query_rel mode family warmup_query_rel tags description notes <<<"$row"
+  IFS='|' read -r label oxidns_config_rel mosdns_config_rel query_rel mode family warmup_query_rel tags description notes <<<"$row"
 
   benchmark_engine \
     "$label" \
-    "$BASE_DIR/$forgedns_config_rel" \
+    "$BASE_DIR/$oxidns_config_rel" \
     "$BASE_DIR/$query_rel" \
     "${SCENARIO_WARMUP_QUERY_FILE[$label]}" \
     "$mode" \
-    "forgedns"
+    "oxidns"
 
   benchmark_engine \
     "$label" \

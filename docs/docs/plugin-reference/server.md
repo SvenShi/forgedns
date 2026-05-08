@@ -126,9 +126,9 @@ sidebar_position: 2
     # 典型 DoT 端口
     listen: ":853"
     # PEM 证书链
-    cert: "/etc/forgedns/server.crt"
+    cert: "/etc/oxidns/server.crt"
     # PEM 私钥
-    key: "/etc/forgedns/server.key"
+    key: "/etc/oxidns/server.key"
     # DoT 通常适当放大空闲时间以复用连接
     idle_timeout: 30
 ```
@@ -164,7 +164,7 @@ sidebar_position: 2
 
 - 类型：`string`；必填：否；默认值：无
 - 作用：指定 TLS 证书文件路径。
-- 示例：`cert: "/etc/forgedns/server.crt"`
+- 示例：`cert: "/etc/oxidns/server.crt"`
 - 使用条件：
   - 与 `key` 配合使用时启用 TLS。
 - 运行影响：
@@ -174,7 +174,7 @@ sidebar_position: 2
 
 - 类型：`string`；必填：否；默认值：无
 - 作用：指定 TLS 私钥文件路径。
-- 示例：`key: "/etc/forgedns/server.key"`
+- 示例：`key: "/etc/oxidns/server.key"`
 - 使用条件：
   - 与 `cert` 配合使用时启用 TLS。
 - 运行影响：
@@ -225,9 +225,9 @@ sidebar_position: 2
     # HTTPS / DoH 监听地址
     listen: ":443"
     # 启用 HTTPS / HTTP3 所需证书
-    cert: "/etc/forgedns/server.crt"
+    cert: "/etc/oxidns/server.crt"
     # 启用 HTTPS / HTTP3 所需私钥
-    key: "/etc/forgedns/server.key"
+    key: "/etc/oxidns/server.key"
     # 在 TLS 已启用时同时开启 DoH over HTTP/3
     enable_http3: true
     # 反代场景下从指定头部恢复真实客户端 IP
@@ -292,7 +292,7 @@ sidebar_position: 2
 
 - 类型：`string`；必填：否；默认值：无
 - 作用：指定 HTTPS 证书文件路径。
-- 示例：`cert: "/etc/forgedns/server.crt"`
+- 示例：`cert: "/etc/oxidns/server.crt"`
 - 运行影响：
   - 与 `key` 同时配置时启用 HTTPS。
 
@@ -300,7 +300,7 @@ sidebar_position: 2
 
 - 类型：`string`；必填：否；默认值：无
 - 作用：指定 HTTPS 私钥文件路径。
-- 示例：`key: "/etc/forgedns/server.key"`
+- 示例：`key: "/etc/oxidns/server.key"`
 - 运行影响：
   - 与 `cert` 同时配置时启用 HTTPS。
 
@@ -358,9 +358,9 @@ sidebar_position: 2
     # DoQ 常见监听端口
     listen: ":853"
     # DoQ 必须配置 TLS 证书
-    cert: "/etc/forgedns/server.crt"
+    cert: "/etc/oxidns/server.crt"
     # DoQ 必须配置 TLS 私钥
-    key: "/etc/forgedns/server.key"
+    key: "/etc/oxidns/server.key"
     # QUIC transport 空闲超时，单位秒
     idle_timeout: 30
 ```
@@ -388,7 +388,7 @@ sidebar_position: 2
 
 - 类型：`string`；必填：是；默认值：无
 - 作用：指定 DoQ 所需 TLS 证书文件。
-- 示例：`cert: "/etc/forgedns/server.crt"`
+- 示例：`cert: "/etc/oxidns/server.crt"`
 - 运行影响：
   - 证书无效时监听器无法启动。
 
@@ -396,7 +396,7 @@ sidebar_position: 2
 
 - 类型：`string`；必填：是；默认值：无
 - 作用：指定 DoQ 所需 TLS 私钥文件。
-- 示例：`key: "/etc/forgedns/server.key"`
+- 示例：`key: "/etc/oxidns/server.key"`
 - 运行影响：
   - 私钥无效时监听器无法启动。
 

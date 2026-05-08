@@ -29,7 +29,7 @@ interface AppState {
   renamePlugin: (id: string, name: string) => void;
 }
 
-const defaultYamlConfig = `# ForgeDNS Configuration
+const defaultYamlConfig = `# OxiDNS Configuration
 plugins:
   - tag: seq_main
     type: sequence

@@ -186,7 +186,7 @@ Good fits:
 Policy goals:
 
 * Use different logic for different client sources
-* Host several policy classes in one ForgeDNS instance
+* Host several policy classes in one OxiDNS instance
 
 ```yaml
 plugins:
@@ -275,7 +275,7 @@ plugins:
     type: adguard_rule
     args:
       files:
-        - "/etc/forgedns/adguard.txt"
+        - "/etc/oxidns/adguard.txt"
 
   - tag: blocked
     type: sequence

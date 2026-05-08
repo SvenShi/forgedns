@@ -5,7 +5,7 @@ sidebar_position: 2
 
 ## Before You Start
 
-ForgeDNS uses YAML configuration. The current top-level layout has five parts:
+OxiDNS uses YAML configuration. The current top-level layout has five parts:
 
 ```yaml
 runtime:
@@ -16,7 +16,7 @@ api:
 
 log:
   level: info
-  file: ./forgedns.log
+  file: ./oxidns.log
 
 include: []
 
@@ -38,7 +38,7 @@ Where:
 - `include`
   - Load plugin definitions from other configuration files.
 - `plugins`
-  - All plugin instance definitions. ForgeDNS composes the full DNS pipeline from plugins.
+  - All plugin instance definitions. OxiDNS composes the full DNS pipeline from plugins.
 
 ## Top-Level Fields
 
@@ -79,7 +79,7 @@ Field notes:
 ```yaml
 log:
   level: info
-  file: ./forgedns.log
+  file: ./oxidns.log
   rotation:
     type: daily
     max_files: 7
@@ -93,7 +93,7 @@ Field notes:
 - `file`
   - Meaning: Optional log file path.
   - If omitted, logs go only to stdout.
-  - When configured, ForgeDNS writes to both stdout and the log file.
+  - When configured, OxiDNS writes to both stdout and the log file.
   - Log files are written as UTF-8 plain text without terminal ANSI color escape codes.
 - `rotation`
   - Meaning: Log file rotation policy.
@@ -130,9 +130,9 @@ api:
   http:
     listen: "127.0.0.1:9443"
     ssl:
-      cert: "/etc/forgedns/api.crt"
-      key: "/etc/forgedns/api.key"
-      client_ca: "/etc/forgedns/client-ca.crt"
+      cert: "/etc/oxidns/api.crt"
+      key: "/etc/oxidns/api.key"
+      client_ca: "/etc/oxidns/client-ca.crt"
       require_client_cert: true
     auth:
       type: basic
@@ -242,7 +242,7 @@ Current main provider types:
 
 ## The `sequence` Orchestration Model
 
-`sequence` is the policy hub of ForgeDNS. Most non-trivial configs use it as the primary entry.
+`sequence` is the policy hub of OxiDNS. Most non-trivial configs use it as the primary entry.
 
 Example:
 
@@ -283,7 +283,7 @@ Use `$tag` to reference a plugin that has already been defined:
 
 ### Quick Setup
 
-If a `sequence` rule uses `type + arguments` instead of `$tag`, ForgeDNS creates a temporary plugin on the fly.
+If a `sequence` rule uses `type + arguments` instead of `$tag`, OxiDNS creates a temporary plugin on the fly.
 
 Example:
 
@@ -464,7 +464,7 @@ Example:
 args:
   - "domain:example.com"
   - "$core_domains"
-  - "&/etc/forgedns/domains.txt"
+  - "&/etc/oxidns/domains.txt"
 ```
 
 ## Unified Upstream Structure

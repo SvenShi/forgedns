@@ -88,7 +88,7 @@ Matches the query name in the request.
     # Reuse an existing domain-capable provider
     - "$core_domains"
     # Load rules from file
-    - "&/etc/forgedns/domains.txt"
+    - "&/etc/oxidns/domains.txt"
 ```
 
 ### Configuration Details
@@ -356,7 +356,7 @@ Matches CNAME targets in the response.
   args:
     - "domain:example.com"
     - "$core_domains"
-    - "&/etc/forgedns/cnames.txt"
+    - "&/etc/oxidns/cnames.txt"
 ```
 
 ### Configuration Details

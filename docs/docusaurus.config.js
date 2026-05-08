@@ -2,7 +2,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'ForgeDNS',
+  title: 'OxiDNS',
   tagline: 'A Rust-powered DNS engine inspired by MosDNS, designed for performance and complete configurability.',
   favicon: 'img/logo-light.png',
 
@@ -17,11 +17,11 @@ const config = {
     v4: true,
   },
 
-  url: 'https://forgedns.cn',
+  url: 'https://oxidns.cn',
   baseUrl: '/',
 
   organizationName: 'SvenShi',
-  projectName: 'forgedns',
+  projectName: 'oxidns',
 
   onBrokenLinks: 'throw',
 
@@ -74,7 +74,7 @@ const config = {
           path: './docs',
           routeBasePath: '/',
           sidebarPath: './sidebars.js',
-          editUrl: 'https://github.com/SvenShi/forgedns/tree/main/docs/',
+          editUrl: 'https://github.com/SvenShi/oxidns/tree/main/docs/',
         },
         blog: false,
         theme: {
@@ -91,9 +91,9 @@ const config = {
         respectPrefersColorScheme: false,
       },
       navbar: {
-        title: 'ForgeDNS',
+        title: 'OxiDNS',
         logo: {
-          alt: 'ForgeDNS Logo',
+          alt: 'OxiDNS Logo',
           src: 'img/logo-light.png',
           srcDark: 'img/logo-dark.png',
           width: 32,
@@ -105,7 +105,7 @@ const config = {
             position: 'right',
           },
           {
-            href: 'https://github.com/SvenShi/forgedns',
+            href: 'https://github.com/SvenShi/oxidns',
             'aria-label': 'GitHub repository',
             className: 'header-github-link',
             position: 'right',
@@ -120,7 +120,7 @@ const config = {
         style: 'light',
         links: [
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} ForgeDNS`,
+        copyright: `Copyright © ${new Date().getFullYear()} OxiDNS`,
       },
       prism: {
         theme: prismThemes.github,

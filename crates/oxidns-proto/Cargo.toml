@@ -1,17 +1,17 @@
 [package]
-name = "forgedns-proto"
+name = "oxidns-proto"
 version = "0.1.1"
 edition = "2024"
 authors = ["Sven Shi <isvenshi@gmail.com>"]
-description = "DNS message model and wire codec primitives used by ForgeDNS"
+description = "DNS message model and wire codec primitives used by OxiDNS"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/SvenShi/forgedns"
+repository = "https://github.com/SvenShi/oxidns"
 readme = "README.md"
 keywords = ["dns", "protocol", "codec", "wire"]
 categories = ["network-programming", "parser-implementations"]
 
 [lib]
-name = "forgedns_proto"
+name = "oxidns_proto"
 path = "src/lib.rs"
 doctest = false
 

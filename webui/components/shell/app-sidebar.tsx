@@ -54,7 +54,7 @@ export function AppSidebar() {
                 <div className="relative size-8 shrink-0">
                   <Image
                     src="/logo-light.png"
-                    alt="ForgeDNS"
+                    alt="OxiDNS"
                     width={32}
                     height={32}
                     className="size-8 object-contain dark:hidden"
@@ -62,7 +62,7 @@ export function AppSidebar() {
                   />
                   <Image
                     src="/logo-dark.png"
-                    alt="ForgeDNS"
+                    alt="OxiDNS"
                     width={32}
                     height={32}
                     className="hidden size-8 object-contain dark:block"
@@ -70,7 +70,7 @@ export function AppSidebar() {
                   />
                 </div>
                 <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="font-semibold">ForgeDNS</span>
+                  <span className="font-semibold">OxiDNS</span>
                   <span className="text-xs text-muted-foreground">控制台</span>
                 </div>
               </Link>
@@ -104,7 +104,7 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton asChild>
               <a
-                href="https://forgedns.cn"
+                href="https://oxidns.cn"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted-foreground"
@@ -117,7 +117,7 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton asChild>
               <a
-                href="https://github.com/SvenShi/forgedns"
+                href="https://github.com/SvenShi/oxidns"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted-foreground"

@@ -3,10 +3,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use forgedns::config::types::{ApiConfig, Config, LogConfig, PluginConfig, RuntimeConfig};
-use forgedns::core::context::DnsContext;
-use forgedns::plugin::{PluginRegistry, init as init_plugins};
-use forgedns::proto::{DNSClass, Message, Name, Question, RecordType};
+use oxidns::config::types::{ApiConfig, Config, LogConfig, PluginConfig, RuntimeConfig};
+use oxidns::core::context::DnsContext;
+use oxidns::plugin::{PluginRegistry, init as init_plugins};
+use oxidns::proto::{DNSClass, Message, Name, Question, RecordType};
 use serde_yaml_ng::{Mapping, Value};
 use tokio::runtime::Runtime;
 
@@ -59,7 +59,7 @@ fn load_executor(
     rt: &Runtime,
     plugin: PluginConfig,
 ) -> (
-    Arc<dyn forgedns::plugin::executor::Executor>,
+    Arc<dyn oxidns::plugin::executor::Executor>,
     Arc<PluginRegistry>,
 ) {
     let registry = rt

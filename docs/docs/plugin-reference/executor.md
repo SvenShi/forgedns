@@ -3,7 +3,7 @@ title: 执行器插件
 sidebar_position: 3
 ---
 
-执行器是 ForgeDNS 的核心动作层。它们可以读写请求、设置响应、调用上游、缓存结果、做回退、记录日志，或触发系统联动。
+执行器是 OxiDNS 的核心动作层。它们可以读写请求、设置响应、调用上游、缓存结果、做回退、记录日志，或触发系统联动。
 
 阅读本章时，应重点关注以下两个问题：
 
@@ -619,7 +619,7 @@ sidebar_position: 3
       - "regexp:^api[0-9]+\\.corp\\.local$ 10.10.0.5"
     files:
       # 从文件合并更多 hosts 规则
-      - "/etc/forgedns/hosts.txt"
+      - "/etc/oxidns/hosts.txt"
     short_circuit: true
 ```
 
@@ -686,7 +686,7 @@ sidebar_position: 3
       - "10.2.0.192.in-addr.arpa. 300 IN PTR host.example.com."
     files:
       # 从文件加载更多静态记录
-      - "/etc/forgedns/zone.txt"
+      - "/etc/oxidns/zone.txt"
     short_circuit: false
 ```
 
@@ -757,7 +757,7 @@ sidebar_position: 3
       - "keyword:staging staging-gateway.example.net"
     files:
       # 从文件合并更多重定向规则
-      - "/etc/forgedns/redirect.txt"
+      - "/etc/oxidns/redirect.txt"
 ```
 
 ### 配置项
@@ -1537,7 +1537,7 @@ sidebar_position: 3
       X-Client-IP: "${client_ip}"
       X-Qname: "${qname}"
     query_params:
-      source: "forgedns"
+      source: "oxidns"
       qname: "${qname}"
     json:
       qname: "${qname}"
@@ -1682,7 +1682,7 @@ sidebar_position: 3
   args:
     command: "bash"
     args:
-      - "/opt/forgedns/notify.sh"
+      - "/opt/oxidns/notify.sh"
       - "${qname}"
       - "${client_ip}"
     env:
@@ -1775,9 +1775,9 @@ sidebar_position: 3
   type: ipset
   args:
     # A 记录写入的 ipset
-    set_name4: "forgedns_v4"
+    set_name4: "oxidns_v4"
     # AAAA 记录写入的 ipset
-    set_name6: "forgedns_v6"
+    set_name6: "oxidns_v6"
     # IPv4 写入前先聚合成 /24
     mask4: 24
     # IPv6 写入前先聚合成 /64
@@ -1809,7 +1809,7 @@ sidebar_position: 3
 ### quick setup
 
 ```yaml
-- exec: "ipset forgedns_v4,4,24 forgedns_v6,6,64"
+- exec: "ipset oxidns_v4,4,24 oxidns_v6,6,64"
 ```
 
 格式：
@@ -1974,11 +1974,11 @@ sidebar_position: 3
     # 异步提交，避免阻塞 DNS 主路径
     async: true
     # A 记录写入的 address-list
-    address_list4: "forgedns_ipv4"
+    address_list4: "oxidns_ipv4"
     # AAAA 记录写入的 address-list
-    address_list6: "forgedns_ipv6"
-    # 用于标记 ForgeDNS 管理条目的注释前缀
-    comment_prefix: "forgedns"
+    address_list6: "oxidns_ipv6"
+    # 用于标记 OxiDNS 管理条目的注释前缀
+    comment_prefix: "oxidns"
     # 动态项 TTL 下限
     min_ttl: 60
     # 动态项 TTL 上限
@@ -1997,7 +1997,7 @@ sidebar_position: 3
         - "2001:db8::/64"
       files:
         # 从文件加载更多常驻项
-        - "/etc/forgedns/persistent_ips.txt"
+        - "/etc/oxidns/persistent_ips.txt"
 ```
 
 ### 配置项
@@ -2041,7 +2041,7 @@ sidebar_position: 3
 #### `comment_prefix`
 
 - 类型：`string`；必填：否；默认值：`fdns`
-- 作用：指定插件写入 RouterOS 条目时使用的注释前缀。该前缀用于区分 ForgeDNS 创建的动态项和常驻项，便于后续刷新、重载与清理。
+- 作用：指定插件写入 RouterOS 条目时使用的注释前缀。该前缀用于区分 OxiDNS 创建的动态项和常驻项，便于后续刷新、重载与清理。
 - 注意事项：该值及插件 `tag` 不应包含 `;` 或 `=`，以避免影响内部标记格式。
 
 #### `persistent`
@@ -2118,7 +2118,7 @@ sidebar_position: 3
 
 ### 作用
 
-执行 ForgeDNS 升级流程，可用于 `cron`、`sequence` 或其它执行器触发的维护任务。
+执行 OxiDNS 升级流程，可用于 `cron`、`sequence` 或其它执行器触发的维护任务。
 
 ### 配置示例
 
@@ -2126,7 +2126,7 @@ sidebar_position: 3
 - tag: upgrade_auto
   type: upgrade
   args:
-      repository: SvenShi/forgedns
+      repository: SvenShi/oxidns
       asset: auto
       cache_dir: ./upgrade/cache
       backup_dir: ./upgrade/backups
@@ -2149,7 +2149,7 @@ sidebar_position: 3
     - 默认值：`true`
     - 升级成功后清理 `cache_dir` 和 `backup_dir`。
 - `repository`
-    - GitHub 仓库，默认 `SvenShi/forgedns`。
+    - GitHub 仓库，默认 `SvenShi/oxidns`。
 - `asset`
     - Release asset 名称；`auto` 会按当前平台选择 archive。
 - `cache_dir` / `backup_dir`
@@ -2197,16 +2197,16 @@ sidebar_position: 3
     socks5: "127.0.0.1:1080"
     downloads:
       - url: "https://example.com/geosite.dat"
-        dir: "/etc/forgedns"
+        dir: "/etc/oxidns"
       - url: "https://example.com/geoip.dat"
-        dir: "/etc/forgedns"
+        dir: "/etc/oxidns"
         filename: "geoip.dat"
 ```
 
 ### Quick Setup
 
 ```yaml
-- exec: "download https://example.com/rules.txt /etc/forgedns"
+- exec: "download https://example.com/rules.txt /etc/oxidns"
 ```
 
 ### 行为说明
@@ -2241,12 +2241,12 @@ sidebar_position: 3
   args:
     downloads:
       - url: "https://example.com/geosite.dat"
-        dir: "/etc/forgedns"
+        dir: "/etc/oxidns"
 
 - tag: provider_geosite
   type: geosite
   args:
-    file: "/etc/forgedns/geosite.dat"
+    file: "/etc/oxidns/geosite.dat"
 
 - tag: reload_rules
   type: reload_provider
@@ -2286,10 +2286,10 @@ plugins:
       startup_if_missing: true
       downloads:
         - url: "https://example.com/geosite.dat"
-          dir: "/etc/forgedns/rules"
+          dir: "/etc/oxidns/rules"
           filename: "geosite.dat"
         - url: "https://example.com/geoip.dat"
-          dir: "/etc/forgedns/rules"
+          dir: "/etc/oxidns/rules"
           filename: "geoip.dat"
 
   # 4. 下载完成后只刷新相关 provider
@@ -2303,12 +2303,12 @@ plugins:
   - tag: provider_geosite
     type: geosite
     args:
-      file: "/etc/forgedns/rules/geosite.dat"
+      file: "/etc/oxidns/rules/geosite.dat"
 
   - tag: provider_geoip
     type: geoip
     args:
-      file: "/etc/forgedns/rules/geoip.dat"
+      file: "/etc/oxidns/rules/geoip.dat"
 ```
 
 说明：
@@ -2410,7 +2410,7 @@ plugins:
 
 ### 注意事项
 
-- 需要运行在带有应用控制上下文的正常 ForgeDNS 进程中。
+- 需要运行在带有应用控制上下文的正常 OxiDNS 进程中。
 - 如果已有 reload 处于 `pending` 或 `in_progress`，本次执行会返回错误。
 - 放进普通请求 `sequence` 时会触发全量应用 reload，通常不建议在实时请求路径上使用。
 

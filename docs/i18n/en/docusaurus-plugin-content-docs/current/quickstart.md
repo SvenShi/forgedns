@@ -3,7 +3,7 @@ title: Quick Start
 sidebar_position: 2
 ---
 
-This page covers the currently supported installation paths for ForgeDNS and the shortest way to get a runnable instance.
+This page covers the currently supported installation paths for OxiDNS and the shortest way to get a runnable instance.
 
 If you only want to get it running quickly, prefer:
 
@@ -24,11 +24,11 @@ Requirements:
 Build and run:
 
 ```bash
-git clone https://github.com/SvenShi/forgedns.git
-cd forgedns
+git clone https://github.com/SvenShi/oxidns.git
+cd oxidns
 
 cargo build --release
-./target/release/forgedns start -c config.yaml
+./target/release/oxidns start -c config.yaml
 ```
 
 Run with debug logging:
@@ -41,33 +41,33 @@ cargo run -- -c config.yaml -l debug
 
 The release workflow generates standalone binaries for multiple platforms. Each archive includes:
 
-- `forgedns` or `forgedns.exe`
+- `oxidns` or `oxidns.exe`
 - `config.yaml`
 - `LICENSE`
 
 Release page:
 
-- [https://github.com/SvenShi/forgedns/releases](https://github.com/SvenShi/forgedns/releases)
+- [https://github.com/SvenShi/oxidns/releases](https://github.com/SvenShi/oxidns/releases)
 
 ### Supported Archive Targets
 
 Non-Windows targets use `.tar.gz`:
 
-- `forgedns-x86_64-unknown-linux-gnu.tar.gz`
-- `forgedns-x86_64-unknown-linux-musl.tar.gz`
-- `forgedns-aarch64-unknown-linux-gnu.tar.gz`
-- `forgedns-aarch64-unknown-linux-musl.tar.gz`
-- `forgedns-i686-unknown-linux-musl.tar.gz`
-- `forgedns-arm-unknown-linux-musleabihf.tar.gz`
-- `forgedns-x86_64-apple-darwin.tar.gz`
-- `forgedns-aarch64-apple-darwin.tar.gz`
-- `forgedns-x86_64-unknown-freebsd.tar.gz`
+- `oxidns-x86_64-unknown-linux-gnu.tar.gz`
+- `oxidns-x86_64-unknown-linux-musl.tar.gz`
+- `oxidns-aarch64-unknown-linux-gnu.tar.gz`
+- `oxidns-aarch64-unknown-linux-musl.tar.gz`
+- `oxidns-i686-unknown-linux-musl.tar.gz`
+- `oxidns-arm-unknown-linux-musleabihf.tar.gz`
+- `oxidns-x86_64-apple-darwin.tar.gz`
+- `oxidns-aarch64-apple-darwin.tar.gz`
+- `oxidns-x86_64-unknown-freebsd.tar.gz`
 
 Windows targets use `.zip`:
 
-- `forgedns-x86_64-pc-windows-msvc.zip`
-- `forgedns-i686-pc-windows-msvc.zip`
-- `forgedns-aarch64-pc-windows-msvc.zip`
+- `oxidns-x86_64-pc-windows-msvc.zip`
+- `oxidns-i686-pc-windows-msvc.zip`
+- `oxidns-aarch64-pc-windows-msvc.zip`
 
 ### How To Choose The Right Release Asset
 
@@ -75,20 +75,20 @@ If you are not sure which asset to download, use this mapping:
 
 | System / Environment | Recommended release asset | Notes |
 | --- | --- | --- |
-| Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` | Safer default for broad compatibility |
-| Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` | Safer default for broad compatibility |
+| Linux x86_64 | `oxidns-x86_64-unknown-linux-musl.tar.gz` | Safer default for broad compatibility |
+| Linux ARM64 | `oxidns-aarch64-unknown-linux-musl.tar.gz` | Safer default for broad compatibility |
 | Debian / Ubuntu x86_64 service install | `*_amd64.deb` | Best fit for systemd-based deployment |
 | Debian / Ubuntu ARM64 service install | `*_arm64.deb` | Best fit for systemd-based deployment |
-| Alpine Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` | Prefer musl on Alpine |
-| Alpine Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` | Static-friendly build |
-| Confirmed glibc Linux requiring a dynamic build | `forgedns-x86_64-unknown-linux-gnu.tar.gz` / `forgedns-aarch64-unknown-linux-gnu.tar.gz` | Only choose this when the target environment is clearly compatible |
-| 32-bit ARM Linux | `forgedns-arm-unknown-linux-musleabihf.tar.gz` | Fits some Raspberry Pi and older ARM boards |
-| macOS Intel | `forgedns-x86_64-apple-darwin.tar.gz` | Intel Macs |
-| macOS Apple Silicon | `forgedns-aarch64-apple-darwin.tar.gz` | M1 / M2 / M3 / M4 Macs |
-| Windows x64 | `forgedns-x86_64-pc-windows-msvc.zip` | Most PCs |
-| Windows 32-bit | `forgedns-i686-pc-windows-msvc.zip` | Only for 32-bit Windows |
-| Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` | ARM-based Windows devices |
-| FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` | FreeBSD hosts |
+| Alpine Linux x86_64 | `oxidns-x86_64-unknown-linux-musl.tar.gz` | Prefer musl on Alpine |
+| Alpine Linux ARM64 | `oxidns-aarch64-unknown-linux-musl.tar.gz` | Static-friendly build |
+| Confirmed glibc Linux requiring a dynamic build | `oxidns-x86_64-unknown-linux-gnu.tar.gz` / `oxidns-aarch64-unknown-linux-gnu.tar.gz` | Only choose this when the target environment is clearly compatible |
+| 32-bit ARM Linux | `oxidns-arm-unknown-linux-musleabihf.tar.gz` | Fits some Raspberry Pi and older ARM boards |
+| macOS Intel | `oxidns-x86_64-apple-darwin.tar.gz` | Intel Macs |
+| macOS Apple Silicon | `oxidns-aarch64-apple-darwin.tar.gz` | M1 / M2 / M3 / M4 Macs |
+| Windows x64 | `oxidns-x86_64-pc-windows-msvc.zip` | Most PCs |
+| Windows 32-bit | `oxidns-i686-pc-windows-msvc.zip` | Only for 32-bit Windows |
+| Windows ARM64 | `oxidns-aarch64-pc-windows-msvc.zip` | ARM-based Windows devices |
+| FreeBSD x86_64 | `oxidns-x86_64-unknown-freebsd.tar.gz` | FreeBSD hosts |
 
 If you still need to verify your platform, check it first:
 
@@ -118,15 +118,15 @@ Map `X64`, `Arm64`, and `X86` to the `x86_64`, `aarch64`, and `i686` Windows ass
 Replace `TAG` below with the actual release tag, for example `v0.1.0`. The Linux example below uses `x86_64-unknown-linux-musl` as the default choice:
 
 ```bash
-curl -L -o forgedns.tar.gz \
-  https://github.com/SvenShi/forgedns/releases/download/TAG/forgedns-x86_64-unknown-linux-musl.tar.gz
+curl -L -o oxidns.tar.gz \
+  https://github.com/SvenShi/oxidns/releases/download/TAG/oxidns-x86_64-unknown-linux-musl.tar.gz
 
-mkdir -p forgedns
-tar -xzf forgedns.tar.gz -C forgedns
-cd forgedns
+mkdir -p oxidns
+tar -xzf oxidns.tar.gz -C oxidns
+cd oxidns
 
-chmod +x forgedns
-./forgedns start -c config.yaml
+chmod +x oxidns
+./oxidns start -c config.yaml
 ```
 
 If you cannot guarantee the target machine's glibc compatibility, or you are running Alpine Linux, prefer a `*-linux-musl` archive instead of defaulting to `gnu`.
@@ -136,7 +136,7 @@ If you cannot guarantee the target machine's glibc compatibility, or you are run
 Download the matching `.zip`, extract it, then run:
 
 ```powershell
-.\forgedns.exe start -c .\config.yaml
+.\oxidns.exe start -c .\config.yaml
 ```
 
 ## 3. Install From Debian Packages
@@ -149,32 +149,32 @@ The release workflow currently builds `.deb` packages for:
 Install on Debian / Ubuntu:
 
 ```bash
-sudo dpkg -i forgedns_*_amd64.deb
+sudo dpkg -i oxidns_*_amd64.deb
 ```
 
 Or on ARM64 Debian / Ubuntu:
 
 ```bash
-sudo dpkg -i forgedns_*_arm64.deb
+sudo dpkg -i oxidns_*_arm64.deb
 ```
 
 Default installed paths:
 
-- Binary: `/usr/bin/forgedns`
-- Config: `/etc/forgedns/config.yaml`
+- Binary: `/usr/bin/oxidns`
+- Config: `/etc/oxidns/config.yaml`
 
 The project also ships systemd packaging metadata, so Debian-family systems are a good fit for service-based deployment.
 
 Verify service status:
 
 ```bash
-sudo systemctl status forgedns
+sudo systemctl status oxidns
 ```
 
 If the service is not running yet:
 
 ```bash
-sudo systemctl enable --now forgedns
+sudo systemctl enable --now oxidns
 ```
 
 ## 4. Run With Docker
@@ -182,9 +182,9 @@ sudo systemctl enable --now forgedns
 The repository publishes a GHCR image at:
 
 #### GitHub
-- `ghcr.io/svenshi/forgedns`
+- `ghcr.io/svenshi/oxidns`
 #### Docker Hub
-- `svenshi/forgedns`
+- `svenshi/oxidns`
 
 The Docker workflow builds:
 
@@ -194,14 +194,14 @@ The Docker workflow builds:
 Pull and run:
 
 ```bash
-docker pull svenshi/forgedns:latest
+docker pull svenshi/oxidns:latest
 
 docker run --rm \
   -p 53:53/udp \
   -p 53:53/tcp \
   -p 9088:9088/tcp \
-  -v "$(pwd)/config.yaml:/etc/forgedns/config.yaml:ro" \
-  svenshi/forgedns:latest
+  -v "$(pwd)/config.yaml:/etc/oxidns/config.yaml:ro" \
+  svenshi/oxidns:latest
 ```
 
 If the default-branch image is published, you can also use the `latest` tag.
@@ -209,7 +209,7 @@ If the default-branch image is published, you can also use the `latest` tag.
 The image entrypoint effectively runs:
 
 ```bash
-forgedns start -c /etc/forgedns/config.yaml
+oxidns start -c /etc/oxidns/config.yaml
 ```
 
 The container exposes:
@@ -224,16 +224,16 @@ If you prefer Compose for port mappings and config management, use this `docker-
 
 ```yaml
 services:
-  forgedns:
-    image: svenshi/forgedns:latest
-    container_name: forgedns
+  oxidns:
+    image: svenshi/oxidns:latest
+    container_name: oxidns
     restart: unless-stopped
     ports:
       - "53:53/udp"
       - "53:53/tcp"
       - "9088:9088/tcp"
     volumes:
-      - ./config.yaml:/etc/forgedns/config.yaml:ro
+      - ./config.yaml:/etc/oxidns/config.yaml:ro
 ```
 
 Start it with:
@@ -245,7 +245,7 @@ docker compose up -d
 Follow logs with:
 
 ```bash
-docker compose logs -f forgedns
+docker compose logs -f oxidns
 ```
 
 ## 5. Which One Should You Use?

@@ -4,7 +4,7 @@
 //! Operating-system service management commands.
 //!
 //! This module wraps the `service-manager` crate to install, start, stop, and
-//! uninstall ForgeDNS as a system service. It keeps platform-specific service
+//! uninstall OxiDNS as a system service. It keeps platform-specific service
 //! manager details outside the normal foreground application runner.
 
 use std::ffi::OsString;
@@ -18,7 +18,7 @@ use service_manager::{
 use crate::app::cli::{ServiceCommand, ServiceInstallOptions, ServiceOptions};
 use crate::core::error::{DnsError, Result};
 
-const SERVICE_LABEL: &str = "forgedns";
+const SERVICE_LABEL: &str = "oxidns";
 
 pub fn run(options: ServiceOptions) -> Result<()> {
     match options.command {

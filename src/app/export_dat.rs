@@ -579,7 +579,7 @@ mod tests {
         run(ExportDatOptions {
             file: test_rule_path("geosite.dat"),
             kind: DatKind::Geosite,
-            format: ExportFormat::Forgedns,
+            format: ExportFormat::Oxidns,
             selectors: vec!["cn".to_string(), "mastercard@cn".to_string()],
             out_dir: temp_dir.path().to_path_buf(),
             merged_file: Some("merged.txt".to_string()),
@@ -605,7 +605,7 @@ mod tests {
         run(ExportDatOptions {
             file: test_rule_path("geoip.dat"),
             kind: DatKind::Geoip,
-            format: ExportFormat::Forgedns,
+            format: ExportFormat::Oxidns,
             selectors: vec!["cn".to_string()],
             out_dir: temp_dir.path().to_path_buf(),
             merged_file: None,
@@ -626,7 +626,7 @@ mod tests {
         run(ExportDatOptions {
             file: test_rule_path("geosite.dat"),
             kind: DatKind::Geosite,
-            format: ExportFormat::Forgedns,
+            format: ExportFormat::Oxidns,
             selectors: Vec::new(),
             out_dir: temp_dir.path().to_path_buf(),
             merged_file: None,
@@ -646,7 +646,7 @@ mod tests {
         run(ExportDatOptions {
             file: test_rule_path("geoip.dat"),
             kind: DatKind::Geoip,
-            format: ExportFormat::Forgedns,
+            format: ExportFormat::Oxidns,
             selectors: Vec::new(),
             out_dir: temp_dir.path().to_path_buf(),
             merged_file: None,
@@ -670,7 +670,7 @@ mod tests {
         let err = run(ExportDatOptions {
             file: test_rule_path("geosite.dat"),
             kind: DatKind::Geosite,
-            format: ExportFormat::Forgedns,
+            format: ExportFormat::Oxidns,
             selectors: vec!["cn".to_string()],
             out_dir: temp_dir.path().to_path_buf(),
             merged_file: None,

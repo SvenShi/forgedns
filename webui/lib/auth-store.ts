@@ -113,7 +113,7 @@ export const useAuthStore = create<AuthState>()(
       },
     }),
     {
-      name: "forgedns-auth",
+      name: "oxidns-auth",
       partialize: (state) => ({
         serverConfig: state.serverConfig,
       }),

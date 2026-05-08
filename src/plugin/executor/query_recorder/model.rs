@@ -4,7 +4,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use forgedns_proto::Message;
+use oxidns_proto::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

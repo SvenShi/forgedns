@@ -40,7 +40,7 @@ fn render_startup_banner() -> String {
         .map(|line| line.chars().count())
         .max()
         .unwrap_or(0);
-    let version_line = format!("ForgeDNS v{VERSION}");
+    let version_line = format!("OxiDNS v{VERSION}");
     let inner_width = [
         STARTUP_BANNER_MIN_INNER_WIDTH,
         art_width + STARTUP_BANNER_SIDE_PADDING * 2,
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn startup_banner_includes_branding_version_and_repository() {
         let banner = render_startup_banner();
-        assert!(banner.contains("ForgeDNS"));
+        assert!(banner.contains("OxiDNS"));
         assert!(banner.contains(VERSION));
         assert!(banner.contains(STARTUP_BANNER_REPOSITORY));
         assert!(!banner.contains("\x1b["));

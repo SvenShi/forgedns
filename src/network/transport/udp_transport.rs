@@ -12,7 +12,7 @@ use crate::proto::Message;
 /// UDP transport wrapper for DNS messages.
 ///
 /// Designed to be consistent with other transport modules: provides
-/// `write_message` and `read_message` methods operating on ForgeDNS messages.
+/// `write_message` and `read_message` methods operating on OxiDNS messages.
 ///
 /// Supports both connected-client style I/O (`read_message`/`write_message`)
 /// and unconnected-server style I/O (`read_message_from`/`write_message_to`).

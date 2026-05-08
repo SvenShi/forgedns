@@ -19,7 +19,7 @@ export const providerPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "files",
         "域名规则文件",
-        "/etc/forgedns/domains.txt",
+        "/etc/oxidns/domains.txt",
         false,
         "指定外部规则文件路径列表。",
       ),
@@ -52,7 +52,7 @@ export const providerPluginDefinitions: PluginKindDefinition[] = [
         label: "geosite.dat",
         type: "text",
         required: true,
-        placeholder: "/etc/forgedns/geosite.dat",
+        placeholder: "/etc/oxidns/geosite.dat",
       },
       stringArrayField(
         "selectors",
@@ -80,7 +80,7 @@ export const providerPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "files",
         "规则文件",
-        "/etc/forgedns/adguard.txt",
+        "/etc/oxidns/adguard.txt",
         false,
         "从外部规则文件加载。",
       ),
@@ -103,7 +103,7 @@ export const providerPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "files",
         "IP 规则文件",
-        "/etc/forgedns/ips.txt",
+        "/etc/oxidns/ips.txt",
         false,
         "指定外部 IP 规则文件路径列表。",
       ),
@@ -136,7 +136,7 @@ export const providerPluginDefinitions: PluginKindDefinition[] = [
         label: "geoip.dat",
         type: "text",
         required: true,
-        placeholder: "/etc/forgedns/geoip.dat",
+        placeholder: "/etc/oxidns/geoip.dat",
       },
       stringArrayField(
         "selectors",

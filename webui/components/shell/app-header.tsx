@@ -44,7 +44,7 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
             <BreadcrumbList className="gap-2 text-[13px]">
               <BreadcrumbItem>
                 <BreadcrumbLink href="/" className="text-foreground/70">
-                  ForgeDNS
+                  OxiDNS
                 </BreadcrumbLink>
               </BreadcrumbItem>
               {breadcrumbs.map((crumb, i) => (

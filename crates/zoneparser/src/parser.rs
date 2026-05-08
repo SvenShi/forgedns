@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fmt, fs};
 
-use forgedns_proto::{
+use oxidns_proto::{
     A, AAAA, AFSDB, ANAME, AVC, CAA, CNAME, DNAME, DNSClass, HINFO, MB, MD, MF, MG, MINFO, MR, MX,
     NAPTR, NS, NSAPPTR, Name, PTR, RData, RESINFO, RP, RT, Record, RecordType, SOA, SPF, SRV, TXT,
     decode_rdata_from_wire,

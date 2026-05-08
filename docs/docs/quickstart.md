@@ -3,7 +3,7 @@ title: 快速开始
 sidebar_position: 2
 ---
 
-本页介绍 ForgeDNS 当前支持的几种安装方式，并给出最短可运行路径。
+本页介绍 OxiDNS 当前支持的几种安装方式，并给出最短可运行路径。
 
 如果你只是想先跑起来，优先使用以下方式：
 
@@ -24,11 +24,11 @@ sidebar_position: 2
 构建并运行：
 
 ```bash
-git clone https://github.com/SvenShi/forgedns.git
-cd forgedns
+git clone https://github.com/SvenShi/oxidns.git
+cd oxidns
 
 cargo build --release
-./target/release/forgedns start -c config.yaml
+./target/release/oxidns start -c config.yaml
 ```
 
 调试运行：
@@ -39,35 +39,35 @@ cargo run -- -c config.yaml -l debug
 
 ## 2. 使用 GitHub Releases 二进制包
 
-ForgeDNS 的 release 工作流会为多个平台生成独立二进制压缩包。压缩包内默认包含：
+OxiDNS 的 release 工作流会为多个平台生成独立二进制压缩包。压缩包内默认包含：
 
-- `forgedns` 或 `forgedns.exe`
+- `oxidns` 或 `oxidns.exe`
 - `config.yaml`
 - `LICENSE`
 
 发布页地址：
 
-- [https://github.com/SvenShi/forgedns/releases](https://github.com/SvenShi/forgedns/releases)
+- [https://github.com/SvenShi/oxidns/releases](https://github.com/SvenShi/oxidns/releases)
 
 ### 支持的压缩包目标
 
 非 Windows 平台使用 `.tar.gz`：
 
-- `forgedns-x86_64-unknown-linux-gnu.tar.gz`
-- `forgedns-x86_64-unknown-linux-musl.tar.gz`
-- `forgedns-aarch64-unknown-linux-gnu.tar.gz`
-- `forgedns-aarch64-unknown-linux-musl.tar.gz`
-- `forgedns-i686-unknown-linux-musl.tar.gz`
-- `forgedns-arm-unknown-linux-musleabihf.tar.gz`
-- `forgedns-x86_64-apple-darwin.tar.gz`
-- `forgedns-aarch64-apple-darwin.tar.gz`
-- `forgedns-x86_64-unknown-freebsd.tar.gz`
+- `oxidns-x86_64-unknown-linux-gnu.tar.gz`
+- `oxidns-x86_64-unknown-linux-musl.tar.gz`
+- `oxidns-aarch64-unknown-linux-gnu.tar.gz`
+- `oxidns-aarch64-unknown-linux-musl.tar.gz`
+- `oxidns-i686-unknown-linux-musl.tar.gz`
+- `oxidns-arm-unknown-linux-musleabihf.tar.gz`
+- `oxidns-x86_64-apple-darwin.tar.gz`
+- `oxidns-aarch64-apple-darwin.tar.gz`
+- `oxidns-x86_64-unknown-freebsd.tar.gz`
 
 Windows 平台使用 `.zip`：
 
-- `forgedns-x86_64-pc-windows-msvc.zip`
-- `forgedns-i686-pc-windows-msvc.zip`
-- `forgedns-aarch64-pc-windows-msvc.zip`
+- `oxidns-x86_64-pc-windows-msvc.zip`
+- `oxidns-i686-pc-windows-msvc.zip`
+- `oxidns-aarch64-pc-windows-msvc.zip`
 
 ### 不同系统如何选择 release 文件
 
@@ -75,20 +75,20 @@ Windows 平台使用 `.zip`：
 
 | 系统 / 环境 | 推荐 release 文件 | 说明 |
 | --- | --- | --- |
-| Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` | 默认优先选这个，兼容性更稳 |
-| Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` | 默认优先选这个，兼容性更稳 |
+| Linux x86_64 | `oxidns-x86_64-unknown-linux-musl.tar.gz` | 默认优先选这个，兼容性更稳 |
+| Linux ARM64 | `oxidns-aarch64-unknown-linux-musl.tar.gz` | 默认优先选这个，兼容性更稳 |
 | Debian / Ubuntu x86_64 服务安装 | `*_amd64.deb` | 适合 systemd 服务部署 |
 | Debian / Ubuntu ARM64 服务安装 | `*_arm64.deb` | 适合 systemd 服务部署 |
-| Alpine Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` | Alpine 建议优先选 musl |
-| Alpine Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` | 静态链接更省心 |
-| 明确是 glibc Linux 且需要动态链接版本 | `forgedns-x86_64-unknown-linux-gnu.tar.gz` / `forgedns-aarch64-unknown-linux-gnu.tar.gz` | 仅在明确环境匹配时选择 |
-| 32 位 ARM Linux | `forgedns-arm-unknown-linux-musleabihf.tar.gz` | 适合部分树莓派和老 ARM 板子 |
-| macOS Intel | `forgedns-x86_64-apple-darwin.tar.gz` | Intel Mac |
-| macOS Apple Silicon | `forgedns-aarch64-apple-darwin.tar.gz` | M1 / M2 / M3 / M4 |
-| Windows x64 | `forgedns-x86_64-pc-windows-msvc.zip` | 常见 PC |
-| Windows 32-bit | `forgedns-i686-pc-windows-msvc.zip` | 仅在 32 位 Windows 上使用 |
-| Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` | ARM Windows 设备 |
-| FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` | FreeBSD 主机 |
+| Alpine Linux x86_64 | `oxidns-x86_64-unknown-linux-musl.tar.gz` | Alpine 建议优先选 musl |
+| Alpine Linux ARM64 | `oxidns-aarch64-unknown-linux-musl.tar.gz` | 静态链接更省心 |
+| 明确是 glibc Linux 且需要动态链接版本 | `oxidns-x86_64-unknown-linux-gnu.tar.gz` / `oxidns-aarch64-unknown-linux-gnu.tar.gz` | 仅在明确环境匹配时选择 |
+| 32 位 ARM Linux | `oxidns-arm-unknown-linux-musleabihf.tar.gz` | 适合部分树莓派和老 ARM 板子 |
+| macOS Intel | `oxidns-x86_64-apple-darwin.tar.gz` | Intel Mac |
+| macOS Apple Silicon | `oxidns-aarch64-apple-darwin.tar.gz` | M1 / M2 / M3 / M4 |
+| Windows x64 | `oxidns-x86_64-pc-windows-msvc.zip` | 常见 PC |
+| Windows 32-bit | `oxidns-i686-pc-windows-msvc.zip` | 仅在 32 位 Windows 上使用 |
+| Windows ARM64 | `oxidns-aarch64-pc-windows-msvc.zip` | ARM Windows 设备 |
+| FreeBSD x86_64 | `oxidns-x86_64-unknown-freebsd.tar.gz` | FreeBSD 主机 |
 
 如果还不确定，可先查看本机信息：
 
@@ -118,15 +118,15 @@ Windows 可在 PowerShell 中执行：
 将下面的 `TAG` 替换为实际 release 标签，例如 `v0.1.0`。Linux 默认以 `x86_64-unknown-linux-musl` 为例：
 
 ```bash
-curl -L -o forgedns.tar.gz \
-  https://github.com/SvenShi/forgedns/releases/download/TAG/forgedns-x86_64-unknown-linux-musl.tar.gz
+curl -L -o oxidns.tar.gz \
+  https://github.com/SvenShi/oxidns/releases/download/TAG/oxidns-x86_64-unknown-linux-musl.tar.gz
 
-mkdir -p forgedns
-tar -xzf forgedns.tar.gz -C forgedns
-cd forgedns
+mkdir -p oxidns
+tar -xzf oxidns.tar.gz -C oxidns
+cd oxidns
 
-chmod +x forgedns
-./forgedns start -c config.yaml
+chmod +x oxidns
+./oxidns start -c config.yaml
 ```
 
 如果你不能确认目标机的 glibc 版本，或运行在 Alpine Linux 上，应优先选择 `*-linux-musl` 版本，不要默认使用 `gnu` 版本。
@@ -136,7 +136,7 @@ chmod +x forgedns
 下载对应 `zip` 后解压，在 PowerShell 中运行：
 
 ```powershell
-.\forgedns.exe start -c .\config.yaml
+.\oxidns.exe start -c .\config.yaml
 ```
 
 ## 3. 使用 Debian 包安装
@@ -149,32 +149,32 @@ release 工作流当前会额外生成以下 Debian 包：
 安装：
 
 ```bash
-sudo dpkg -i forgedns_*_amd64.deb
+sudo dpkg -i oxidns_*_amd64.deb
 ```
 
 或在 ARM64 Debian / Ubuntu 上：
 
 ```bash
-sudo dpkg -i forgedns_*_arm64.deb
+sudo dpkg -i oxidns_*_arm64.deb
 ```
 
 安装后默认文件位置：
 
-- 二进制：`/usr/bin/forgedns`
-- 配置：`/etc/forgedns/config.yaml`
+- 二进制：`/usr/bin/oxidns`
+- 配置：`/etc/oxidns/config.yaml`
 
 项目也包含 systemd 打包配置，因此在 Debian 系发行版上适合直接作为系统服务部署。
 
 验证服务状态：
 
 ```bash
-sudo systemctl status forgedns
+sudo systemctl status oxidns
 ```
 
 如果服务尚未启动，可执行：
 
 ```bash
-sudo systemctl enable --now forgedns
+sudo systemctl enable --now oxidns
 ```
 
 ## 4. 使用 Docker 镜像
@@ -182,9 +182,9 @@ sudo systemctl enable --now forgedns
 仓库提供 GHCR 镜像发布流程，镜像仓库地址为：
 
 #### GitHub
-- `ghcr.io/svenshi/forgedns`
+- `ghcr.io/svenshi/oxidns`
 #### Docker Hub
-- `svenshi/forgedns`
+- `svenshi/oxidns`
 
 当前 Docker 发布流程构建以下平台：
 
@@ -194,14 +194,14 @@ sudo systemctl enable --now forgedns
 拉取并运行：
 
 ```bash
-docker pull svenshi/forgedns:latest
+docker pull svenshi/oxidns:latest
 
 docker run --rm \
   -p 53:53/udp \
   -p 53:53/tcp \
   -p 9088:9088/tcp \
-  -v "$(pwd)/config.yaml:/etc/forgedns/config.yaml:ro" \
-  svenshi/forgedns:latest
+  -v "$(pwd)/config.yaml:/etc/oxidns/config.yaml:ro" \
+  svenshi/oxidns:latest
 ```
 
 如果默认分支镜像已发布，也可以使用 `latest` 标签。
@@ -209,7 +209,7 @@ docker run --rm \
 镜像默认启动命令等价于：
 
 ```bash
-forgedns start -c /etc/forgedns/config.yaml
+oxidns start -c /etc/oxidns/config.yaml
 ```
 
 镜像内默认暴露：
@@ -224,16 +224,16 @@ forgedns start -c /etc/forgedns/config.yaml
 
 ```yaml
 services:
-  forgedns:
-    image: svenshi/forgedns:latest
-    container_name: forgedns
+  oxidns:
+    image: svenshi/oxidns:latest
+    container_name: oxidns
     restart: unless-stopped
     ports:
       - "53:53/udp"
       - "53:53/tcp"
       - "9088:9088/tcp"
     volumes:
-      - ./config.yaml:/etc/forgedns/config.yaml:ro
+      - ./config.yaml:/etc/oxidns/config.yaml:ro
 ```
 
 启动：
@@ -245,7 +245,7 @@ docker compose up -d
 查看日志：
 
 ```bash
-docker compose logs -f forgedns
+docker compose logs -f oxidns
 ```
 
 ## 5. 选择建议

@@ -100,7 +100,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
   <ReleaseCard version="v0.4.0" badge="Minor Release" date="2026-04-19">
       **Highlights**
 
-      - Added the `reload_provider` executor plus the provider-scoped management API `POST /plugins/<provider_tag>/reload`. After downloading or overwriting rule files, ForgeDNS can now refresh only the affected providers instead of forcing a full application reload.
+      - Added the `reload_provider` executor plus the provider-scoped management API `POST /plugins/<provider_tag>/reload`. After downloading or overwriting rule files, OxiDNS can now refresh only the affected providers instead of forcing a full application reload.
       - Reworked provider composition so `domain_set` and `ip_set` compile only their own local rules and keep querying referenced providers from `sets` at runtime. When a downstream provider reloads, aggregated providers see the new result immediately without reloading themselves, while also reducing rule duplication and memory usage.
       - Runtime initialization now skips providers that have no live dependents, so unused rule sets no longer spend startup time on file reads, dat parsing, or memory allocation.
 
@@ -126,7 +126,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
   <ReleaseCard version="v0.3.2" badge="Patch Release" date="2026-04-16">
       **Fixes**
 
-      - Adjusted UDP, TCP, DoT, and DoQ upstream pool initialization so ForgeDNS no longer pre-creates idle connections during startup, which reduces false EOF / reset warnings when upstreams close idle sockets on their own.
+      - Adjusted UDP, TCP, DoT, and DoQ upstream pool initialization so OxiDNS no longer pre-creates idle connections during startup, which reduces false EOF / reset warnings when upstreams close idle sockets on their own.
       - Expected TCP upstream lifecycle events such as EOF, connection recycling, and invalid-connection eviction are now logged at `debug` instead of `warn`, so normal connection churn no longer looks like an operational fault.
       - Downgraded DoH server-side TLS, HTTP/2, and HTTP/3 handshake aborts plus client-closed response-send failures to `debug`, which removes warning noise from browsers or proxies that disconnect early.
 
@@ -150,7 +150,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 
       **Packaging And Ecosystem**
 
-      - Added the metadata, README files, repository links, and versioned dependency declarations needed to publish `forgedns-proto`, `forgedns-zoneparser`, and `forgedns-ripset` to crates.io cleanly.
+      - Added the metadata, README files, repository links, and versioned dependency declarations needed to publish `oxidns-proto`, `oxidns-zoneparser`, and `oxidns-ripset` to crates.io cleanly.
       - Updated the main package dependency declarations to reference those internal crates with explicit versions, which keeps release packaging and downstream reuse aligned.
 
       **Docs**
@@ -168,14 +168,14 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
       **Highlights**
 
       - Added the `http_request` executor for synchronous or asynchronous `http/https` callbacks in either the `before` or `after` phase, with template placeholders, `json/form/body` payloads, SOCKS5, redirect handling, and configurable error modes.
-      - Added the `check` and `export-dat` CLI commands. `check --graph` now performs static validation and prints the plugin dependency graph, while `export-dat` can export selected rules from `geosite.dat` / `geoip.dat` into ForgeDNS or original text formats.
+      - Added the `check` and `export-dat` CLI commands. `check --graph` now performs static validation and prints the plugin dependency graph, while `export-dat` can export selected rules from `geosite.dat` / `geoip.dat` into OxiDNS or original text formats.
       - Aligned `hosts` behavior with mosdns semantics, and upgraded `arbitrary` with a fuller zone parser that supports `$ORIGIN`, `$TTL`, `$INCLUDE`, `$GENERATE`, RFC3597, and broader record syntax.
       - Expanded and clarified `short_circuit` coverage and behavior notes across multiple executors, so local responses, cache hits, or winning branches can stop the remaining executor chain explicitly; `hosts` now also documents its short-circuit behavior for empty local replies.
       - Switched the Linux `ipset` / `nftset` executors to an embedded Rust netlink backend, removing the runtime dependency on the `ipset` / `nft` shell commands.
 
       **Core And Performance**
 
-      - Split protocol, zone parsing, and Linux integration internals into three workspace crates: `forgedns-proto`, `zoneparser`, and `ripset`.
+      - Split protocol, zone parsing, and Linux integration internals into three workspace crates: `oxidns-proto`, `zoneparser`, and `ripset`.
       - Added a reusable wire-buffer pool on the network hot path and tuned UDP/TCP/upstream socket parameters to reduce short-lived allocations and connection-side overhead.
       - Added a low-concurrency latency benchmark script, published the `v0.3.0` benchmark snapshot, and expanded the benchmark documentation.
       - Fixed Windows build compatibility issues plus several benchmark and CI configuration problems.
@@ -263,7 +263,7 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
   <ReleaseCard version="v0.1.0" badge="First Public Release" date="2026-03-28">
       **Highlights**
 
-      - Established the ForgeDNS plugin architecture around `server -> DnsContext -> matcher / executor / provider -> upstream or side effects`.
+      - Established the OxiDNS plugin architecture around `server -> DnsContext -> matcher / executor / provider -> upstream or side effects`.
       - Completed server and upstream support for UDP, TCP, DoT, DoQ, and DoH.
       - Delivered MosDNS-style `sequence` orchestration, `jump/goto/return` control flow, and `$tag` references.
       - Added core executors such as `cache`, `forward`, `fallback`, `hosts`, `redirect`, `ecs_handler`, and `dual_selector`.

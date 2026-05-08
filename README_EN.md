@@ -1,4 +1,4 @@
-![ForgeDNS Banner](.github/img/logo-banner.png)
+![OxiDNS Banner](.github/img/logo-banner.png)
 
 [中文](README.md) | [English](README_EN.md)
 
@@ -6,7 +6,7 @@
 
 **⚡ A high-performance, programmable DNS server for modern networks.**
 
-ForgeDNS is written in Rust and built around the request path `server -> DnsContext -> matcher / executor / provider -> upstream`. The goal is not to accumulate features, but to keep DNS fast and structurally clean while handling real-world policy needs such as cache, filtering, fallback, rewriting, local answers, and system integrations.
+OxiDNS is written in Rust and built around the request path `server -> DnsContext -> matcher / executor / provider -> upstream`. The goal is not to accumulate features, but to keep DNS fast and structurally clean while handling real-world policy needs such as cache, filtering, fallback, rewriting, local answers, and system integrations.
 
 The project is under active development.
 
@@ -36,18 +36,18 @@ If you want to download a GitHub release directly, use this platform guide:
 
 | System / Environment | Recommended release asset |
 | --- | --- |
-| Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` |
-| Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` |
+| Linux x86_64 | `oxidns-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `oxidns-aarch64-unknown-linux-musl.tar.gz` |
 | Debian / Ubuntu x86_64 service install | `*_amd64.deb` |
 | Debian / Ubuntu ARM64 service install | `*_arm64.deb` |
-| Alpine Linux x86_64 | `forgedns-x86_64-unknown-linux-musl.tar.gz` |
-| Alpine Linux ARM64 | `forgedns-aarch64-unknown-linux-musl.tar.gz` |
-| 32-bit ARM Linux, including some Raspberry Pi installs | `forgedns-arm-unknown-linux-musleabihf.tar.gz` |
-| macOS Intel | `forgedns-x86_64-apple-darwin.tar.gz` |
-| macOS Apple Silicon | `forgedns-aarch64-apple-darwin.tar.gz` |
-| Windows x64 | `forgedns-x86_64-pc-windows-msvc.zip` |
-| Windows ARM64 | `forgedns-aarch64-pc-windows-msvc.zip` |
-| FreeBSD x86_64 | `forgedns-x86_64-unknown-freebsd.tar.gz` |
+| Alpine Linux x86_64 | `oxidns-x86_64-unknown-linux-musl.tar.gz` |
+| Alpine Linux ARM64 | `oxidns-aarch64-unknown-linux-musl.tar.gz` |
+| 32-bit ARM Linux, including some Raspberry Pi installs | `oxidns-arm-unknown-linux-musleabihf.tar.gz` |
+| macOS Intel | `oxidns-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `oxidns-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `oxidns-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `oxidns-aarch64-pc-windows-msvc.zip` |
+| FreeBSD x86_64 | `oxidns-x86_64-unknown-freebsd.tar.gz` |
 
 On Linux, prefer `musl` by default if you are unsure about compatibility instead of assuming `gnu` will work.
 

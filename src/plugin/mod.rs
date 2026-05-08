@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2025 Sven Shi
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Plugin system and registry for ForgeDNS.
+//! Plugin system and registry for OxiDNS.
 //!
-//! ForgeDNS is assembled around plugins instead of hard-coded protocol or
+//! OxiDNS is assembled around plugins instead of hard-coded protocol or
 //! policy branches. This module provides the common lifecycle and registration
 //! machinery for four plugin categories:
 //!

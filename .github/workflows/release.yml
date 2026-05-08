@@ -23,7 +23,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cargo
             make_deb: true
@@ -31,7 +31,7 @@ jobs:
 
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
@@ -39,7 +39,7 @@ jobs:
 
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cross
             make_deb: true
@@ -47,7 +47,7 @@ jobs:
 
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
@@ -55,7 +55,7 @@ jobs:
 
           - os: ubuntu-latest
             target: i686-unknown-linux-musl
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
@@ -63,7 +63,7 @@ jobs:
 
           - os: ubuntu-latest
             target: arm-unknown-linux-musleabihf
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
@@ -71,7 +71,7 @@ jobs:
 
           - os: macos-latest
             target: x86_64-apple-darwin
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cargo
             make_deb: false
@@ -79,7 +79,7 @@ jobs:
 
           - os: macos-latest
             target: aarch64-apple-darwin
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cargo
             make_deb: false
@@ -87,7 +87,7 @@ jobs:
 
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
-            exe: forgedns
+            exe: oxidns
             archive_ext: tar.gz
             build_tool: cross
             make_deb: false
@@ -95,7 +95,7 @@ jobs:
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            exe: forgedns.exe
+            exe: oxidns.exe
             archive_ext: zip
             build_tool: cargo
             make_deb: false
@@ -103,7 +103,7 @@ jobs:
 
           - os: windows-latest
             target: i686-pc-windows-msvc
-            exe: forgedns.exe
+            exe: oxidns.exe
             archive_ext: zip
             build_tool: cargo
             make_deb: false
@@ -111,7 +111,7 @@ jobs:
 
           - os: windows-latest
             target: aarch64-pc-windows-msvc
-            exe: forgedns.exe
+            exe: oxidns.exe
             archive_ext: zip
             build_tool: cargo
             make_deb: false
@@ -174,7 +174,7 @@ jobs:
         if: matrix.make_deb
         uses: actions/upload-artifact@v7
         with:
-          name: forgedns-${{ matrix.target }}.deb
+          name: oxidns-${{ matrix.target }}.deb
           path: target/debian/*.deb
           compression-level: 0
           if-no-files-found: error
@@ -210,7 +210,7 @@ jobs:
 
           ls -lah "$DIR"
           cp config.yaml LICENSE "$DIR"/
-          tar czf "$DIR/forgedns-${TARGET}.tar.gz" -C "$DIR" "$EXE" config.yaml LICENSE
+          tar czf "$DIR/oxidns-${TARGET}.tar.gz" -C "$DIR" "$EXE" config.yaml LICENSE
 
       - name: Package release (Windows)
         if: matrix.os == 'windows-latest'
@@ -228,14 +228,14 @@ jobs:
 
           Compress-Archive `
             -Path "$DIR/$EXE", "$DIR/config.yaml", "$DIR/LICENSE" `
-            -DestinationPath "$DIR/forgedns-$TARGET.zip" `
+            -DestinationPath "$DIR/oxidns-$TARGET.zip" `
             -Force
 
       - name: Upload archive artifact
         uses: actions/upload-artifact@v7
         with:
-          name: forgedns-${{ matrix.target }}.${{ matrix.archive_ext }}
-          path: target/${{ matrix.target }}/release/forgedns-${{ matrix.target }}.${{ matrix.archive_ext }}
+          name: oxidns-${{ matrix.target }}.${{ matrix.archive_ext }}
+          path: target/${{ matrix.target }}/release/oxidns-${{ matrix.target }}.${{ matrix.archive_ext }}
           compression-level: 0
           if-no-files-found: error
 
@@ -248,7 +248,7 @@ jobs:
       - name: Download all release artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: forgedns-*
+          pattern: oxidns-*
           merge-multiple: true
           path: artifacts
 
@@ -290,5 +290,5 @@ jobs:
     needs: publish
     uses: ./.github/workflows/docker.yml
     with:
-      FORGEDNS_VERSION: ${{ github.ref_name }}
+      OXIDNS_VERSION: ${{ github.ref_name }}
     secrets: inherit
