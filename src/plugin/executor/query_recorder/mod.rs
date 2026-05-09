@@ -35,7 +35,6 @@ use serde_yaml_ng::Value as YamlValue;
 
 use self::backend::RecorderBackend;
 use self::model::{PendingRecord, QueryRecorderConfig, ResolvedRecorderConfig};
-use crate::api::ApiRegister;
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
@@ -59,7 +58,6 @@ const ONE_DAY_MS: u64 = 24 * 60 * 60 * 1000;
 struct QueryRecorder {
     tag: String,
     config: ResolvedRecorderConfig,
-    api_register: Option<ApiRegister>,
     backend: Option<Arc<RecorderBackend>>,
     cleanup_task_id: Option<u64>,
 }
@@ -72,7 +70,7 @@ impl Plugin for QueryRecorder {
 
     async fn init(&mut self) -> Result<()> {
         let backend = RecorderBackend::run(self.tag.clone(), self.config.clone())?;
-        api::register(&backend, self.api_register.as_ref())?;
+        api::register(&backend)?;
 
         let recorder_backend = backend.clone();
         let retention_ms = self.config.retention_days.saturating_mul(ONE_DAY_MS) as i64;
@@ -157,11 +155,10 @@ impl Executor for QueryRecorder {
 }
 
 impl QueryRecorder {
-    fn new(tag: String, config: ResolvedRecorderConfig, api_register: Option<ApiRegister>) -> Self {
+    fn new(tag: String, config: ResolvedRecorderConfig) -> Self {
         Self {
             tag,
             config,
-            api_register,
             backend: None,
             cleanup_task_id: None,
         }
@@ -240,14 +237,13 @@ impl PluginFactory for QueryRecorderFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _registry: Arc<PluginRegistry>,
         _context: &PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let config = resolve_config(plugin_config.args.clone())?;
         Ok(UninitializedPlugin::Executor(Box::new(QueryRecorder::new(
             plugin_config.tag.clone(),
             config,
-            registry.api_register(),
         ))))
     }
 }

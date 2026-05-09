@@ -19,10 +19,9 @@ use super::model::{
     RecordRow, StatsQuery,
 };
 use super::store::{load_plugin_stats, load_record_detail, load_stats_overview, query_records};
-use crate::api::{
-    ApiHandler, ApiRegister, json_error, json_ok, simple_response, streaming_response,
-};
+use crate::api::{ApiHandler, json_error, json_ok, simple_response, streaming_response};
 use crate::core::error::Result;
+use crate::register_plugin_api;
 
 const DEFAULT_LIST_LIMIT: usize = 100;
 const MAX_LIST_LIMIT: usize = 500;
@@ -436,54 +435,26 @@ fn sse_record_frame(record: &RecordDetail) -> Bytes {
     }
 }
 
-pub(super) fn register(
-    backend: &Arc<RecorderBackend>,
-    api_register: Option<&ApiRegister>,
-) -> Result<()> {
-    let Some(api_register) = api_register else {
-        return Ok(());
-    };
-
-    api_register.register_plugin_get(
+pub(super) fn register(backend: &Arc<RecorderBackend>) -> Result<()> {
+    register_plugin_api!(
         &backend.tag,
-        "/records",
-        Arc::new(RecordsListHandler {
+        |plugin_api|
+        GET "/records" => RecordsListHandler {
             backend: backend.clone(),
-        }),
-    )?;
-
-    let detail_prefix = format!("/plugins/{}/records/", backend.tag);
-    api_register.register_plugin_get_prefix(
-        &backend.tag,
-        "/records/",
-        Arc::new(RecordDetailHandler {
+        },
+        GET_PREFIX "/records/" => RecordDetailHandler {
             backend: backend.clone(),
-            path_prefix: detail_prefix,
-        }),
-    )?;
-
-    api_register.register_plugin_get(
-        &backend.tag,
-        "/stats/overview",
-        Arc::new(StatsOverviewHandler {
+            path_prefix: plugin_api.path("/records/")?,
+        },
+        GET "/stats/overview" => StatsOverviewHandler {
             backend: backend.clone(),
-        }),
-    )?;
-
-    api_register.register_plugin_get(
-        &backend.tag,
-        "/stats/plugins",
-        Arc::new(StatsPluginsHandler {
+        },
+        GET "/stats/plugins" => StatsPluginsHandler {
             backend: backend.clone(),
-        }),
-    )?;
-
-    api_register.register_plugin_get(
-        &backend.tag,
-        "/stream",
-        Arc::new(StreamHandler {
+        },
+        GET "/stream" => StreamHandler {
             backend: backend.clone(),
-        }),
+        },
     )?;
 
     Ok(())

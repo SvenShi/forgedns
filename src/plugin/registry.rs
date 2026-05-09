@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use dashmap::DashMap;
 use tracing::{debug, error, info, warn};
 
-use crate::api::ApiRegister;
 use crate::api::control::{AppController, ControlRequestError};
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
@@ -30,8 +29,6 @@ use crate::plugin::{PluginCreateContext, PluginDependent, PluginFactory, PluginI
 /// - Proper dependency injection
 #[derive(Debug)]
 pub struct PluginRegistry {
-    api_register: Option<ApiRegister>,
-
     /// Optional application controller used by plugins that need to trigger
     /// process-level control actions such as a full configuration reload.
     controller: OnceLock<Arc<AppController>>,
@@ -57,19 +54,12 @@ impl PluginRegistry {
     /// Create a new empty plugin registry
     pub fn new() -> Self {
         Self {
-            api_register: None,
             controller: OnceLock::new(),
             factories: HashMap::new(),
             factory_kinds: HashMap::new(),
             plugins: DashMap::new(),
             init_order: Mutex::new(Vec::new()),
         }
-    }
-
-    pub fn with_api(api_register: Option<ApiRegister>) -> Self {
-        let mut registry = Self::new();
-        registry.api_register = api_register;
-        registry
     }
 
     /// Register a plugin factory
@@ -265,11 +255,7 @@ impl PluginRegistry {
                 )));
             }
             if plugin_type == PluginType::Provider {
-                register_reload_api_route(
-                    self.api_register.as_ref(),
-                    self.clone(),
-                    &plugin_config.tag,
-                )?;
+                register_reload_api_route(self.clone(), &plugin_config.tag)?;
             }
             if let Ok(mut order) = self.init_order.lock() {
                 order.push(plugin_config.tag.clone());
@@ -309,10 +295,6 @@ impl PluginRegistry {
     /// Get a plugin instance by tag
     pub fn get_plugin(&self, tag: &str) -> Option<Arc<PluginInfo>> {
         self.plugins.get(tag).map(|entry| entry.clone())
-    }
-
-    pub fn api_register(&self) -> Option<ApiRegister> {
-        self.api_register.clone()
     }
 
     /// Attach the application controller after the registry has been assembled.

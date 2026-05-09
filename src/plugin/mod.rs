@@ -37,7 +37,6 @@ use futures::future::BoxFuture;
 pub use registry::PluginRegistry;
 use serde_yaml_ng::Value;
 
-use crate::api::ApiRegister;
 use crate::config::types::{Config, PluginConfig};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::Executor;
@@ -105,11 +104,8 @@ impl UninitializedPlugin {
 /// # Returns
 /// * `Ok(Arc<PluginRegistry>)` - Initialized plugin registry
 /// * `Err(DnsError)` - Error message if initialization fails
-pub async fn init(
-    config: Config,
-    api_register: Option<ApiRegister>,
-) -> Result<Arc<PluginRegistry>> {
-    let mut registry = PluginRegistry::with_api(api_register);
+pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
+    let mut registry = PluginRegistry::new();
 
     // Register all built-in plugin factories from inventory
     register_factories_from_inventory(&mut registry)?;

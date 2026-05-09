@@ -7,65 +7,40 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
-use http::{Method, Request, StatusCode};
+use http::{Request, StatusCode};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::key::{CacheKey, EcsScopeDigest};
 use super::persistence::{dump_cache_to_bytes, load_cache_from_bytes};
 use super::{CacheItem, CacheMap};
-use crate::api::{ApiHandler, ApiRegister, json_error, json_ok, simple_response};
+use crate::api::{ApiHandler, json_error, json_ok, simple_response};
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
+use crate::register_plugin_api;
 
-pub(super) fn register(
-    tag: &str,
-    api_register: Option<&ApiRegister>,
-    cache_map: CacheMap,
-    ecs_in_key: bool,
-) -> Result<()> {
-    let Some(api_register) = api_register else {
-        return Ok(());
-    };
-
-    let entries_prefix = format!("/plugins/{}/entries/", tag);
-    api_register.register_plugin_get(
+pub(super) fn register(tag: &str, cache_map: CacheMap, ecs_in_key: bool) -> Result<()> {
+    register_plugin_api!(
         tag,
-        "/entries",
-        Arc::new(CacheEntriesListHandler {
+        |plugin_api|
+        GET "/entries" => CacheEntriesListHandler {
             cache_map: cache_map.clone(),
-        }),
-    )?;
-    api_register.register_prefix_route(
-        Method::DELETE,
-        &entries_prefix,
-        Arc::new(CacheEntryDeleteHandler {
+        },
+        DELETE_PREFIX "/entries/" => CacheEntryDeleteHandler {
             cache_map: cache_map.clone(),
-            path_prefix: entries_prefix.clone(),
-        }),
-    )?;
-    api_register.register_plugin_get(
-        tag,
-        "/flush",
-        Arc::new(CacheFlushHandler {
+            path_prefix: plugin_api.path("/entries/")?,
+        },
+        GET "/flush" => CacheFlushHandler {
             cache_map: cache_map.clone(),
-        }),
-    )?;
-    api_register.register_plugin_get(
-        tag,
-        "/dump",
-        Arc::new(CacheDumpHandler {
+        },
+        GET "/dump" => CacheDumpHandler {
             cache_map: cache_map.clone(),
             tag: tag.to_string(),
-        }),
-    )?;
-    api_register.register_plugin_post(
-        tag,
-        "/load_dump",
-        Arc::new(CacheLoadDumpHandler {
+        },
+        POST "/load_dump" => CacheLoadDumpHandler {
             cache_map,
             ecs_in_key,
-        }),
+        },
     )?;
     Ok(())
 }

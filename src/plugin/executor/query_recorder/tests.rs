@@ -136,7 +136,7 @@ async fn test_query_recorder_execute_enqueues_record() {
     ))
     .unwrap();
 
-    let mut plugin = QueryRecorder::new("rec".to_string(), config.clone(), None);
+    let mut plugin = QueryRecorder::new("rec".to_string(), config.clone());
     plugin.init().await.unwrap();
 
     let mut ctx = DnsContext::new(
@@ -188,7 +188,7 @@ async fn test_query_recorder_list_cursor_only_when_more_records_exist() {
     ))
     .unwrap();
 
-    let mut plugin = QueryRecorder::new("rec".to_string(), config.clone(), None);
+    let mut plugin = QueryRecorder::new("rec".to_string(), config.clone());
     plugin.init().await.unwrap();
 
     for request_id in 1..=3 {

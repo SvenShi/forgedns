@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::api::control::{self, AppController};
-use crate::api::{ApiHub, ApiRegister};
+use crate::api::{ApiHub, ApiRegister, clear_global_api_register, set_global_api_register};
 use crate::config::types::Config;
 use crate::core::error::Result;
 use crate::plugin::{self, PluginRegistry};
@@ -26,8 +26,14 @@ pub async fn assemble(
         control::register_builtin_routes(&ApiRegister::new(api_hub.clone()), controller.clone())?;
     }
 
-    let api_register = api_hub.as_ref().map(|hub| ApiRegister::new(hub.clone()));
-    let registry = plugin::init(config.clone(), api_register).await?;
+    set_global_api_register(api_hub.as_ref().map(|hub| ApiRegister::new(hub.clone())));
+    let registry = match plugin::init(config.clone()).await {
+        Ok(registry) => registry,
+        Err(err) => {
+            clear_global_api_register();
+            return Err(err);
+        }
+    };
     if let Some(controller) = controller {
         registry.set_controller(controller);
     }
@@ -36,6 +42,7 @@ pub async fn assemble(
         api_hub.mark_plugins_initialized(registry.plugin_count(), registry.server_plugin_count());
         if let Err(err) = api_hub.start().await {
             registry.destory().await;
+            clear_global_api_register();
             return Err(err);
         }
     }
@@ -44,6 +51,7 @@ pub async fn assemble(
 }
 
 pub async fn stop(assembly: &AppAssembly) {
+    clear_global_api_register();
     if let Some(api_hub) = &assembly.api_hub {
         api_hub.stop().await;
     }

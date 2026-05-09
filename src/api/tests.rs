@@ -1,15 +1,18 @@
 use std::fs;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use bytes::Bytes;
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use http::{HeaderValue, Uri};
+use http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
 use http_body_util::{BodyExt, Empty};
 use hyper::{Request as HyperRequest, Version};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioExecutor;
 use serde::Serialize;
 use tokio::time::{Duration, sleep};
 
@@ -20,6 +23,7 @@ use crate::config::types::{
     ApiAuthConfig, ApiConfig, ApiCorsConfig, ApiHttpConfig, ApiHttpDetailedConfig, ApiWebUiConfig,
 };
 use crate::core::app_clock::AppClock;
+use crate::{register_api_route, register_plugin_api};
 
 #[derive(Debug)]
 struct TestEchoHandler;
@@ -326,6 +330,84 @@ fn test_register_helper_methods_register_without_error() {
     register
         .register_plugin_post("cache_main", "/reload", Arc::new(TestEchoHandler))
         .expect("register plugin POST");
+    register
+        .register_plugin_delete("cache_main", "/entries/abc", Arc::new(TestEchoHandler))
+        .expect("register plugin DELETE");
+
+    let plugin_api = register.plugin("query_recorder").expect("plugin registrar");
+    assert_eq!(
+        plugin_api.path("/records/").expect("plugin path"),
+        "/plugins/query_recorder/records/"
+    );
+    plugin_api
+        .get("/records", Arc::new(TestEchoHandler))
+        .expect("register scoped GET");
+    plugin_api
+        .delete_prefix("/records/", Arc::new(TestEchoHandler))
+        .expect("register scoped DELETE prefix");
+}
+
+#[tokio::test]
+async fn test_global_api_route_macros_noop_when_api_is_disabled() {
+    let _guard = global_api_test_guard().await;
+    clear_global_api_register();
+
+    register_api_route!(GET "/macro-noop" => TestEchoHandler).expect("global route no-op");
+    register_plugin_api!(
+        "macro_plugin",
+        GET "/noop" => TestEchoHandler,
+        DELETE_PREFIX "/noop/" => TestEchoHandler,
+    )
+    .expect("plugin route no-op");
+}
+
+#[tokio::test]
+async fn test_global_api_route_macros_register_routes_and_clear() {
+    let _guard = global_api_test_guard().await;
+    clear_global_api_register();
+    AppClock::start();
+    let addr = reserve_local_addr();
+    let hub = test_api_hub(addr, None);
+    set_global_api_register(Some(ApiRegister::new(hub.clone())));
+
+    register_api_route!(GET "/macro-global" => TestEchoHandler).expect("register global route");
+    register_plugin_api!(
+        "macro_plugin",
+        |plugin_api|
+        GET "/records" => TestEchoHandler,
+        DELETE_PREFIX "/records/" => TestEchoHandler,
+        POST "/uses-path" => TestEchoHandler,
+    )
+    .expect("register plugin routes");
+    assert_eq!(
+        global_api_register()
+            .expect("global register should be set")
+            .plugin("macro_plugin")
+            .and_then(|api| api.path("/records/"))
+            .expect("plugin path"),
+        "/plugins/macro_plugin/records/"
+    );
+
+    start_test_api_hub(&hub).await;
+    let client = http1_client();
+    let delete_uri: Uri = format!("http://{addr}/api/plugins/macro_plugin/records/abc")
+        .parse()
+        .expect("delete uri");
+    let response = client
+        .request(
+            HyperRequest::builder()
+                .method(Method::DELETE)
+                .uri(delete_uri)
+                .body(Empty::new())
+                .expect("delete request"),
+        )
+        .await
+        .expect("delete response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    clear_global_api_register();
+    assert!(global_api_register().is_none());
+    hub.stop().await;
 }
 
 #[tokio::test]

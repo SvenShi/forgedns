@@ -28,14 +28,14 @@ use serde::Deserialize;
 use serde_yaml_ng::Value;
 use tracing::debug;
 
-use crate::api::{ApiHandler, ApiRegister, simple_response};
+use crate::api::{ApiHandler, global_api_register, simple_response};
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, register_api_route, register_plugin_factory};
 
 const DEFAULT_NAME: &str = "default";
 
@@ -49,7 +49,6 @@ struct MetricsCollectorConfig {
 struct MetricsCollector {
     tag: String,
     stats: Arc<MetricsCollectorStats>,
-    api_register: Option<ApiRegister>,
 }
 
 #[derive(Debug)]
@@ -84,14 +83,12 @@ impl Plugin for MetricsCollector {
                 .expect("metrics collectors poisoned");
             collectors.push(self.stats.clone());
         }
-        if exporter.route_registered.load(Ordering::Relaxed) == 0
-            && let Some(api_register) = &self.api_register
+        if exporter.route_registered.load(Ordering::Relaxed) == 0 && global_api_register().is_some()
         {
-            api_register.register_get(
-                "/metrics",
-                Arc::new(MetricsHandler {
+            register_api_route!(
+                GET "/metrics" => MetricsHandler {
                     exporter: metrics_exporter().clone(),
-                }),
+                },
             )?;
             exporter.route_registered.store(1, Ordering::Relaxed);
         }
@@ -177,7 +174,7 @@ impl PluginFactory for MetricsCollectorFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _registry: Arc<PluginRegistry>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let name =
@@ -186,7 +183,6 @@ impl PluginFactory for MetricsCollectorFactory {
         Ok(UninitializedPlugin::Executor(Box::new(MetricsCollector {
             tag: plugin_config.tag.clone(),
             stats: Arc::new(MetricsCollectorStats::new(plugin_config.tag.clone(), name)),
-            api_register: registry.api_register(),
         })))
     }
 
@@ -204,7 +200,6 @@ impl PluginFactory for MetricsCollectorFactory {
         Ok(UninitializedPlugin::Executor(Box::new(MetricsCollector {
             tag: tag.to_string(),
             stats: Arc::new(MetricsCollectorStats::new(tag.to_string(), name)),
-            api_register: None,
         })))
     }
 }
@@ -357,7 +352,6 @@ mod tests {
                 "metrics".to_string(),
                 "default".to_string(),
             )),
-            api_register: None,
         }
     }
 

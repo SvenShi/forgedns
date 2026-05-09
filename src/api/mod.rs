@@ -20,861 +20,105 @@
 //! runtime state with the application, but it does not participate in query
 //! matching or response generation.
 
-use std::convert::Infallible;
-use std::fmt::{Debug, Formatter};
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex as StdMutex};
-
-use ahash::AHashMap;
-use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use bytes::Bytes;
-use http::{HeaderMap, Method, Request, Response, StatusCode, Uri};
-use http_body_util::combinators::UnsyncBoxBody;
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Frame, Incoming};
-use hyper::service::service_fn;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto::Builder as AutoBuilder;
-use serde::Serialize;
-use tokio::net::TcpStream;
-use tokio::sync::{Mutex, oneshot, watch};
-use tokio_rustls::TlsAcceptor;
-use tracing::{debug, info, warn};
-
-use crate::api::cors::{add_cors_headers, resolve_cors_config};
-use crate::api::health::HealthState;
-use crate::api::static_files::StaticFileServer;
-use crate::config::types::{ApiAuthConfig, ApiConfig, ApiCorsConfig, ResolvedApiHttpConfig};
-use crate::core::error::{DnsError, Result};
-use crate::network::listen::{self, parse_listen_addr};
-use crate::network::tls_config::load_server_tls_config;
-
+mod auth;
 pub mod control;
 mod cors;
+mod global;
+mod handler;
 pub mod health;
+mod hub;
+mod request;
+mod response;
+mod route;
+mod server;
 mod static_files;
+
+#[cfg(test)]
+pub(super) use auth::is_authorized;
+#[cfg(test)]
+pub(crate) use global::global_api_test_guard;
+pub use global::{clear_global_api_register, global_api_register, set_global_api_register};
+pub use handler::{ApiBody, ApiHandler, ApiResponse};
+pub use hub::{ApiHub, ApiRegister, PluginApiRegister};
+#[cfg(test)]
+pub(super) use request::{rewrite_request_path, strip_api_prefix};
+pub use response::{json_error, json_ok, json_response, simple_response, streaming_response};
+#[cfg(test)]
+pub(super) use route::build_plugin_route_path;
 
 #[cfg(test)]
 mod tests;
 
-pub type ApiBody = UnsyncBoxBody<Bytes, Infallible>;
-pub type ApiResponse = Response<ApiBody>;
-
-#[async_trait]
-pub trait ApiHandler: Send + Sync + 'static {
-    async fn handle(&self, request: Request<Bytes>) -> ApiResponse;
-}
-
-#[derive(Clone)]
-pub struct ApiRegister {
-    hub: Arc<ApiHub>,
-}
-
-impl ApiRegister {
-    pub(crate) fn new(hub: Arc<ApiHub>) -> Self {
-        Self { hub }
-    }
-
-    /// Register one handler under an absolute API path.
-    pub fn register_route(
-        &self,
-        method: Method,
-        path: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        self.hub.register_route(method, path, handler)
-    }
-
-    /// Register one GET handler under an absolute API path.
-    pub fn register_get(&self, path: &str, handler: Arc<dyn ApiHandler>) -> Result<()> {
-        self.register_route(Method::GET, path, handler)
-    }
-
-    /// Register one POST handler under an absolute API path.
-    pub fn register_post(&self, path: &str, handler: Arc<dyn ApiHandler>) -> Result<()> {
-        self.register_route(Method::POST, path, handler)
-    }
-
-    /// Register one handler using path-prefix matching under an absolute API
-    /// path.
-    pub fn register_prefix_route(
-        &self,
-        method: Method,
-        path_prefix: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        self.hub.register_prefix_route(method, path_prefix, handler)
-    }
-
-    /// Register one GET handler using path-prefix matching under an absolute
-    /// API path.
-    pub fn register_get_prefix(
-        &self,
-        path_prefix: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        self.register_prefix_route(Method::GET, path_prefix, handler)
-    }
-
-    /// Register one POST handler using path-prefix matching under an absolute
-    /// API path.
-    pub fn register_post_prefix(
-        &self,
-        path_prefix: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        self.register_prefix_route(Method::POST, path_prefix, handler)
-    }
-
-    /// Register one GET handler under `/plugins/<plugin_tag>/<subpath>`.
-    pub fn register_plugin_get(
-        &self,
-        plugin_tag: &str,
-        subpath: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        self.hub
-            .register_plugin_route(plugin_tag, Method::GET, subpath, handler)
-    }
-
-    /// Register one POST handler under `/plugins/<plugin_tag>/<subpath>`.
-    pub fn register_plugin_post(
-        &self,
-        plugin_tag: &str,
-        subpath: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        self.hub
-            .register_plugin_route(plugin_tag, Method::POST, subpath, handler)
-    }
-
-    /// Register one GET handler using path-prefix matching under
-    /// `/plugins/<plugin_tag>/<subpath>`.
-    pub fn register_plugin_get_prefix(
-        &self,
-        plugin_tag: &str,
-        subpath: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        self.hub
-            .register_plugin_prefix_route(plugin_tag, Method::GET, subpath, handler)
-    }
-
-    /// Register one POST handler using path-prefix matching under
-    /// `/plugins/<plugin_tag>/<subpath>`.
-    pub fn register_plugin_post_prefix(
-        &self,
-        plugin_tag: &str,
-        subpath: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        self.hub
-            .register_plugin_prefix_route(plugin_tag, Method::POST, subpath, handler)
-    }
-}
-
-impl Debug for ApiRegister {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ApiRegister").finish_non_exhaustive()
-    }
-}
-
-pub struct ApiHub {
-    config: ResolvedApiHttpConfig,
-    routes: StdMutex<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
-    prefix_routes: StdMutex<Vec<PrefixRoute>>,
-    health: Arc<HealthState>,
-    shutdown_tx: watch::Sender<bool>,
-    task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
-}
-
-impl Debug for ApiHub {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let route_count = self.routes.lock().map(|routes| routes.len()).unwrap_or(0);
-        let prefix_route_count = self
-            .prefix_routes
-            .lock()
-            .map(|routes| routes.len())
-            .unwrap_or(0);
-        f.debug_struct("ApiHub")
-            .field("listen", &self.config.listen)
-            .field("has_tls", &self.config.ssl.is_some())
-            .field("has_auth", &self.config.auth.is_some())
-            .field("route_count", &route_count)
-            .field("prefix_route_count", &prefix_route_count)
-            .finish()
-    }
-}
-
-impl ApiHub {
-    pub fn from_config(config: &ApiConfig) -> Result<Option<Arc<Self>>> {
-        let Some(http) = &config.http else {
-            return Ok(None);
-        };
-
-        let resolved = http.resolve();
-        let listen = resolved.listen.trim();
-        if listen.is_empty() {
-            return Err(DnsError::config("api.http.listen cannot be empty"));
-        }
-        let listen_addr = parse_listen_addr(listen)?;
-        let normalized_listen = listen_addr.to_string();
-        let cors = Some(resolve_cors_config(resolved.cors, listen_addr));
-        let webui = resolved.webui.clone();
-
-        let (shutdown_tx, _) = watch::channel(false);
-        Ok(Some(Arc::new(Self {
-            config: ResolvedApiHttpConfig {
-                listen: normalized_listen,
-                ssl: resolved.ssl,
-                auth: resolved.auth,
-                cors,
-                webui,
-            },
-            routes: StdMutex::new(AHashMap::new()),
-            prefix_routes: StdMutex::new(Vec::new()),
-            health: Arc::new(HealthState::new()),
-            shutdown_tx,
-            task_handle: Mutex::new(None),
-        }))
-        .inspect(|hub| {
-            health::register_builtin_routes(&ApiRegister::new(hub.clone()), hub.health.clone())
-                .expect("builtin API routes should register");
-        }))
-    }
-
-    pub fn register_plugin_route(
-        &self,
-        plugin_tag: &str,
-        method: Method,
-        subpath: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        let plugin_tag = plugin_tag.trim();
-        if plugin_tag.is_empty() {
-            return Err(DnsError::plugin("api route plugin tag cannot be empty"));
-        }
-
-        let route_path = build_plugin_route_path(plugin_tag, subpath)?;
-        self.register_route(method, &route_path, handler)
-    }
-
-    pub fn register_plugin_prefix_route(
-        &self,
-        plugin_tag: &str,
-        method: Method,
-        subpath: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        let route_path = build_plugin_route_path(plugin_tag, subpath)?;
-        self.register_prefix_route(method, &route_path, handler)
-    }
-
-    pub fn register_route(
-        &self,
-        method: Method,
-        path: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        let route_path = normalize_route_path(path)?;
-        let key = RouteKey::new(method, route_path);
-        let mut routes = self
-            .routes
-            .lock()
-            .map_err(|_| DnsError::runtime("API route registry lock poisoned"))?;
-
-        if routes.insert(key.clone(), handler).is_some() {
-            return Err(DnsError::plugin(format!(
-                "duplicate API route registered: {} {}",
-                key.method, key.path
-            )));
-        }
-        Ok(())
-    }
-
-    pub fn register_prefix_route(
-        &self,
-        method: Method,
-        path_prefix: &str,
-        handler: Arc<dyn ApiHandler>,
-    ) -> Result<()> {
-        let route_path = normalize_route_path(path_prefix)?;
-        let mut routes = self
-            .prefix_routes
-            .lock()
-            .map_err(|_| DnsError::runtime("API route registry lock poisoned"))?;
-
-        if routes
-            .iter()
-            .any(|route| route.method == method && route.path_prefix == route_path)
-        {
-            return Err(DnsError::plugin(format!(
-                "duplicate API prefix route registered: {} {}",
-                method, route_path
-            )));
-        }
-
-        routes.push(PrefixRoute {
-            method,
-            path_prefix: route_path,
-            handler,
-        });
-        Ok(())
-    }
-
-    pub async fn start(&self) -> Result<()> {
-        let mut task_slot = self.task_handle.lock().await;
-        if task_slot.is_some() {
-            return Ok(());
-        }
-
-        let listen = parse_listen_addr(&self.config.listen)?;
-        let routes = self
-            .routes
-            .lock()
-            .map_err(|_| DnsError::runtime("API route registry lock poisoned"))?
-            .clone();
-        let prefix_routes = self
-            .prefix_routes
-            .lock()
-            .map_err(|_| DnsError::runtime("API route registry lock poisoned"))?
-            .clone();
-        let tls_acceptor = build_tls_acceptor(&self.config)?;
-        let auth = self.config.auth.clone();
-        let cors = self.config.cors.clone();
-        let webui = self
-            .config
-            .webui
-            .as_ref()
-            .map(StaticFileServer::from_config)
-            .transpose()?
-            .map(Arc::new);
-        let health = self.health.clone();
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let (startup_tx, startup_rx) = oneshot::channel();
-        *task_slot = Some(tokio::spawn(async move {
-            run_api_server(
-                ApiServerContext {
-                    listen,
-                    routes,
-                    prefix_routes,
-                    tls_acceptor,
-                    auth,
-                    cors,
-                    webui,
-                    health,
-                },
-                &mut shutdown_rx,
-                startup_tx,
-            )
-            .await;
-        }));
-        drop(task_slot);
-
-        match startup_rx.await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(err)) => Err(DnsError::runtime(err)),
-            Err(_) => Err(DnsError::runtime(
-                "API server startup channel closed unexpectedly",
-            )),
-        }
-    }
-
-    pub async fn stop(&self) {
-        let _ = self.shutdown_tx.send(true);
-        if let Some(handle) = self.task_handle.lock().await.take() {
-            let _ = handle.await;
-        }
-    }
-
-    pub fn mark_plugins_initialized(&self, total_plugins: usize, server_plugins: usize) {
-        self.health
-            .mark_plugins_initialized(total_plugins, server_plugins);
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RouteKey {
-    method: Method,
-    path: String,
-}
-
-impl RouteKey {
-    fn new(method: Method, path: String) -> Self {
-        Self { method, path }
-    }
-}
-
-impl PartialEq for RouteKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.method == other.method && self.path == other.path
-    }
-}
-
-impl Eq for RouteKey {}
-
-impl std::hash::Hash for RouteKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.method.hash(state);
-        self.path.hash(state);
-    }
-}
-
-#[derive(Clone)]
-struct PrefixRoute {
-    method: Method,
-    path_prefix: String,
-    handler: Arc<dyn ApiHandler>,
-}
-
-fn build_plugin_route_path(plugin_tag: &str, subpath: &str) -> Result<String> {
-    if plugin_tag.bytes().any(|b| matches!(b, b'/' | b'?' | b'#')) {
-        return Err(DnsError::plugin(format!(
-            "plugin tag '{}' is not valid for API route paths",
-            plugin_tag
-        )));
-    }
-
-    let subpath = if subpath.is_empty() {
-        ""
-    } else if subpath.starts_with('/') {
-        subpath
-    } else {
-        return Err(DnsError::plugin(format!(
-            "API subpath '{}' must start with '/'",
-            subpath
-        )));
-    };
-
-    normalize_route_path(&format!("/plugins/{plugin_tag}{subpath}"))
-}
-
-fn normalize_route_path(path: &str) -> Result<String> {
-    let path = path.trim();
-    if path.is_empty() || !path.starts_with('/') {
-        return Err(DnsError::plugin(format!(
-            "API route path '{}' must start with '/'",
-            path
-        )));
-    }
-    if path.bytes().any(|b| matches!(b, b'?' | b'#')) {
-        return Err(DnsError::plugin(format!(
-            "API route path '{}' cannot contain query or fragment",
-            path
-        )));
-    }
-    Ok(path.to_string())
-}
-
-fn build_tls_acceptor(config: &ResolvedApiHttpConfig) -> Result<Option<Arc<TlsAcceptor>>> {
-    let Some(ssl) = &config.ssl else {
-        return Ok(None);
-    };
-    let server_config = load_server_tls_config(
-        ssl.cert.as_deref(),
-        ssl.key.as_deref(),
-        ssl.client_ca.as_deref(),
-        ssl.require_client_cert.unwrap_or(false),
-    )?;
-    Ok(server_config.map(|mut cfg| {
-        cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-        Arc::new(TlsAcceptor::from(Arc::new(cfg)))
-    }))
-}
-
-struct ApiServerContext {
-    listen: SocketAddr,
-    routes: AHashMap<RouteKey, Arc<dyn ApiHandler>>,
-    prefix_routes: Vec<PrefixRoute>,
-    tls_acceptor: Option<Arc<TlsAcceptor>>,
-    auth: Option<ApiAuthConfig>,
-    cors: Option<ApiCorsConfig>,
-    webui: Option<Arc<StaticFileServer>>,
-    health: Arc<HealthState>,
-}
-
-#[hotpath::measure]
-async fn run_api_server(
-    context: ApiServerContext,
-    shutdown_rx: &mut watch::Receiver<bool>,
-    startup_tx: oneshot::Sender<std::result::Result<(), String>>,
-) {
-    let ApiServerContext {
-        listen,
-        routes,
-        prefix_routes,
-        tls_acceptor,
-        auth,
-        cors,
-        webui,
-        health,
-    } = context;
-    let listener = match listen::build_tcp_listener(listen, 512, |_| {}) {
-        Ok(listener) => listener,
-        Err(err) => {
-            let _ = startup_tx.send(Err(format!(
-                "failed to bind API listener on {}: {}",
-                listen, err
-            )));
-            return;
-        }
-    };
-    health.mark_api_listening();
-    let _ = startup_tx.send(Ok(()));
-    info!(
-        listen = %listen,
-        tls = %tls_acceptor.is_some(),
-        auth = %auth.is_some(),
-        cors = %cors.is_some(),
-        webui = %webui.is_some(),
-        routes = routes.len(),
-        prefix_routes = prefix_routes.len(),
-        "Management API listening"
-    );
-
-    let routes = Arc::new(routes);
-    let prefix_routes = Arc::new(prefix_routes);
-    loop {
-        tokio::select! {
-            changed = shutdown_rx.changed() => {
-                if changed.is_ok() && *shutdown_rx.borrow() {
-                    break;
-                }
+#[macro_export]
+macro_rules! register_plugin_api {
+    ($tag:expr, |$plugin_api:ident| $($method:ident $path:expr => $handler:expr),+ $(,)?) => {{
+        (|| -> $crate::core::error::Result<()> {
+            if let Some(api_register) = $crate::api::global_api_register() {
+                let $plugin_api = api_register.plugin($tag)?;
+                $(
+                    $crate::register_plugin_api!(@register $plugin_api, $method, $path, $handler)?;
+                )+
             }
-            accepted = listener.accept() => {
-                let (stream, remote_addr) = match accepted {
-                    Ok(item) => item,
-                    Err(err) => {
-                        warn!(error = %err, "API accept failed");
-                        continue;
-                    }
-                };
-                let routes = routes.clone();
-                let prefix_routes = prefix_routes.clone();
-                let tls_acceptor = tls_acceptor.clone();
-                let auth = auth.clone();
-                let cors = cors.clone();
-                let webui = webui.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = handle_connection(stream, remote_addr, routes, prefix_routes, tls_acceptor, auth, cors, webui).await {
-                        warn!(remote = %remote_addr, error = %err, "API connection failed");
-                    }
-                });
+            Ok(())
+        })()
+    }};
+    ($tag:expr, $($method:ident $path:expr => $handler:expr),+ $(,)?) => {{
+        (|| -> $crate::core::error::Result<()> {
+            if let Some(api_register) = $crate::api::global_api_register() {
+                let plugin_api = api_register.plugin($tag)?;
+                $(
+                    $crate::register_plugin_api!(@register plugin_api, $method, $path, $handler)?;
+                )+
             }
-        }
-    }
+            Ok(())
+        })()
+    }};
+    (@register $plugin_api:ident, GET, $path:expr, $handler:expr) => {
+        $plugin_api.get($path, std::sync::Arc::new($handler))
+    };
+    (@register $plugin_api:ident, POST, $path:expr, $handler:expr) => {
+        $plugin_api.post($path, std::sync::Arc::new($handler))
+    };
+    (@register $plugin_api:ident, DELETE, $path:expr, $handler:expr) => {
+        $plugin_api.delete($path, std::sync::Arc::new($handler))
+    };
+    (@register $plugin_api:ident, GET_PREFIX, $path:expr, $handler:expr) => {
+        $plugin_api.get_prefix($path, std::sync::Arc::new($handler))
+    };
+    (@register $plugin_api:ident, POST_PREFIX, $path:expr, $handler:expr) => {
+        $plugin_api.post_prefix($path, std::sync::Arc::new($handler))
+    };
+    (@register $plugin_api:ident, DELETE_PREFIX, $path:expr, $handler:expr) => {
+        $plugin_api.delete_prefix($path, std::sync::Arc::new($handler))
+    };
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn handle_connection(
-    stream: TcpStream,
-    remote_addr: SocketAddr,
-    routes: Arc<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
-    prefix_routes: Arc<Vec<PrefixRoute>>,
-    tls_acceptor: Option<Arc<TlsAcceptor>>,
-    auth: Option<ApiAuthConfig>,
-    cors: Option<ApiCorsConfig>,
-    webui: Option<Arc<StaticFileServer>>,
-) -> Result<()> {
-    match tls_acceptor {
-        Some(acceptor) => {
-            let stream = acceptor
-                .accept(stream)
-                .await
-                .map_err(|err| DnsError::runtime(format!("API TLS handshake failed: {err}")))?;
-            handle_hyper_stream(
-                stream,
-                remote_addr,
-                routes,
-                prefix_routes,
-                auth,
-                cors,
-                webui,
-            )
-            .await
-        }
-        None => {
-            handle_hyper_stream(
-                stream,
-                remote_addr,
-                routes,
-                prefix_routes,
-                auth,
-                cors,
-                webui,
-            )
-            .await
-        }
-    }
-}
-
-async fn handle_hyper_stream<S>(
-    stream: S,
-    remote_addr: SocketAddr,
-    routes: Arc<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
-    prefix_routes: Arc<Vec<PrefixRoute>>,
-    auth: Option<ApiAuthConfig>,
-    cors: Option<ApiCorsConfig>,
-    webui: Option<Arc<StaticFileServer>>,
-) -> Result<()>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
-{
-    let service = service_fn(move |request: Request<Incoming>| {
-        let routes = routes.clone();
-        let prefix_routes = prefix_routes.clone();
-        let auth = auth.clone();
-        let cors = cors.clone();
-        let webui = webui.clone();
-        async move {
-            handle_hyper_request(
-                request,
-                remote_addr,
-                routes,
-                prefix_routes,
-                auth,
-                cors,
-                webui,
-            )
-            .await
-        }
-    });
-
-    let io = TokioIo::new(stream);
-    AutoBuilder::new(TokioExecutor::new())
-        .serve_connection_with_upgrades(io, service)
-        .await
-        .map_err(|err| DnsError::runtime(format!("API hyper connection failed: {err}")))
-}
-
-#[hotpath::measure]
-async fn handle_hyper_request(
-    request: Request<Incoming>,
-    remote_addr: SocketAddr,
-    routes: Arc<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
-    prefix_routes: Arc<Vec<PrefixRoute>>,
-    auth: Option<ApiAuthConfig>,
-    cors: Option<ApiCorsConfig>,
-    webui: Option<Arc<StaticFileServer>>,
-) -> std::result::Result<ApiResponse, Infallible> {
-    let request = match read_hyper_request(request).await {
-        Ok(request) => request,
-        Err(status) => return Ok(simple_response(status, Bytes::new())),
-    };
-
-    debug!(
-        remote = %remote_addr,
-        method = %request.method(),
-        path = %request.uri().path(),
-        body_len = request.body().len(),
-        "API request received"
-    );
-
-    let request_headers = request.headers().clone();
-    let Some(api_path) = strip_api_prefix(request.uri().path()) else {
-        return Ok(match webui {
-            Some(webui) => webui.handle(request).await,
-            None => simple_response(StatusCode::NOT_FOUND, Bytes::from("404 Not Found")),
-        });
-    };
-    let request = match rewrite_request_path(request, &api_path) {
-        Ok(request) => request,
-        Err(()) => return Ok(simple_response(StatusCode::BAD_REQUEST, Bytes::new())),
-    };
-
-    // Handle CORS preflight requests.
-    if request.method() == Method::OPTIONS {
-        if let Some(ref cors_cfg) = cors {
-            let mut response = simple_response(StatusCode::NO_CONTENT, Bytes::new());
-            add_cors_headers(response.headers_mut(), Some(&request_headers), cors_cfg);
-            return Ok(response);
-        }
-        return Ok(simple_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            Bytes::new(),
-        ));
-    }
-
-    let response = if !is_authorized(request.headers(), auth.as_ref()) {
-        let mut response =
-            simple_response(StatusCode::UNAUTHORIZED, Bytes::from("401 Unauthorized"));
-        response.headers_mut().insert(
-            http::header::WWW_AUTHENTICATE,
-            http::HeaderValue::from_static("Basic realm=\"oxidns\""),
-        );
-        if let Some(ref cors_cfg) = cors {
-            add_cors_headers(response.headers_mut(), Some(&request_headers), cors_cfg);
-        }
-        response
-    } else {
-        if let Some(handler) = lookup_handler(
-            request.method(),
-            api_path.as_str(),
-            routes.as_ref(),
-            prefix_routes.as_ref(),
-        ) {
-            let mut response = handler.handle(request).await;
-            if let Some(ref cors_cfg) = cors {
-                add_cors_headers(response.headers_mut(), Some(&request_headers), cors_cfg);
+#[macro_export]
+macro_rules! register_api_route {
+    ($method:ident $path:expr => $handler:expr $(,)?) => {{
+        (|| -> $crate::core::error::Result<()> {
+            if let Some(api_register) = $crate::api::global_api_register() {
+                $crate::register_api_route!(@register api_register, $method, $path, $handler)?;
             }
-            response
-        } else {
-            let mut response = simple_response(StatusCode::NOT_FOUND, Bytes::from("404 Not Found"));
-            if let Some(ref cors_cfg) = cors {
-                add_cors_headers(response.headers_mut(), Some(&request_headers), cors_cfg);
-            }
-            response
-        }
+            Ok(())
+        })()
+    }};
+    (@register $api_register:ident, GET, $path:expr, $handler:expr) => {
+        $api_register.register_get($path, std::sync::Arc::new($handler))
     };
-
-    Ok(response)
-}
-
-fn strip_api_prefix(path: &str) -> Option<String> {
-    if path == "/api" {
-        return Some("/".to_string());
-    }
-    path.strip_prefix("/api/").map(|path| format!("/{path}"))
-}
-
-fn rewrite_request_path(
-    request: Request<Bytes>,
-    path: &str,
-) -> std::result::Result<Request<Bytes>, ()> {
-    let query = request.uri().query().map(str::to_string);
-    let (mut parts, body) = request.into_parts();
-    let path_and_query = match query {
-        Some(query) => format!("{path}?{query}"),
-        None => path.to_string(),
+    (@register $api_register:ident, POST, $path:expr, $handler:expr) => {
+        $api_register.register_post($path, std::sync::Arc::new($handler))
     };
-    parts.uri = path_and_query.parse::<Uri>().map_err(|_| ())?;
-    Ok(Request::from_parts(parts, body))
-}
-
-fn lookup_handler<'a>(
-    method: &Method,
-    path: &str,
-    routes: &'a AHashMap<RouteKey, Arc<dyn ApiHandler>>,
-    prefix_routes: &'a [PrefixRoute],
-) -> Option<&'a Arc<dyn ApiHandler>> {
-    let key = RouteKey::new(method.clone(), path.to_string());
-    if let Some(handler) = routes.get(&key) {
-        return Some(handler);
-    }
-
-    prefix_routes
-        .iter()
-        .filter(|route| route.method == *method && path.starts_with(route.path_prefix.as_str()))
-        .max_by_key(|route| route.path_prefix.len())
-        .map(|route| &route.handler)
-}
-
-fn is_authorized(headers: &HeaderMap, auth: Option<&ApiAuthConfig>) -> bool {
-    let Some(auth) = auth else {
-        return true;
+    (@register $api_register:ident, DELETE, $path:expr, $handler:expr) => {
+        $api_register.register_delete($path, std::sync::Arc::new($handler))
     };
-    match auth {
-        ApiAuthConfig::Basic { username, password } => {
-            let Some(value) = headers.get(http::header::AUTHORIZATION) else {
-                return false;
-            };
-            let Ok(value) = value.to_str() else {
-                return false;
-            };
-            let Some(encoded) = value.strip_prefix("Basic ") else {
-                return false;
-            };
-            let Ok(decoded) = STANDARD.decode(encoded) else {
-                return false;
-            };
-            let Ok(decoded) = String::from_utf8(decoded) else {
-                return false;
-            };
-            decoded == format!("{username}:{password}")
-        }
-    }
-}
-
-async fn read_hyper_request(
-    request: Request<Incoming>,
-) -> std::result::Result<Request<Bytes>, StatusCode> {
-    let (parts, mut body) = request.into_parts();
-    let mut collected = Vec::with_capacity(2048);
-
-    while let Some(frame_result) = body.frame().await {
-        let frame = frame_result.map_err(|_| StatusCode::BAD_REQUEST)?;
-        if let Ok(data) = frame.into_data() {
-            collected.extend_from_slice(&data);
-        }
-    }
-
-    Ok(Request::from_parts(parts, Bytes::from(collected)))
-}
-
-pub fn simple_response(status: StatusCode, body: Bytes) -> ApiResponse {
-    Response::builder()
-        .status(status)
-        .body(Full::new(body).boxed_unsync())
-        .expect("failed to build simple API response")
-}
-
-pub fn json_response<T>(status: StatusCode, value: &T) -> ApiResponse
-where
-    T: Serialize + ?Sized,
-{
-    match serde_json::to_vec(value) {
-        Ok(body) => {
-            let mut response = simple_response(status, Bytes::from(body));
-            response.headers_mut().insert(
-                http::header::CONTENT_TYPE,
-                http::HeaderValue::from_static("application/json"),
-            );
-            response
-        }
-        Err(err) => simple_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Bytes::from(format!("failed to serialize json response: {err}")),
-        ),
-    }
-}
-
-pub fn json_ok<T>(status: StatusCode, value: &T) -> ApiResponse
-where
-    T: Serialize + ?Sized,
-{
-    json_response(status, value)
-}
-
-pub fn json_error(
-    status: StatusCode,
-    code: &'static str,
-    message: impl Into<String>,
-) -> ApiResponse {
-    #[derive(Serialize)]
-    struct ErrorBody {
-        ok: bool,
-        code: &'static str,
-        message: String,
-    }
-
-    json_response(
-        status,
-        &ErrorBody {
-            ok: false,
-            code,
-            message: message.into(),
-        },
-    )
-}
-
-pub fn streaming_response<S>(status: StatusCode, stream: S) -> ApiResponse
-where
-    S: futures::Stream<Item = std::result::Result<Frame<Bytes>, Infallible>> + Send + 'static,
-{
-    Response::builder()
-        .status(status)
-        .body(http_body_util::StreamBody::new(stream).boxed_unsync())
-        .expect("failed to build streaming API response")
+    (@register $api_register:ident, GET_PREFIX, $path:expr, $handler:expr) => {
+        $api_register.register_get_prefix($path, std::sync::Arc::new($handler))
+    };
+    (@register $api_register:ident, POST_PREFIX, $path:expr, $handler:expr) => {
+        $api_register.register_post_prefix($path, std::sync::Arc::new($handler))
+    };
+    (@register $api_register:ident, DELETE_PREFIX, $path:expr, $handler:expr) => {
+        $api_register.register_delete_prefix($path, std::sync::Arc::new($handler))
+    };
 }

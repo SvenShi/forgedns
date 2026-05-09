@@ -20,7 +20,6 @@ use tracing::{Level, debug, event_enabled, warn};
 
 use self::key::{CacheKey, build_cache_key as build_cache_key_internal};
 use self::persistence::{dump_cache_to_file, load_cache_from_file};
-use crate::api::ApiRegister;
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
@@ -176,9 +175,6 @@ pub struct Cache {
 
     /// Periodic cleanup task id.
     cleanup_task_id: Mutex<Option<u64>>,
-
-    /// Management API route register, when global API is enabled.
-    api_register: Option<ApiRegister>,
 
     /// Deduplicates background refreshes for stale lazy cache hits.
     lazy_refresh_inflight: Arc<Mutex<AHashSet<CacheKey>>>,
@@ -605,12 +601,7 @@ impl Plugin for Cache {
         let cache_map = CacheMap::with_capacity(self.cache_size);
 
         let _ = self.cache_map.set(cache_map.clone());
-        api::register(
-            &self.tag,
-            self.api_register.as_ref(),
-            cache_map.clone(),
-            self.ecs_in_key,
-        )?;
+        api::register(&self.tag, cache_map.clone(), self.ecs_in_key)?;
 
         if let Some(dump_file) = &self.config.dump_file {
             self.spawn_load_task(cache_map.clone(), dump_file.clone(), self.ecs_in_key);
@@ -878,7 +869,7 @@ impl CacheFactory {
         &self,
         tag: String,
         cache_config: CacheConfig,
-        registry: Arc<PluginRegistry>,
+        _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(Cache {
             cache_map: OnceCell::new(),
@@ -897,7 +888,6 @@ impl CacheFactory {
             updated_keys: Arc::new(AtomicU64::new(0)),
             dump_task_id: Mutex::new(None),
             cleanup_task_id: Mutex::new(None),
-            api_register: registry.api_register(),
             lazy_refresh_inflight: Arc::new(Mutex::new(AHashSet::new())),
         })))
     }
@@ -984,7 +974,6 @@ mod tests {
             cache_size,
             dump_task_id: Mutex::new(None),
             cleanup_task_id: Mutex::new(None),
-            api_register: None,
             lazy_refresh_inflight: Arc::new(Mutex::new(AHashSet::new())),
         }
     }

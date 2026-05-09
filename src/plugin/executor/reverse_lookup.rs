@@ -26,7 +26,7 @@ use bytes::Bytes;
 use http::{Request, StatusCode};
 use serde::Deserialize;
 
-use crate::api::{ApiHandler, ApiRegister, simple_response};
+use crate::api::{ApiHandler, simple_response};
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
@@ -36,7 +36,7 @@ use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, PTR, RData, Rcode, Record, RecordType};
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, register_plugin_api, register_plugin_factory};
 
 const DEFAULT_SIZE: usize = 65_535;
 const DEFAULT_TTL: u32 = 7_200;
@@ -67,7 +67,6 @@ struct ReverseLookup {
     handle_ptr: bool,
     cleanup_started: AtomicBool,
     cleanup_task_id: Option<u64>,
-    api_register: Option<ApiRegister>,
 }
 
 #[async_trait]
@@ -183,16 +182,11 @@ impl Executor for ReverseLookup {
 
 impl ReverseLookup {
     fn register_api_routes(&self) -> Result<()> {
-        let Some(api_register) = &self.api_register else {
-            return Ok(());
-        };
-
-        api_register.register_plugin_get(
+        register_plugin_api!(
             &self.tag,
-            "",
-            Arc::new(ReverseLookupQueryHandler {
+            GET "" => ReverseLookupQueryHandler {
                 cache: self.cache.clone(),
-            }),
+            },
         )
     }
 
@@ -226,7 +220,7 @@ impl PluginFactory for ReverseLookupFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _registry: Arc<PluginRegistry>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = plugin_config
@@ -248,7 +242,6 @@ impl PluginFactory for ReverseLookupFactory {
             handle_ptr: cfg.handle_ptr.unwrap_or(false),
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
-            api_register: registry.api_register(),
         })))
     }
 }
@@ -367,7 +360,6 @@ mod tests {
             handle_ptr: true,
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
-            api_register: None,
         };
 
         let mut a_ctx = make_context("www.example.com.", RecordType::A);
@@ -410,7 +402,6 @@ mod tests {
             handle_ptr: false,
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
-            api_register: None,
         };
 
         let mut ctx = make_context("www.example.com.", RecordType::A);

@@ -25,10 +25,11 @@ use bytes::Bytes;
 use http::{Request, StatusCode};
 use serde::Serialize;
 
-use crate::api::{ApiHandler, ApiRegister, json_error, json_ok};
+use crate::api::{ApiHandler, json_error, json_ok};
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::{Plugin, PluginRegistry};
 use crate::proto::{Name, Question};
+use crate::register_plugin_api;
 
 pub mod adguard_rule;
 pub mod domain_set;
@@ -117,22 +118,13 @@ impl ApiHandler for ProviderReloadHandler {
     }
 }
 
-pub(crate) fn register_reload_api_route(
-    api_register: Option<&ApiRegister>,
-    registry: Arc<PluginRegistry>,
-    tag: &str,
-) -> DnsResult<()> {
-    let Some(api_register) = api_register else {
-        return Ok(());
-    };
-
-    api_register.register_plugin_post(
+pub(crate) fn register_reload_api_route(registry: Arc<PluginRegistry>, tag: &str) -> DnsResult<()> {
+    register_plugin_api!(
         tag,
-        "/reload",
-        Arc::new(ProviderReloadHandler {
+        POST "/reload" => ProviderReloadHandler {
             tag: tag.to_string(),
             registry,
-        }),
+        },
     )
 }
 
@@ -149,8 +141,12 @@ mod tests {
     use hyper_util::rt::TokioExecutor;
 
     use super::*;
-    use crate::api::ApiHub;
+    use crate::api::{
+        ApiHub, ApiRegister, clear_global_api_register, global_api_test_guard,
+        set_global_api_register,
+    };
     use crate::config::types::{ApiConfig, ApiHttpConfig, PluginConfig};
+    use crate::core::app_clock::AppClock;
     use crate::plugin::dependency::DependencyKind;
     use crate::plugin::matcher::qname::QnameFactory;
     use crate::plugin::{PluginFactory, UninitializedPlugin};
@@ -226,6 +222,9 @@ mod tests {
 
     #[tokio::test]
     async fn provider_reload_api_calls_targeted_reload() -> DnsResult<()> {
+        let _guard = global_api_test_guard().await;
+        clear_global_api_register();
+        AppClock::start();
         let listen = reserve_local_addr();
         let hub = ApiHub::from_config(&ApiConfig {
             http: Some(ApiHttpConfig::Listen(listen.to_string())),
@@ -233,7 +232,8 @@ mod tests {
         .expect("api hub should be created");
         let reload_count = Arc::new(AtomicUsize::new(0));
 
-        let mut registry = PluginRegistry::with_api(Some(ApiRegister::new(hub.clone())));
+        set_global_api_register(Some(ApiRegister::new(hub.clone())));
+        let mut registry = PluginRegistry::new();
         registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
         registry.register_factory(
             "reloadable_provider",
@@ -296,6 +296,7 @@ mod tests {
 
         hub.stop().await;
         registry.destory().await;
+        clear_global_api_register();
         Ok(())
     }
 }

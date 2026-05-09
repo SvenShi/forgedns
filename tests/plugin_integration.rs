@@ -589,7 +589,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     assert_eq!(
         registry.plugin_count(),
@@ -620,7 +620,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     assert_eq!(registry.plugin_count(), 2);
 
@@ -725,7 +725,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     assert!(
         registry.get_plugin("zzz_set").is_some(),
         "provider used by quick setup should still be visible"
@@ -762,7 +762,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     let sequence = registry
         .get_plugin("seq")
@@ -801,7 +801,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config, None)
+    let err = plugin::init(config)
         .await
         .expect_err("missing dependency should fail plugin init");
     let msg = err.to_string();
@@ -827,7 +827,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config, None)
+    let err = plugin::init(config)
         .await
         .expect_err("missing dependency should fail plugin init");
     let msg = err.to_string();
@@ -854,7 +854,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config, None)
+    let err = plugin::init(config)
         .await
         .expect_err("missing quick setup dependency should fail plugin init");
     let msg = err.to_string();
@@ -881,7 +881,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     let sequence = registry
         .get_plugin("seq")
@@ -927,7 +927,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -968,7 +968,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -1015,7 +1015,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -1055,7 +1055,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -1095,7 +1095,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -1134,7 +1134,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let sequence = registry
         .get_plugin("parent")
         .expect("parent sequence should exist")
@@ -1183,7 +1183,7 @@ plugins:
         );
 
         let config = parse_config(&yaml)?;
-        match plugin::init(config, None).await {
+        match plugin::init(config).await {
             Ok(registry) => {
                 registry_and_addr = Some((registry, listen));
                 break;
@@ -1240,7 +1240,7 @@ plugins:
         );
 
         let config = parse_config(&yaml)?;
-        match plugin::init(config, None).await {
+        match plugin::init(config).await {
             Ok(registry) => {
                 registry_and_addr = Some((registry, listen));
                 break;
@@ -1296,7 +1296,7 @@ plugins:
         );
 
         let config = parse_config(&yaml)?;
-        match plugin::init(config, None).await {
+        match plugin::init(config).await {
             Ok(registry) => {
                 registry_and_addr = Some((registry, listen));
                 break;
@@ -1350,7 +1350,7 @@ plugins:
         );
 
         let config = parse_config(&yaml)?;
-        match plugin::init(config, None).await {
+        match plugin::init(config).await {
             Ok(registry) => {
                 registry_and_addr = Some((registry, listen));
                 break;
@@ -1395,7 +1395,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let seq = registry
         .get_plugin("seq")
         .expect("sequence should exist")
@@ -1438,7 +1438,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     assert_eq!(registry.plugin_count(), 0);
     assert!(registry.get_plugin("orphan_domain").is_none());
@@ -1468,7 +1468,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     assert_eq!(registry.plugin_count(), 0);
     assert!(registry.get_plugin("shared_domain").is_none());
@@ -1503,7 +1503,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     let matcher = registry
         .get_plugin("domain_match")
@@ -1552,7 +1552,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     let qname_matcher = registry
         .get_plugin("qname_match")
@@ -1601,7 +1601,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     let matcher = registry
         .get_plugin("domain_match")
@@ -1659,7 +1659,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     let matcher = registry
         .get_plugin("match_client")
@@ -1703,7 +1703,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     let matcher = registry
         .get_plugin("match_client")
@@ -1758,7 +1758,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("match_client")
         .expect("client matcher should exist")
@@ -1796,7 +1796,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("match_client")
         .expect("client matcher should exist")
@@ -1841,7 +1841,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let qname_matcher = registry
         .get_plugin("match_qname")
         .expect("qname matcher should exist")
@@ -1884,7 +1884,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("match_qname")
         .expect("qname matcher should exist")
@@ -1922,7 +1922,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("match_qname")
         .expect("qname matcher should exist")
@@ -1981,7 +1981,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     assert!(registry.get_plugin("geoip_cn").is_some());
     assert!(registry.get_plugin("geosite_cn").is_some());
     assert!(registry.get_plugin("geosite_foreign").is_some());
@@ -2056,7 +2056,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
 
     let ip_matcher = registry
         .get_plugin("match_client")
@@ -2118,7 +2118,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("match_qname")
         .expect("qname matcher should exist")
@@ -2178,7 +2178,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("match_client")
         .expect("client matcher should exist")
@@ -2240,7 +2240,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("match_qname")
         .expect("qname matcher should exist")
@@ -2292,7 +2292,7 @@ plugins:
       - "$geoip_missing"
 "#
     );
-    let err = plugin::init(parse_config(&missing_code_yaml)?, None)
+    let err = plugin::init(parse_config(&missing_code_yaml)?)
         .await
         .expect_err("missing geoip code should fail");
     assert!(err.to_string().contains("found no geoip entries"));
@@ -2318,7 +2318,7 @@ plugins:
       - "$invalid_ip_set"
 "#
     );
-    let err = plugin::init(parse_config(&wrong_set_yaml)?, None)
+    let err = plugin::init(parse_config(&wrong_set_yaml)?)
         .await
         .expect_err("ip_set should reject non-ip provider");
     assert!(err.to_string().contains("support IP matching"));
@@ -2339,7 +2339,7 @@ plugins:
       - "$geoip_cn"
 "#
     );
-    let err = plugin::init(parse_config(&wrong_matcher_yaml)?, None)
+    let err = plugin::init(parse_config(&wrong_matcher_yaml)?)
         .await
         .expect_err("qname should reject non-domain provider");
     assert!(err.to_string().contains("support domain matching"));
@@ -2364,7 +2364,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config, None)
+    let err = plugin::init(config)
         .await
         .expect_err("kind mismatch should fail plugin init");
     let msg = err.to_string();
@@ -2407,7 +2407,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let main = registry
         .get_plugin("main")
         .expect("main sequence should exist")
@@ -2469,7 +2469,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("agh_match")
         .expect("qname matcher should exist")
@@ -2523,7 +2523,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let agh_rules = registry
         .get_plugin("agh_rules")
         .expect("agh_rules provider should exist")
@@ -2671,7 +2671,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("q_match")
         .expect("question matcher should exist")
@@ -2717,7 +2717,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config, None)
+    let err = plugin::init(config)
         .await
         .expect_err("circular dependencies should fail plugin init");
     let msg = err.to_string();
@@ -2743,7 +2743,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config, None)
+    let err = plugin::init(config)
         .await
         .expect_err("dollar-prefixed jump target should fail plugin init");
     let msg = err.to_string();
@@ -2767,7 +2767,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let err = plugin::init(config, None)
+    let err = plugin::init(config)
         .await
         .expect_err("jump target should require sequence plugin");
     let msg = err.to_string();
@@ -2802,7 +2802,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     assert_eq!(
         registry
             .get_plugin("cron_main")
@@ -2834,7 +2834,7 @@ plugins:
 "#;
 
     let config = parse_config(yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     assert_eq!(
         registry
             .get_plugin("cron_main")
@@ -2865,7 +2865,7 @@ plugins:
             - "$child"
 "#;
 
-    let err = plugin::init(parse_config(yaml)?, None)
+    let err = plugin::init(parse_config(yaml)?)
         .await
         .expect_err("invalid timezone should be rejected");
     assert!(err.to_string().contains("failed to parse cron schedule"));
@@ -2890,7 +2890,7 @@ plugins:
             - "$child"
 "#;
 
-    let err = plugin::init(parse_config(yaml)?, None)
+    let err = plugin::init(parse_config(yaml)?)
         .await
         .expect_err("6-field cron should be rejected");
     assert!(err.to_string().contains("second-level cron"));
@@ -2915,7 +2915,7 @@ plugins:
             - "$child"
 "#;
 
-    let err = plugin::init(parse_config(yaml)?, None)
+    let err = plugin::init(parse_config(yaml)?)
         .await
         .expect_err("sub-minute interval should be rejected");
     assert!(err.to_string().contains("at least 1 minute"));
@@ -2944,7 +2944,7 @@ plugins:
             - "$child_cron"
 "#;
 
-    let err = plugin::init(parse_config(yaml)?, None)
+    let err = plugin::init(parse_config(yaml)?)
         .await
         .expect_err("cron should not reference another cron");
     let msg = err.to_string();
@@ -2983,7 +2983,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("dl")
         .expect("download plugin should exist")
@@ -3029,7 +3029,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("dl")
         .expect("download plugin should exist")
@@ -3099,7 +3099,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let matcher = registry
         .get_plugin("match_qname")
         .expect("qname matcher should exist")
@@ -3134,7 +3134,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let sequence = registry
         .get_plugin("seq")
         .expect("sequence plugin should exist")
@@ -3194,7 +3194,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("script_main")
         .expect("script plugin should exist")
@@ -3264,7 +3264,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("script_main")
         .expect("script plugin should exist")
@@ -3307,7 +3307,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("script_main")
         .expect("script plugin should exist")
@@ -3350,7 +3350,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("script_main")
         .expect("script plugin should exist")
@@ -3396,7 +3396,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3458,7 +3458,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3513,7 +3513,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3557,7 +3557,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3606,7 +3606,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3650,7 +3650,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3692,7 +3692,7 @@ plugins:
         );
 
         let config = parse_config(&yaml)?;
-        let registry = plugin::init(config, None).await?;
+        let registry = plugin::init(config).await?;
         let executor = registry
             .get_plugin("http_main")
             .expect("http_request plugin should exist")
@@ -3739,7 +3739,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3779,7 +3779,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3819,7 +3819,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let executor = registry
         .get_plugin("http_main")
         .expect("http_request plugin should exist")
@@ -3880,7 +3880,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let response_result = exchange_udp_query(listen, "example.test.").await;
     let kernel_result =
         wait_for_command_output_contains("ipset", &["list", &set_name], "192.0.2.0/24").await;
@@ -3956,7 +3956,7 @@ plugins:
     );
 
     let config = parse_config(&yaml)?;
-    let registry = plugin::init(config, None).await?;
+    let registry = plugin::init(config).await?;
     let response_result = exchange_udp_query(listen, "example.test.").await;
     let kernel_result = wait_for_command_output_contains(
         "nft",
