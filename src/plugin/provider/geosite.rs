@@ -23,8 +23,8 @@ use crate::plugin::provider::v2ray_dat::{
     matched_geosite_selectors, parse_geosite_selectors,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin_factory;
 use crate::proto::{Name, Question};
-use crate::register_plugin_factory;
 
 #[derive(Debug, Clone, Deserialize)]
 struct GeoSiteArgs {
@@ -209,9 +209,8 @@ impl Provider for GeoSiteProvider {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("geosite")]
 pub struct GeoSiteFactory;
-
-register_plugin_factory!("geosite", GeoSiteFactory {});
 
 impl PluginFactory for GeoSiteFactory {
     fn create(

@@ -30,7 +30,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{EdnsCode, EdnsOption};
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, plugin_factory};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ForwardEdns0OptConfig {
@@ -103,9 +103,8 @@ impl Executor for ForwardEdns0Opt {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("forward_edns0opt")]
 pub struct ForwardEdns0OptFactory;
-
-register_plugin_factory!("forward_edns0opt", ForwardEdns0OptFactory {});
 
 impl PluginFactory for ForwardEdns0OptFactory {
     fn create(

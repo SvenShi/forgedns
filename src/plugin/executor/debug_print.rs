@@ -18,7 +18,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 const DEFAULT_MSG: &str = "debug print";
 
@@ -65,9 +65,8 @@ impl Executor for DebugPrint {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("debug_print")]
 pub struct DebugPrintFactory;
-
-register_plugin_factory!("debug_print", DebugPrintFactory {});
 
 impl PluginFactory for DebugPrintFactory {
     fn create(

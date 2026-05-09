@@ -1,5 +1,11 @@
 [workspace]
-members = [".", "crates/ripset", "crates/oxidns-proto", "crates/zoneparser"]
+members = [
+    ".",
+    "crates/macros",
+    "crates/ripset",
+    "crates/oxidns-proto",
+    "crates/zoneparser",
+]
 
 [package]
 name = "oxidns"
@@ -52,6 +58,7 @@ flate2 = "1.1"
 tar = "0.4"
 wincode = { version = "0.5", features = ["derive"] }
 oxidns-proto = { version = "0.1.1", path = "crates/oxidns-proto" }
+oxidns-macros = { version = "0.1.0", path = "crates/macros" }
 hotpath = "0.15"
 
 # DNS transport and TLS stack used by server plugins and upstream clients

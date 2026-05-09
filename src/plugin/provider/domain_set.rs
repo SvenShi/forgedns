@@ -30,8 +30,8 @@ use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin_factory;
 use crate::proto::{Name, Question};
-use crate::register_plugin_factory;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct DomainSetArgs {
@@ -172,9 +172,8 @@ impl Provider for DomainSet {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("domain_set")]
 pub struct DomainSetFactory {}
-
-register_plugin_factory!("domain_set", DomainSetFactory {});
 
 impl PluginFactory for DomainSetFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {

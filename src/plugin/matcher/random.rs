@@ -21,12 +21,11 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{parse_quick_setup_rules, parse_rules_from_value};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
+#[plugin_factory("random")]
 pub struct RandomFactory {}
-
-register_plugin_factory!("random", RandomFactory {});
 
 impl PluginFactory for RandomFactory {
     fn create(

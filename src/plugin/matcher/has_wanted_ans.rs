@@ -16,12 +16,11 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
+#[plugin_factory("has_wanted_ans")]
 pub struct HasWantedAnsFactory {}
-
-register_plugin_factory!("has_wanted_ans", HasWantedAnsFactory {});
 
 impl PluginFactory for HasWantedAnsFactory {
     fn create(

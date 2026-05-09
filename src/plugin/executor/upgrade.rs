@@ -22,7 +22,7 @@ use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 use crate::upgrade::{self, UpgradeConfig};
 
 #[derive(Debug)]
@@ -118,9 +118,8 @@ impl Executor for UpgradeExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("upgrade")]
 pub struct UpgradeFactory;
-
-register_plugin_factory!("upgrade", UpgradeFactory {});
 
 impl PluginFactory for UpgradeFactory {
     fn create(

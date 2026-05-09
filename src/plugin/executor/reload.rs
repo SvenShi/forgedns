@@ -17,7 +17,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug)]
 struct ReloadExecutor {
@@ -50,9 +50,8 @@ impl Executor for ReloadExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("reload")]
 pub struct ReloadFactory;
-
-register_plugin_factory!("reload", ReloadFactory {});
 
 impl PluginFactory for ReloadFactory {
     fn create(

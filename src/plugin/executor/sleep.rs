@@ -22,7 +22,7 @@ use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SleepConfig {
@@ -64,9 +64,8 @@ impl Executor for SleepExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("sleep")]
 pub struct SleepFactory;
-
-register_plugin_factory!("sleep", SleepFactory {});
 
 impl PluginFactory for SleepFactory {
     fn create(

@@ -25,12 +25,11 @@ use crate::plugin::matcher::matcher_utils::{
     validate_non_empty_ip_rules_or_set_tags,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
+#[plugin_factory("resp_ip")]
 pub struct RespIpFactory {}
-
-register_plugin_factory!("resp_ip", RespIpFactory {});
 
 impl PluginFactory for RespIpFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {

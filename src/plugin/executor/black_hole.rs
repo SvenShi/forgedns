@@ -26,8 +26,8 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin_factory;
 use crate::proto::{A, AAAA, RData, RecordType};
-use crate::register_plugin_factory;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct BlackHoleConfig {
@@ -91,9 +91,8 @@ impl Executor for BlackHole {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("black_hole")]
 pub struct BlackHoleFactory;
-
-register_plugin_factory!("black_hole", BlackHoleFactory {});
 
 impl PluginFactory for BlackHoleFactory {
     fn create(

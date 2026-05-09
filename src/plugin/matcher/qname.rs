@@ -23,12 +23,11 @@ use crate::plugin::matcher::matcher_utils::{
     validate_non_empty_domain_rules_or_set_tags,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
+#[plugin_factory("qname")]
 pub struct QnameFactory {}
-
-register_plugin_factory!("qname", QnameFactory {});
 
 impl PluginFactory for QnameFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {

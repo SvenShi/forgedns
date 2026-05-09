@@ -32,7 +32,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone, Deserialize)]
 struct FallbackConfig {
@@ -237,9 +237,8 @@ impl FallbackExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("fallback")]
 pub struct FallbackFactory;
-
-register_plugin_factory!("fallback", FallbackFactory {});
 
 impl PluginFactory for FallbackFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {

@@ -44,7 +44,7 @@ use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{
     Plugin, PluginCreateContext, PluginFactory, PluginRegistry, UninitializedPlugin,
 };
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, plugin_factory};
 
 const DEFAULT_QUEUE_SIZE: usize = 8_192;
 const DEFAULT_BATCH_SIZE: usize = 256;
@@ -229,9 +229,8 @@ fn resolve_config(args: Option<YamlValue>) -> Result<ResolvedRecorderConfig> {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("query_recorder")]
 pub struct QueryRecorderFactory;
-
-register_plugin_factory!("query_recorder", QueryRecorderFactory {});
 
 impl PluginFactory for QueryRecorderFactory {
     fn create(

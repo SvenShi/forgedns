@@ -36,7 +36,7 @@ use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
 use crate::plugin::executor::template::{JsonTemplateValue, Template};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, plugin_factory};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_ASYNC_MODE: bool = true;
@@ -147,9 +147,8 @@ struct HttpRequestExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("http_request")]
 pub struct HttpRequestFactory;
-
-register_plugin_factory!("http_request", HttpRequestFactory {});
 
 #[async_trait]
 impl Plugin for HttpRequestExecutor {

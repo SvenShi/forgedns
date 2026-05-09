@@ -1778,6 +1778,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "mikrotik-rs",
+ "oxidns-macros",
  "oxidns-proto",
  "oxidns-ripset",
  "oxidns-zoneparser",
@@ -1808,6 +1809,15 @@ dependencies = [
  "url",
  "webpki-roots",
  "wincode",
+]
+
+[[package]]
+name = "oxidns-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -27,12 +27,11 @@ use crate::plugin::{
     Plugin, PluginFactory, PluginHolder, PluginRef, PluginRegistry, UninitializedPlugin,
     expand_quick_setup_dependency_specs,
 };
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
+#[plugin_factory("any_match")]
 pub struct AnyMatchFactory {}
-
-register_plugin_factory!("any_match", AnyMatchFactory {});
 
 impl PluginFactory for AnyMatchFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {

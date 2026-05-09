@@ -17,7 +17,9 @@
 //!
 //! Initialization flow:
 //!
-//! - factories are registered through [`crate::register_plugin_factory!`];
+//! - simple factories are registered with `#[plugin_factory("type")]`;
+//! - factories that need custom constructors are registered through
+//!   [`crate::register_plugin_factory!`];
 //! - runtime configuration is validated against the registered plugin types;
 //! - plugin dependencies are resolved in category-aware order; and
 //! - concrete plugin instances are initialized and stored in

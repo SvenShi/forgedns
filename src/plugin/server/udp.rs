@@ -26,7 +26,7 @@ use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 const UDP_RECV_BUFFER_SIZE: usize = 65_535;
 const UDP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
@@ -233,9 +233,8 @@ fn configure_udp_socket(sock: &Socket) {
 
 /// Factory for creating UDP server plugin instances
 #[derive(Debug)]
+#[plugin_factory("udp_server")]
 pub struct UdpServerFactory {}
-
-register_plugin_factory!("udp_server", UdpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for UdpServerFactory {

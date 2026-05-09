@@ -36,7 +36,7 @@ use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 const DEFAULT_QPS: f64 = 20.0;
 const DEFAULT_BURST: f64 = 40.0;
@@ -76,9 +76,8 @@ struct RateLimiter {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("rate_limiter")]
 pub struct RateLimiterFactory;
-
-register_plugin_factory!("rate_limiter", RateLimiterFactory {});
 
 impl PluginFactory for RateLimiterFactory {
     fn create(

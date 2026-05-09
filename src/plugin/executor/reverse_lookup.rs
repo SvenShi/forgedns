@@ -36,7 +36,7 @@ use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Name, PTR, RData, Rcode, Record, RecordType};
-use crate::{continue_next, register_plugin_api, register_plugin_factory};
+use crate::{continue_next, plugin_factory, register_plugin_api};
 
 const DEFAULT_SIZE: usize = 65_535;
 const DEFAULT_TTL: u32 = 7_200;
@@ -212,9 +212,8 @@ impl ReverseLookup {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("reverse_lookup")]
 pub struct ReverseLookupFactory;
-
-register_plugin_factory!("reverse_lookup", ReverseLookupFactory {});
 
 impl PluginFactory for ReverseLookupFactory {
     fn create(

@@ -19,7 +19,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug)]
 struct DropResp {
@@ -51,9 +51,8 @@ impl Executor for DropResp {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("drop_resp")]
 pub struct DropRespFactory;
-
-register_plugin_factory!("drop_resp", DropRespFactory {});
 
 impl PluginFactory for DropRespFactory {
     fn create(

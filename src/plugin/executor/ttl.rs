@@ -28,7 +28,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
 struct TtlPolicy {
@@ -108,9 +108,8 @@ impl Executor for TtlExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("ttl")]
 pub struct TtlFactory;
-
-register_plugin_factory!("ttl", TtlFactory {});
 
 impl PluginFactory for TtlFactory {
     fn create(

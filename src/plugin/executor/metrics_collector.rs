@@ -35,7 +35,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::{continue_next, register_api_route, register_plugin_factory};
+use crate::{continue_next, plugin_factory, register_api_route};
 
 const DEFAULT_NAME: &str = "default";
 
@@ -166,9 +166,8 @@ impl MetricsCollector {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("metrics_collector")]
 pub struct MetricsCollectorFactory;
-
-register_plugin_factory!("metrics_collector", MetricsCollectorFactory {});
 
 impl PluginFactory for MetricsCollectorFactory {
     fn create(

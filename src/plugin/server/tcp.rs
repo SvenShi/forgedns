@@ -40,8 +40,8 @@ use crate::plugin::server::{
     ConnectionGuard, RequestHandle, RequestMeta, Server, parse_listen_addr,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::plugin_factory;
 use crate::proto::Message;
-use crate::register_plugin_factory;
 
 const TCP_SOCKET_BUFFER_SIZE: usize = 64 * 1024;
 
@@ -369,9 +369,8 @@ fn configure_tcp_socket(sock: &Socket, idle_timeout: Duration) {
 
 /// Factory for creating TCP server plugin instances
 #[derive(Debug)]
+#[plugin_factory("tcp_server")]
 pub struct TcpServerFactory {}
-
-register_plugin_factory!("tcp_server", TcpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for TcpServerFactory {

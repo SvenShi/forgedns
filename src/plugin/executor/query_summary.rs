@@ -26,7 +26,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, plugin_factory};
 
 const DEFAULT_MSG: &str = "query summary";
 
@@ -116,9 +116,8 @@ impl QuerySummary {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("query_summary")]
 pub struct QuerySummaryFactory;
-
-register_plugin_factory!("query_summary", QuerySummaryFactory {});
 
 impl PluginFactory for QuerySummaryFactory {
     fn create(

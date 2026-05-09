@@ -32,7 +32,7 @@ use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::template::Template;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 4096;
@@ -328,9 +328,8 @@ where
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("script")]
 pub struct ScriptFactory;
-
-register_plugin_factory!("script", ScriptFactory {});
 
 impl PluginFactory for ScriptFactory {
     fn create(

@@ -32,7 +32,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{CNAME, DNSClass, Name, Question, RData, Record};
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, plugin_factory};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RedirectConfig {
@@ -163,9 +163,8 @@ impl RedirectExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("redirect")]
 pub struct RedirectFactory;
-
-register_plugin_factory!("redirect", RedirectFactory {});
 
 impl PluginFactory for RedirectFactory {
     fn create(

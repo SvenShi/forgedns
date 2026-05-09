@@ -37,8 +37,8 @@ use crate::plugin::{
     Plugin, PluginFactory, PluginHolder, PluginRegistry, UninitializedPlugin,
     expand_quick_setup_dependency_specs, registered_plugin_kind,
 };
+use crate::plugin_factory;
 use crate::proto::Message;
-use crate::register_plugin_factory;
 
 const ATTR_PLUGIN_TAG: &str = "cron.plugin_tag";
 const ATTR_JOB_NAME: &str = "cron.job_name";
@@ -297,9 +297,8 @@ impl CronExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("cron")]
 pub struct CronFactory;
-
-register_plugin_factory!("cron", CronFactory {});
 
 impl PluginFactory for CronFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {

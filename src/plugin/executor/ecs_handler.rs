@@ -28,7 +28,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{ClientSubnet, DNSClass, Edns, EdnsCode, EdnsOption, Message};
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, plugin_factory};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct EcsHandlerConfig {
@@ -143,9 +143,8 @@ impl EcsHandler {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("ecs_handler")]
 pub struct EcsHandlerFactory;
-
-register_plugin_factory!("ecs_handler", EcsHandlerFactory {});
 
 impl PluginFactory for EcsHandlerFactory {
     fn create(

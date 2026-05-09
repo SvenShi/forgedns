@@ -19,7 +19,7 @@ use crate::plugin::{
     Plugin, PluginFactory, PluginRef, PluginRegistry, UninitializedPlugin,
     expand_quick_setup_dependency_specs,
 };
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 pub mod chain;
 
@@ -150,9 +150,8 @@ fn parse_control_flow_dependency(exec: &str) -> Option<String> {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("sequence")]
 pub struct SequenceFactory {}
-
-register_plugin_factory!("sequence", SequenceFactory {});
 
 impl PluginFactory for SequenceFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {

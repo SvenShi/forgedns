@@ -32,4 +32,5 @@ pub mod plugin;
 pub mod service;
 pub mod upgrade;
 
+pub use oxidns_macros::plugin_factory;
 pub use oxidns_proto as proto;

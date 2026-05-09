@@ -40,7 +40,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[cfg(target_os = "linux")]
 const NFTSET_WRITER_QUEUE_SIZE: usize = 256;
@@ -215,9 +215,8 @@ impl Executor for NftSetExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("nftset")]
 pub struct NftSetFactory;
-
-register_plugin_factory!("nftset", NftSetFactory {});
 
 impl PluginFactory for NftSetFactory {
     fn create(

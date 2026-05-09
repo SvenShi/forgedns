@@ -25,7 +25,7 @@ use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct IpSetArgs {
@@ -164,9 +164,8 @@ impl Provider for IpSet {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("ip_set")]
 pub struct IpSetFactory {}
-
-register_plugin_factory!("ip_set", IpSetFactory {});
 
 impl PluginFactory for IpSetFactory {
     fn get_dependency_specs(&self, plugin_config: &PluginConfig) -> Vec<DependencySpec> {

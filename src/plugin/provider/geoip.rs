@@ -23,7 +23,7 @@ use crate::plugin::provider::v2ray_dat::{
     GeoIp, GeoIpList, cidr_to_rule, geoip_code, normalized_selectors,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone, Deserialize)]
 struct GeoIpArgs {
@@ -172,9 +172,8 @@ impl Provider for GeoIpProvider {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("geoip")]
 pub struct GeoIpFactory;
-
-register_plugin_factory!("geoip", GeoIpFactory {});
 
 impl PluginFactory for GeoIpFactory {
     fn create(

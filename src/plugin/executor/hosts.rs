@@ -35,10 +35,10 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin_factory;
 use crate::proto::{
     A, AAAA, DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType, SOA,
 };
-use crate::register_plugin_factory;
 
 const HOSTS_ANSWER_TTL: u32 = 10;
 const HOSTS_FAKE_SOA_TTL: u32 = 300;
@@ -207,9 +207,8 @@ impl Executor for HostsExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("hosts")]
 pub struct HostsFactory;
-
-register_plugin_factory!("hosts", HostsFactory {});
 
 impl PluginFactory for HostsFactory {
     fn create(

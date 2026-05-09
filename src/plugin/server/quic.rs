@@ -33,7 +33,7 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::DEFAULT_SERVER_IDLE_TIMEOUT;
 use crate::plugin::server::{ConnectionGuard, RequestHandle, RequestMeta, Server, udp};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 /// QUIC server configuration
 #[derive(Deserialize)]
@@ -359,9 +359,8 @@ pub fn build_quic_endpoint(
 
 /// Factory for creating QUIC server plugin instances
 #[derive(Debug)]
+#[plugin_factory("quic_server")]
 pub struct QuicServerFactory {}
-
-register_plugin_factory!("quic_server", QuicServerFactory {});
 
 #[async_trait]
 impl PluginFactory for QuicServerFactory {

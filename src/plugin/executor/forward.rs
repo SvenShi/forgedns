@@ -25,8 +25,8 @@ use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder, Upstre
 use crate::plugin::executor::dual_selector::{ForwardProbeRequest, ForwardProbeResult};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin_factory;
 use crate::proto::{Message, Rcode, RecordType};
-use crate::register_plugin_factory;
 
 const PROBE_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_CONCURRENT_QUERIES: usize = 3;
@@ -595,9 +595,8 @@ pub struct ForwardConfig {
 
 /// Factory for creating DNS forwarder plugins
 #[derive(Debug)]
+#[plugin_factory("forward")]
 pub struct ForwardFactory;
-
-register_plugin_factory!("forward", ForwardFactory {});
 
 impl PluginFactory for ForwardFactory {
     fn create(

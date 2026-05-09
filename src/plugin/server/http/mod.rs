@@ -33,7 +33,7 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
 use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 mod http2_server;
 mod http3_server;
@@ -292,9 +292,8 @@ impl Server for HttpServer {
 
 /// Factory for creating HTTP server plugin instances
 #[derive(Debug)]
+#[plugin_factory("http_server")]
 pub struct HttpServerFactory {}
-
-register_plugin_factory!("http_server", HttpServerFactory {});
 
 #[async_trait]
 impl PluginFactory for HttpServerFactory {

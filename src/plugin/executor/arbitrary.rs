@@ -25,8 +25,8 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin_factory;
 use crate::proto::{DNSClass, Name, Rcode, Record, RecordType};
-use crate::register_plugin_factory;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -114,9 +114,8 @@ impl Executor for Arbitrary {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("arbitrary")]
 pub struct ArbitraryFactory;
-
-register_plugin_factory!("arbitrary", ArbitraryFactory {});
 
 impl PluginFactory for ArbitraryFactory {
     fn create(

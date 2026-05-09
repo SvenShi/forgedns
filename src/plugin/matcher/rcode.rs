@@ -24,12 +24,11 @@ use crate::plugin::matcher::matcher_utils::{
     validate_non_empty_rules,
 };
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
+#[plugin_factory("rcode")]
 pub struct RcodeFactory {}
-
-register_plugin_factory!("rcode", RcodeFactory {});
 
 impl PluginFactory for RcodeFactory {
     fn create(

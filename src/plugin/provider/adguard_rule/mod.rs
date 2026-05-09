@@ -30,8 +30,8 @@ use crate::config::types::PluginConfig;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::provider::Provider;
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin_factory;
 use crate::proto::{Name, Question};
-use crate::register_plugin_factory;
 
 mod compiler;
 mod model;
@@ -124,9 +124,8 @@ impl Plugin for AdGuardRule {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("adguard_rule")]
 pub struct AdGuardRuleFactory;
-
-register_plugin_factory!("adguard_rule", AdGuardRuleFactory {});
 
 #[async_trait]
 impl Provider for AdGuardRule {

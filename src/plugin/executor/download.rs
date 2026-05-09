@@ -33,7 +33,7 @@ use crate::network::http_client::{HttpClient, HttpClientOptions, HttpRequestOpti
 use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -157,9 +157,8 @@ impl DownloadExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("download")]
 pub struct DownloadFactory;
-
-register_plugin_factory!("download", DownloadFactory {});
 
 impl PluginFactory for DownloadFactory {
     fn prepare_startup<'a>(

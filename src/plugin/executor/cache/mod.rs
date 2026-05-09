@@ -29,7 +29,7 @@ use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Message, Rcode};
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, plugin_factory};
 
 mod api;
 mod key;
@@ -836,9 +836,8 @@ fn validate_cache_config(config: &CacheConfig) -> Result<()> {
 
 /// Factory for creating cache executor plugins.
 #[derive(Debug)]
+#[plugin_factory("cache")]
 pub struct CacheFactory;
-
-register_plugin_factory!("cache", CacheFactory {});
 
 impl PluginFactory for CacheFactory {
     fn create(

@@ -40,7 +40,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::register_plugin_factory;
+use crate::plugin_factory;
 
 #[cfg(target_os = "linux")]
 const IPSET_WRITER_QUEUE_SIZE: usize = 256;
@@ -167,9 +167,8 @@ impl Executor for IpSetExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("ipset")]
 pub struct IpSetFactory;
-
-register_plugin_factory!("ipset", IpSetFactory {});
 
 impl PluginFactory for IpSetFactory {
     fn create(

@@ -63,7 +63,7 @@ fn load_executor(
     Arc<PluginRegistry>,
 ) {
     let registry = rt
-        .block_on(init_plugins(make_config(plugin), None))
+        .block_on(init_plugins(make_config(plugin)))
         .expect("benchmark plugin should initialize");
     let executor = registry
         .get_plugin("bench")

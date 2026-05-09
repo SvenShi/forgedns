@@ -52,7 +52,7 @@ use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::Rcode;
-use crate::{continue_next, register_plugin_factory};
+use crate::{continue_next, plugin_factory};
 
 mod api;
 mod manager;
@@ -371,9 +371,8 @@ impl Executor for MikrotikExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[plugin_factory("ros_address_list")]
 pub struct MikrotikFactory;
-
-register_plugin_factory!("ros_address_list", MikrotikFactory {});
 
 impl PluginFactory for MikrotikFactory {
     fn create(
