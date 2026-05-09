@@ -1,12 +1,16 @@
 ![OxiDNS Banner](.github/img/logo-banner.png) 
 
+[![oxidns downloads](https://img.shields.io/github/downloads/SvenShi/oxidns/total)](https://github.com/SvenShi/oxidns/releases)
+[![Rust CI](https://github.com/svenshi/oxidns/actions/workflows/rust-ci.yml/badge.svg?branch=main)](https://github.com/svenshi/oxidns/actions/workflows/rust-ci.yml)
+[![WebUI CI](https://github.com/svenshi/oxidns/actions/workflows/webui-ci.yml/badge.svg)](https://github.com/svenshi/oxidns/actions/workflows/webui-ci.yml)
+
 [中文](README.md) | [English](README_EN.md)
 
 [文档地址](https://forgedns.cn/)
 
 **⚡ 一个面向现代网络的高性能、可编排 DNS 服务器。**
 
-OxiDNS 使用 Rust 编写，围绕 `server -> DnsContext -> matcher / executor / provider -> upstream` 这条主路径构建。它的目标不是堆功能，而是在缓存、过滤、回退、重写、本地应答和系统联动这些真实需求下，依然保持清晰结构和稳定性能。
+OxiDNS 受 [mosdns](https://github.com/IrineSistiana/mosdns) 启发，并使用 Rust 重新实现。它围绕 `server -> DnsContext -> matcher / executor / provider -> upstream` 这条主路径构建，目标不是堆功能，而是在缓存、过滤、回退、重写、本地应答和系统联动这些真实需求下，依然保持清晰结构和稳定性能。
 
 项目仍在持续开发中。
 

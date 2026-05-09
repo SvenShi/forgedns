@@ -1,12 +1,16 @@
 ![OxiDNS Banner](.github/img/logo-banner.png)
 
+[![oxidns downloads](https://img.shields.io/github/downloads/SvenShi/oxidns/total)](https://github.com/SvenShi/oxidns/releases)
+[![Rust CI](https://github.com/svenshi/oxidns/actions/workflows/rust-ci.yml/badge.svg?branch=main)](https://github.com/svenshi/oxidns/actions/workflows/rust-ci.yml)
+[![WebUI CI](https://github.com/svenshi/oxidns/actions/workflows/webui-ci.yml/badge.svg)](https://github.com/svenshi/oxidns/actions/workflows/webui-ci.yml)
+
 [中文](README.md) | [English](README_EN.md)
 
 [Documentation](https://forgedns.cn/en/)
 
 **⚡ A high-performance, programmable DNS server for modern networks.**
 
-OxiDNS is written in Rust and built around the request path `server -> DnsContext -> matcher / executor / provider -> upstream`. The goal is not to accumulate features, but to keep DNS fast and structurally clean while handling real-world policy needs such as cache, filtering, fallback, rewriting, local answers, and system integrations.
+OxiDNS is inspired by [mosdns](https://github.com/IrineSistiana/mosdns) and reimplemented in Rust. It is built around the request path `server -> DnsContext -> matcher / executor / provider -> upstream`. The goal is not to accumulate features, but to keep DNS fast and structurally clean while handling real-world policy needs such as cache, filtering, fallback, rewriting, local answers, and system integrations.
 
 The project is under active development.
 
