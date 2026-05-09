@@ -14,7 +14,7 @@ COPY .docker-dist/webui /etc/oxidns/webui
 COPY .docker-dist/LICENSE /usr/share/licenses/oxidns/LICENSE
 
 RUN chmod +x /usr/local/bin/oxidns \
-    && sed -i 's/0.0.0.0:5335/0.0.0.0:53/' /etc/oxidns/config.yaml || true
+    && sed -i 's/:5335/:53/' /etc/oxidns/config.yaml || true
 
 ENV OXIDNS_VERSION=${OXIDNS_VERSION}
 ENV TZ=UTC

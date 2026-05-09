@@ -9,7 +9,7 @@ log:
 # Management API (optional)
 api:
   http:
-    listen: "0.0.0.0:9199"
+    listen: ":9199"
     # auth:
     #   type: basic
     #   username: admin
@@ -29,8 +29,6 @@ plugins:
   - tag: main_sequence
     type: sequence
     args:
-      # Place the recorder before the main branch if you want complete path capture.
-      # - exec: $query_recorder_main
       - exec: $forward
       - exec: accept
 
