@@ -1,0 +1,52 @@
+name: WebUI CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "v*"
+    paths:
+      - "webui/**"
+      - ".github/workflows/webui-ci.yml"
+  pull_request:
+    branches:
+      - main
+      - "v*"
+    paths:
+      - "webui/**"
+      - ".github/workflows/webui-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  webui:
+    name: Typecheck and Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: webui/pnpm-lock.yaml
+
+      - name: Install WebUI dependencies
+        working-directory: webui
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck WebUI
+        working-directory: webui
+        run: pnpm typecheck
+
+      - name: Build WebUI
+        working-directory: webui
+        run: pnpm build

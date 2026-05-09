@@ -14,9 +14,48 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  webui:
+    name: Build WebUI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: webui/pnpm-lock.yaml
+
+      - name: Install WebUI dependencies
+        working-directory: webui
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck WebUI
+        working-directory: webui
+        run: pnpm typecheck
+
+      - name: Build WebUI
+        working-directory: webui
+        run: pnpm build
+
+      - name: Upload WebUI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: webui-dist
+          path: webui/out
+          if-no-files-found: error
+
   release:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: webui
     strategy:
       fail-fast: false
       matrix:
@@ -129,6 +168,12 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Download WebUI artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: webui-dist
+          path: webui/out
+
       - name: Install cross
         if: matrix.build_tool == 'cross'
         run: cargo install cross --version 0.2.5 --locked
@@ -210,7 +255,9 @@ jobs:
 
           ls -lah "$DIR"
           cp config.yaml LICENSE "$DIR"/
-          tar czf "$DIR/oxidns-${TARGET}.tar.gz" -C "$DIR" "$EXE" config.yaml LICENSE
+          rm -rf "$DIR/webui"
+          cp -R webui/out "$DIR/webui"
+          tar czf "$DIR/oxidns-${TARGET}.tar.gz" -C "$DIR" "$EXE" config.yaml LICENSE webui
 
       - name: Package release (Windows)
         if: matrix.os == 'windows-latest'
@@ -225,9 +272,13 @@ jobs:
 
           Copy-Item -Path "config.yaml" -Destination "$DIR/"
           Copy-Item -Path "LICENSE" -Destination "$DIR/"
+          if (Test-Path "$DIR/webui") {
+            Remove-Item -Path "$DIR/webui" -Recurse -Force
+          }
+          Copy-Item -Path "webui/out" -Destination "$DIR/webui" -Recurse
 
           Compress-Archive `
-            -Path "$DIR/$EXE", "$DIR/config.yaml", "$DIR/LICENSE" `
+            -Path "$DIR/$EXE", "$DIR/config.yaml", "$DIR/LICENSE", "$DIR/webui" `
             -DestinationPath "$DIR/oxidns-$TARGET.zip" `
             -Force
 

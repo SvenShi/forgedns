@@ -140,6 +140,7 @@ A Rust-powered DNS engine inspired by MosDNS, designed for performance and compl
 assets = [
     ["target/release/oxidns", "usr/bin/oxidns", "755"],
     ["config.yaml", "etc/oxidns/config.yaml", "644"],
+    ["webui/out/**/*", "usr/share/oxidns/webui", "644"],
 ]
 maintainer-scripts = "packaging/debian"
 

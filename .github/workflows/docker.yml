@@ -121,6 +121,7 @@ jobs:
           test -f .docker-dist/oxidns
           test -f .docker-dist/config.yaml
           test -f .docker-dist/LICENSE
+          test -f .docker-dist/webui/index.html
 
       - name: Log in to Docker Hub
         if: needs.prepare.outputs.push == 'true'
@@ -157,7 +158,9 @@ jobs:
       - name: Smoke test amd64 image
         if: needs.prepare.outputs.push != 'true'
         shell: bash
-        run: docker run --rm oxidns-ci:amd64 --version
+        run: |
+          docker run --rm oxidns-ci:amd64 --version
+          docker run --rm --entrypoint test oxidns-ci:amd64 -f /etc/oxidns/webui/index.html
 
       - name: Build and push amd64 by digest
         if: needs.prepare.outputs.push == 'true'
@@ -226,6 +229,7 @@ jobs:
           test -f .docker-dist/oxidns
           test -f .docker-dist/config.yaml
           test -f .docker-dist/LICENSE
+          test -f .docker-dist/webui/index.html
 
       - name: Log in to Docker Hub
         if: needs.prepare.outputs.push == 'true'
@@ -262,7 +266,9 @@ jobs:
       - name: Smoke test arm64 image
         if: needs.prepare.outputs.push != 'true'
         shell: bash
-        run: docker run --rm --platform linux/arm64 oxidns-ci:arm64 --version
+        run: |
+          docker run --rm --platform linux/arm64 oxidns-ci:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint test oxidns-ci:arm64 -f /etc/oxidns/webui/index.html
 
       - name: Build and push arm64 by digest
         if: needs.prepare.outputs.push == 'true'

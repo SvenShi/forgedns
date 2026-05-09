@@ -10,7 +10,22 @@ The OxiDNS WebUI is a separately built static frontend. It is not compiled into 
 
 In both modes, the WebUI defaults to the relative backend URL `/api`. When the WebUI page and `/api/*` share the same browser origin, no CORS setup is needed.
 
-## Build The WebUI
+## Use The WebUI Included In Release Packages
+
+Official release archives include a prebuilt `webui/` directory:
+
+```text
+oxidns
+config.yaml
+LICENSE
+webui/
+```
+
+If you run OxiDNS from the extracted release directory, the default `webui.root: "./webui"` config works directly. Docker images also place the same WebUI static files under `/etc/oxidns/webui`.
+
+You only need to build the WebUI manually when building from source, developing the WebUI, or publishing static files yourself through nginx or caddy.
+
+## Build The WebUI Manually
 
 The WebUI lives in the repository's `webui/` directory. Production builds are exported to `webui/out`:
 

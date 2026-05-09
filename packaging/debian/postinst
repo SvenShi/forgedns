@@ -4,6 +4,10 @@ set -e
 mkdir -p /var/lib/oxidns
 mkdir -p /etc/oxidns
 
+if [ -d /usr/share/oxidns/webui ] && [ ! -e /var/lib/oxidns/webui ]; then
+    ln -s /usr/share/oxidns/webui /var/lib/oxidns/webui
+fi
+
 #DEBHELPER#
 
 exit 0

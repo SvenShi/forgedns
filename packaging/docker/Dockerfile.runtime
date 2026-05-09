@@ -10,6 +10,7 @@ WORKDIR /etc/oxidns
 
 COPY .docker-dist/oxidns /usr/local/bin/oxidns
 COPY .docker-dist/config.yaml /etc/oxidns/config.yaml
+COPY .docker-dist/webui /etc/oxidns/webui
 COPY .docker-dist/LICENSE /usr/share/licenses/oxidns/LICENSE
 
 RUN chmod +x /usr/local/bin/oxidns \
@@ -20,7 +21,7 @@ ENV TZ=UTC
 
 EXPOSE 53/udp
 EXPOSE 53/tcp
-EXPOSE 9088/tcp
+EXPOSE 9199/tcp
 
 ENTRYPOINT ["oxidns"]
-CMD ["start", "-c", "/etc/oxidns/config.yaml"]
+CMD ["start", "-c", "/etc/oxidns/config.yaml", "-d", "/etc/oxidns"]
