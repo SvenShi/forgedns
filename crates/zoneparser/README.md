@@ -14,6 +14,13 @@ parsing pipeline are now adapted for OxiDNS:
   `default_ttl`, `base_dir`, and `max_include_depth`
 - the parser supports a zonefile superset intended for OxiDNS `arbitrary`
 
+## Role in OxiDNS
+
+OxiDNS uses this crate to load static DNS records into plugins that synthesize
+answers, especially the `arbitrary` executor. Keeping the parser outside the
+main server crate lets zonefile syntax support evolve without coupling it to
+listeners, upstream transports, cache state, or runtime configuration.
+
 ## Public API
 
 ```rust
@@ -47,8 +54,30 @@ Common RR presentation formats are parsed directly. For types without a
 dedicated text parser, RFC3597 generic syntax can still be used as long as the
 wire format is supported by `oxidns-proto`.
 
+## Options
+
+`ParseOptions` controls the parser's initial state:
+
+- `initial_origin` sets the origin used for relative owner names
+- `default_ttl` sets the starting TTL before any `$TTL` directive is seen
+- `base_dir` resolves relative `$INCLUDE` paths for inline sources
+- `max_include_depth` bounds recursive include expansion
+
+When parsing a file, `base_dir` defaults to the file's parent directory if it
+is not set explicitly.
+
+## Error Reporting
+
+Parser errors include a source label, line number, and message when possible.
+I/O errors and include-depth failures are reported as structured
+`ZoneParseError` variants so callers can distinguish syntax problems from
+environment or configuration issues.
+
 ## Notes
 
 - This crate is not trying to preserve the original upstream iterator API.
 - The parser is broader than what OxiDNS `arbitrary` currently needs, but it
   is still focused on loading static zonefile content into OxiDNS records.
+- Parser output is already normalized to `oxidns_proto::Record`, so callers do
+  not need a second conversion step before inserting records into OxiDNS
+  response logic.

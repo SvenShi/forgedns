@@ -5,6 +5,10 @@ Pure Rust library for managing Linux `ipset` and nftables sets through netlink.
 This package is published to crates.io as `oxidns-ripset` to avoid the
 upstream name conflict. The library crate name remains `ripset`.
 
+OxiDNS uses this crate for system-integration plugins that synchronize DNS
+policy results into kernel-managed IP sets without spawning `ipset` or `nft`
+commands on the request path.
+
 ## Features
 
 - No shelling out to `ipset` or `nft`
@@ -12,6 +16,22 @@ upstream name conflict. The library crate name remains `ripset`.
 - Supports IPv4, IPv6, and CIDR entries
 - Optional entry timeout support
 - Non-Linux targets compile with stub implementations that return `UnsupportedPlatform`
+
+## API Shape
+
+The public API is intentionally direct:
+
+- ipset helpers are exposed as `ipset_create`, `ipset_add`, `ipset_del`,
+  `ipset_test`, `ipset_list`, `ipset_flush`, and `ipset_destroy`
+- nftables helpers are exposed as `nftset_create_table`,
+  `nftset_create_set`, `nftset_add`, `nftset_del`, `nftset_test`,
+  `nftset_list`, and delete/list helpers
+- `IpTarget` represents either a single IP address or a CIDR network
+- `IpEntry` adds optional timeout metadata for add operations
+- errors are normalized as `IpSetError`
+
+The crate keeps netlink details private so callers can focus on set lifecycle
+and membership operations.
 
 ## Install
 
@@ -81,6 +101,19 @@ nftset_delete_table("inet", "mytable")?;
 - `CAP_NET_ADMIN` or root privileges
 - `ip_set` kernel module for ipset
 - `nf_tables` kernel module for nftables
+
+## Platform Behavior
+
+On Linux, operations communicate with the kernel through netlink. On other
+platforms, the same API is available but returns
+`IpSetError::UnsupportedPlatform`, allowing cross-platform projects to compile
+while keeping runtime behavior explicit.
+
+## Relationship to OxiDNS
+
+This crate is maintained with OxiDNS's plugin model in mind. It is suitable for
+background synchronization and side-effect plugins, but DNS request handling
+should avoid blocking on kernel set management unless correctness requires it.
 
 ## License
 

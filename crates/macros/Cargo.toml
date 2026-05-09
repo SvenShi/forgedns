@@ -6,6 +6,7 @@ authors = ["Sven Shi <isvenshi@gmail.com>"]
 description = "Proc macros for OxiDNS."
 repository = "https://github.com/svenshi/oxidns"
 license = "GPL-3.0-or-later"
+readme = "README.md"
 
 [lib]
 proc-macro = true

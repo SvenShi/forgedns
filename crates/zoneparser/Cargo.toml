@@ -11,7 +11,7 @@ keywords = ["dns", "zonefile", "parser"]
 categories = ["parser-implementations", "network-programming"]
 
 [dependencies]
-oxidns-proto = { version = "0.1.0", path = "../oxidns-proto" }
+oxidns-proto = { version = "0.1", path = "../proto" }
 thiserror = "2.0"
 
 [lib]
