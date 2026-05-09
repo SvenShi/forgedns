@@ -221,13 +221,6 @@ pub struct DnsContext {
 }
 
 impl DnsContext {
-    /// Context attribute key: dual_selector requests extra preferred-type probe
-    /// in forward.
-    pub const ATTR_FORWARD_PROBE_REQUEST: &'static str = "dual_selector.forward_probe_request";
-    /// Context attribute key: forward returns probe result back to
-    /// dual_selector.
-    pub const ATTR_FORWARD_PROBE_RESULT: &'static str = "dual_selector.forward_probe_result";
-
     #[inline]
     pub fn new(peer_addr: SocketAddr, request: Message, registry: Arc<PluginRegistry>) -> Self {
         Self {
@@ -342,7 +335,7 @@ impl DnsContext {
     }
 
     #[inline]
-    pub fn remove_attr<T>(&mut self, name: &str) -> Option<T>
+    pub fn take_attr<T>(&mut self, name: &str) -> Option<T>
     where
         T: Send + Sync + 'static,
     {

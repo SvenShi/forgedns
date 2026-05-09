@@ -312,7 +312,6 @@ Use the full plugin form for bootstrap, proxy, HTTP/3, pool settings, and other 
 
 - Single-upstream mode queries the configured upstream directly.
 - Multi-upstream mode races queries from a randomized starting point and keeps the first successful answer.
-- When combined with `prefer_ipv4` or `prefer_ipv6`, it can run preferred-family probes.
 - With `short_circuit` enabled, a successful upstream response stops the remaining executor chain immediately.
 
 ### Typical Uses
@@ -939,17 +938,20 @@ Biases dual-stack results toward one address family.
 
 #### `cache`
 
-- Type: `boolean`; Required: no; Default: `false`
+- Type: `boolean`; Required: no; Default: `true`
 - Purpose: Cache preference decisions.
 
 #### `cache_ttl`
 
-- Type: `duration`; Required: no
+- Type: `integer`; Required: no; Default: `3600`
+- Unit: seconds
 - Purpose: Retention for the preference cache.
 
 ### Behavior
 
 - Helps make A and AAAA selection more stable when both families exist.
+- Preferred-family queries pass through normally and warm the preference cache when they return preferred-family answers.
+- Non-preferred-family queries are blocked immediately when the cache says the preferred family exists; otherwise `prefer_ipv4` / `prefer_ipv6` runs the downstream chain concurrently for the original query and a preferred-family probe.
 
 ### Typical Uses
 

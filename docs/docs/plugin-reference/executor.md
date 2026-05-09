@@ -368,7 +368,6 @@ sidebar_position: 3
 
 - 单上游模式：直接查询该上游。
 - 多上游模式：从随机起点选择上游并发查询，先返回成功结果者胜出。
-- 当与 `prefer_ipv4` / `prefer_ipv6` 联动时，支持额外 preferred qtype probe。
 - 开启 `short_circuit` 时，一旦拿到可用上游响应，就会立即停止后续 executor 链。
 
 ### 常见用途
@@ -1032,7 +1031,7 @@ sidebar_position: 3
 - 偏好类型请求正常放行，并记录“该域名存在 preferred answer”。
 - 非偏好类型请求：
   - 若缓存已知 preferred answer 存在，则直接返回空成功响应抑制该类型。
-  - 否则借助 `forward` 的 probe 机制进行一次 preferred 类型探测，再决定是否抑制。
+  - 否则并发执行后续链路的原始查询和 preferred 类型探测，再决定是否抑制。
 
 ### 典型用途
 

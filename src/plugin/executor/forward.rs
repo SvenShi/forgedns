@@ -7,10 +7,8 @@
 //! Supports:
 //! - single-upstream forwarding
 //! - multi-upstream concurrent racing (`concurrent`) with first-success return
-//! - optional dual-stack probe flow used by `dual_selector`
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use rand::RngExt;
@@ -22,13 +20,11 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder, UpstreamConfig};
-use crate::plugin::executor::dual_selector::{ForwardProbeRequest, ForwardProbeResult};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::plugin_factory;
-use crate::proto::{Message, Rcode, RecordType};
+use crate::proto::{Message, Rcode};
 
-const PROBE_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_CONCURRENT_QUERIES: usize = 3;
 
 /// Single-upstream DNS forwarder
@@ -67,35 +63,7 @@ impl Plugin for SingleDnsForwarder {
 #[async_trait]
 impl Executor for SingleDnsForwarder {
     #[hotpath::measure]
-    #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if context.contains_attr(DnsContext::ATTR_FORWARD_PROBE_REQUEST) {
-            return if let Some(probe) = context
-                .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
-                .copied()
-            {
-                self.execute_with_probe(context, probe).await
-            } else {
-                self.execute_standard(context).await
-            };
-        }
-        self.execute_standard(context).await
-    }
-}
-
-impl SingleDnsForwarder {
-    #[inline]
-    fn completion_step(&self) -> ExecStep {
-        if self.short_circuit {
-            ExecStep::Stop
-        } else {
-            ExecStep::Next
-        }
-    }
-
-    #[inline]
-    #[hotpath::measure]
-    async fn execute_standard(&self, context: &mut DnsContext) -> Result<ExecStep> {
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
                 context.set_response(res);
@@ -116,103 +84,16 @@ impl SingleDnsForwarder {
         }
         Ok(self.completion_step())
     }
+}
 
-    #[hotpath::measure]
-    async fn execute_with_probe(
-        &self,
-        context: &mut DnsContext,
-        probe: ForwardProbeRequest,
-    ) -> Result<ExecStep> {
-        let mut preferred_request = context.request.clone();
-        if !set_message_first_qtype(&mut preferred_request, probe.preferred_type) {
-            return self.execute_standard(context).await;
-        }
-        let original_request = context.request.clone();
-
-        let mut original_fut = std::pin::pin!(self.upstream.query(original_request));
-        let mut preferred_fut = std::pin::pin!(self.upstream.query(preferred_request));
-        let mut preferred_early: Option<Result<Message>> = None;
-
-        let original_result = loop {
-            tokio::select! {
-                result = &mut original_fut => break result,
-                result = &mut preferred_fut, if preferred_early.is_none() => {
-                    preferred_early = Some(result);
-                }
-            }
-        };
-
-        match original_result {
-            Ok(response) => {
-                context.set_response(response);
-            }
-            Err(e) => {
-                let original_error = format!("forward plugin '{}' query failed: {}", self.tag, e);
-                context.set_attr(
-                    DnsContext::ATTR_FORWARD_PROBE_RESULT,
-                    ForwardProbeResult {
-                        preferred_has_answer: false,
-                        preferred_error: Some("probe aborted due to original query failure".into()),
-                        original_error: Some(original_error.clone()),
-                    },
-                );
-                warn!(
-                    "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
-                    context.peer_addr(),
-                    context.request.questions(),
-                    context.request.id(),
-                    e
-                );
-                return Err(DnsError::plugin(original_error));
-            }
-        }
-
-        let preferred_result = if let Some(result) = preferred_early {
-            Some(result)
+impl SingleDnsForwarder {
+    #[inline]
+    fn completion_step(&self) -> ExecStep {
+        if self.short_circuit {
+            ExecStep::Stop
         } else {
-            tokio::time::timeout(PROBE_WAIT_TIMEOUT, &mut preferred_fut)
-                .await
-                .ok()
-        };
-
-        let (preferred_has_answer, preferred_error) = match preferred_result {
-            Some(Ok(response)) => (
-                response_has_answer_of_type(&response, probe.preferred_type),
-                None,
-            ),
-            Some(Err(e)) => {
-                if event_enabled!(Level::DEBUG) {
-                    debug!(
-                        "forward plugin '{}' dual probe query failed: {}",
-                        self.tag, e
-                    );
-                }
-                (
-                    false,
-                    Some(format!(
-                        "forward plugin '{}' probe query failed: {}",
-                        self.tag, e
-                    )),
-                )
-            }
-            None => (
-                false,
-                Some(format!(
-                    "forward plugin '{}' probe query timed out after {:?}",
-                    self.tag, PROBE_WAIT_TIMEOUT
-                )),
-            ),
-        };
-
-        context.set_attr(
-            DnsContext::ATTR_FORWARD_PROBE_RESULT,
-            ForwardProbeResult {
-                preferred_has_answer,
-                preferred_error,
-                original_error: None,
-            },
-        );
-        Ok(self.completion_step())
+            ExecStep::Next
+        }
     }
 }
 
@@ -250,17 +131,21 @@ impl Plugin for ConcurrentForwarder {
 impl Executor for ConcurrentForwarder {
     #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        if context.contains_attr(DnsContext::ATTR_FORWARD_PROBE_REQUEST) {
-            return if let Some(probe) = context
-                .get_attr::<ForwardProbeRequest>(DnsContext::ATTR_FORWARD_PROBE_REQUEST)
-                .copied()
-            {
-                self.execute_with_probe(context, probe).await
-            } else {
-                self.execute_standard(context).await
-            };
+        let (response, last_error) = self.query_any_upstream(context.request.clone()).await;
+        if let Some(response) = response {
+            context.set_response(response);
+            return Ok(self.completion_step());
         }
-        self.execute_standard(context).await
+
+        let err = last_error.unwrap_or_else(|| "no upstream response".to_string());
+        warn!(
+            "forward plugin '{}' failed across all concurrent upstreams: {}",
+            self.tag, err
+        );
+        Err(DnsError::plugin(format!(
+            "forward plugin '{}' failed across all concurrent upstreams: {}",
+            self.tag, err
+        )))
     }
 }
 
@@ -324,133 +209,6 @@ impl ConcurrentForwarder {
 
         (None, last_error)
     }
-
-    async fn execute_standard(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let (response, last_error) = self.query_any_upstream(context.request.clone()).await;
-        if let Some(response) = response {
-            context.set_response(response);
-            return Ok(self.completion_step());
-        }
-
-        let err = last_error.unwrap_or_else(|| "no upstream response".to_string());
-        warn!(
-            "forward plugin '{}' failed across all concurrent upstreams: {}",
-            self.tag, err
-        );
-        Err(DnsError::plugin(format!(
-            "forward plugin '{}' failed across all concurrent upstreams: {}",
-            self.tag, err
-        )))
-    }
-
-    async fn execute_with_probe(
-        &self,
-        context: &mut DnsContext,
-        probe: ForwardProbeRequest,
-    ) -> Result<ExecStep> {
-        let mut preferred_request = context.request.clone();
-        if !set_message_first_qtype(&mut preferred_request, probe.preferred_type) {
-            return self.execute_standard(context).await;
-        }
-        let original_request = context.request.clone();
-
-        let mut original_fut = std::pin::pin!(self.query_any_upstream(original_request));
-        let mut preferred_fut = std::pin::pin!(self.query_any_upstream(preferred_request));
-        let mut preferred_early: Option<(Option<Message>, Option<String>)> = None;
-
-        let original_outcome = loop {
-            tokio::select! {
-                result = &mut original_fut => break result,
-                result = &mut preferred_fut, if preferred_early.is_none() => {
-                    preferred_early = Some(result);
-                }
-            }
-        };
-
-        let (original_response, original_error_raw) = original_outcome;
-        let Some(response) = original_response else {
-            let err = original_error_raw.unwrap_or_else(|| "no upstream response".to_string());
-            context.set_attr(
-                DnsContext::ATTR_FORWARD_PROBE_RESULT,
-                ForwardProbeResult {
-                    preferred_has_answer: false,
-                    preferred_error: Some("probe aborted due to original query failure".into()),
-                    original_error: Some(format!(
-                        "forward plugin '{}' query failed: {}",
-                        self.tag, err
-                    )),
-                },
-            );
-            return Err(DnsError::plugin(format!(
-                "forward plugin '{}' query failed: {}",
-                self.tag, err
-            )));
-        };
-        context.set_response(response);
-
-        let preferred_outcome = if let Some(result) = preferred_early {
-            Some(result)
-        } else {
-            tokio::time::timeout(PROBE_WAIT_TIMEOUT, &mut preferred_fut)
-                .await
-                .ok()
-        };
-
-        let (preferred_has_answer, preferred_error) =
-            if let Some((Some(response), _)) = preferred_outcome {
-                (
-                    response_has_answer_of_type(&response, probe.preferred_type),
-                    None,
-                )
-            } else if let Some((None, err)) = preferred_outcome {
-                if event_enabled!(Level::DEBUG)
-                    && let Some(err) = err.as_ref()
-                {
-                    debug!(
-                        "forward plugin '{}' dual probe query failed: {}",
-                        self.tag, err
-                    );
-                }
-                (
-                    false,
-                    Some(err.unwrap_or_else(|| {
-                        format!(
-                            "forward plugin '{}' probe query failed: no upstream response",
-                            self.tag
-                        )
-                    })),
-                )
-            } else {
-                (
-                    false,
-                    Some(format!(
-                        "forward plugin '{}' probe query timed out after {:?}",
-                        self.tag, PROBE_WAIT_TIMEOUT
-                    )),
-                )
-            };
-
-        context.set_attr(
-            DnsContext::ATTR_FORWARD_PROBE_RESULT,
-            ForwardProbeResult {
-                preferred_has_answer,
-                preferred_error,
-                original_error: None,
-            },
-        );
-
-        Ok(self.completion_step())
-    }
-}
-
-#[inline]
-fn set_message_first_qtype(message: &mut Message, qtype: RecordType) -> bool {
-    message.set_first_qtype(qtype)
-}
-
-#[inline]
-fn response_has_answer_of_type(message: &Message, qtype: RecordType) -> bool {
-    message.has_answer_type(qtype)
 }
 
 #[inline]
@@ -691,8 +449,10 @@ impl PluginFactory for ForwardFactory {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    use crate::proto::{Name, Question, Rcode};
+    use crate::proto::{Name, Question, Rcode, RecordType};
 
     #[derive(Debug)]
     struct MockUpstream {
