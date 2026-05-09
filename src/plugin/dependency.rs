@@ -8,11 +8,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 
+use serde::Serialize;
+
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
 
 /// Expected dependency kind used during startup structural validation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DependencyKind {
     Any,
     Server,
@@ -35,14 +38,14 @@ impl Display for DependencyKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DependencyGraphNode {
     pub tag: String,
     pub plugin_type: String,
     pub kind: DependencyKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DependencyGraphEdge {
     pub source_tag: String,
     pub field: String,
@@ -51,7 +54,7 @@ pub struct DependencyGraphEdge {
     pub expected_plugin_type: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DependencyGraphReport {
     pub nodes: Vec<DependencyGraphNode>,
     pub edges: Vec<DependencyGraphEdge>,

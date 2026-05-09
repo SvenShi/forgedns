@@ -167,14 +167,42 @@ impl ApiHttpConfig {
                 listen: listen.clone(),
                 ssl: None,
                 auth: None,
+                cors: None,
             },
             Self::Detailed(config) => ResolvedApiHttpConfig {
                 listen: config.listen.clone(),
                 ssl: config.ssl.clone(),
                 auth: config.auth.clone(),
+                cors: config.cors.clone(),
             },
         }
     }
+}
+
+/// CORS settings for the management API.
+///
+/// When present, cross-origin requests matching the configured origins are
+/// accepted. This is needed when the WebUI is served from a different host
+/// or port than the API server.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ApiCorsConfig {
+    /// List of allowed `Origin` values (e.g. `http://localhost:3000`).
+    ///
+    /// Each entry is matched exactly against the incoming `Origin` header.
+    /// Use `"*"` to allow any origin (credentials will not be sent in that
+    /// case).
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+    /// Runtime-only flag used by the management API when CORS is inferred from
+    /// a wildcard listen address such as `0.0.0.0` or `[::]`.
+    #[serde(default, skip)]
+    pub allow_any_origin: bool,
+    /// Runtime-only host allowlist inferred from the API listen address.
+    ///
+    /// These entries match the host part of the browser `Origin` header and do
+    /// not constrain the WebUI port.
+    #[serde(default, skip)]
+    pub allowed_origin_hosts: Vec<String>,
 }
 
 /// Expanded HTTP API configuration.
@@ -183,6 +211,7 @@ pub struct ApiHttpDetailedConfig {
     pub listen: String,
     pub ssl: Option<ApiTlsConfig>,
     pub auth: Option<ApiAuthConfig>,
+    pub cors: Option<ApiCorsConfig>,
 }
 
 /// TLS settings for the management API.
@@ -207,6 +236,7 @@ pub struct ResolvedApiHttpConfig {
     pub listen: String,
     pub ssl: Option<ApiTlsConfig>,
     pub auth: Option<ApiAuthConfig>,
+    pub cors: Option<ApiCorsConfig>,
 }
 
 /// Tokio runtime configuration.
@@ -428,6 +458,7 @@ mod tests {
                         require_client_cert: Some(true),
                     }),
                     auth: None,
+                    cors: None,
                 })),
             },
             log: LogConfig::default(),

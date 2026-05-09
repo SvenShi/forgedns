@@ -16,8 +16,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use crate::api::{ApiHandler, ApiRegister, json_error, json_ok};
+use crate::api::{ApiHandler, ApiRegister, json_error, json_ok, json_response};
 use crate::config;
+use crate::core::VERSION;
 use crate::core::app_clock::AppClock;
 use crate::core::error::Result;
 
@@ -209,6 +210,7 @@ struct ConfigCheckResponse {
     source: &'static str,
     path: Option<String>,
     plugin_count: usize,
+    dependency_graph: crate::plugin::DependencyGraphReport,
     message: String,
 }
 
@@ -242,6 +244,26 @@ struct ConfigSaveResponse {
     init_order: Vec<String>,
     reload: Option<ReloadSnapshot>,
     message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SystemResponse {
+    ok: bool,
+    version: &'static str,
+    os: &'static str,
+    arch: &'static str,
+    uptime_ms: u64,
+    config_path: String,
+    api_enabled: bool,
+    reload: ReloadSnapshot,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfigValidationErrorResponse {
+    ok: bool,
+    code: &'static str,
+    message: String,
+    diagnostics: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -318,10 +340,35 @@ struct ReloadStatusHandler {
     controller: Arc<AppController>,
 }
 
+#[derive(Debug)]
+struct SystemHandler {
+    controller: Arc<AppController>,
+}
+
 #[async_trait]
 impl ApiHandler for ReloadStatusHandler {
     async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         json_ok(StatusCode::OK, &self.controller.reload_snapshot())
+    }
+}
+
+#[async_trait]
+impl ApiHandler for SystemHandler {
+    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
+        let snapshot = self.controller.snapshot();
+        json_ok(
+            StatusCode::OK,
+            &SystemResponse {
+                ok: true,
+                version: VERSION,
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                uptime_ms: snapshot.uptime_ms,
+                config_path: snapshot.config_path,
+                api_enabled: true,
+                reload: snapshot.reload,
+            },
+        )
     }
 }
 
@@ -335,7 +382,7 @@ impl ApiHandler for ConfigCheckHandler {
     async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         match validate_config_file(self.controller.config_path()) {
             Ok(response) => json_ok(StatusCode::OK, &response),
-            Err(err) => json_error(StatusCode::BAD_REQUEST, "config_check_failed", err),
+            Err(err) => config_validation_error("config_check_failed", err),
         }
     }
 }
@@ -416,9 +463,21 @@ impl ApiHandler for ConfigValidateHandler {
 
         match validate_config_text(&body) {
             Ok(response) => json_ok(StatusCode::OK, &response),
-            Err(err) => json_error(StatusCode::BAD_REQUEST, "config_validate_failed", err),
+            Err(err) => config_validation_error("config_validate_failed", err),
         }
     }
+}
+
+fn config_validation_error(code: &'static str, message: String) -> crate::api::ApiResponse {
+    json_response(
+        StatusCode::BAD_REQUEST,
+        &ConfigValidationErrorResponse {
+            ok: false,
+            diagnostics: vec![message.clone()],
+            code,
+            message,
+        },
+    )
 }
 
 fn config_text_from_validate_request(
@@ -490,6 +549,7 @@ fn validate_config_file(path: &Path) -> std::result::Result<ConfigCheckResponse,
         source: "file",
         path: Some(path.display().to_string()),
         plugin_count: summary.plugin_count,
+        dependency_graph: summary.dependency_graph,
         message: "configuration is valid".to_string(),
     })
 }
@@ -501,6 +561,7 @@ fn validate_config_text(text: &str) -> std::result::Result<ConfigCheckResponse, 
         source: "body",
         path: None,
         plugin_count: summary.plugin_count,
+        dependency_graph: summary.dependency_graph,
         message: "configuration is valid".to_string(),
     })
 }
@@ -624,6 +685,12 @@ pub fn register_builtin_routes(
     register.register_get(
         "/reload/status",
         Arc::new(ReloadStatusHandler {
+            controller: controller.clone(),
+        }),
+    )?;
+    register.register_get(
+        "/system",
+        Arc::new(SystemHandler {
             controller: controller.clone(),
         }),
     )?;

@@ -99,6 +99,28 @@ curl -H 'Authorization: Basic YWRtaW46c2VjcmV0' \
   http://127.0.0.1:9088/healthz
 ```
 
+### CORS / WebUI Cross-Origin Access
+
+By default, the management API infers WebUI CORS behavior from `api.http.listen`:
+
+* When listening on `0.0.0.0` or `[::]`, it returns `Access-Control-Allow-Origin: *`.
+* When listening on a specific IP, it allows WebUI origins on the same host without constraining the WebUI port. For example, if the API listens on `192.168.1.10:8080`, both `http://192.168.1.10:3000` and `http://192.168.1.10:5173` are allowed.
+* When listening on `127.0.0.1` or `[::1]`, `localhost` is also allowed.
+
+To tighten or override the automatic policy, configure `cors.allowed_origins` explicitly:
+
+```yaml
+api:
+  http:
+    listen: "0.0.0.0:8080"
+    cors:
+      allowed_origins:
+        - "http://localhost:3000"
+        - "http://192.168.1.100:3000"
+```
+
+When configured explicitly, `allowed_origins` is matched exactly against the browser's `Origin` header. Use `"*"` to allow any origin, but browsers will not accept credentialed cross-origin requests with a wildcard origin.
+
 ## Route Layout
 
 API routes fall into three groups:

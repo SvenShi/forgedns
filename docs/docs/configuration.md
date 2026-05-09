@@ -157,6 +157,11 @@ api:
 - `http.auth`
   - 当前支持 `basic`。
   - Basic Auth 的请求头编码方式见《管理 API》章节。
+- `http.cors.allowed_origins`
+  - 可选的 WebUI/API 跨域白名单；未配置时会根据 `http.listen` 自动推导。
+  - `0.0.0.0` 和 `[::]` 自动允许任意 origin；具体 IP 自动允许同一 host 的任意 WebUI 端口。
+  - 显式配置时按浏览器 `Origin` 精确匹配。
+  - 使用 `"*"` 可允许任意 origin，但不能与浏览器凭据跨域一起使用。
 
 校验规则：
 

@@ -49,41 +49,35 @@ export const useAuthStore = create<AuthState>()(
         const authPassword = password ?? serverConfig.password ?? "";
 
         try {
-          // Simulate connection attempt
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-
-          // Simulate connection logic
-          // In real app, this would make an API call to the backend
           const url = serverConfig.url.trim();
           if (!url) {
             throw new Error("服务地址不能为空");
           }
-
+          const headers: Record<string, string> = { Accept: "application/json" };
           if (serverConfig.requiresAuth) {
             if (!authUsername || !authPassword) {
               throw new Error("请输入用户名和密码");
             }
-            // Simulate auth check - in real app, call API
-            if (authUsername === "admin" && authPassword === "admin") {
-              set({
-                isConnected: true,
-                isAuthenticated: true,
-                isConnecting: false,
-                user: { username: authUsername },
-              });
-              return true;
-            } else {
-              throw new Error("用户名或密码错误");
-            }
-          } else {
-            set({
-              isConnected: true,
-              isAuthenticated: true,
-              isConnecting: false,
-              user: null,
-            });
-            return true;
+            headers.Authorization = `Basic ${btoa(`${authUsername}:${authPassword}`)}`;
           }
+          const response = await fetch(`${url.replace(/\/$/, "")}/health`, {
+            method: "GET",
+            headers,
+          });
+          if (!response.ok) {
+            throw new Error(
+              response.status === 401
+                ? "用户名或密码错误"
+                : `连接失败：HTTP ${response.status}`,
+            );
+          }
+          set({
+            isConnected: true,
+            isAuthenticated: true,
+            isConnecting: false,
+            user: serverConfig.requiresAuth ? { username: authUsername } : null,
+          });
+          return true;
         } catch (error) {
           set({
             isConnecting: false,

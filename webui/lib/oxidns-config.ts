@@ -84,7 +84,7 @@ export function pluginsFromConfig(config: OxiDnsConfig): PluginInstance[] {
     return {
       id: plugin.tag || `${plugin.type}-${now}`,
       name: plugin.tag,
-      type: definition?.type ?? inferPluginType(plugin.type),
+      type: definition?.type ?? inferPluginType(),
       pluginKind: plugin.type,
       status: "running",
       enabled: true,
@@ -174,7 +174,7 @@ export function createDefaultOxiDnsConfig(): OxiDnsConfig {
   };
 }
 
-function inferPluginType(_pluginKind: string): PluginType {
+function inferPluginType(): PluginType {
   return "executor";
 }
 

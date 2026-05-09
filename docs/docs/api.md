@@ -99,6 +99,28 @@ curl -H 'Authorization: Basic YWRtaW46c2VjcmV0' \
   http://127.0.0.1:9088/healthz
 ```
 
+### CORS / WebUI 跨域
+
+默认情况下，管理 API 会根据 `api.http.listen` 自动处理 WebUI 跨域：
+
+* 监听 `0.0.0.0` 或 `[::]` 时，自动返回 `Access-Control-Allow-Origin: *`。
+* 监听具体 IP 时，自动允许同一 host 的 WebUI 访问，且不限制 WebUI 端口。例如 API 监听 `192.168.1.10:8080`，则 `http://192.168.1.10:3000`、`http://192.168.1.10:5173` 都可访问。
+* 监听 `127.0.0.1` 或 `[::1]` 时，也会允许 `localhost`。
+
+如需收紧或覆盖自动策略，可显式配置 `cors.allowed_origins`：
+
+```yaml
+api:
+  http:
+    listen: "0.0.0.0:8080"
+    cors:
+      allowed_origins:
+        - "http://localhost:3000"
+        - "http://192.168.1.100:3000"
+```
+
+显式配置后，`allowed_origins` 按浏览器发送的 `Origin` 精确匹配。可使用 `"*"` 允许任意 origin，但此时浏览器不会接受带凭据的跨域请求。
+
 ## 路由组织
 
 API 路由分成三类：

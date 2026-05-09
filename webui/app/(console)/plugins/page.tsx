@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Background, Controls, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import { AppHeader } from "@/components/shell/app-header";
 import { PluginCard } from "@/components/plugins/plugin-card";
 import { CreatePluginDialog } from "@/components/plugins/create-plugin-dialog";
@@ -18,8 +19,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, LayoutGrid, List, Pin } from "lucide-react";
-import type { PluginType } from "@/lib/types";
+import { Search, LayoutGrid, List, Pin, GitBranch } from "lucide-react";
+import type { PluginInstance, PluginType } from "@/lib/types";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -45,10 +46,11 @@ function PluginsPageContent() {
   const [activeTab, setActiveTab] = useState<PluginType | "all">(
     initialType || "all",
   );
-  const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "table" | "topology">("grid");
   const [search, setSearch] = useState("");
 
   const plugins = useAppStore((s) => s.plugins);
+  const dependencyGraph = useAppStore((s) => s.dependencyGraph);
   const { setSelectedPlugin, setDetailOpen } = useAppStore();
 
   const filteredPlugins = plugins.filter((p) => {
@@ -111,6 +113,14 @@ function PluginsPageContent() {
                 >
                   <List className="h-4 w-4" />
                 </Button>
+                <Button
+                  variant={viewMode === "topology" ? "secondary" : "ghost"}
+                  size="sm"
+                  className="rounded-l-none"
+                  onClick={() => setViewMode("topology")}
+                >
+                  <GitBranch className="h-4 w-4" />
+                </Button>
               </div>
               <CreatePluginDialog
                 defaultType={activeTab !== "all" ? activeTab : undefined}
@@ -147,7 +157,7 @@ function PluginsPageContent() {
                     <PluginCard key={plugin.id} plugin={plugin} />
                   ))}
                 </div>
-              ) : (
+              ) : viewMode === "table" ? (
                 <div className="border rounded-lg overflow-hidden">
                   <Table>
                     <TableHeader>
@@ -192,6 +202,12 @@ function PluginsPageContent() {
                     </TableBody>
                   </Table>
                 </div>
+              ) : (
+                <TopologyView
+                  plugins={plugins}
+                  dependencyGraph={dependencyGraph}
+                  onSelect={handleRowClick}
+                />
               )}
 
               {filteredPlugins.length === 0 && (
@@ -215,6 +231,71 @@ function PluginsPageContent() {
         </div>
       </main>
     </>
+  );
+}
+
+function TopologyView({
+  plugins,
+  dependencyGraph,
+  onSelect,
+}: {
+  plugins: PluginInstance[];
+  dependencyGraph: ReturnType<typeof useAppStore.getState>["dependencyGraph"];
+  onSelect: (plugin: PluginInstance) => void;
+}) {
+  if (!dependencyGraph) {
+    return (
+      <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
+        暂无依赖图，请先读取并校验配置。
+      </div>
+    );
+  }
+
+  const kindOrder = ["server", "executor", "matcher", "provider", "unknown"];
+  const nodes: Node[] = dependencyGraph.nodes.map((node) => {
+    const column = Math.max(0, kindOrder.indexOf(node.kind));
+    const row = dependencyGraph.nodes
+      .filter((item) => item.kind === node.kind)
+      .findIndex((item) => item.tag === node.tag);
+    return {
+      id: node.tag,
+      position: { x: column * 260, y: Math.max(0, row) * 110 },
+      data: {
+        label: (
+          <button
+            type="button"
+            className="min-w-44 rounded-md border bg-background px-3 py-2 text-left shadow-sm hover:border-primary"
+            onClick={() => {
+              const plugin = plugins.find((item) => item.name === node.tag);
+              if (plugin) onSelect(plugin);
+            }}
+          >
+            <div className="truncate font-mono text-sm font-medium">{node.tag}</div>
+            <div className="mt-1 flex gap-1">
+              <Badge variant="outline">{node.kind}</Badge>
+              <Badge variant="secondary">{node.plugin_type}</Badge>
+            </div>
+          </button>
+        ),
+      },
+      draggable: false,
+    };
+  });
+  const edges: Edge[] = dependencyGraph.edges.map((edge, index) => ({
+    id: `${edge.source_tag}-${edge.target_tag}-${index}`,
+    source: edge.source_tag,
+    target: edge.target_tag,
+    label: edge.field,
+    type: "smoothstep",
+  }));
+
+  return (
+    <div className="h-[640px] rounded-lg border bg-muted/20">
+      <ReactFlow nodes={nodes} edges={edges} fitView nodesDraggable={false}>
+        <Background gap={18} size={1} />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+    </div>
   );
 }
 

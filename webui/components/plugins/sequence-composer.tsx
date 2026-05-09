@@ -169,6 +169,15 @@ const controlLabels: Record<ControlKind, string> = {
   goto: "goto",
 };
 
+const controlDescriptions: Record<ControlKind, string> = {
+  accept: "终止并接受当前响应",
+  return: "返回上级 sequence",
+  reject: "终止并返回拒绝响应",
+  mark: "写入上下文 mark",
+  jump: "跳转到目标 sequence 后返回",
+  goto: "切换到目标 sequence 不返回",
+};
+
 const builtinControls: ControlKind[] = [
   "accept",
   "return",
@@ -1102,6 +1111,11 @@ function ActionEditor({
 
   return (
     <div className="w-full rounded-md border bg-muted/20 p-2">
+      {action.mode === "control" && (
+        <Badge variant="outline" className="mb-2 text-[0.68rem]">
+          {controlDescriptions[action.control]}
+        </Badge>
+      )}
       <div className="grid min-w-0 gap-2 sm:grid-cols-[8rem_8rem_minmax(8rem,1fr)]">
         <InlineSelect
           value={action.mode}

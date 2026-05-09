@@ -7,15 +7,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   MoreVertical,
   Pin,
   PinOff,
-  Power,
-  PowerOff,
   Trash2,
 } from "lucide-react";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
@@ -36,7 +33,6 @@ export function PluginCardTemplate({
     setSelectedPlugin,
     setDetailOpen,
     togglePluginPin,
-    togglePluginEnabled,
     deletePlugin,
   } = useAppStore();
   const definition = getPluginCatalogItem(plugin.pluginKind);
@@ -58,7 +54,6 @@ export function PluginCardTemplate({
       className={cn(
         "flex h-full min-h-[9.25rem] cursor-pointer flex-col transition-all hover:border-primary/50 hover:shadow-md",
         plugin.pinned && "border-primary/30",
-        !plugin.enabled && "opacity-60",
       )}
       onClick={handleClick}
     >
@@ -129,20 +124,6 @@ export function PluginCardTemplate({
                   </>
                 )}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => togglePluginEnabled(plugin.id)}>
-                {plugin.enabled ? (
-                  <>
-                    <PowerOff className="mr-2 h-4 w-4" />
-                    禁用
-                  </>
-                ) : (
-                  <>
-                    <Power className="mr-2 h-4 w-4" />
-                    启用
-                  </>
-                )}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => deletePlugin(plugin.id)}
                 className="text-destructive focus:text-destructive"

@@ -6,6 +6,19 @@
 log:
   level: info
 
+# Management API (optional)
+# api:
+#   http:
+#     listen: "0.0.0.0:8080"
+#     # auth:
+#     #   type: basic
+#     #   username: admin
+#     #   password: secret
+#     # CORS is inferred from listen by default; set this only to override it.
+#     # cors:
+#     #   allowed_origins:
+#     #     - "http://localhost:3000"
+
 plugins:
   # Forward to upstream DNS servers
   - tag: forward

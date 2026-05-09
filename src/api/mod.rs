@@ -44,7 +44,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
 
 use crate::api::health::HealthState;
-use crate::config::types::{ApiAuthConfig, ApiConfig, ResolvedApiHttpConfig};
+use crate::config::types::{ApiAuthConfig, ApiConfig, ApiCorsConfig, ResolvedApiHttpConfig};
 use crate::core::error::{DnsError, Result};
 use crate::network::listen::{self, parse_listen_addr};
 use crate::network::tls_config::load_server_tls_config;
@@ -212,7 +212,9 @@ impl ApiHub {
         if listen.is_empty() {
             return Err(DnsError::config("api.http.listen cannot be empty"));
         }
-        let normalized_listen = parse_listen_addr(listen)?.to_string();
+        let listen_addr = parse_listen_addr(listen)?;
+        let normalized_listen = listen_addr.to_string();
+        let cors = Some(resolve_cors_config(resolved.cors, listen_addr));
 
         let (shutdown_tx, _) = watch::channel(false);
         Ok(Some(Arc::new(Self {
@@ -220,6 +222,7 @@ impl ApiHub {
                 listen: normalized_listen,
                 ssl: resolved.ssl,
                 auth: resolved.auth,
+                cors,
             },
             routes: StdMutex::new(AHashMap::new()),
             prefix_routes: StdMutex::new(Vec::new()),
@@ -331,6 +334,7 @@ impl ApiHub {
             .clone();
         let tls_acceptor = build_tls_acceptor(&self.config)?;
         let auth = self.config.auth.clone();
+        let cors = self.config.cors.clone();
         let health = self.health.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let (startup_tx, startup_rx) = oneshot::channel();
@@ -342,6 +346,7 @@ impl ApiHub {
                     prefix_routes,
                     tls_acceptor,
                     auth,
+                    cors,
                     health,
                 },
                 &mut shutdown_rx,
@@ -468,6 +473,7 @@ struct ApiServerContext {
     prefix_routes: Vec<PrefixRoute>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     auth: Option<ApiAuthConfig>,
+    cors: Option<ApiCorsConfig>,
     health: Arc<HealthState>,
 }
 
@@ -483,6 +489,7 @@ async fn run_api_server(
         prefix_routes,
         tls_acceptor,
         auth,
+        cors,
         health,
     } = context;
     let listener = match listen::build_tcp_listener(listen, 512, |_| {}) {
@@ -501,6 +508,7 @@ async fn run_api_server(
         listen = %listen,
         tls = %tls_acceptor.is_some(),
         auth = %auth.is_some(),
+        cors = %cors.is_some(),
         routes = routes.len(),
         prefix_routes = prefix_routes.len(),
         "Management API listening"
@@ -527,8 +535,9 @@ async fn run_api_server(
                 let prefix_routes = prefix_routes.clone();
                 let tls_acceptor = tls_acceptor.clone();
                 let auth = auth.clone();
+                let cors = cors.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = handle_connection(stream, remote_addr, routes, prefix_routes, tls_acceptor, auth).await {
+                    if let Err(err) = handle_connection(stream, remote_addr, routes, prefix_routes, tls_acceptor, auth, cors).await {
                         warn!(remote = %remote_addr, error = %err, "API connection failed");
                     }
                 });
@@ -544,6 +553,7 @@ async fn handle_connection(
     prefix_routes: Arc<Vec<PrefixRoute>>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     auth: Option<ApiAuthConfig>,
+    cors: Option<ApiCorsConfig>,
 ) -> Result<()> {
     match tls_acceptor {
         Some(acceptor) => {
@@ -551,9 +561,9 @@ async fn handle_connection(
                 .accept(stream)
                 .await
                 .map_err(|err| DnsError::runtime(format!("API TLS handshake failed: {err}")))?;
-            handle_hyper_stream(stream, remote_addr, routes, prefix_routes, auth).await
+            handle_hyper_stream(stream, remote_addr, routes, prefix_routes, auth, cors).await
         }
-        None => handle_hyper_stream(stream, remote_addr, routes, prefix_routes, auth).await,
+        None => handle_hyper_stream(stream, remote_addr, routes, prefix_routes, auth, cors).await,
     }
 }
 
@@ -563,6 +573,7 @@ async fn handle_hyper_stream<S>(
     routes: Arc<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
     prefix_routes: Arc<Vec<PrefixRoute>>,
     auth: Option<ApiAuthConfig>,
+    cors: Option<ApiCorsConfig>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
@@ -571,7 +582,10 @@ where
         let routes = routes.clone();
         let prefix_routes = prefix_routes.clone();
         let auth = auth.clone();
-        async move { handle_hyper_request(request, remote_addr, routes, prefix_routes, auth).await }
+        let cors = cors.clone();
+        async move {
+            handle_hyper_request(request, remote_addr, routes, prefix_routes, auth, cors).await
+        }
     });
 
     let io = TokioIo::new(stream);
@@ -588,6 +602,7 @@ async fn handle_hyper_request(
     routes: Arc<AHashMap<RouteKey, Arc<dyn ApiHandler>>>,
     prefix_routes: Arc<Vec<PrefixRoute>>,
     auth: Option<ApiAuthConfig>,
+    cors: Option<ApiCorsConfig>,
 ) -> std::result::Result<ApiResponse, Infallible> {
     let request = match read_hyper_request(request).await {
         Ok(request) => request,
@@ -602,6 +617,21 @@ async fn handle_hyper_request(
         "API request received"
     );
 
+    let request_headers = request.headers().clone();
+
+    // Handle CORS preflight requests.
+    if request.method() == Method::OPTIONS {
+        if let Some(ref cors_cfg) = cors {
+            let mut response = simple_response(StatusCode::NO_CONTENT, Bytes::new());
+            add_cors_headers(response.headers_mut(), Some(&request_headers), cors_cfg);
+            return Ok(response);
+        }
+        return Ok(simple_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            Bytes::new(),
+        ));
+    }
+
     let response = if !is_authorized(request.headers(), auth.as_ref()) {
         let mut response =
             simple_response(StatusCode::UNAUTHORIZED, Bytes::from("401 Unauthorized"));
@@ -609,6 +639,9 @@ async fn handle_hyper_request(
             http::header::WWW_AUTHENTICATE,
             http::HeaderValue::from_static("Basic realm=\"oxidns\""),
         );
+        if let Some(ref cors_cfg) = cors {
+            add_cors_headers(response.headers_mut(), Some(&request_headers), cors_cfg);
+        }
         response
     } else {
         if let Some(handler) = lookup_handler(
@@ -617,13 +650,141 @@ async fn handle_hyper_request(
             routes.as_ref(),
             prefix_routes.as_ref(),
         ) {
-            handler.handle(request).await
+            let mut response = handler.handle(request).await;
+            if let Some(ref cors_cfg) = cors {
+                add_cors_headers(response.headers_mut(), Some(&request_headers), cors_cfg);
+            }
+            response
         } else {
-            simple_response(StatusCode::NOT_FOUND, Bytes::from("404 Not Found"))
+            let mut response = simple_response(StatusCode::NOT_FOUND, Bytes::from("404 Not Found"));
+            if let Some(ref cors_cfg) = cors {
+                add_cors_headers(response.headers_mut(), Some(&request_headers), cors_cfg);
+            }
+            response
         }
     };
 
     Ok(response)
+}
+
+/// Add CORS headers to the management API response based on the configured
+/// allowed origins.
+///
+/// When `request_headers` is provided (i.e. the original request is still
+/// available), the `Origin` header is matched against `cors.allowed_origins`.
+/// When `request_headers` is `None` (handler already consumed the request),
+/// all configured origins that contain a wildcard are used; otherwise the
+/// first configured origin is used as a fallback.
+///
+/// This is only applied to the control-plane API, never to the DNS data path.
+fn add_cors_headers(
+    headers: &mut http::HeaderMap,
+    request_headers: Option<&http::HeaderMap>,
+    cors: &ApiCorsConfig,
+) {
+    let wildcard = cors.allow_any_origin || cors.allowed_origins.iter().any(|o| o == "*");
+
+    let origin_value = request_headers
+        .and_then(|h| h.get(http::header::ORIGIN))
+        .and_then(|v| v.to_str().ok());
+
+    let allowed_origin = if wildcard {
+        http::HeaderValue::from_static("*")
+    } else if let Some(origin) = origin_value {
+        if cors.allowed_origins.iter().any(|o| o == origin)
+            || origin_host_allowed(origin, &cors.allowed_origin_hosts)
+        {
+            http::HeaderValue::from_str(origin)
+                .unwrap_or_else(|_| http::HeaderValue::from_static("*"))
+        } else {
+            // Origin not in allow list — skip CORS headers entirely.
+            return;
+        }
+    } else {
+        // No Origin header; use the first configured origin as a default.
+        match cors.allowed_origins.first() {
+            Some(origin) => http::HeaderValue::from_str(origin)
+                .unwrap_or_else(|_| http::HeaderValue::from_static("*")),
+            None => return,
+        }
+    };
+
+    headers.insert(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, allowed_origin);
+    headers.insert(
+        http::header::ACCESS_CONTROL_ALLOW_METHODS,
+        http::HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
+    );
+    headers.insert(
+        http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+        http::HeaderValue::from_static("Content-Type, Authorization"),
+    );
+
+    // Do not set Access-Control-Allow-Credentials when using wildcard origin,
+    // as browsers reject that combination per the CORS spec.
+    if !wildcard {
+        headers.insert(
+            http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            http::HeaderValue::from_static("true"),
+        );
+    }
+}
+
+fn infer_cors_config_from_listen(listen: SocketAddr) -> ApiCorsConfig {
+    let ip = listen.ip();
+    if ip.is_unspecified() {
+        return ApiCorsConfig {
+            allowed_origins: Vec::new(),
+            allow_any_origin: true,
+            allowed_origin_hosts: Vec::new(),
+        };
+    }
+
+    let mut allowed_origin_hosts = vec![normalize_origin_host(&ip.to_string())];
+    if ip.is_loopback() {
+        allowed_origin_hosts.push("localhost".to_string());
+    }
+
+    allowed_origin_hosts.sort();
+    allowed_origin_hosts.dedup();
+
+    ApiCorsConfig {
+        allowed_origins: Vec::new(),
+        allow_any_origin: false,
+        allowed_origin_hosts,
+    }
+}
+
+fn resolve_cors_config(configured: Option<ApiCorsConfig>, listen: SocketAddr) -> ApiCorsConfig {
+    match configured {
+        Some(cors)
+            if cors.allow_any_origin
+                || !cors.allowed_origins.is_empty()
+                || !cors.allowed_origin_hosts.is_empty() =>
+        {
+            cors
+        }
+        _ => infer_cors_config_from_listen(listen),
+    }
+}
+
+fn origin_host_allowed(origin: &str, allowed_hosts: &[String]) -> bool {
+    if allowed_hosts.is_empty() {
+        return false;
+    }
+
+    let Ok(uri) = origin.parse::<http::Uri>() else {
+        return false;
+    };
+    let Some(host) = uri.host() else {
+        return false;
+    };
+
+    let host = normalize_origin_host(host);
+    allowed_hosts.iter().any(|allowed| allowed == &host)
+}
+
+fn normalize_origin_host(host: &str) -> String {
+    host.trim_matches(['[', ']']).to_ascii_lowercase()
 }
 
 fn lookup_handler<'a>(
@@ -795,11 +956,20 @@ mod tests {
     }
 
     fn test_api_hub(addr: SocketAddr, auth: Option<ApiAuthConfig>) -> Arc<ApiHub> {
+        test_api_hub_with_cors(addr, auth, None)
+    }
+
+    fn test_api_hub_with_cors(
+        addr: SocketAddr,
+        auth: Option<ApiAuthConfig>,
+        cors: Option<ApiCorsConfig>,
+    ) -> Arc<ApiHub> {
         let config = ApiConfig {
             http: Some(ApiHttpConfig::Detailed(ApiHttpDetailedConfig {
                 listen: addr.to_string(),
                 ssl: None,
                 auth,
+                cors,
             })),
         };
         ApiHub::from_config(&config)
@@ -846,6 +1016,131 @@ mod tests {
             http::HeaderValue::from_static("Basic YWRtaW46c2VjcmV0"),
         );
         assert!(is_authorized(&headers, Some(&auth)));
+    }
+
+    #[test]
+    fn test_cors_headers_echo_allowed_request_origin_and_delete_method() {
+        let cors = ApiCorsConfig {
+            allowed_origins: vec![
+                "http://localhost:3000".to_string(),
+                "http://192.168.1.100:3000".to_string(),
+            ],
+            ..Default::default()
+        };
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(
+            http::header::ORIGIN,
+            http::HeaderValue::from_static("http://192.168.1.100:3000"),
+        );
+        let mut response_headers = HeaderMap::new();
+
+        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
+
+        assert_eq!(
+            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&http::HeaderValue::from_static("http://192.168.1.100:3000"))
+        );
+        assert_eq!(
+            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_METHODS),
+            Some(&http::HeaderValue::from_static(
+                "GET, POST, DELETE, OPTIONS"
+            ))
+        );
+        assert_eq!(
+            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
+            Some(&http::HeaderValue::from_static("true"))
+        );
+    }
+
+    #[test]
+    fn test_inferred_cors_for_unspecified_listen_allows_any_origin() {
+        let cors = infer_cors_config_from_listen("0.0.0.0:8080".parse().expect("listen addr"));
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(
+            http::header::ORIGIN,
+            http::HeaderValue::from_static("http://example.test:5173"),
+        );
+        let mut response_headers = HeaderMap::new();
+
+        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
+
+        assert_eq!(
+            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&http::HeaderValue::from_static("*"))
+        );
+        assert_eq!(
+            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
+            None
+        );
+
+        let ipv6_cors = infer_cors_config_from_listen("[::]:8080".parse().expect("listen addr"));
+        let mut ipv6_response_headers = HeaderMap::new();
+        add_cors_headers(
+            &mut ipv6_response_headers,
+            Some(&request_headers),
+            &ipv6_cors,
+        );
+        assert_eq!(
+            ipv6_response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&http::HeaderValue::from_static("*"))
+        );
+    }
+
+    #[test]
+    fn test_inferred_cors_for_specific_listen_matches_host_without_port_limit() {
+        let cors = infer_cors_config_from_listen("192.168.1.10:8080".parse().expect("listen addr"));
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(
+            http::header::ORIGIN,
+            http::HeaderValue::from_static("http://192.168.1.10:5173"),
+        );
+        let mut response_headers = HeaderMap::new();
+
+        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
+
+        assert_eq!(
+            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&http::HeaderValue::from_static("http://192.168.1.10:5173"))
+        );
+    }
+
+    #[test]
+    fn test_inferred_cors_for_specific_listen_rejects_other_hosts() {
+        let cors = infer_cors_config_from_listen("192.168.1.10:8080".parse().expect("listen addr"));
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(
+            http::header::ORIGIN,
+            http::HeaderValue::from_static("http://192.168.1.11:5173"),
+        );
+        let mut response_headers = HeaderMap::new();
+
+        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
+
+        assert_eq!(
+            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            None
+        );
+    }
+
+    #[test]
+    fn test_empty_configured_cors_falls_back_to_listen_inference() {
+        let cors = resolve_cors_config(
+            Some(ApiCorsConfig::default()),
+            "0.0.0.0:8080".parse().expect("listen addr"),
+        );
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(
+            http::header::ORIGIN,
+            http::HeaderValue::from_static("http://localhost:3000"),
+        );
+        let mut response_headers = HeaderMap::new();
+
+        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
+
+        assert_eq!(
+            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&http::HeaderValue::from_static("*"))
+        );
     }
 
     #[tokio::test]
@@ -967,6 +1262,51 @@ mod tests {
         let body = std::str::from_utf8(&body).expect("utf8 body");
         assert!(body.contains("\"method\":\"POST\""));
         assert!(body.contains("\"path\":\"/plugins/test_plugin/echo\""));
+
+        hub.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_hyper_response_uses_request_origin_for_cors() {
+        AppClock::start();
+        let addr = reserve_local_addr();
+        let hub = test_api_hub_with_cors(
+            addr,
+            None,
+            Some(ApiCorsConfig {
+                allowed_origins: vec![
+                    "http://localhost:3000".to_string(),
+                    "http://192.168.1.100:3000".to_string(),
+                ],
+                ..Default::default()
+            }),
+        );
+
+        start_test_api_hub(&hub).await;
+
+        let client = http1_client();
+        let uri: Uri = format!("http://{addr}/healthz")
+            .parse()
+            .expect("request uri");
+        let response = client
+            .request(
+                HyperRequest::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .header(http::header::ORIGIN, "http://192.168.1.100:3000")
+                    .body(Empty::new())
+                    .expect("request"),
+            )
+            .await
+            .expect("health response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&http::HeaderValue::from_static("http://192.168.1.100:3000"))
+        );
 
         hub.stop().await;
     }

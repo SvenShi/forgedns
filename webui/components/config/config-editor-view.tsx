@@ -32,6 +32,7 @@ export function ConfigEditorView() {
   const configError = useAppStore((s) => s.configError);
   const configPath = useAppStore((s) => s.configPath);
   const configVersion = useAppStore((s) => s.configVersion);
+  const dependencyGraph = useAppStore((s) => s.dependencyGraph);
 
   const [originalConfig, setOriginalConfig] = useState(yamlConfig);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">(
@@ -45,8 +46,10 @@ export function ConfigEditorView() {
   }, [loadConfig]);
 
   useEffect(() => {
-    if (configVersion) setOriginalConfig(yamlConfig);
-  }, [configVersion]);
+    if (!configVersion) return;
+    const timer = window.setTimeout(() => setOriginalConfig(yamlConfig), 0);
+    return () => window.clearTimeout(timer);
+  }, [configVersion, yamlConfig]);
 
   const handleSave = async () => {
     setSaveStatus("idle");
@@ -207,30 +210,37 @@ export function ConfigEditorView() {
             <CardContent className="space-y-2 text-sm">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-blue-500" />
-                <span className="text-muted-foreground">servers</span>
+                <span className="text-muted-foreground">runtime</span>
                 <span className="ml-auto text-xs text-muted-foreground">
-                  服务器
+                  运行时
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-green-500" />
-                <span className="text-muted-foreground">executors</span>
+                <span className="text-muted-foreground">api</span>
                 <span className="ml-auto text-xs text-muted-foreground">
-                  执行器
+                  管理 API
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-yellow-500" />
-                <span className="text-muted-foreground">matchers</span>
+                <span className="text-muted-foreground">log</span>
                 <span className="ml-auto text-xs text-muted-foreground">
-                  匹配器
+                  日志
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-purple-500" />
-                <span className="text-muted-foreground">providers</span>
+                <span className="text-muted-foreground">plugins</span>
                 <span className="ml-auto text-xs text-muted-foreground">
-                  数据源
+                  {dependencyGraph?.nodes.length ?? 0}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-primary" />
+                <span className="text-muted-foreground">init_order</span>
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {dependencyGraph?.init_order.length ?? 0}
                 </span>
               </div>
             </CardContent>

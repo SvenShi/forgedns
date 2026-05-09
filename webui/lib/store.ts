@@ -2,7 +2,6 @@
 
 import { create } from "zustand";
 import type { PluginInstance } from "./types";
-import { mockPlugins, mockSystemMetrics, mockSystemInfo } from "./mock-data";
 import {
   configFromPlugins,
   createDefaultOxiDnsConfig,
@@ -12,11 +11,21 @@ import {
   type OxiDnsConfig,
 } from "./oxidns-config";
 import {
-  apiHeaders,
-  apiUrl,
+  fetchControl,
   fetchConfigFile,
+  fetchHealth,
+  fetchReloadStatus,
+  fetchSystem,
+  requestReload,
   saveConfigFile,
+  validateConfigText,
   type ConfigFileResponse,
+  type ConfigValidateResponse,
+  type ControlResponse,
+  type DependencyGraphReport,
+  type HealthResponse,
+  type ReloadSnapshot,
+  type SystemResponse,
 } from "./oxidns-api";
 
 type StoreSet = (
@@ -25,8 +34,12 @@ type StoreSet = (
 
 interface AppState {
   plugins: PluginInstance[];
-  systemMetrics: typeof mockSystemMetrics;
-  systemInfo: typeof mockSystemInfo;
+  health: HealthResponse | null;
+  control: ControlResponse | null;
+  system: SystemResponse | null;
+  reloadStatus: ReloadSnapshot | null;
+  dependencyGraph: DependencyGraphReport | null;
+  configDiagnostics: string[];
   selectedPlugin: PluginInstance | null;
   detailOpen: boolean;
   editorMode: boolean;
@@ -45,6 +58,8 @@ interface AppState {
   setEditorMode: (mode: boolean) => void;
   setYamlConfig: (config: string) => void;
   loadConfig: () => Promise<void>;
+  refreshRuntimeState: () => Promise<void>;
+  validateCurrentConfig: () => Promise<void>;
   saveConfig: (options?: { reload?: boolean }) => Promise<void>;
   restartService: () => Promise<void>;
   togglePluginPin: (id: string) => void;
@@ -57,16 +72,17 @@ interface AppState {
   renamePlugin: (id: string, name: string) => void;
 }
 
-const initialConfigModel = configFromPlugins(
-  createDefaultOxiDnsConfig(),
-  mockPlugins,
-);
+const initialConfigModel = createDefaultOxiDnsConfig();
 const initialConfigText = stringifyOxiDnsConfig(initialConfigModel);
 
 export const useAppStore = create<AppState>((set, get) => ({
-  plugins: mockPlugins,
-  systemMetrics: mockSystemMetrics,
-  systemInfo: mockSystemInfo,
+  plugins: [],
+  health: null,
+  control: null,
+  system: null,
+  reloadStatus: null,
+  dependencyGraph: null,
+  configDiagnostics: [],
   selectedPlugin: null,
   detailOpen: false,
   editorMode: false,
@@ -90,6 +106,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         configText: config,
         yamlConfig: config,
         configError: parsed.diagnostics[0] ?? "配置解析失败",
+        configDiagnostics: parsed.diagnostics,
       });
       return;
     }
@@ -102,6 +119,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       plugins,
       selectedPlugin: syncSelectedPlugin(get().selectedPlugin, plugins),
       configError: parsed.diagnostics[0] ?? null,
+      configDiagnostics: parsed.diagnostics,
     });
   },
 
@@ -110,6 +128,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const response = await fetchConfigFile();
       applyConfigFileResponse(response, set);
+      await get().validateCurrentConfig();
+      await get().refreshRuntimeState();
     } catch (error) {
       set({
         configError:
@@ -120,12 +140,51 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  refreshRuntimeState: async () => {
+    const results = await Promise.allSettled([
+      fetchHealth(),
+      fetchControl(),
+      fetchSystem(),
+      fetchReloadStatus(),
+    ]);
+    const [health, control, system, reloadStatus] = results;
+    set({
+      health: health.status === "fulfilled" ? health.value : get().health,
+      control: control.status === "fulfilled" ? control.value : get().control,
+      system: system.status === "fulfilled" ? system.value : get().system,
+      reloadStatus:
+        reloadStatus.status === "fulfilled"
+          ? reloadStatus.value
+          : get().reloadStatus,
+    });
+  },
+
+  validateCurrentConfig: async () => {
+    const state = get();
+    if (state.configError) return;
+    try {
+      const response = await validateConfigText(state.configText);
+      applyConfigValidationResponse(response, set);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "配置校验失败";
+      set({
+        configError: message,
+        configDiagnostics: [message],
+        dependencyGraph: null,
+      });
+      throw error;
+    }
+  },
+
   saveConfig: async (options) => {
     const state = get();
     if (state.configError) throw new Error(state.configError);
 
     set({ isConfigSaving: true, configError: null });
     try {
+      const validation = await validateConfigText(state.configText);
+      applyConfigValidationResponse(validation, set);
       const response = await saveConfigFile({
         content: state.configText,
         baseVersion: state.configVersion,
@@ -135,7 +194,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         configVersion: response.version,
         configPath: response.path,
+        reloadStatus: response.reload ?? get().reloadStatus,
       });
+      await get().refreshRuntimeState();
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "保存配置文件失败";
@@ -149,11 +210,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   restartService: async () => {
     set({ isRestarting: true });
     try {
-      const response = await fetch(apiUrl("/reload"), {
-        method: "POST",
-        headers: apiHeaders(),
-      });
-      if (!response.ok) throw new Error(await response.text());
+      await requestReload();
+      await get().refreshRuntimeState();
     } finally {
       set({ isRestarting: false });
     }
@@ -172,19 +230,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   togglePluginEnabled: (id) =>
     set((state) => {
-      const plugins: PluginInstance[] = state.plugins.map((p) =>
-        p.id === id
-          ? {
-              ...p,
-              enabled: !p.enabled,
-              status: !p.enabled ? "running" : "stopped",
-            }
-          : p,
-      );
-      return {
-        plugins,
-        selectedPlugin: syncSelectedPlugin(state.selectedPlugin, plugins),
-      };
+      void id;
+      const plugins: PluginInstance[] = state.plugins.map((p) => p);
+      return { plugins };
     }),
 
   updatePluginConfig: (id, config) =>
@@ -251,6 +299,7 @@ function applyConfigFileResponse(response: ConfigFileResponse, set: StoreSet) {
       configVersion: response.version,
       configPath: response.path,
       configError: parsed.diagnostics[0] ?? "配置解析失败",
+      configDiagnostics: parsed.diagnostics,
     });
     return;
   }
@@ -263,6 +312,18 @@ function applyConfigFileResponse(response: ConfigFileResponse, set: StoreSet) {
     configPath: response.path,
     plugins: pluginsFromConfig(parsed.config),
     configError: parsed.diagnostics[0] ?? null,
+    configDiagnostics: parsed.diagnostics,
+  });
+}
+
+function applyConfigValidationResponse(
+  response: ConfigValidateResponse,
+  set: StoreSet,
+) {
+  set({
+    dependencyGraph: response.dependency_graph,
+    configDiagnostics: [],
+    configError: null,
   });
 }
 
@@ -280,6 +341,7 @@ function syncPluginsToConfig(
     yamlConfig: configText,
     selectedPlugin: syncSelectedPlugin(state.selectedPlugin, plugins),
     configError: null,
+    configDiagnostics: [],
   };
 }
 

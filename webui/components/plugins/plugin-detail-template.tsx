@@ -24,9 +24,6 @@ import {
   Pencil,
   Pin,
   PinOff,
-  Power,
-  PowerOff,
-  RefreshCw,
   Save,
   Trash2,
 } from "lucide-react";
@@ -48,13 +45,13 @@ export function PluginDetailTemplate({
 }: PluginDetailTemplateProps) {
   const {
     togglePluginPin,
-    togglePluginEnabled,
     deletePlugin,
     updatePluginConfig,
     renamePlugin,
     saveConfig,
     isConfigSaving,
     plugins,
+    dependencyGraph,
   } = useAppStore();
   const definition = getPluginCatalogItem(plugin.pluginKind);
   const resolvedIcon =
@@ -184,27 +181,6 @@ export function PluginDetailTemplate({
               </>
             )}
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => togglePluginEnabled(plugin.id)}
-          >
-            {plugin.enabled ? (
-              <>
-                <PowerOff className="mr-1.5 h-4 w-4" />
-                禁用
-              </>
-            ) : (
-              <>
-                <Power className="mr-1.5 h-4 w-4" />
-                启用
-              </>
-            )}
-          </Button>
-          <Button variant="outline" size="sm">
-            <RefreshCw className="mr-1.5 h-4 w-4" />
-            重载
-          </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
@@ -305,6 +281,10 @@ export function PluginDetailTemplate({
               </CardContent>
             </Card>
           )}
+          <DependencySection
+            tag={plugin.name}
+            dependencyGraph={dependencyGraph}
+          />
         </TabsContent>
 
         <TabsContent value="metrics" className="mt-4 space-y-4">
@@ -318,6 +298,53 @@ export function PluginDetailTemplate({
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function DependencySection({
+  tag,
+  dependencyGraph,
+}: {
+  tag: string;
+  dependencyGraph: ReturnType<typeof useAppStore.getState>["dependencyGraph"];
+}) {
+  if (!dependencyGraph) return null;
+  const initIndex = dependencyGraph.init_order.indexOf(tag);
+  const upstream = dependencyGraph.edges.filter((edge) => edge.source_tag === tag);
+  const downstream = dependencyGraph.edges.filter((edge) => edge.target_tag === tag);
+
+  return (
+    <Card>
+      <CardHeader className="p-4 pb-2">
+        <CardTitle className="text-sm">依赖关系</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3 p-4 pt-0 text-sm sm:grid-cols-3">
+        <SummaryItem
+          item={{
+            label: "初始化序号",
+            value: initIndex >= 0 ? String(initIndex + 1) : "-",
+          }}
+        />
+        <SummaryItem item={{ label: "依赖插件", value: String(upstream.length) }} />
+        <SummaryItem item={{ label: "被引用", value: String(downstream.length) }} />
+        <div className="space-y-1 sm:col-span-3">
+          {[...upstream, ...downstream].length ? (
+            [...upstream, ...downstream].map((edge) => (
+              <div
+                key={`${edge.source_tag}-${edge.target_tag}-${edge.field}`}
+                className="truncate rounded-md border px-2 py-1 font-mono text-xs text-muted-foreground"
+              >
+                {edge.source_tag}.{edge.field} -&gt; {edge.target_tag}
+              </div>
+            ))
+          ) : (
+            <div className="rounded-md border border-dashed px-3 py-2 text-muted-foreground">
+              暂无依赖边
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

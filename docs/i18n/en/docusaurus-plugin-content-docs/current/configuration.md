@@ -156,6 +156,11 @@ Field notes:
 - `http.auth`
   - Currently supports `basic`.
   - See the Management API chapter for the Basic Auth header encoding rules.
+- `http.cors.allowed_origins`
+  - Optional WebUI/API cross-origin allowlist; when omitted, it is inferred from `http.listen`.
+  - `0.0.0.0` and `[::]` automatically allow any origin; a specific IP automatically allows any WebUI port on the same host.
+  - When configured explicitly, entries are matched exactly against the browser's `Origin`.
+  - Use `"*"` to allow any origin, but not for credentialed browser requests.
 
 Validation rules:
 
