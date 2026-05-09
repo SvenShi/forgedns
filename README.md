@@ -82,4 +82,4 @@ Windows 可在 PowerShell 中执行 `[System.Runtime.InteropServices.RuntimeInfo
 
 ## 许可证
 
-[MIT](LICENSE)
+本项目基于 [GNU General Public License v3.0 or later](LICENSE) 开源。

@@ -82,4 +82,4 @@ The full install flow is documented in Quick Start.
 
 ## License
 
-[MIT](LICENSE)
+This project is open-sourced under the [GNU General Public License v3.0 or later](LICENSE).
