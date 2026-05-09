@@ -14,8 +14,9 @@ slug: /
 3. 阅读《[配置总览](configuration.md)》，了解顶层 YAML 结构与 `sequence` 编排方式。
 4. 阅读《[插件总览](plugin-reference/overview.md)》下的四类插件文档，建立 `server / executor / matcher / provider` 的结构认知。
 5. 在接入运维平台、控制平面或观测系统时，阅读《[管理 API](api.md)》。
-6. 在进行策略落地与组合设计时，阅读《[常见策略场景](scenarios.md)》。
-7. 在理解内部设计与性能方向时，阅读《[架构与设计](architecture-and-design.md)》与《[性能与基准](benchmarks.md)》。
+6. 在部署管理控制台时，阅读《[WebUI 部署](webui.md)》。
+7. 在进行策略落地与组合设计时，阅读《[常见策略场景](scenarios.md)》。
+8. 在理解内部设计与性能方向时，阅读《[架构与设计](architecture-and-design.md)》与《[性能与基准](benchmarks.md)》。
 
 ## 文档范围
 

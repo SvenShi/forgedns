@@ -138,6 +138,9 @@ api:
       type: basic
       username: "admin"
       password: "secret"
+    webui:
+      root: "/opt/oxidns/webui"
+      index: "index.html"
 ```
 
 Field notes:
@@ -161,6 +164,11 @@ Field notes:
   - `0.0.0.0` and `[::]` automatically allow any origin; a specific IP automatically allows any WebUI port on the same host.
   - When configured explicitly, entries are matched exactly against the browser's `Origin`.
   - Use `"*"` to allow any origin, but not for credentialed browser requests.
+- `http.webui.root`
+  - Optional WebUI static file directory. When enabled, the WebUI is mounted at `/` and the management API is available under `/api/*`.
+  - See [WebUI Deployment](webui.md) for build steps, publish directories, and standalone nginx deployment.
+- `http.webui.index`
+  - Optional index file name. Defaults to `index.html`.
 
 Validation rules:
 
@@ -168,6 +176,8 @@ Validation rules:
 - `cert` and `key` must be configured together.
 - `require_client_cert: true` requires `client_ca`.
 - `basic.username` and `basic.password` must both be non-empty.
+- `webui.root` must not be empty.
+- `webui.index`, when configured, must not be empty.
 
 ### `plugins`
 

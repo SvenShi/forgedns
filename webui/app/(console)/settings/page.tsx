@@ -127,7 +127,7 @@ export default function SettingsPage() {
                     后台服务
                   </CardTitle>
                   <CardDescription className="mt-1.5">
-                    配置 WebUI 连接的 OxiDNS 管理 API
+                    配置 WebUI 连接的 OxiDNS 管理 API，可使用 /api 或完整地址
                   </CardDescription>
                 </div>
                 <Badge variant="outline" className={isConnected ? "bg-primary/10 text-primary border-primary/30" : "bg-muted text-muted-foreground"}>
@@ -139,7 +139,7 @@ export default function SettingsPage() {
               <FieldGroup>
                 <Field>
                   <FieldLabel>服务地址</FieldLabel>
-                  <Input value={backendUrl} onChange={(event) => setBackendUrl(event.target.value)} placeholder="http://localhost:8080" className="font-mono" />
+                  <Input value={backendUrl} onChange={(event) => setBackendUrl(event.target.value)} placeholder="/api 或 http://localhost:8080" className="font-mono" />
                 </Field>
                 <Field orientation="horizontal" className="rounded-lg border p-3">
                   <Switch checked={requiresAuth} onCheckedChange={setRequiresAuth} aria-label="启用后台服务认证" />

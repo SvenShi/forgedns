@@ -28,7 +28,7 @@ export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
       serverConfig: {
-        url: "http://localhost:8080",
+        url: "/api",
         requiresAuth: false,
         username: "",
         password: "",

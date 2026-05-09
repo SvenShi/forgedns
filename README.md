@@ -73,6 +73,7 @@ Windows 可在 PowerShell 中执行 `[System.Runtime.InteropServices.RuntimeInfo
 - 家庭网络、网关、旁路由
 - 多上游并发、主备回退、协议混合接入
 - 基于域名和响应结果的策略路由与过滤
+- 需要通过同一管理端口托管独立构建 WebUI 的轻量部署
 - 需要长期演进、自建可控 DNS 基础设施的场景
 
 ## 许可证

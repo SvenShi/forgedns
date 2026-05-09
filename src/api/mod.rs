@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
-use http::{HeaderMap, Method, Request, Response, StatusCode};
+use http::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Frame, Incoming};
@@ -43,14 +43,21 @@ use tokio::sync::{Mutex, oneshot, watch};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
 
+use crate::api::cors::{add_cors_headers, resolve_cors_config};
 use crate::api::health::HealthState;
+use crate::api::static_files::StaticFileServer;
 use crate::config::types::{ApiAuthConfig, ApiConfig, ApiCorsConfig, ResolvedApiHttpConfig};
 use crate::core::error::{DnsError, Result};
 use crate::network::listen::{self, parse_listen_addr};
 use crate::network::tls_config::load_server_tls_config;
 
 pub mod control;
+mod cors;
 pub mod health;
+mod static_files;
+
+#[cfg(test)]
+mod tests;
 
 pub type ApiBody = UnsyncBoxBody<Bytes, Infallible>;
 pub type ApiResponse = Response<ApiBody>;
@@ -215,6 +222,7 @@ impl ApiHub {
         let listen_addr = parse_listen_addr(listen)?;
         let normalized_listen = listen_addr.to_string();
         let cors = Some(resolve_cors_config(resolved.cors, listen_addr));
+        let webui = resolved.webui.clone();
 
         let (shutdown_tx, _) = watch::channel(false);
         Ok(Some(Arc::new(Self {
@@ -223,6 +231,7 @@ impl ApiHub {
                 ssl: resolved.ssl,
                 auth: resolved.auth,
                 cors,
+                webui,
             },
             routes: StdMutex::new(AHashMap::new()),
             prefix_routes: StdMutex::new(Vec::new()),
@@ -335,6 +344,13 @@ impl ApiHub {
         let tls_acceptor = build_tls_acceptor(&self.config)?;
         let auth = self.config.auth.clone();
         let cors = self.config.cors.clone();
+        let webui = self
+            .config
+            .webui
+            .as_ref()
+            .map(StaticFileServer::from_config)
+            .transpose()?
+            .map(Arc::new);
         let health = self.health.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let (startup_tx, startup_rx) = oneshot::channel();
@@ -347,6 +363,7 @@ impl ApiHub {
                     tls_acceptor,
                     auth,
                     cors,
+                    webui,
                     health,
                 },
                 &mut shutdown_rx,
@@ -474,6 +491,7 @@ struct ApiServerContext {
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     auth: Option<ApiAuthConfig>,
     cors: Option<ApiCorsConfig>,
+    webui: Option<Arc<StaticFileServer>>,
     health: Arc<HealthState>,
 }
 
@@ -490,6 +508,7 @@ async fn run_api_server(
         tls_acceptor,
         auth,
         cors,
+        webui,
         health,
     } = context;
     let listener = match listen::build_tcp_listener(listen, 512, |_| {}) {
@@ -509,6 +528,7 @@ async fn run_api_server(
         tls = %tls_acceptor.is_some(),
         auth = %auth.is_some(),
         cors = %cors.is_some(),
+        webui = %webui.is_some(),
         routes = routes.len(),
         prefix_routes = prefix_routes.len(),
         "Management API listening"
@@ -536,8 +556,9 @@ async fn run_api_server(
                 let tls_acceptor = tls_acceptor.clone();
                 let auth = auth.clone();
                 let cors = cors.clone();
+                let webui = webui.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = handle_connection(stream, remote_addr, routes, prefix_routes, tls_acceptor, auth, cors).await {
+                    if let Err(err) = handle_connection(stream, remote_addr, routes, prefix_routes, tls_acceptor, auth, cors, webui).await {
                         warn!(remote = %remote_addr, error = %err, "API connection failed");
                     }
                 });
@@ -546,6 +567,7 @@ async fn run_api_server(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     stream: TcpStream,
     remote_addr: SocketAddr,
@@ -554,6 +576,7 @@ async fn handle_connection(
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     auth: Option<ApiAuthConfig>,
     cors: Option<ApiCorsConfig>,
+    webui: Option<Arc<StaticFileServer>>,
 ) -> Result<()> {
     match tls_acceptor {
         Some(acceptor) => {
@@ -561,9 +584,29 @@ async fn handle_connection(
                 .accept(stream)
                 .await
                 .map_err(|err| DnsError::runtime(format!("API TLS handshake failed: {err}")))?;
-            handle_hyper_stream(stream, remote_addr, routes, prefix_routes, auth, cors).await
+            handle_hyper_stream(
+                stream,
+                remote_addr,
+                routes,
+                prefix_routes,
+                auth,
+                cors,
+                webui,
+            )
+            .await
         }
-        None => handle_hyper_stream(stream, remote_addr, routes, prefix_routes, auth, cors).await,
+        None => {
+            handle_hyper_stream(
+                stream,
+                remote_addr,
+                routes,
+                prefix_routes,
+                auth,
+                cors,
+                webui,
+            )
+            .await
+        }
     }
 }
 
@@ -574,6 +617,7 @@ async fn handle_hyper_stream<S>(
     prefix_routes: Arc<Vec<PrefixRoute>>,
     auth: Option<ApiAuthConfig>,
     cors: Option<ApiCorsConfig>,
+    webui: Option<Arc<StaticFileServer>>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
@@ -583,8 +627,18 @@ where
         let prefix_routes = prefix_routes.clone();
         let auth = auth.clone();
         let cors = cors.clone();
+        let webui = webui.clone();
         async move {
-            handle_hyper_request(request, remote_addr, routes, prefix_routes, auth, cors).await
+            handle_hyper_request(
+                request,
+                remote_addr,
+                routes,
+                prefix_routes,
+                auth,
+                cors,
+                webui,
+            )
+            .await
         }
     });
 
@@ -603,6 +657,7 @@ async fn handle_hyper_request(
     prefix_routes: Arc<Vec<PrefixRoute>>,
     auth: Option<ApiAuthConfig>,
     cors: Option<ApiCorsConfig>,
+    webui: Option<Arc<StaticFileServer>>,
 ) -> std::result::Result<ApiResponse, Infallible> {
     let request = match read_hyper_request(request).await {
         Ok(request) => request,
@@ -618,6 +673,16 @@ async fn handle_hyper_request(
     );
 
     let request_headers = request.headers().clone();
+    let Some(api_path) = strip_api_prefix(request.uri().path()) else {
+        return Ok(match webui {
+            Some(webui) => webui.handle(request).await,
+            None => simple_response(StatusCode::NOT_FOUND, Bytes::from("404 Not Found")),
+        });
+    };
+    let request = match rewrite_request_path(request, &api_path) {
+        Ok(request) => request,
+        Err(()) => return Ok(simple_response(StatusCode::BAD_REQUEST, Bytes::new())),
+    };
 
     // Handle CORS preflight requests.
     if request.method() == Method::OPTIONS {
@@ -646,7 +711,7 @@ async fn handle_hyper_request(
     } else {
         if let Some(handler) = lookup_handler(
             request.method(),
-            request.uri().path(),
+            api_path.as_str(),
             routes.as_ref(),
             prefix_routes.as_ref(),
         ) {
@@ -667,124 +732,25 @@ async fn handle_hyper_request(
     Ok(response)
 }
 
-/// Add CORS headers to the management API response based on the configured
-/// allowed origins.
-///
-/// When `request_headers` is provided (i.e. the original request is still
-/// available), the `Origin` header is matched against `cors.allowed_origins`.
-/// When `request_headers` is `None` (handler already consumed the request),
-/// all configured origins that contain a wildcard are used; otherwise the
-/// first configured origin is used as a fallback.
-///
-/// This is only applied to the control-plane API, never to the DNS data path.
-fn add_cors_headers(
-    headers: &mut http::HeaderMap,
-    request_headers: Option<&http::HeaderMap>,
-    cors: &ApiCorsConfig,
-) {
-    let wildcard = cors.allow_any_origin || cors.allowed_origins.iter().any(|o| o == "*");
+fn strip_api_prefix(path: &str) -> Option<String> {
+    if path == "/api" {
+        return Some("/".to_string());
+    }
+    path.strip_prefix("/api/").map(|path| format!("/{path}"))
+}
 
-    let origin_value = request_headers
-        .and_then(|h| h.get(http::header::ORIGIN))
-        .and_then(|v| v.to_str().ok());
-
-    let allowed_origin = if wildcard {
-        http::HeaderValue::from_static("*")
-    } else if let Some(origin) = origin_value {
-        if cors.allowed_origins.iter().any(|o| o == origin)
-            || origin_host_allowed(origin, &cors.allowed_origin_hosts)
-        {
-            http::HeaderValue::from_str(origin)
-                .unwrap_or_else(|_| http::HeaderValue::from_static("*"))
-        } else {
-            // Origin not in allow list — skip CORS headers entirely.
-            return;
-        }
-    } else {
-        // No Origin header; use the first configured origin as a default.
-        match cors.allowed_origins.first() {
-            Some(origin) => http::HeaderValue::from_str(origin)
-                .unwrap_or_else(|_| http::HeaderValue::from_static("*")),
-            None => return,
-        }
+fn rewrite_request_path(
+    request: Request<Bytes>,
+    path: &str,
+) -> std::result::Result<Request<Bytes>, ()> {
+    let query = request.uri().query().map(str::to_string);
+    let (mut parts, body) = request.into_parts();
+    let path_and_query = match query {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_string(),
     };
-
-    headers.insert(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, allowed_origin);
-    headers.insert(
-        http::header::ACCESS_CONTROL_ALLOW_METHODS,
-        http::HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
-    );
-    headers.insert(
-        http::header::ACCESS_CONTROL_ALLOW_HEADERS,
-        http::HeaderValue::from_static("Content-Type, Authorization"),
-    );
-
-    // Do not set Access-Control-Allow-Credentials when using wildcard origin,
-    // as browsers reject that combination per the CORS spec.
-    if !wildcard {
-        headers.insert(
-            http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-            http::HeaderValue::from_static("true"),
-        );
-    }
-}
-
-fn infer_cors_config_from_listen(listen: SocketAddr) -> ApiCorsConfig {
-    let ip = listen.ip();
-    if ip.is_unspecified() {
-        return ApiCorsConfig {
-            allowed_origins: Vec::new(),
-            allow_any_origin: true,
-            allowed_origin_hosts: Vec::new(),
-        };
-    }
-
-    let mut allowed_origin_hosts = vec![normalize_origin_host(&ip.to_string())];
-    if ip.is_loopback() {
-        allowed_origin_hosts.push("localhost".to_string());
-    }
-
-    allowed_origin_hosts.sort();
-    allowed_origin_hosts.dedup();
-
-    ApiCorsConfig {
-        allowed_origins: Vec::new(),
-        allow_any_origin: false,
-        allowed_origin_hosts,
-    }
-}
-
-fn resolve_cors_config(configured: Option<ApiCorsConfig>, listen: SocketAddr) -> ApiCorsConfig {
-    match configured {
-        Some(cors)
-            if cors.allow_any_origin
-                || !cors.allowed_origins.is_empty()
-                || !cors.allowed_origin_hosts.is_empty() =>
-        {
-            cors
-        }
-        _ => infer_cors_config_from_listen(listen),
-    }
-}
-
-fn origin_host_allowed(origin: &str, allowed_hosts: &[String]) -> bool {
-    if allowed_hosts.is_empty() {
-        return false;
-    }
-
-    let Ok(uri) = origin.parse::<http::Uri>() else {
-        return false;
-    };
-    let Some(host) = uri.host() else {
-        return false;
-    };
-
-    let host = normalize_origin_host(host);
-    allowed_hosts.iter().any(|allowed| allowed == &host)
-}
-
-fn normalize_origin_host(host: &str) -> String {
-    host.trim_matches(['[', ']']).to_ascii_lowercase()
+    parts.uri = path_and_query.parse::<Uri>().map_err(|_| ())?;
+    Ok(Request::from_parts(parts, body))
 }
 
 fn lookup_handler<'a>(
@@ -911,439 +877,4 @@ where
         .status(status)
         .body(http_body_util::StreamBody::new(stream).boxed_unsync())
         .expect("failed to build streaming API response")
-}
-
-#[cfg(test)]
-mod tests {
-    use std::net::{SocketAddr, TcpListener as StdTcpListener};
-
-    use async_trait::async_trait;
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
-    use http::Uri;
-    use http::header::{AUTHORIZATION, CONTENT_TYPE};
-    use http_body_util::{BodyExt, Empty};
-    use hyper::{Request as HyperRequest, Version};
-    use hyper_util::client::legacy::Client;
-    use hyper_util::client::legacy::connect::HttpConnector;
-    use serde::Serialize;
-    use tokio::time::{Duration, sleep};
-
-    use super::*;
-    use crate::config::types::{ApiAuthConfig, ApiConfig, ApiHttpConfig, ApiHttpDetailedConfig};
-    use crate::core::app_clock::AppClock;
-
-    #[derive(Debug)]
-    struct TestEchoHandler;
-
-    #[async_trait]
-    impl ApiHandler for TestEchoHandler {
-        async fn handle(&self, request: Request<Bytes>) -> ApiResponse {
-            let payload = serde_json::json!({
-                "method": request.method().as_str(),
-                "path": request.uri().path(),
-                "body_len": request.body().len(),
-            });
-            json_ok(StatusCode::OK, &payload)
-        }
-    }
-
-    fn reserve_local_addr() -> SocketAddr {
-        let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind test listener");
-        let addr = listener.local_addr().expect("local addr");
-        drop(listener);
-        addr
-    }
-
-    fn test_api_hub(addr: SocketAddr, auth: Option<ApiAuthConfig>) -> Arc<ApiHub> {
-        test_api_hub_with_cors(addr, auth, None)
-    }
-
-    fn test_api_hub_with_cors(
-        addr: SocketAddr,
-        auth: Option<ApiAuthConfig>,
-        cors: Option<ApiCorsConfig>,
-    ) -> Arc<ApiHub> {
-        let config = ApiConfig {
-            http: Some(ApiHttpConfig::Detailed(ApiHttpDetailedConfig {
-                listen: addr.to_string(),
-                ssl: None,
-                auth,
-                cors,
-            })),
-        };
-        ApiHub::from_config(&config)
-            .expect("api hub config should be valid")
-            .expect("api hub should be enabled")
-    }
-
-    async fn start_test_api_hub(hub: &Arc<ApiHub>) {
-        hub.start().await.expect("api hub should start");
-        sleep(Duration::from_millis(50)).await;
-    }
-
-    fn http1_client() -> Client<HttpConnector, Empty<Bytes>> {
-        Client::builder(TokioExecutor::new()).build_http()
-    }
-
-    fn http2_client() -> Client<HttpConnector, Empty<Bytes>> {
-        Client::builder(TokioExecutor::new())
-            .http2_only(true)
-            .build_http()
-    }
-
-    #[test]
-    fn test_build_plugin_route_path() {
-        let route = build_plugin_route_path("cache_main", "/flush").expect("route should be built");
-        assert_eq!(route, "/plugins/cache_main/flush");
-    }
-
-    #[test]
-    fn test_build_plugin_route_path_without_subpath() {
-        let route = build_plugin_route_path("reverse_lookup", "").expect("route should be built");
-        assert_eq!(route, "/plugins/reverse_lookup");
-    }
-
-    #[test]
-    fn test_basic_auth_matches_expected_credentials() {
-        let auth = ApiAuthConfig::Basic {
-            username: "admin".to_string(),
-            password: "secret".to_string(),
-        };
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            http::HeaderValue::from_static("Basic YWRtaW46c2VjcmV0"),
-        );
-        assert!(is_authorized(&headers, Some(&auth)));
-    }
-
-    #[test]
-    fn test_cors_headers_echo_allowed_request_origin_and_delete_method() {
-        let cors = ApiCorsConfig {
-            allowed_origins: vec![
-                "http://localhost:3000".to_string(),
-                "http://192.168.1.100:3000".to_string(),
-            ],
-            ..Default::default()
-        };
-        let mut request_headers = HeaderMap::new();
-        request_headers.insert(
-            http::header::ORIGIN,
-            http::HeaderValue::from_static("http://192.168.1.100:3000"),
-        );
-        let mut response_headers = HeaderMap::new();
-
-        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
-
-        assert_eq!(
-            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&http::HeaderValue::from_static("http://192.168.1.100:3000"))
-        );
-        assert_eq!(
-            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_METHODS),
-            Some(&http::HeaderValue::from_static(
-                "GET, POST, DELETE, OPTIONS"
-            ))
-        );
-        assert_eq!(
-            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
-            Some(&http::HeaderValue::from_static("true"))
-        );
-    }
-
-    #[test]
-    fn test_inferred_cors_for_unspecified_listen_allows_any_origin() {
-        let cors = infer_cors_config_from_listen("0.0.0.0:8080".parse().expect("listen addr"));
-        let mut request_headers = HeaderMap::new();
-        request_headers.insert(
-            http::header::ORIGIN,
-            http::HeaderValue::from_static("http://example.test:5173"),
-        );
-        let mut response_headers = HeaderMap::new();
-
-        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
-
-        assert_eq!(
-            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&http::HeaderValue::from_static("*"))
-        );
-        assert_eq!(
-            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
-            None
-        );
-
-        let ipv6_cors = infer_cors_config_from_listen("[::]:8080".parse().expect("listen addr"));
-        let mut ipv6_response_headers = HeaderMap::new();
-        add_cors_headers(
-            &mut ipv6_response_headers,
-            Some(&request_headers),
-            &ipv6_cors,
-        );
-        assert_eq!(
-            ipv6_response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&http::HeaderValue::from_static("*"))
-        );
-    }
-
-    #[test]
-    fn test_inferred_cors_for_specific_listen_matches_host_without_port_limit() {
-        let cors = infer_cors_config_from_listen("192.168.1.10:8080".parse().expect("listen addr"));
-        let mut request_headers = HeaderMap::new();
-        request_headers.insert(
-            http::header::ORIGIN,
-            http::HeaderValue::from_static("http://192.168.1.10:5173"),
-        );
-        let mut response_headers = HeaderMap::new();
-
-        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
-
-        assert_eq!(
-            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&http::HeaderValue::from_static("http://192.168.1.10:5173"))
-        );
-    }
-
-    #[test]
-    fn test_inferred_cors_for_specific_listen_rejects_other_hosts() {
-        let cors = infer_cors_config_from_listen("192.168.1.10:8080".parse().expect("listen addr"));
-        let mut request_headers = HeaderMap::new();
-        request_headers.insert(
-            http::header::ORIGIN,
-            http::HeaderValue::from_static("http://192.168.1.11:5173"),
-        );
-        let mut response_headers = HeaderMap::new();
-
-        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
-
-        assert_eq!(
-            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            None
-        );
-    }
-
-    #[test]
-    fn test_empty_configured_cors_falls_back_to_listen_inference() {
-        let cors = resolve_cors_config(
-            Some(ApiCorsConfig::default()),
-            "0.0.0.0:8080".parse().expect("listen addr"),
-        );
-        let mut request_headers = HeaderMap::new();
-        request_headers.insert(
-            http::header::ORIGIN,
-            http::HeaderValue::from_static("http://localhost:3000"),
-        );
-        let mut response_headers = HeaderMap::new();
-
-        add_cors_headers(&mut response_headers, Some(&request_headers), &cors);
-
-        assert_eq!(
-            response_headers.get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&http::HeaderValue::from_static("*"))
-        );
-    }
-
-    #[tokio::test]
-    async fn test_json_response_sets_content_type_and_body() {
-        #[derive(Serialize)]
-        struct Payload {
-            ok: bool,
-            count: u32,
-        }
-
-        let response = json_response(StatusCode::OK, &Payload { ok: true, count: 2 });
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(http::header::CONTENT_TYPE),
-            Some(&http::HeaderValue::from_static("application/json"))
-        );
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        assert_eq!(body, Bytes::from_static(br#"{"ok":true,"count":2}"#));
-    }
-
-    #[tokio::test]
-    async fn test_json_error_sets_content_type_and_body() {
-        let response = json_error(StatusCode::BAD_REQUEST, "bad_request", "missing field");
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            response.headers().get(http::header::CONTENT_TYPE),
-            Some(&http::HeaderValue::from_static("application/json"))
-        );
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        assert_eq!(
-            body,
-            Bytes::from_static(br#"{"ok":false,"code":"bad_request","message":"missing field"}"#)
-        );
-    }
-
-    #[test]
-    fn test_register_helper_methods_register_without_error() {
-        AppClock::start();
-        let addr = reserve_local_addr();
-        let hub = test_api_hub(addr, None);
-        let register = ApiRegister::new(hub);
-
-        register
-            .register_get("/helper", Arc::new(TestEchoHandler))
-            .expect("register GET");
-        register
-            .register_post("/helper-post", Arc::new(TestEchoHandler))
-            .expect("register POST");
-        register
-            .register_plugin_get("cache_main", "/stats", Arc::new(TestEchoHandler))
-            .expect("register plugin GET");
-        register
-            .register_plugin_post("cache_main", "/reload", Arc::new(TestEchoHandler))
-            .expect("register plugin POST");
-    }
-
-    #[tokio::test]
-    async fn test_hyper_http1_serves_auth_and_plugin_route() {
-        AppClock::start();
-        let addr = reserve_local_addr();
-        let hub = test_api_hub(
-            addr,
-            Some(ApiAuthConfig::Basic {
-                username: "admin".to_string(),
-                password: "secret".to_string(),
-            }),
-        );
-        let register = ApiRegister::new(hub.clone());
-        register
-            .register_plugin_post("test_plugin", "/echo", Arc::new(TestEchoHandler))
-            .expect("register plugin route");
-
-        start_test_api_hub(&hub).await;
-
-        let client = http1_client();
-        let uri: Uri = format!("http://{addr}/plugins/test_plugin/echo")
-            .parse()
-            .expect("request uri");
-
-        let unauthorized = client
-            .request(
-                HyperRequest::builder()
-                    .method(Method::POST)
-                    .uri(uri.clone())
-                    .body(Empty::new())
-                    .expect("request"),
-            )
-            .await
-            .expect("unauthorized response");
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-        let auth_header = format!("Basic {}", STANDARD.encode("admin:secret"));
-        let authorized = client
-            .request(
-                HyperRequest::builder()
-                    .method(Method::POST)
-                    .uri(uri)
-                    .header(AUTHORIZATION, auth_header)
-                    .body(Empty::new())
-                    .expect("authorized request"),
-            )
-            .await
-            .expect("authorized response");
-
-        assert_eq!(authorized.version(), Version::HTTP_11);
-        assert_eq!(authorized.status(), StatusCode::OK);
-        assert_eq!(
-            authorized.headers().get(CONTENT_TYPE),
-            Some(&http::HeaderValue::from_static("application/json"))
-        );
-        let body = authorized
-            .into_body()
-            .collect()
-            .await
-            .expect("collect body")
-            .to_bytes();
-        let body = std::str::from_utf8(&body).expect("utf8 body");
-        assert!(body.contains("\"method\":\"POST\""));
-        assert!(body.contains("\"path\":\"/plugins/test_plugin/echo\""));
-
-        hub.stop().await;
-    }
-
-    #[tokio::test]
-    async fn test_hyper_response_uses_request_origin_for_cors() {
-        AppClock::start();
-        let addr = reserve_local_addr();
-        let hub = test_api_hub_with_cors(
-            addr,
-            None,
-            Some(ApiCorsConfig {
-                allowed_origins: vec![
-                    "http://localhost:3000".to_string(),
-                    "http://192.168.1.100:3000".to_string(),
-                ],
-                ..Default::default()
-            }),
-        );
-
-        start_test_api_hub(&hub).await;
-
-        let client = http1_client();
-        let uri: Uri = format!("http://{addr}/healthz")
-            .parse()
-            .expect("request uri");
-        let response = client
-            .request(
-                HyperRequest::builder()
-                    .method(Method::GET)
-                    .uri(uri)
-                    .header(http::header::ORIGIN, "http://192.168.1.100:3000")
-                    .body(Empty::new())
-                    .expect("request"),
-            )
-            .await
-            .expect("health response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&http::HeaderValue::from_static("http://192.168.1.100:3000"))
-        );
-
-        hub.stop().await;
-    }
-
-    #[tokio::test]
-    async fn test_hyper_http2_serves_builtin_health_route() {
-        AppClock::start();
-        let addr = reserve_local_addr();
-        let hub = test_api_hub(addr, None);
-
-        start_test_api_hub(&hub).await;
-
-        let client = http2_client();
-        let uri: Uri = format!("http://{addr}/healthz")
-            .parse()
-            .expect("request uri");
-        let response = client
-            .request(
-                HyperRequest::builder()
-                    .method(Method::GET)
-                    .uri(uri)
-                    .body(Empty::new())
-                    .expect("request"),
-            )
-            .await
-            .expect("health response");
-
-        assert_eq!(response.version(), Version::HTTP_2);
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect body")
-            .to_bytes();
-        assert_eq!(body, Bytes::from_static(b"ok"));
-
-        hub.stop().await;
-    }
 }

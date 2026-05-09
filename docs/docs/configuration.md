@@ -139,6 +139,9 @@ api:
       type: basic
       username: "admin"
       password: "secret"
+    webui:
+      root: "/opt/oxidns/webui"
+      index: "index.html"
 ```
 
 字段说明：
@@ -162,6 +165,11 @@ api:
   - `0.0.0.0` 和 `[::]` 自动允许任意 origin；具体 IP 自动允许同一 host 的任意 WebUI 端口。
   - 显式配置时按浏览器 `Origin` 精确匹配。
   - 使用 `"*"` 可允许任意 origin，但不能与浏览器凭据跨域一起使用。
+- `http.webui.root`
+  - 可选的 WebUI 静态文件目录。启用后 WebUI 挂载在 `/`，管理 API 位于 `/api/*`。
+  - WebUI 构建、发布目录和 nginx 独立部署方式见《[WebUI 部署](webui.md)》。
+- `http.webui.index`
+  - 可选首页文件名，默认 `index.html`。
 
 校验规则：
 
@@ -169,6 +177,8 @@ api:
 - `cert` 和 `key` 必须成对出现。
 - `require_client_cert: true` 时必须提供 `client_ca`。
 - `basic.username` 和 `basic.password` 都不能为空。
+- `webui.root` 不能为空。
+- `webui.index` 配置后不能为空。
 
 ### `plugins`
 

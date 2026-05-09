@@ -39,6 +39,9 @@ api:
       type: basic
       username: "admin"
       password: "secret"
+    webui:
+      root: "/opt/oxidns/webui"
+      index: "index.html"
 ```
 
 ## Authentication and Transport
@@ -89,15 +92,30 @@ Notes:
 Examples:
 
 ```bash
-curl -u admin:secret http://127.0.0.1:9088/healthz
+curl -u admin:secret http://127.0.0.1:9088/api/healthz
 ```
 
 Or:
 
 ```bash
 curl -H 'Authorization: Basic YWRtaW46c2VjcmV0' \
-  http://127.0.0.1:9088/healthz
+  http://127.0.0.1:9088/api/healthz
 ```
+
+### Static WebUI Files
+
+The management API can serve an external WebUI static directory. The WebUI is mounted at `/`, and management API routes are under `/api/*`:
+
+```yaml
+api:
+  http:
+    listen: "0.0.0.0:9199"
+    webui:
+      root: "/opt/oxidns/webui"
+      index: "index.html"
+```
+
+After enabling it, open `http://server:9199/` for the WebUI. The WebUI uses same-origin `/api` requests to reach the backend. Static files are not protected by Basic Auth, while `/api/*` keeps the management API authentication and CORS behavior. See [WebUI Deployment](webui.md) for the full configuration, build steps, and standalone nginx example.
 
 ### CORS / WebUI Cross-Origin Access
 
@@ -126,15 +144,15 @@ When configured explicitly, `allowed_origins` is matched exactly against the bro
 API routes fall into three groups:
 
 * Global routes
-  * For example `/healthz` and `/control`
+  * For example `/api/healthz` and `/api/control`
 * Plugin routes
-  * Uniform format: `/plugins/<plugin_tag>/<subpath>`
+  * Uniform format: `/api/plugins/<plugin_tag>/<subpath>`
 * Observability routes
-  * For example `/metrics`
+  * For example `/api/metrics`
 
 ## Built-In Health Endpoints
 
-### `GET /healthz`
+### `GET /api/healthz`
 
 Purpose:
 
@@ -145,7 +163,7 @@ Responses:
 * `200 OK`: `ok`
 * `503 Service Unavailable`: `not_listening`
 
-### `GET /readyz`
+### `GET /api/readyz`
 
 Purpose:
 
@@ -156,7 +174,7 @@ Responses:
 * `200 OK`: `ready`
 * `503 Service Unavailable`: `not_ready`
 
-### `GET /health`
+### `GET /api/health`
 
 Purpose:
 
@@ -183,7 +201,7 @@ Example shape:
 
 ## Built-In Control Endpoints
 
-### `GET /control`
+### `GET /api/control`
 
 Purpose:
 
@@ -197,7 +215,7 @@ The payload includes:
 * Whether shutdown has been requested
 * Reload status snapshots
 
-### `POST /shutdown`
+### `POST /api/shutdown`
 
 Purpose:
 
@@ -207,7 +225,7 @@ Response:
 
 * `202 Accepted`
 
-### `POST /reload`
+### `POST /api/reload`
 
 Purpose:
 
@@ -220,7 +238,7 @@ Responses:
 * `409 Conflict`
   * A reload is already `pending` or `in_progress`.
 
-### `GET /reload/status`
+### `GET /api/reload/status`
 
 Purpose:
 
@@ -243,7 +261,7 @@ Fields include:
 
 ## Config Check Endpoints
 
-### `GET /config`
+### `GET /api/config`
 
 Purpose:
 
@@ -263,12 +281,12 @@ Example response:
 }
 ```
 
-### `PUT /config`
+### `PUT /api/config`
 
 Purpose:
 
 * Saves the full YAML config file.
-* Runs the same validation as `POST /config/validate` before writing by default.
+* Runs the same validation as `POST /api/config/validate` before writing by default.
 * Can request an application-level reload after a successful save.
 
 Request body:
@@ -292,7 +310,7 @@ Responses:
 * `409 Conflict`
   * `base_version` does not match the current file version, or a reload was requested while another reload is already running.
 
-### `GET /config/check`
+### `GET /api/config/check`
 
 Purpose:
 
@@ -302,12 +320,12 @@ Good fit:
 
 * Check whether the on-disk config parses correctly and passes plugin dependency validation.
 
-### `POST /config/validate`
+### `POST /api/config/validate`
 
 Purpose:
 
 * Validates YAML config text sent directly in the request body.
-* Also accepts the JSON envelope used by `PUT /config`.
+* Also accepts the JSON envelope used by `PUT /api/config`.
 
 Request body requirements:
 
@@ -323,22 +341,22 @@ Good fit:
 ### Unified Format
 
 ```
-/plugins/<plugin_tag>/<route>
+/api/plugins/<plugin_tag>/<route>
 ```
 
 Notes:
 
-* A few plugins also expose prefix routes. For example, `query_recorder` uses `/plugins/<tag>/records/<id>`.
+* A few plugins also expose prefix routes. For example, `query_recorder` uses `/api/plugins/<tag>/records/<id>`.
 
 ### cache
 
-#### `GET /plugins/<cache_tag>/flush`
+#### `GET /api/plugins/<cache_tag>/flush`
 
 Clears the cache.
 
 ### provider
 
-#### `POST /plugins/<provider_tag>/reload`
+#### `POST /api/plugins/<provider_tag>/reload`
 
 Purpose:
 
@@ -355,30 +373,30 @@ Responses:
 Good fit:
 
 * Refreshing only the affected `domain_set`, `ip_set`, `geosite`, `geoip`, or `adguard_rule` provider after downloading new rule files.
-* Avoiding the blast radius of an application-wide `POST /reload`.
+* Avoiding the blast radius of an application-wide `POST /api/reload`.
 
 Notes:
 
-* If the change also updates `config.yaml`, provider topology, the plugin list, or other non-provider structures, you still need `POST /reload`.
+* If the change also updates `config.yaml`, provider topology, the plugin list, or other non-provider structures, you still need `POST /api/reload`.
 
-#### `GET /plugins/<cache_tag>/dump`
+#### `GET /api/plugins/<cache_tag>/dump`
 
 Exports a cache dump.
 
-#### `POST /plugins/<cache_tag>/load_dump`
+#### `POST /api/plugins/<cache_tag>/load_dump`
 
 Imports a cache dump.
 
 ### reverse_lookup
 
-#### `GET /plugins/<tag>?ip=<ip_addr>`
+#### `GET /api/plugins/<tag>?ip=<ip_addr>`
 
 Looks up the domain cached for an IP address.
 
 Example:
 
 ```
-GET /plugins/reverse_lookup_main?ip=8.8.8.8
+GET /api/plugins/reverse_lookup_main?ip=8.8.8.8
 ```
 
 Responses:
@@ -389,7 +407,7 @@ Responses:
 
 ### query_recorder
 
-#### `GET /plugins/<tag>/records`
+#### `GET /api/plugins/<tag>/records`
 
 Returns recorder rows ordered by `created_at_ms` descending and does not include `steps`.
 
@@ -459,7 +477,7 @@ Responses:
 }
 ```
 
-#### `GET /plugins/<tag>/records/<id>`
+#### `GET /api/plugins/<tag>/records/<id>`
 
 Returns one full record plus its `steps` array.
 
@@ -470,7 +488,7 @@ Responses:
 * `404 Not Found`
   * The record does not exist.
 
-#### `GET /plugins/<tag>/stats/overview`
+#### `GET /api/plugins/<tag>/stats/overview`
 
 Returns recorder overview statistics.
 
@@ -486,7 +504,7 @@ Response fields:
 * `dropped_total`
 * `avg_elapsed_ms`
 
-#### `GET /plugins/<tag>/stats/plugins`
+#### `GET /api/plugins/<tag>/stats/plugins`
 
 Aggregates plugin hit information from recorded path events.
 
@@ -506,7 +524,7 @@ Response fields:
 * `query_total`
 * `query_share`
 
-#### `GET /plugins/<tag>/stream`
+#### `GET /api/plugins/<tag>/stream`
 
 Streams newly written records over SSE.
 
@@ -522,7 +540,7 @@ Notes:
 
 ## Prometheus Metrics
 
-### `GET /metrics`
+### `GET /api/metrics`
 
 This endpoint is registered when the API is enabled and at least one `metrics_collector` is configured.
 

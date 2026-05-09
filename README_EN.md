@@ -73,6 +73,7 @@ The full install flow is documented in Quick Start.
 - Home networks, gateways, and side-router deployments
 - Multi-upstream racing, fallback chains, and mixed protocol environments
 - Domain-driven routing and filtering
+- Lightweight deployments that serve a separately built WebUI on the same management port
 - Teams building long-lived, self-hosted DNS infrastructure
 
 ## License

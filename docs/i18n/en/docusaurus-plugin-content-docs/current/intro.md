@@ -13,8 +13,9 @@ Recommended reading order:
 3. Read [Configuration Overview](configuration.md) to understand the top-level YAML layout and `sequence` orchestration model.
 4. Read [Plugin Overview](plugin-reference/overview.md) and then the four plugin categories: `server`, `executor`, `matcher`, and `provider`.
 5. Read [Management API](api.md) when integrating OxiDNS with control planes, dashboards, or automation.
-6. Read [Common Scenarios](scenarios.md) for policy composition patterns.
-7. Read [Architecture and Design](architecture-and-design.md) and [Benchmarks](benchmarks.md) for implementation background and performance direction.
+6. Read [WebUI Deployment](webui.md) when deploying the management console.
+7. Read [Common Scenarios](scenarios.md) for policy composition patterns.
+8. Read [Architecture and Design](architecture-and-design.md) and [Benchmarks](benchmarks.md) for implementation background and performance direction.
 
 ## Scope
 

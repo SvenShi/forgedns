@@ -266,7 +266,7 @@ mod tests {
 
         let client: Client<HttpConnector, Empty<bytes::Bytes>> =
             Client::builder(TokioExecutor::new()).build(HttpConnector::new());
-        let uri: Uri = format!("http://{listen}/plugins/reloadable/reload")
+        let uri: Uri = format!("http://{listen}/api/plugins/reloadable/reload")
             .parse()
             .expect("uri should parse");
         let request = HttpRequest::builder()

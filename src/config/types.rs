@@ -41,6 +41,12 @@ pub enum ConfigError {
     #[error("api.http.ssl.require_client_cert requires api.http.ssl.client_ca")]
     MissingApiTlsClientCa,
 
+    #[error("api.http.webui.root cannot be empty")]
+    EmptyApiWebUiRoot,
+
+    #[error("api.http.webui.index cannot be empty")]
+    EmptyApiWebUiIndex,
+
     #[error(
         "Duplicate plugin tag '{tag}' found at plugins[{first_index}] and plugins[{duplicate_index}]"
     )]
@@ -117,6 +123,15 @@ impl Config {
                     return Err(ConfigError::EmptyApiBasicAuthPassword);
                 }
             }
+
+            if let Some(webui) = &resolved.webui {
+                if webui.root.trim().is_empty() {
+                    return Err(ConfigError::EmptyApiWebUiRoot);
+                }
+                if matches!(webui.index.as_deref(), Some(index) if index.trim().is_empty()) {
+                    return Err(ConfigError::EmptyApiWebUiIndex);
+                }
+            }
         }
 
         // Validate plugins - basic structure checks
@@ -156,7 +171,7 @@ pub struct ApiConfig {
 #[serde(untagged)]
 pub enum ApiHttpConfig {
     Listen(String),
-    Detailed(ApiHttpDetailedConfig),
+    Detailed(Box<ApiHttpDetailedConfig>),
 }
 
 impl ApiHttpConfig {
@@ -168,12 +183,14 @@ impl ApiHttpConfig {
                 ssl: None,
                 auth: None,
                 cors: None,
+                webui: None,
             },
             Self::Detailed(config) => ResolvedApiHttpConfig {
                 listen: config.listen.clone(),
                 ssl: config.ssl.clone(),
                 auth: config.auth.clone(),
                 cors: config.cors.clone(),
+                webui: config.webui.clone(),
             },
         }
     }
@@ -212,6 +229,14 @@ pub struct ApiHttpDetailedConfig {
     pub ssl: Option<ApiTlsConfig>,
     pub auth: Option<ApiAuthConfig>,
     pub cors: Option<ApiCorsConfig>,
+    pub webui: Option<ApiWebUiConfig>,
+}
+
+/// Static WebUI files served by the management API listener.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiWebUiConfig {
+    pub root: String,
+    pub index: Option<String>,
 }
 
 /// TLS settings for the management API.
@@ -237,6 +262,7 @@ pub struct ResolvedApiHttpConfig {
     pub ssl: Option<ApiTlsConfig>,
     pub auth: Option<ApiAuthConfig>,
     pub cors: Option<ApiCorsConfig>,
+    pub webui: Option<ApiWebUiConfig>,
 }
 
 /// Tokio runtime configuration.
@@ -449,7 +475,7 @@ mod tests {
             include: Vec::new(),
             runtime: RuntimeConfig::default(),
             api: ApiConfig {
-                http: Some(ApiHttpConfig::Detailed(ApiHttpDetailedConfig {
+                http: Some(ApiHttpConfig::Detailed(Box::new(ApiHttpDetailedConfig {
                     listen: "127.0.0.1:9443".to_string(),
                     ssl: Some(ApiTlsConfig {
                         cert: Some("cert.pem".to_string()),
@@ -459,7 +485,8 @@ mod tests {
                     }),
                     auth: None,
                     cors: None,
-                })),
+                    webui: None,
+                }))),
             },
             log: LogConfig::default(),
             plugins: vec![plugin("ok", "debug_print")],

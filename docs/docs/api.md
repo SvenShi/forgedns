@@ -39,6 +39,9 @@ api:
       type: basic
       username: "admin"
       password: "secret"
+    webui:
+      root: "/opt/oxidns/webui"
+      index: "index.html"
 ```
 
 ## 认证与传输
@@ -89,15 +92,30 @@ Authorization: Basic YWRtaW46c2VjcmV0
 示例：
 
 ```bash
-curl -u admin:secret http://127.0.0.1:9088/healthz
+curl -u admin:secret http://127.0.0.1:9088/api/healthz
 ```
 
 或：
 
 ```bash
 curl -H 'Authorization: Basic YWRtaW46c2VjcmV0' \
-  http://127.0.0.1:9088/healthz
+  http://127.0.0.1:9088/api/healthz
 ```
+
+### WebUI 静态文件
+
+管理 API 可以直接服务外部 WebUI 静态目录。WebUI 挂载在根路径 `/`，管理 API 统一位于 `/api/*`：
+
+```yaml
+api:
+  http:
+    listen: "0.0.0.0:9199"
+    webui:
+      root: "/opt/oxidns/webui"
+      index: "index.html"
+```
+
+启用后，访问 `http://服务器:9199/` 加载 WebUI，WebUI 使用同源 `/api` 访问后端。静态文件不受 Basic Auth 保护，但 `/api/*` 仍按管理 API 的认证与 CORS 规则处理。完整配置、构建步骤和 nginx 独立部署示例见《[WebUI 部署](webui.md)》。
 
 ### CORS / WebUI 跨域
 
@@ -126,15 +144,15 @@ api:
 API 路由分成三类：
 
 * 全局路由
-  * 例如 `/healthz`、`/control`
+  * 例如 `/api/healthz`、`/api/control`
 * 插件路由
-  * 统一格式：`/plugins/<plugin_tag>/<subpath>`
+  * 统一格式：`/api/plugins/<plugin_tag>/<subpath>`
 * 观测路由
-  * 例如 `/metrics`
+  * 例如 `/api/metrics`
 
 ## 内置健康检查接口
 
-### `GET /healthz`
+### `GET /api/healthz`
 
 作用：
 
@@ -145,7 +163,7 @@ API 路由分成三类：
 * `200 OK`：`ok`
 * `503 Service Unavailable`：`not_listening`
 
-### `GET /readyz`
+### `GET /api/readyz`
 
 作用：
 
@@ -156,7 +174,7 @@ API 路由分成三类：
 * `200 OK`：`ready`
 * `503 Service Unavailable`：`not_ready`
 
-### `GET /health`
+### `GET /api/health`
 
 作用：
 
@@ -183,7 +201,7 @@ API 路由分成三类：
 
 ## 内置控制接口
 
-### `GET /control`
+### `GET /api/control`
 
 作用：
 
@@ -197,7 +215,7 @@ API 路由分成三类：
 * 是否请求过 shutdown
 * reload 状态快照
 
-### `POST /shutdown`
+### `POST /api/shutdown`
 
 作用：
 
@@ -207,7 +225,7 @@ API 路由分成三类：
 
 * `202 Accepted`
 
-### `POST /reload`
+### `POST /api/reload`
 
 作用：
 
@@ -220,7 +238,7 @@ API 路由分成三类：
 * `409 Conflict`
   * 已有 reload 在 pending / in\_progress。
 
-### `GET /reload/status`
+### `GET /api/reload/status`
 
 作用：
 
@@ -243,7 +261,7 @@ API 路由分成三类：
 
 ## 配置检查接口
 
-### `GET /config`
+### `GET /api/config`
 
 作用：
 
@@ -263,12 +281,12 @@ API 路由分成三类：
 }
 ```
 
-### `PUT /config`
+### `PUT /api/config`
 
 作用：
 
 * 保存完整 YAML 配置文件。
-* 保存前默认执行与 `POST /config/validate` 相同的校验。
+* 保存前默认执行与 `POST /api/config/validate` 相同的校验。
 * 可在保存成功后触发一次应用级 reload。
 
 请求体：
@@ -292,7 +310,7 @@ API 路由分成三类：
 * `409 Conflict`
   * `base_version` 与当前文件版本不一致，或保存后请求 reload 时已有 reload 正在进行。
 
-### `GET /config/check`
+### `GET /api/config/check`
 
 作用：
 
@@ -302,12 +320,12 @@ API 路由分成三类：
 
 * 检查磁盘上现有配置是否能成功解析与通过插件依赖校验。
 
-### `POST /config/validate`
+### `POST /api/config/validate`
 
 作用：
 
 * 直接校验请求体中的 YAML 配置文本。
-* 同时支持 `PUT /config` 使用的 JSON 包装格式。
+* 同时支持 `PUT /api/config` 使用的 JSON 包装格式。
 
 请求体要求：
 
@@ -323,22 +341,22 @@ API 路由分成三类：
 ### 统一格式
 
 ```
-/plugins/<plugin_tag>/<route>
+/api/plugins/<plugin_tag>/<route>
 ```
 
 说明：
 
-* 也有少量插件会把主资源绑定到前缀路由下，例如 `query_recorder` 的 `/plugins/<tag>/records/<id>`。
+* 也有少量插件会把主资源绑定到前缀路由下，例如 `query_recorder` 的 `/api/plugins/<tag>/records/<id>`。
 
 ### cache
 
-#### `GET /plugins/<cache_tag>/flush`
+#### `GET /api/plugins/<cache_tag>/flush`
 
 清空缓存。
 
 ### provider
 
-#### `POST /plugins/<provider_tag>/reload`
+#### `POST /api/plugins/<provider_tag>/reload`
 
 作用：
 
@@ -355,30 +373,30 @@ API 路由分成三类：
 适用场景：
 
 * 规则文件下载完成后，只刷新受影响的 `domain_set`、`ip_set`、`geosite`、`geoip`、`adguard_rule` provider。
-* 需要避免应用级全量 `POST /reload` 对其它插件造成重建影响。
+* 需要避免应用级全量 `POST /api/reload` 对其它插件造成重建影响。
 
 注意：
 
-* 如果变更涉及 `config.yaml`、provider 依赖拓扑、插件列表或其它非 provider 结构，仍然需要使用 `POST /reload`。
+* 如果变更涉及 `config.yaml`、provider 依赖拓扑、插件列表或其它非 provider 结构，仍然需要使用 `POST /api/reload`。
 
-#### `GET /plugins/<cache_tag>/dump`
+#### `GET /api/plugins/<cache_tag>/dump`
 
 导出缓存 dump。
 
-#### `POST /plugins/<cache_tag>/load_dump`
+#### `POST /api/plugins/<cache_tag>/load_dump`
 
 导入缓存 dump。
 
 ### reverse\_lookup
 
-#### `GET /plugins/<tag>?ip=<ip_addr>`
+#### `GET /api/plugins/<tag>?ip=<ip_addr>`
 
 按 IP 查询缓存中的域名。
 
 示例：
 
 ```
-GET /plugins/reverse_lookup_main?ip=8.8.8.8
+GET /api/plugins/reverse_lookup_main?ip=8.8.8.8
 ```
 
 返回：
@@ -389,7 +407,7 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 
 ### query\_recorder
 
-#### `GET /plugins/<tag>/records`
+#### `GET /api/plugins/<tag>/records`
 
 按 `created_at_ms` 倒序返回 recorder 主表中的记录列表，不包含 `steps`。
 
@@ -459,7 +477,7 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 }
 ```
 
-#### `GET /plugins/<tag>/records/<id>`
+#### `GET /api/plugins/<tag>/records/<id>`
 
 返回单条完整记录，并附带 `steps` 路径事件数组。
 
@@ -470,7 +488,7 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 * `404 Not Found`
   * 记录不存在。
 
-#### `GET /plugins/<tag>/stats/overview`
+#### `GET /api/plugins/<tag>/stats/overview`
 
 返回 recorder 概览统计。
 
@@ -486,7 +504,7 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 * `dropped_total`
 * `avg_elapsed_ms`
 
-#### `GET /plugins/<tag>/stats/plugins`
+#### `GET /api/plugins/<tag>/stats/plugins`
 
 按路径事件聚合插件命中情况。
 
@@ -506,7 +524,7 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 * `query_total`
 * `query_share`
 
-#### `GET /plugins/<tag>/stream`
+#### `GET /api/plugins/<tag>/stream`
 
 通过 SSE 推送新写入的完整记录。
 
@@ -522,7 +540,7 @@ GET /plugins/reverse_lookup_main?ip=8.8.8.8
 
 ## Prometheus 指标
 
-### `GET /metrics`
+### `GET /api/metrics`
 
 当配置了至少一个 `metrics_collector` 且 API 已启用时，会注册该接口。
 
