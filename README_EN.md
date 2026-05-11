@@ -4,7 +4,7 @@
 [![Rust CI](https://github.com/svenshi/oxidns/actions/workflows/rust-ci.yml/badge.svg?branch=main)](https://github.com/svenshi/oxidns/actions/workflows/rust-ci.yml)
 [![WebUI CI](https://github.com/svenshi/oxidns/actions/workflows/webui-ci.yml/badge.svg)](https://github.com/svenshi/oxidns/actions/workflows/webui-ci.yml)
 
-[中文](README.md) | [English](README_EN.md) · [Documentation](https://forgedns.cn/en/) · [Quick Start](https://forgedns.cn/en/quickstart) · [Plugin Reference](https://forgedns.cn/en/plugin-reference/overview)
+[中文](README.md) | [English](README_EN.md) · [Documentation](https://oxidns.org/en/) · [Quick Start](https://oxidns.org/en/quickstart) · [Plugin Reference](https://oxidns.org/en/plugin-reference/overview)
 
 # OxiDNS
 
@@ -171,20 +171,20 @@ On Windows PowerShell, run:
 [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
 ```
 
-For the full installation flow, see [Quick Start](https://forgedns.cn/en/quickstart).
+For the full installation flow, see [Quick Start](https://oxidns.org/en/quickstart).
 
 ---
 
 ## Documentation
 
-- [Configuration](https://forgedns.cn/en/configuration)
-- [Quick Start](https://forgedns.cn/en/quickstart)
-- [Plugin Overview](https://forgedns.cn/en/plugin-reference/overview)
-- [Management API](https://forgedns.cn/en/api)
-- [MikroTik Policy Routing](https://forgedns.cn/en/mikrotik-policy-routing)
-- [Common Scenarios](https://forgedns.cn/en/scenarios)
-- [Architecture and Design](https://forgedns.cn/en/architecture-and-design)
-- [Performance and Benchmarks](https://forgedns.cn/en/benchmarks)
+- [Configuration](https://oxidns.org/en/configuration)
+- [Quick Start](https://oxidns.org/en/quickstart)
+- [Plugin Overview](https://oxidns.org/en/plugin-reference/overview)
+- [Management API](https://oxidns.org/en/api)
+- [MikroTik Policy Routing](https://oxidns.org/en/mikrotik-policy-routing)
+- [Common Scenarios](https://oxidns.org/en/scenarios)
+- [Architecture and Design](https://oxidns.org/en/architecture-and-design)
+- [Performance and Benchmarks](https://oxidns.org/en/benchmarks)
 
 ---
 

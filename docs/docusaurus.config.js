@@ -17,7 +17,7 @@ const config = {
     v4: true,
   },
 
-  url: 'https://oxidns.cn',
+  url: 'https://oxidns.org',
   baseUrl: '/',
 
   organizationName: 'svenshi',

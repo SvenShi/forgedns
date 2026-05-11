@@ -4,7 +4,7 @@
 [![Rust CI](https://github.com/svenshi/oxidns/actions/workflows/rust-ci.yml/badge.svg?branch=main)](https://github.com/svenshi/oxidns/actions/workflows/rust-ci.yml)
 [![WebUI CI](https://github.com/svenshi/oxidns/actions/workflows/webui-ci.yml/badge.svg)](https://github.com/svenshi/oxidns/actions/workflows/webui-ci.yml)
 
-[中文](README.md) | [English](README_EN.md) · [文档](https://forgedns.cn/) · [快速开始](https://forgedns.cn/quickstart) · [插件参考](https://forgedns.cn/plugin-reference/overview)
+[中文](README.md) | [English](README_EN.md) · [文档](https://oxidns.org/) · [快速开始](https://oxidns.org/quickstart) · [插件参考](https://oxidns.org/plugin-reference/overview)
 
 # OxiDNS
 
@@ -171,20 +171,20 @@ Windows 可在 PowerShell 中执行：
 [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
 ```
 
-完整安装流程请参考 [快速开始](https://forgedns.cn/quickstart)。
+完整安装流程请参考 [快速开始](https://oxidns.org/quickstart)。
 
 ---
 
 ## 文档
 
-- [配置总览](https://forgedns.cn/configuration)
-- [快速开始](https://forgedns.cn/quickstart)
-- [插件总览](https://forgedns.cn/plugin-reference/overview)
-- [管理 API](https://forgedns.cn/api)
-- [MikroTik 策略路由](https://forgedns.cn/mikrotik-policy-routing)
-- [常见场景](https://forgedns.cn/scenarios)
-- [架构与设计](https://forgedns.cn/architecture-and-design)
-- [性能与基准](https://forgedns.cn/benchmarks)
+- [配置总览](https://oxidns.org/configuration)
+- [快速开始](https://oxidns.org/quickstart)
+- [插件总览](https://oxidns.org/plugin-reference/overview)
+- [管理 API](https://oxidns.org/api)
+- [MikroTik 策略路由](https://oxidns.org/mikrotik-policy-routing)
+- [常见场景](https://oxidns.org/scenarios)
+- [架构与设计](https://oxidns.org/architecture-and-design)
+- [性能与基准](https://oxidns.org/benchmarks)
 
 ---
 
