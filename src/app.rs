@@ -18,9 +18,8 @@ mod banner;
 pub mod bootstrap;
 pub mod cli;
 pub mod export_dat;
+mod graph;
 mod logging;
-
-use std::collections::{HashMap, HashSet};
 
 use tokio::runtime;
 use tokio::sync::{mpsc, oneshot};
@@ -33,7 +32,6 @@ use crate::config::ConfigValidationSummary;
 use crate::config::types::Config;
 use crate::core::app_clock::AppClock;
 use crate::core::error::{DnsError, Result};
-use crate::plugin::dependency::DependencyKind;
 use crate::{config, core};
 
 /// Start OxiDNS in the foreground using the provided CLI options.
@@ -89,153 +87,7 @@ fn print_dependency_graph(summary: &ConfigValidationSummary) {
 }
 
 fn render_dependency_graph(summary: &ConfigValidationSummary) -> String {
-    let mut lines = vec!["Plugin dependency graph:".to_string()];
-    let node_map = summary
-        .dependency_graph
-        .nodes
-        .iter()
-        .map(|node| (node.tag.as_str(), node))
-        .collect::<HashMap<_, _>>();
-    let init_index = summary
-        .dependency_graph
-        .init_order
-        .iter()
-        .enumerate()
-        .map(|(idx, tag)| (tag.as_str(), idx))
-        .collect::<HashMap<_, _>>();
-    let mut dependency_map: HashMap<&str, Vec<_>> = HashMap::new();
-    let mut referenced = HashSet::new();
-
-    for edge in &summary.dependency_graph.edges {
-        dependency_map
-            .entry(edge.source_tag.as_str())
-            .or_default()
-            .push(edge);
-        referenced.insert(edge.target_tag.as_str());
-    }
-
-    for deps in dependency_map.values_mut() {
-        deps.sort_by(|a, b| {
-            a.field
-                .cmp(&b.field)
-                .then_with(|| {
-                    init_index
-                        .get(a.target_tag.as_str())
-                        .cmp(&init_index.get(b.target_tag.as_str()))
-                })
-                .then_with(|| a.target_tag.cmp(&b.target_tag))
-        });
-    }
-
-    let mut roots = summary
-        .dependency_graph
-        .init_order
-        .iter()
-        .filter(|tag| !referenced.contains(tag.as_str()))
-        .collect::<Vec<_>>();
-    roots.sort_by(|a, b| {
-        init_index
-            .get(a.as_str())
-            .cmp(&init_index.get(b.as_str()))
-            .then_with(|| a.cmp(b))
-    });
-
-    for (idx, root) in roots.iter().enumerate() {
-        if idx > 0 {
-            lines.push(String::new());
-        }
-        render_dependency_tree(root, "", true, &node_map, &dependency_map, &mut lines);
-    }
-    lines.join("\n")
-}
-
-fn render_dependency_tree<'a>(
-    tag: &'a str,
-    prefix: &str,
-    is_last: bool,
-    node_map: &HashMap<&'a str, &'a crate::plugin::dependency::DependencyGraphNode>,
-    dependency_map: &HashMap<&'a str, Vec<&'a crate::plugin::dependency::DependencyGraphEdge>>,
-    lines: &mut Vec<String>,
-) {
-    let Some(node) = node_map.get(tag) else {
-        return;
-    };
-
-    let branch = if prefix.is_empty() {
-        ""
-    } else if is_last {
-        "└─ "
-    } else {
-        "├─ "
-    };
-    lines.push(format!(
-        "{}{}{} [{}:{}]",
-        prefix,
-        branch,
-        node.tag,
-        kind_label(node.kind),
-        node.plugin_type
-    ));
-
-    let Some(deps) = dependency_map.get(tag) else {
-        return;
-    };
-
-    let child_prefix = if prefix.is_empty() {
-        String::new()
-    } else if is_last {
-        format!("{prefix}   ")
-    } else {
-        format!("{prefix}│  ")
-    };
-
-    for (idx, dep) in deps.iter().enumerate() {
-        let last_dep = idx + 1 == deps.len();
-        let edge_branch = if last_dep { "└─ " } else { "├─ " };
-        let edge_label = match dep.expected_plugin_type.as_deref() {
-            Some(expected_type) => format!(
-                "{}{}{} [{}:{}]",
-                child_prefix,
-                edge_branch,
-                dep.field,
-                kind_label(dep.expected_kind),
-                expected_type
-            ),
-            None => format!(
-                "{}{}{} [{}]",
-                child_prefix,
-                edge_branch,
-                dep.field,
-                kind_label(dep.expected_kind)
-            ),
-        };
-        lines.push(edge_label);
-
-        let next_prefix = if last_dep {
-            format!("{child_prefix}   ")
-        } else {
-            format!("{child_prefix}│  ")
-        };
-        render_dependency_tree(
-            dep.target_tag.as_str(),
-            &next_prefix,
-            true,
-            node_map,
-            dependency_map,
-            lines,
-        );
-    }
-}
-
-fn kind_label(kind: DependencyKind) -> &'static str {
-    match kind {
-        DependencyKind::Any => "any",
-        DependencyKind::Server => "server",
-        DependencyKind::Executor => "executor",
-        DependencyKind::Matcher => "matcher",
-        DependencyKind::Provider => "provider",
-        DependencyKind::Unknown => "unknown",
-    }
+    graph::render_dependency_graph(&summary.dependency_graph)
 }
 
 fn init_runtime(options: StartOptions, config: Config) -> Result<()> {
@@ -327,9 +179,57 @@ plugins:
             graph.contains("udp_server [server:udp_server]\n\n")
                 || graph.contains("tcp_server [server:tcp_server]\n\n")
         );
-        assert!(graph.contains("└─ args[0].exec [executor]"));
-        assert!(graph.contains("forward [executor:forward]"));
+        assert!(graph.contains("#0 IF always"));
+        assert!(graph.contains("THEN $forward [args[0].exec]"));
+        assert!(graph.contains("#1 IF always"));
+        assert!(graph.contains("THEN accept [args[1].exec]"));
         assert!(!graph.contains("no dependencies"));
+    }
+
+    #[test]
+    fn dependency_graph_serializes_sequence_flows_without_dropping_legacy_fields() {
+        let summary = config::validate_text(
+            r#"
+plugins:
+  - tag: forward
+    type: forward
+  - tag: seq
+    type: sequence
+    args:
+      - matches:
+          - qname domain:example.com
+        exec: $forward
+"#,
+        )
+        .expect("config should validate");
+
+        let value =
+            serde_json::to_value(&summary.dependency_graph).expect("graph should serialize");
+        assert!(value.get("nodes").is_some());
+        assert!(value.get("edges").is_some());
+        assert!(value.get("init_order").is_some());
+
+        let flows = value
+            .get("sequence_flows")
+            .and_then(|flows| flows.as_array())
+            .expect("sequence_flows should serialize as an array");
+        assert_eq!(flows.len(), 1);
+        assert_eq!(
+            flows[0].get("tag").and_then(|tag| tag.as_str()),
+            Some("seq")
+        );
+        assert_eq!(
+            flows[0]
+                .get("rules")
+                .and_then(|rules| rules.as_array())
+                .and_then(|rules| rules.first())
+                .and_then(|rule| rule.get("matches"))
+                .and_then(|matches| matches.as_array())
+                .and_then(|matches| matches.first())
+                .and_then(|expr| expr.get("kind"))
+                .and_then(|kind| kind.as_str()),
+            Some("quick_setup")
+        );
     }
 
     #[test]

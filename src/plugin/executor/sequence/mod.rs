@@ -11,7 +11,10 @@ use tokio::sync::OnceCell;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
-use crate::plugin::dependency::DependencySpec;
+use crate::plugin::dependency::{
+    DependencySpec, SequenceFlowExpression, SequenceFlowExpressionKind, SequenceFlowReport,
+    SequenceFlowRule,
+};
 use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainProgram};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::parse_matcher_expr;
@@ -147,6 +150,160 @@ fn parse_control_flow_dependency(exec: &str) -> Option<String> {
         return Some(tag);
     }
     None
+}
+
+pub(crate) fn analyze_sequence_flow(plugin_config: &PluginConfig) -> Option<SequenceFlowReport> {
+    if plugin_config.plugin_type != "sequence" {
+        return None;
+    }
+
+    let args = plugin_config.args.clone()?;
+    let rules = serde_yaml_ng::from_value::<Vec<Rule>>(args).ok()?;
+    let rules = rules
+        .into_iter()
+        .enumerate()
+        .map(|(rule_idx, rule)| {
+            let matches = rule
+                .matches
+                .unwrap_or_default()
+                .into_iter()
+                .enumerate()
+                .map(|(match_idx, raw)| {
+                    analyze_match_expression(format!("args[{rule_idx}].matches[{match_idx}]"), raw)
+                })
+                .collect();
+            let exec = rule
+                .exec
+                .map(|raw| analyze_exec_expression(format!("args[{rule_idx}].exec"), raw));
+            SequenceFlowRule {
+                index: rule_idx,
+                matches,
+                exec,
+            }
+        })
+        .collect();
+
+    Some(SequenceFlowReport {
+        tag: plugin_config.tag.clone(),
+        rules,
+    })
+}
+
+fn analyze_match_expression(field: String, raw: String) -> SequenceFlowExpression {
+    let parsed = parse_matcher_expr(&raw).and_then(|(inverted, matcher)| {
+        PluginRef::from_str(matcher).map(|plugin_ref| (inverted, plugin_ref))
+    });
+
+    match parsed {
+        Ok((inverted, PluginRef::PluginTag(tag))) => SequenceFlowExpression {
+            field,
+            raw,
+            kind: SequenceFlowExpressionKind::Plugin,
+            target_tag: Some(tag),
+            plugin_type: None,
+            param: None,
+            inverted,
+            builtin: None,
+        },
+        Ok((inverted, PluginRef::QuickSetup { plugin_type, param })) => SequenceFlowExpression {
+            field,
+            raw,
+            kind: SequenceFlowExpressionKind::QuickSetup,
+            target_tag: None,
+            plugin_type: Some(plugin_type),
+            param,
+            inverted,
+            builtin: None,
+        },
+        Err(_) => SequenceFlowExpression {
+            field,
+            raw,
+            kind: SequenceFlowExpressionKind::Invalid,
+            target_tag: None,
+            plugin_type: None,
+            param: None,
+            inverted: false,
+            builtin: None,
+        },
+    }
+}
+
+fn analyze_exec_expression(field: String, raw: String) -> SequenceFlowExpression {
+    if let Some(expression) = analyze_builtin_exec_expression(&field, &raw) {
+        return expression;
+    }
+
+    match PluginRef::from_str(&raw) {
+        Ok(PluginRef::PluginTag(tag)) => SequenceFlowExpression {
+            field,
+            raw,
+            kind: SequenceFlowExpressionKind::Plugin,
+            target_tag: Some(tag),
+            plugin_type: None,
+            param: None,
+            inverted: false,
+            builtin: None,
+        },
+        Ok(PluginRef::QuickSetup { plugin_type, param }) => SequenceFlowExpression {
+            field,
+            raw,
+            kind: SequenceFlowExpressionKind::QuickSetup,
+            target_tag: None,
+            plugin_type: Some(plugin_type),
+            param,
+            inverted: false,
+            builtin: None,
+        },
+        Err(_) => SequenceFlowExpression {
+            field,
+            raw,
+            kind: SequenceFlowExpressionKind::Invalid,
+            target_tag: None,
+            plugin_type: None,
+            param: None,
+            inverted: false,
+            builtin: None,
+        },
+    }
+}
+
+fn analyze_builtin_exec_expression(field: &str, raw: &str) -> Option<SequenceFlowExpression> {
+    let trimmed = raw.trim();
+    let mut split = trimmed.splitn(2, char::is_whitespace);
+    let op = split.next()?;
+    let param = split
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let is_builtin = matches!(
+        op,
+        "accept" | "return" | "reject" | "jump" | "goto" | "mark"
+    );
+    if !is_builtin {
+        return None;
+    }
+
+    let target_tag = if matches!(op, "jump" | "goto") {
+        param.and_then(|tag| parse_control_flow_sequence_tag(op, tag).ok())
+    } else {
+        None
+    };
+    let plugin_type = if matches!(op, "jump" | "goto") {
+        Some("sequence".to_string())
+    } else {
+        None
+    };
+
+    Some(SequenceFlowExpression {
+        field: field.to_string(),
+        raw: raw.to_string(),
+        kind: SequenceFlowExpressionKind::Builtin,
+        target_tag,
+        plugin_type,
+        param: param.map(str::to_string),
+        inverted: false,
+        builtin: Some(op.to_string()),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -316,6 +473,72 @@ exec: reject 2
         assert_eq!(
             multi.matches.expect("matches field should exist"),
             vec!["_true".to_string(), "qtype A".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_analyze_sequence_flow_reports_match_exec_and_quick_setup() {
+        let config = PluginConfig {
+            tag: "seq".to_string(),
+            plugin_type: "sequence".to_string(),
+            args: Some(
+                serde_yaml_ng::from_str(
+                    r#"
+- matches:
+    - "!$blocked"
+    - "qname domain:example.com"
+  exec: "forward 1.1.1.1"
+- exec: "jump child_seq"
+- exec: accept
+"#,
+                )
+                .expect("sequence args should parse"),
+            ),
+        };
+
+        let flow = analyze_sequence_flow(&config).expect("sequence flow should parse");
+        assert_eq!(flow.tag, "seq");
+        assert_eq!(flow.rules.len(), 3);
+        assert_eq!(
+            flow.rules[0].matches[0].target_tag.as_deref(),
+            Some("blocked")
+        );
+        assert!(flow.rules[0].matches[0].inverted);
+        assert_eq!(
+            flow.rules[0].matches[1].plugin_type.as_deref(),
+            Some("qname")
+        );
+        assert_eq!(
+            flow.rules[0].matches[1].param.as_deref(),
+            Some("domain:example.com")
+        );
+        assert_eq!(
+            flow.rules[0]
+                .exec
+                .as_ref()
+                .and_then(|expr| expr.plugin_type.as_deref()),
+            Some("forward")
+        );
+        assert_eq!(
+            flow.rules[1]
+                .exec
+                .as_ref()
+                .and_then(|expr| expr.builtin.as_deref()),
+            Some("jump")
+        );
+        assert_eq!(
+            flow.rules[1]
+                .exec
+                .as_ref()
+                .and_then(|expr| expr.target_tag.as_deref()),
+            Some("child_seq")
+        );
+        assert_eq!(
+            flow.rules[2]
+                .exec
+                .as_ref()
+                .and_then(|expr| expr.builtin.as_deref()),
+            Some("accept")
         );
     }
 }

@@ -89,10 +89,33 @@ export interface DependencyGraphEdge {
   expected_plugin_type?: string;
 }
 
+export interface SequenceFlowExpression {
+  field: string;
+  raw: string;
+  kind: "plugin" | "quick_setup" | "builtin" | "invalid";
+  target_tag?: string;
+  plugin_type?: string;
+  param?: string;
+  inverted: boolean;
+  builtin?: string;
+}
+
+export interface SequenceFlowRule {
+  index: number;
+  matches: SequenceFlowExpression[];
+  exec?: SequenceFlowExpression;
+}
+
+export interface SequenceFlowReport {
+  tag: string;
+  rules: SequenceFlowRule[];
+}
+
 export interface DependencyGraphReport {
   nodes: DependencyGraphNode[];
   edges: DependencyGraphEdge[];
   init_order: string[];
+  sequence_flows?: SequenceFlowReport[];
 }
 
 export interface ConfigValidateResponse {

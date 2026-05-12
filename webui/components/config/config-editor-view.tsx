@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Spinner } from "@/components/ui/spinner";
+import { useAuthStore } from "@/lib/auth-store";
 
 export function ConfigEditorView() {
   const yamlConfig = useAppStore((s) => s.configText);
@@ -33,6 +34,7 @@ export function ConfigEditorView() {
   const configPath = useAppStore((s) => s.configPath);
   const configVersion = useAppStore((s) => s.configVersion);
   const dependencyGraph = useAppStore((s) => s.dependencyGraph);
+  const isConnected = useAuthStore((s) => s.isConnected);
 
   const [originalConfig, setOriginalConfig] = useState(yamlConfig);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">(
@@ -42,8 +44,9 @@ export function ConfigEditorView() {
   const hasChanges = yamlConfig !== originalConfig;
 
   useEffect(() => {
+    if (!isConnected) return;
     void loadConfig();
-  }, [loadConfig]);
+  }, [isConnected, loadConfig]);
 
   useEffect(() => {
     if (!configVersion) return;

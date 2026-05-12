@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { AppHeader } from "@/components/shell/app-header";
 import { useAppStore } from "@/lib/store";
-import { useAuthStore } from "@/lib/auth-store";
+import { useAuthStore, type ServerConfig } from "@/lib/auth-store";
 import { stringifyOxiDnsConfig, type OxiDnsConfig } from "@/lib/oxidns-config";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,11 +18,9 @@ export default function SettingsPage() {
   const serverConfig = useAuthStore((s) => s.serverConfig);
   const setServerConfig = useAuthStore((s) => s.setServerConfig);
   const connect = useAuthStore((s) => s.connect);
-  const disconnect = useAuthStore((s) => s.disconnect);
   const isConnected = useAuthStore((s) => s.isConnected);
   const isConnecting = useAuthStore((s) => s.isConnecting);
   const connectionError = useAuthStore((s) => s.connectionError);
-  const user = useAuthStore((s) => s.user);
 
   const configModel = useAppStore((s) => s.configModel);
   const configPath = useAppStore((s) => s.configPath);
@@ -34,7 +32,7 @@ export default function SettingsPage() {
   const reloadStatus = useAppStore((s) => s.reloadStatus);
   const setYamlConfig = useAppStore((s) => s.setYamlConfig);
   const saveConfig = useAppStore((s) => s.saveConfig);
-  const refreshRuntimeState = useAppStore((s) => s.refreshRuntimeState);
+  const loadConfig = useAppStore((s) => s.loadConfig);
   const isConfigSaving = useAppStore((s) => s.isConfigSaving);
 
   const [backendUrl, setBackendUrl] = useState(serverConfig.url);
@@ -70,22 +68,22 @@ export default function SettingsPage() {
     backendUrl.trim().length > 0 &&
     (!requiresAuth || (username.trim().length > 0 && password.length > 0));
 
+  const getConnectionConfig = (): ServerConfig => ({
+    url: backendUrl.trim(),
+    requiresAuth,
+    username: requiresAuth ? username.trim() : "",
+    password: requiresAuth ? password : "",
+  });
+
   const handleSaveConnection = () => {
-    setServerConfig({
-      url: backendUrl.trim(),
-      requiresAuth,
-      username: requiresAuth ? username.trim() : "",
-      password: requiresAuth ? password : "",
-    });
+    setServerConfig(getConnectionConfig());
   };
 
   const handleConnect = async () => {
-    handleSaveConnection();
-    const ok = await connect(
-      requiresAuth ? username.trim() : undefined,
-      requiresAuth ? password : undefined,
-    );
-    if (ok) await refreshRuntimeState();
+    const nextConfig = getConnectionConfig();
+    setServerConfig(nextConfig);
+    const ok = await connect(nextConfig);
+    if (ok) await loadConfig();
   };
 
   const handleSaveTopLevelConfig = async (reload: boolean) => {
@@ -173,8 +171,6 @@ export default function SettingsPage() {
                   <PlugZap className="h-4 w-4 mr-1.5" />
                   {isConnecting ? "连接中" : "保存并连接"}
                 </Button>
-                {isConnected && <Button variant="ghost" onClick={disconnect}>断开连接</Button>}
-                {user && <span className="text-sm text-muted-foreground">当前用户：<span className="font-mono text-foreground">{user.username}</span></span>}
               </div>
             </CardContent>
           </Card>
@@ -262,10 +258,17 @@ export default function SettingsPage() {
                 </Field>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button onClick={() => handleSaveTopLevelConfig(false)} disabled={isConfigSaving}>
+                <Button
+                  onClick={() => handleSaveTopLevelConfig(false)}
+                  disabled={isConfigSaving || !isConnected}
+                >
                   保存配置
                 </Button>
-                <Button variant="outline" onClick={() => handleSaveTopLevelConfig(true)} disabled={isConfigSaving}>
+                <Button
+                  variant="outline"
+                  onClick={() => handleSaveTopLevelConfig(true)}
+                  disabled={isConfigSaving || !isConnected}
+                >
                   <RefreshCw className="h-4 w-4 mr-1.5" />
                   保存并重载
                 </Button>

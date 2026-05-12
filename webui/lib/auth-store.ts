@@ -15,13 +15,12 @@ export interface AuthState {
   isAuthenticated: boolean;
   isConnected: boolean;
   isConnecting: boolean;
+  isHydrated: boolean;
   connectionError: string | null;
-  user: { username: string } | null;
 
   setServerConfig: (config: ServerConfig) => void;
-  connect: (username?: string, password?: string) => Promise<boolean>;
-  disconnect: () => void;
-  logout: () => void;
+  connect: (config?: ServerConfig) => Promise<boolean>;
+  markHydrated: () => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -36,17 +35,25 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       isConnected: false,
       isConnecting: false,
+      isHydrated: false,
       connectionError: null,
-      user: null,
 
-      setServerConfig: (config) => set({ serverConfig: config }),
+      setServerConfig: (config) =>
+        set((state) => ({
+          serverConfig: config,
+          ...(isSameServerConfig(state.serverConfig, config)
+            ? {}
+            : {
+                isAuthenticated: false,
+                isConnected: false,
+                connectionError: null,
+              }),
+        })),
 
-      connect: async (username?: string, password?: string) => {
+      connect: async (config?: ServerConfig) => {
         set({ isConnecting: true, connectionError: null });
 
-        const { serverConfig } = get();
-        const authUsername = username ?? serverConfig.username ?? "";
-        const authPassword = password ?? serverConfig.password ?? "";
+        const serverConfig = config ?? get().serverConfig;
 
         try {
           const url = serverConfig.url.trim();
@@ -55,10 +62,10 @@ export const useAuthStore = create<AuthState>()(
           }
           const headers: Record<string, string> = { Accept: "application/json" };
           if (serverConfig.requiresAuth) {
-            if (!authUsername || !authPassword) {
+            if (!serverConfig.username || !serverConfig.password) {
               throw new Error("请输入用户名和密码");
             }
-            headers.Authorization = `Basic ${btoa(`${authUsername}:${authPassword}`)}`;
+            headers.Authorization = `Basic ${btoa(`${serverConfig.username}:${serverConfig.password}`)}`;
           }
           const response = await fetch(`${url.replace(/\/$/, "")}/health`, {
             method: "GET",
@@ -72,14 +79,16 @@ export const useAuthStore = create<AuthState>()(
             );
           }
           set({
+            serverConfig,
             isConnected: true,
             isAuthenticated: true,
             isConnecting: false,
-            user: serverConfig.requiresAuth ? { username: authUsername } : null,
           });
           return true;
         } catch (error) {
           set({
+            isConnected: false,
+            isAuthenticated: false,
             isConnecting: false,
             connectionError:
               error instanceof Error ? error.message : "连接失败",
@@ -88,29 +97,27 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      disconnect: () => {
-        set({
-          isConnected: false,
-          isAuthenticated: false,
-          user: null,
-          connectionError: null,
-        });
-      },
-
-      logout: () => {
-        set({
-          isConnected: false,
-          isAuthenticated: false,
-          user: null,
-          connectionError: null,
-        });
-      },
+      markHydrated: () => set({ isHydrated: true }),
     }),
     {
       name: "oxidns-auth",
       partialize: (state) => ({
         serverConfig: state.serverConfig,
+        isAuthenticated: state.isAuthenticated,
+        isConnected: state.isConnected,
       }),
+      onRehydrateStorage: () => (state) => {
+        state?.markHydrated();
+      },
     },
   ),
 );
+
+function isSameServerConfig(left: ServerConfig, right: ServerConfig) {
+  return (
+    left.url === right.url &&
+    left.requiresAuth === right.requiresAuth &&
+    left.username === right.username &&
+    left.password === right.password
+  );
+}

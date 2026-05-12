@@ -176,7 +176,13 @@ pub fn analyze_configuration(config: &Config) -> Result<DependencyGraphReport> {
             .unwrap_or(dependency::DependencyKind::Unknown)
     };
 
-    dependency::analyze_dependencies(&config.plugins, &get_deps, &get_kind)
+    let mut report = dependency::analyze_dependencies(&config.plugins, &get_deps, &get_kind)?;
+    report.sequence_flows = config
+        .plugins
+        .iter()
+        .filter_map(crate::plugin::executor::sequence::analyze_sequence_flow)
+        .collect();
+    Ok(report)
 }
 
 pub struct FactoryRegistration {

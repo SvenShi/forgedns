@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
   Breadcrumb,
@@ -13,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Moon, Sun, RotateCw, Code2, LayoutDashboard } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAppStore } from "@/lib/store";
+import { useAuthStore } from "@/lib/auth-store";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Tooltip,
@@ -31,6 +33,7 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
   const setEditorMode = useAppStore((s) => s.setEditorMode);
   const isRestarting = useAppStore((s) => s.isRestarting);
   const restartService = useAppStore((s) => s.restartService);
+  const isConnected = useAuthStore((s) => s.isConnected);
   const showNavigation = !editorMode;
 
   return (
@@ -43,8 +46,8 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
           <Breadcrumb className="min-w-0 flex-1">
             <BreadcrumbList className="gap-2 text-[13px]">
               <BreadcrumbItem>
-                <BreadcrumbLink href="/" className="text-foreground/70">
-                  OxiDNS
+                <BreadcrumbLink asChild className="text-foreground/70">
+                  <Link href="/">OxiDNS</Link>
                 </BreadcrumbLink>
               </BreadcrumbItem>
               {breadcrumbs.map((crumb, i) => (
@@ -52,11 +55,8 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
                   <BreadcrumbSeparator />
                   <BreadcrumbItem>
                     {crumb.href ? (
-                      <BreadcrumbLink
-                        href={crumb.href}
-                        className="text-foreground/70"
-                      >
-                        {crumb.label}
+                      <BreadcrumbLink asChild className="text-foreground/70">
+                        <Link href={crumb.href}>{crumb.label}</Link>
                       </BreadcrumbLink>
                     ) : (
                       <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
@@ -108,7 +108,7 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
               size="icon-sm"
               className="rounded-md"
               onClick={() => restartService()}
-              disabled={isRestarting}
+              disabled={isRestarting || !isConnected}
             >
               {isRestarting ? (
                 <Spinner className="h-4 w-4" />
@@ -119,7 +119,11 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            {isRestarting ? "正在重启..." : "重启服务"}
+            {!isConnected
+              ? "连接后台服务后可重启"
+              : isRestarting
+                ? "正在重启..."
+                : "重启服务"}
           </TooltipContent>
         </Tooltip>
 

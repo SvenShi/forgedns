@@ -153,7 +153,7 @@ fn test_cors_headers_echo_allowed_request_origin_and_delete_method() {
     assert_eq!(
         response_headers.get(http::header::ACCESS_CONTROL_ALLOW_METHODS),
         Some(&http::HeaderValue::from_static(
-            "GET, POST, DELETE, OPTIONS"
+            "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         ))
     );
     assert_eq!(

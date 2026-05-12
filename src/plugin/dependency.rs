@@ -59,6 +59,42 @@ pub struct DependencyGraphReport {
     pub nodes: Vec<DependencyGraphNode>,
     pub edges: Vec<DependencyGraphEdge>,
     pub init_order: Vec<String>,
+    #[serde(default)]
+    pub sequence_flows: Vec<SequenceFlowReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SequenceFlowReport {
+    pub tag: String,
+    pub rules: Vec<SequenceFlowRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SequenceFlowRule {
+    pub index: usize,
+    pub matches: Vec<SequenceFlowExpression>,
+    pub exec: Option<SequenceFlowExpression>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SequenceFlowExpressionKind {
+    Plugin,
+    QuickSetup,
+    Builtin,
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SequenceFlowExpression {
+    pub field: String,
+    pub raw: String,
+    pub kind: SequenceFlowExpressionKind,
+    pub target_tag: Option<String>,
+    pub plugin_type: Option<String>,
+    pub param: Option<String>,
+    pub inverted: bool,
+    pub builtin: Option<String>,
 }
 
 /// One dependency edge from a source plugin to a target plugin tag.
@@ -353,6 +389,7 @@ pub fn analyze_dependencies(
         nodes,
         edges,
         init_order: sorted_tags,
+        sequence_flows: Vec::new(),
     })
 }
 

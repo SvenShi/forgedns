@@ -41,11 +41,11 @@ pub(super) fn add_cors_headers(
     headers.insert(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, allowed_origin);
     headers.insert(
         http::header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
+        HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE, OPTIONS"),
     );
     headers.insert(
         http::header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("Content-Type, Authorization"),
+        HeaderValue::from_static("*"),
     );
 
     if !wildcard {

@@ -606,6 +606,12 @@ fn build_runtime_init_plan(
                 .filter(|tag| live_tags.contains(*tag))
                 .cloned()
                 .collect(),
+            sequence_flows: report
+                .sequence_flows
+                .iter()
+                .filter(|flow| live_tags.contains(&flow.tag))
+                .cloned()
+                .collect(),
         },
         skipped_providers,
     }
@@ -891,6 +897,7 @@ mod tests {
                 "live_provider".to_string(),
                 "entry".to_string(),
             ],
+            sequence_flows: Vec::new(),
         };
 
         let runtime_plan = build_runtime_init_plan(&report);
