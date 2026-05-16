@@ -47,9 +47,7 @@ import {
   createItemId,
   createStableItemId,
   firstQuickSetupKind,
-  formatQuickSetupValue,
   isQuickSetupValue,
-  parseQuickSetupValue,
   stripReferencePrefix,
 } from "@/components/plugins/plugin-ref-editor";
 import type { PluginInstance } from "@/lib/types";
@@ -356,6 +354,10 @@ export function SequenceComposer({
           onChange={handleYamlChange}
           readOnly={readOnly}
           className="min-h-[260px]"
+          variant="sequence"
+          plugins={plugins}
+          pluginKind="sequence"
+          currentPluginName={currentSequenceName}
         />
       )}
     </div>

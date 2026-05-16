@@ -240,6 +240,8 @@ export function PluginDetailTemplate({
                     onValidityChange={setConfigValid}
                     defaultArrayObjectCollapsed={!editingConfig}
                     readOnly={!editingConfig}
+                    pluginKind={plugin.pluginKind}
+                    currentPluginName={plugin.name}
                   />
                 ) : (
                   <Textarea

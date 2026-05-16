@@ -127,6 +127,31 @@ export interface ConfigValidateResponse {
   message: string;
 }
 
+export interface ConfigDiagnostic {
+  message: string;
+  severity: "error" | "warning" | "info";
+  line: number;
+  column: number;
+  end_line: number;
+  end_column: number;
+}
+
+export class ConfigValidationError extends Error {
+  diagnostics: string[];
+  diagnosticDetails: ConfigDiagnostic[];
+
+  constructor(
+    message: string,
+    diagnostics: string[] = [message],
+    diagnosticDetails: ConfigDiagnostic[] = [],
+  ) {
+    super(message);
+    this.name = "ConfigValidationError";
+    this.diagnostics = diagnostics;
+    this.diagnosticDetails = diagnosticDetails;
+  }
+}
+
 export interface CacheEntryRow {
   id: string;
   domain: string;
@@ -384,6 +409,19 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
       body && typeof body.message === "string"
         ? body.message
         : `HTTP ${response.status}`;
+    if (
+      body &&
+      Array.isArray(body.diagnostics) &&
+      body.diagnostics.every((item: unknown) => typeof item === "string")
+    ) {
+      throw new ConfigValidationError(
+        message,
+        body.diagnostics,
+        Array.isArray(body.diagnostic_details)
+          ? (body.diagnostic_details as ConfigDiagnostic[])
+          : [],
+      );
+    }
     throw new Error(message);
   }
   return body as T;

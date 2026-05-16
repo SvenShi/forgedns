@@ -284,6 +284,9 @@ export function CronComposer({
           onChange={handleYamlChange}
           readOnly={readOnly}
           className="min-h-[260px]"
+          variant="plugin-args"
+          plugins={plugins}
+          pluginKind="cron"
         />
       )}
     </div>

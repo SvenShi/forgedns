@@ -1,7 +1,8 @@
 "use client";
 
 import { useAppStore } from "@/lib/store";
-import { YamlEditor } from "@/components/config/yaml-editor";
+import { YamlEditor, type YamlEditorHandle } from "@/components/config/yaml-editor";
+import { PluginIndexPanel } from "@/components/config/plugin-index-panel";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,7 +19,7 @@ import {
   CheckCircle2,
   AlertCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/spinner";
 import { useAuthStore } from "@/lib/auth-store";
 
@@ -33,9 +34,10 @@ export function ConfigEditorView() {
   const configError = useAppStore((s) => s.configError);
   const configPath = useAppStore((s) => s.configPath);
   const configVersion = useAppStore((s) => s.configVersion);
-  const dependencyGraph = useAppStore((s) => s.dependencyGraph);
+  const plugins = useAppStore((s) => s.plugins);
   const isConnected = useAuthStore((s) => s.isConnected);
 
+  const yamlEditorRef = useRef<YamlEditorHandle>(null);
   const [originalConfig, setOriginalConfig] = useState(yamlConfig);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">(
     "idle",
@@ -160,93 +162,52 @@ export function ConfigEditorView() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden p-6">
-        <div className="h-full flex gap-6">
-          <div className="flex-1 min-w-0">
+      <div className="flex-1 min-h-0 p-6 flex flex-col">
+        <div className="flex-1 min-h-0 flex gap-6">
+          <div className="flex-1 min-w-0 min-h-0">
             <YamlEditor
+              ref={yamlEditorRef}
               value={yamlConfig}
               onChange={setYamlConfig}
               className="h-full"
               readOnly={isConfigLoading}
+              variant="config"
+              plugins={plugins}
             />
           </div>
 
-          <Card className="w-72 flex-shrink-0">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">快捷键</CardTitle>
-              <CardDescription>编辑器操作说明</CardDescription>
+          <Card className="w-80 flex-shrink-0 flex flex-col min-h-0">
+            <CardHeader className="flex-shrink-0 pb-2">
+              <CardTitle className="text-sm">插件索引</CardTitle>
+              <CardDescription>点击跳转到定义行</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="flex items-center justify-between">
+            <CardContent className="flex-1 min-h-0 overflow-y-auto pb-2 px-3">
+              <PluginIndexPanel
+                yamlText={yamlConfig}
+                onJumpToLine={(line) => yamlEditorRef.current?.jumpToLine(line)}
+              />
+            </CardContent>
+            <div className="border-t px-3 py-3 flex-shrink-0 space-y-2">
+              <p className="text-xs text-muted-foreground font-medium mb-1.5">快捷键</p>
+              <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">缩进</span>
-                <kbd className="px-2 py-1 bg-muted rounded text-xs font-mono">
-                  Tab
-                </kbd>
+                <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">Tab</kbd>
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">保存</span>
-                <div className="flex gap-1">
-                  <kbd className="px-2 py-1 bg-muted rounded text-xs font-mono">
-                    Ctrl
-                  </kbd>
-                  <kbd className="px-2 py-1 bg-muted rounded text-xs font-mono">
-                    S
-                  </kbd>
+                <div className="flex gap-0.5">
+                  <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">Ctrl</kbd>
+                  <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">S</kbd>
                 </div>
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">撤销</span>
-                <div className="flex gap-1">
-                  <kbd className="px-2 py-1 bg-muted rounded text-xs font-mono">
-                    Ctrl
-                  </kbd>
-                  <kbd className="px-2 py-1 bg-muted rounded text-xs font-mono">
-                    Z
-                  </kbd>
+                <div className="flex gap-0.5">
+                  <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">Ctrl</kbd>
+                  <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">Z</kbd>
                 </div>
               </div>
-            </CardContent>
-
-            <CardHeader className="pb-3 pt-0">
-              <CardTitle className="text-sm">配置结构</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-blue-500" />
-                <span className="text-muted-foreground">runtime</span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  运行时
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-green-500" />
-                <span className="text-muted-foreground">api</span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  管理 API
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-yellow-500" />
-                <span className="text-muted-foreground">log</span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  日志
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-purple-500" />
-                <span className="text-muted-foreground">plugins</span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {dependencyGraph?.nodes.length ?? 0}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-primary" />
-                <span className="text-muted-foreground">init_order</span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {dependencyGraph?.init_order.length ?? 0}
-                </span>
-              </div>
-            </CardContent>
+            </div>
           </Card>
         </div>
       </div>

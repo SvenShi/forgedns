@@ -33,6 +33,16 @@ export default function ConsoleLayout({
   }, [isConnected, loadConfig]);
 
   useEffect(() => {
+    const el = document.documentElement;
+    if (editorMode) {
+      el.style.overflow = "hidden";
+    } else {
+      el.style.overflow = "";
+    }
+    return () => { el.style.overflow = ""; };
+  }, [editorMode]);
+
+  useEffect(() => {
     if (!previousEditorMode.current && editorMode) {
       sidebarStateBeforeEditor.current = sidebarOpen;
       setSidebarOpen(false);
@@ -56,16 +66,16 @@ export default function ConsoleLayout({
         }}
       >
         <AppSidebar />
-        <SidebarInset className="flex flex-col">
+        <SidebarInset className={`flex flex-col${editorMode ? " overflow-hidden" : ""}`}>
           {editorMode ? (
-            <>
+            <div className="h-svh flex flex-col overflow-hidden">
               <AppHeader title="配置编辑器" />
               {!isAuthHydrated || isConnected ? (
                 <ConfigEditorView />
               ) : (
                 <ConnectionRequired />
               )}
-            </>
+            </div>
           ) : canUseBackendPages ? (
             children
           ) : (

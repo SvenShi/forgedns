@@ -264,6 +264,17 @@ struct ConfigValidationErrorResponse {
     code: &'static str,
     message: String,
     diagnostics: Vec<String>,
+    diagnostic_details: Vec<ConfigDiagnostic>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfigDiagnostic {
+    message: String,
+    severity: &'static str,
+    line: usize,
+    column: usize,
+    end_line: usize,
+    end_column: usize,
 }
 
 #[derive(Debug)]
@@ -382,7 +393,7 @@ impl ApiHandler for ConfigCheckHandler {
     async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         match validate_config_file(self.controller.config_path()) {
             Ok(response) => json_ok(StatusCode::OK, &response),
-            Err(err) => config_validation_error("config_check_failed", err),
+            Err(err) => config_validation_error("config_check_failed", err, None),
         }
     }
 }
@@ -463,21 +474,54 @@ impl ApiHandler for ConfigValidateHandler {
 
         match validate_config_text(&body) {
             Ok(response) => json_ok(StatusCode::OK, &response),
-            Err(err) => config_validation_error("config_validate_failed", err),
+            Err(err) => config_validation_error("config_validate_failed", err, Some(&body)),
         }
     }
 }
 
-fn config_validation_error(code: &'static str, message: String) -> crate::api::ApiResponse {
+fn config_validation_error(
+    code: &'static str,
+    message: String,
+    config_text: Option<&str>,
+) -> crate::api::ApiResponse {
+    let diagnostic = config_text
+        .map(|text| locate_config_diagnostic(text, &message))
+        .unwrap_or_else(|| default_config_diagnostic(&message));
     json_response(
         StatusCode::BAD_REQUEST,
         &ConfigValidationErrorResponse {
             ok: false,
             diagnostics: vec![message.clone()],
+            diagnostic_details: vec![diagnostic],
             code,
             message,
         },
     )
+}
+
+fn default_config_diagnostic(message: &str) -> ConfigDiagnostic {
+    ConfigDiagnostic {
+        message: message.to_string(),
+        severity: "error",
+        line: 1,
+        column: 1,
+        end_line: 1,
+        end_column: 2,
+    }
+}
+
+fn locate_config_diagnostic(config_text: &str, message: &str) -> ConfigDiagnostic {
+    if let Some(loc) = config::diagnostic::locate_in_config(config_text, message) {
+        return ConfigDiagnostic {
+            message: message.to_string(),
+            severity: "error",
+            line: loc.line,
+            column: loc.column,
+            end_line: loc.line,
+            end_column: loc.end_column,
+        };
+    }
+    default_config_diagnostic(message)
 }
 
 fn config_text_from_validate_request(
@@ -841,6 +885,39 @@ plugins:
             ))
             .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn config_validate_error_includes_diagnostic_location() {
+        let validate = ConfigValidateHandler;
+        let response = validate
+            .handle(test_request(
+                Method::POST,
+                "/config/validate",
+                Bytes::from_static(
+                    b"
+plugins:
+  - tag: bad
+    type: missing_plugin
+",
+                ),
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("body should be json");
+        assert_eq!(
+            value["diagnostic_details"][0]["message"],
+            "Plugin error: Unknown plugin type: missing_plugin"
+        );
+        assert_eq!(value["diagnostic_details"][0]["line"], 4);
+        assert_eq!(value["diagnostic_details"][0]["column"], 11);
     }
 
     #[tokio::test]

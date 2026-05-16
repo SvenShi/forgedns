@@ -21,6 +21,7 @@ use crate::config::types::Config;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::DependencyGraphReport;
 
+pub mod diagnostic;
 pub mod types;
 
 const MAX_INCLUDE_DEPTH: usize = 8;

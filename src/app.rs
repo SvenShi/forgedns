@@ -46,16 +46,36 @@ pub fn run(start: StartOptions) -> Result<()> {
 /// Validate a configuration file from the CLI without starting runtime
 /// services.
 pub fn check(options: CheckOptions) -> Result<()> {
-    let summary = run_check(&options)?;
-    println!(
-        "Configuration is valid: {} (plugins: {})",
-        options.config.display(),
-        summary.plugin_count
-    );
-    if options.graph {
-        print_dependency_graph(&summary);
+    match run_check(&options) {
+        Ok(summary) => {
+            println!(
+                "Configuration is valid: {} (plugins: {})",
+                options.config.display(),
+                summary.plugin_count
+            );
+            if options.graph {
+                print_dependency_graph(&summary);
+            }
+            Ok(())
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let location = std::fs::read_to_string(&options.config)
+                .ok()
+                .and_then(|text| config::diagnostic::locate_in_config(&text, &message));
+            match location {
+                Some(loc) => eprintln!(
+                    "{}:{}:{}: error: {}",
+                    options.config.display(),
+                    loc.line,
+                    loc.column,
+                    message
+                ),
+                None => eprintln!("error: {message}"),
+            }
+            Err(err)
+        }
     }
-    Ok(())
 }
 
 fn prepare_working_dir(working_dir: Option<&std::path::PathBuf>) -> Result<()> {

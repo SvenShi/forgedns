@@ -403,6 +403,8 @@ export function CreatePluginDialog({
                         values={configValues}
                         onChange={setConfigValues}
                         onValidityChange={setConfigValid}
+                        pluginKind={selectedKind.kind}
+                        currentPluginName={instanceName.trim() || undefined}
                       />
                     )}
                   </div>

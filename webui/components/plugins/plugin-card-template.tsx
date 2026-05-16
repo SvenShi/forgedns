@@ -15,6 +15,11 @@ import {
   PinOff,
   Trash2,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -52,7 +57,7 @@ export function PluginCardTemplate({
   return (
     <Card
       className={cn(
-        "flex h-full min-h-[9.25rem] cursor-pointer flex-col transition-all hover:border-primary/50 hover:shadow-md",
+        "group flex h-full min-h-[9.25rem] cursor-pointer flex-col transition-all hover:border-primary/50 hover:shadow-md",
         plugin.pinned && "border-primary/30",
       )}
       onClick={handleClick}
@@ -97,6 +102,33 @@ export function PluginCardTemplate({
               </div>
             </div>
           )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "h-7 w-7 flex-shrink-0 transition-opacity",
+                  plugin.pinned
+                    ? "text-primary opacity-100"
+                    : "opacity-0 group-hover:opacity-100",
+                )}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePluginPin(plugin.id);
+                }}
+              >
+                {plugin.pinned ? (
+                  <PinOff className="h-3.5 w-3.5" />
+                ) : (
+                  <Pin className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {plugin.pinned ? "取消固定" : "固定到仪表盘"}
+            </TooltipContent>
+          </Tooltip>
           <DropdownMenu>
             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
               <Button

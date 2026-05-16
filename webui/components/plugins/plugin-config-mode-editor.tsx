@@ -32,6 +32,8 @@ interface PluginConfigModeEditorProps {
   defaultArrayObjectCollapsed?: boolean;
   fieldLabel?: string;
   yamlLabel?: string;
+  pluginKind?: string;
+  currentPluginName?: string;
 }
 
 export function PluginConfigModeEditor({
@@ -44,6 +46,8 @@ export function PluginConfigModeEditor({
   defaultArrayObjectCollapsed = false,
   fieldLabel = "字段",
   yamlLabel = "YAML",
+  pluginKind,
+  currentPluginName,
 }: PluginConfigModeEditorProps) {
   const alreadyArgsLevel = isAlreadyArgsLevelSchema(fields);
   const [mode, setMode] = useState<"fields" | "yaml">("fields");
@@ -141,6 +145,11 @@ export function PluginConfigModeEditor({
           onChange={handleYamlChange}
           readOnly={readOnly}
           className="min-h-[260px]"
+          variant="plugin-args"
+          plugins={plugins}
+          pluginKind={pluginKind}
+          fields={fields}
+          currentPluginName={currentPluginName}
         />
       )}
     </div>
