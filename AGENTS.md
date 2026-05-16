@@ -22,6 +22,10 @@
 - `src/plugin/matcher/` contains rule matchers for qname/qtype/qclass, client IP, response IP, CNAME, response presence, RCODE, marks, env, random rollout, rate limits, and related predicates.
 - `src/plugin/provider/` contains reusable domain/IP datasets consumed by matchers and executors.
 - `src/service.rs` contains service-management integration for installing or controlling OxiDNS as a system service.
+- `crates/macros/` provides proc-macros used by the plugin registration system (`register_plugin_factory!` and related derives).
+- `crates/ripset/` is a pure-Rust Linux netlink implementation for ipset/nftset operations, used by the ipset and nftset executor plugins.
+- `crates/proto/` contains the low-level DNS wire protocol types (header, name, question, record, rdata) that back `src/message/`.
+- `crates/zoneparser/` is a standalone zone-file parser used for loading hosts and local zone data.
 - `tests/plugin_integration.rs` covers config parsing, plugin registry wiring, sequence quick-setup, and live server integration.
 - `tests/message_hickory_compat.rs` validates message codec compatibility behavior against Hickory.
 - `config.yaml` is the canonical runnable default configuration for the current plugin composition.
@@ -30,19 +34,31 @@
 
 ## Build, Test, and Development Commands
 
-- `cargo check` is the fastest default sanity check during iteration.
-- `cargo build --release` builds the optimized binary used for realistic performance testing.
-- `cargo run -- -c config.yaml` runs OxiDNS with the default config.
-- `cargo run --release -- -c config.yaml` is the preferred way to validate real runtime behavior or performance-sensitive changes.
-- `cargo run -- -c config.yaml -l debug` overrides the configured log level for local debugging.
-- `cargo test` runs unit tests and integration tests.
-- `cargo test --test plugin_integration` runs the end-to-end plugin/config integration suite directly.
-- `cargo fmt` keeps formatting consistent.
-- `cargo clippy --all-targets --all-features` is recommended when changing shared infrastructure or hot-path logic.
+**Toolchain note:** `rustfmt.toml` uses `unstable_features = true`, so formatting and the pre-commit hook both require the nightly toolchain (`cargo +nightly fmt`). Install it with `rustup toolchain install nightly` if needed.
+
+**Git hooks:** Run `just install-hooks` once per clone to activate the pre-commit hook (`cargo +nightly fmt --check` + `cargo +nightly clippy -- -D warnings`).
+
+**Preferred quality gates (via `just`):**
+- `just check` — full gate: fmt check + clippy (`-D warnings`) + tests. Run this before opening a PR.
+- `just fix` — auto-applies fmt and Clippy fixes; use during active development.
+- `just lint` — fmt check + clippy only, no tests; faster iteration cycle.
+
+**Individual commands:**
+- `cargo check` — fastest sanity check during iteration.
+- `cargo build --release` — builds the optimized binary.
+- `cargo run -- -c config.yaml` — runs OxiDNS with the default config.
+- `cargo run --release -- -c config.yaml` — preferred for performance-sensitive validation.
+- `cargo run -- -c config.yaml -l debug` — overrides the log level for local debugging.
+- `cargo test` — runs all unit and integration tests.
+- `cargo test --test plugin_integration` — runs the end-to-end plugin/config integration suite.
+- `cargo test <filter>` — runs tests whose names match the filter string (e.g., `cargo test cache` runs all cache-related tests).
+- `cargo test --test plugin_integration <filter>` — runs a specific integration test by name.
+- `cargo +nightly fmt` — formats code; nightly is required due to unstable rustfmt features.
+- `cargo +nightly clippy --all-targets --all-features -- -D warnings` — lints with warnings as errors; required to match CI and the pre-commit hook.
 
 ## Coding Style & Naming Conventions
 
-- Rust 2024 edition; format with `cargo fmt`.
+- Rust 2024 edition; format with `cargo +nightly fmt`.
 - Use `snake_case` for functions and fields, `CamelCase` for types, and `SCREAMING_SNAKE_CASE` for constants.
 - Keep modules cohesive and place helpers close to the feature they serve.
 - Comments should be written in English.

@@ -61,7 +61,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Coding Style & Naming Conventions
 
-- Rust 2024 edition; format with `cargo fmt`.
+- Rust 2024 edition; format with `cargo +nightly fmt`.
 - Use `snake_case` for functions and fields, `CamelCase` for types, and `SCREAMING_SNAKE_CASE` for constants.
 - Keep modules cohesive and place helpers close to the feature they serve.
 - Comments should be written in English.
