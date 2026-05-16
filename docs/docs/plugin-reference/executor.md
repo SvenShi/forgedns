@@ -1022,6 +1022,18 @@ sidebar_position: 3
 - 单位：秒
 - 作用：定义 preferred 状态缓存时长。
 
+### quick setup
+
+```yaml
+- exec: "prefer_ipv4"
+- exec: "prefer_ipv6"
+```
+
+说明：
+
+- quick setup 使用默认配置：`cache: true`、`cache_ttl: 3600`。
+- 如需关闭缓存或调整缓存时长，请使用完整插件配置。
+
 ### 行为说明
 
 - `prefer_ipv4`
@@ -1808,7 +1820,7 @@ sidebar_position: 3
 ### quick setup
 
 ```yaml
-- exec: "ipset oxidns_v4,4,24 oxidns_v6,6,64"
+- exec: "ipset oxidns_v4,inet,24 oxidns_v6,inet6,64"
 ```
 
 格式：
@@ -1817,7 +1829,7 @@ sidebar_position: 3
 <set_name>,<family>,<mask>
 ```
 
-其中 `family` 为 `4` 或 `6`。
+其中 `family` 为 `inet` 或 `inet6`。
 
 ### 行为说明
 

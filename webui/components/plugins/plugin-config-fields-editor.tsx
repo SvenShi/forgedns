@@ -1,10 +1,6 @@
 "use client";
 
-import {
-  getPluginCatalogItem,
-  renderPluginKindIcon,
-} from "@/components/plugins/catalog";
-import { Badge } from "@/components/ui/badge";
+import { PluginReferencePicker } from "@/components/plugins/plugin-reference-picker";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -29,8 +25,7 @@ import {
 } from "@/components/ui/tooltip";
 import type { ConfigField, ConfigFieldChild } from "@/lib/plugin-definitions";
 import type { PluginInstance, PluginType } from "@/lib/types";
-import { PLUGIN_TYPE_LABELS } from "@/lib/types";
-import { ChevronDown, Info, Minus, Plus, Search } from "lucide-react";
+import { ChevronDown, Info, Minus, Plus } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
 
 type ArrayItemSyntax = "value" | "plugin" | "quick" | "domain";
@@ -615,6 +610,7 @@ function ConfigFieldControl({
             referenceTypes={field.referenceTypes}
             referencePlugins={field.referencePlugins}
             disabled={readOnly}
+            allowCreate
             onChange={(nextValue) =>
               onChange(
                 `${referenceInverted ? "!" : ""}${field.referencePrefix ?? ""}${nextValue}`,
@@ -1128,6 +1124,7 @@ function ArrayItemInput({
           referenceTypes={referenceTypes}
           referencePlugins={field.referencePlugins}
           disabled={readOnly}
+          allowCreate
           onChange={(nextValue) =>
             onChange({
               value: item.invert ? `!$${nextValue}` : `$${nextValue}`,
@@ -1149,212 +1146,6 @@ function ArrayItemInput({
   );
 }
 
-interface PluginReferencePickerProps {
-  plugins: PluginInstance[];
-  value: string;
-  referenceTypes?: PluginType[];
-  referencePlugins?: string[];
-  disabled?: boolean;
-  onChange: (value: string) => void;
-}
-
-export function PluginReferencePicker({
-  plugins,
-  value,
-  referenceTypes,
-  referencePlugins,
-  disabled = false,
-  onChange,
-}: PluginReferencePickerProps) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const normalizedValue = stripReferencePrefix(value);
-  const selectedPlugin = plugins.find((p) => p.name === normalizedValue);
-
-  const filteredPlugins = plugins.filter((plugin) => {
-    if (
-      referenceTypes &&
-      referenceTypes.length > 0 &&
-      !referenceTypes.includes(plugin.type)
-    )
-      return false;
-    if (
-      referencePlugins &&
-      referencePlugins.length > 0 &&
-      !referencePlugins.includes(plugin.pluginKind)
-    )
-      return false;
-
-    const definition = getPluginCatalogItem(plugin.pluginKind);
-    const normalizedSearch = search.trim().toLowerCase();
-    if (!normalizedSearch) return true;
-
-    return [
-      plugin.name,
-      plugin.type,
-      plugin.pluginKind,
-      definition?.name,
-      definition?.description,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-      .includes(normalizedSearch);
-  });
-
-  return (
-    <Popover open={open && !disabled} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          className="min-w-0 flex-1 justify-between font-normal bg-background text-foreground"
-          disabled={disabled}
-        >
-          {selectedPlugin ? (
-            <PluginReferenceSummary
-              plugin={selectedPlugin}
-              singleLine
-              inDropdown={false}
-            />
-          ) : (
-            <span className="text-muted-foreground">选择插件引用</span>
-          )}
-        </Button>
-      </PopoverTrigger>
-
-      <PopoverContent
-        align="start"
-        side="bottom"
-        className="w-[28rem] max-w-[calc(100vw-3rem)] p-2 z-[50]"
-      >
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索插件名称、类型或种类"
-            className="pl-9"
-          />
-        </div>
-
-        <div className="max-h-72 overflow-y-auto space-y-2 pt-1">
-          {filteredPlugins.length > 0 ? (
-            filteredPlugins.map((plugin) => (
-              <button
-                key={plugin.id}
-                type="button"
-                className="flex w-full flex-col gap-1 rounded-lg border border-border bg-background p-3 text-left transition-colors hover:bg-accent"
-                onClick={() => {
-                  onChange(plugin.name);
-                  setOpen(false);
-                  setSearch("");
-                }}
-              >
-                <PluginReferenceSummary
-                  plugin={plugin}
-                  singleLine={false}
-                  inDropdown
-                />
-              </button>
-            ))
-          ) : (
-            <div className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-              没有匹配的插件
-            </div>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-interface PluginReferenceSummaryProps {
-  plugin: PluginInstance;
-  singleLine?: boolean;
-  inDropdown?: boolean; // 控制背景色
-}
-
-export function PluginReferenceSummary({
-  plugin,
-  singleLine = false,
-  inDropdown = false,
-}: PluginReferenceSummaryProps) {
-  const definition = getPluginCatalogItem(plugin.pluginKind);
-  const iconName = definition?.icon ?? "Database";
-
-  // 单行小图标，下拉列表大图标
-  const iconSizeClass = singleLine ? "h-4 w-4" : "h-10 w-10";
-
-  // 图标背景和颜色保持一致
-  const iconBgClass =
-    inDropdown || singleLine
-      ? "bg-primary/10 text-primary"
-      : "bg-background text-foreground";
-
-  if (singleLine) {
-    // 触发按钮单行显示
-    return (
-      <span className="flex items-center gap-2 truncate min-w-0">
-        <span
-          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${iconBgClass}`}
-        >
-          {renderPluginKindIcon(iconName, { className: iconSizeClass })}
-        </span>
-        <span className="flex-1 flex items-center gap-2 truncate">
-          <span className="truncate font-mono text-sm">{plugin.name}</span>
-          <span className="flex gap-1">
-            <Badge variant="outline" className="text-[0.65rem]">
-              {PLUGIN_TYPE_LABELS[plugin.type]}
-            </Badge>
-            {definition?.name && (
-              <Badge variant="secondary" className="text-[0.65rem]">
-                {definition.name}
-              </Badge>
-            )}
-          </span>
-        </span>
-      </span>
-    );
-  }
-
-  // 下拉列表多行卡片布局
-  return (
-    <div className="flex gap-3 p-2 rounded-lg border border-border bg-background hover:bg-accent">
-      {/* 左侧大图标 */}
-      <div
-        className={`flex shrink-0 items-center justify-center rounded-md ${iconBgClass}`}
-      >
-        {renderPluginKindIcon(iconName, { className: iconSizeClass })}
-      </div>
-
-      {/* 右侧两行内容 */}
-      <div className="flex-1 flex flex-col justify-center gap-1 min-w-0">
-        {/* 第一行：名称 + Badge */}
-        <div className="flex items-center gap-2 truncate">
-          <span className="truncate font-mono text-sm">{plugin.name}</span>
-          <span className="flex gap-1">
-            <Badge variant="outline" className="text-[0.65rem]">
-              {PLUGIN_TYPE_LABELS[plugin.type]}
-            </Badge>
-            {definition?.name && (
-              <Badge variant="secondary" className="text-[0.65rem]">
-                {definition.name}
-              </Badge>
-            )}
-          </span>
-        </div>
-
-        {/* 第二行：描述 */}
-        {definition?.description && (
-          <span className="text-xs text-muted-foreground truncate">
-            {definition.description}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 function normalizeArrayValue(value: unknown): ArrayItemValue[] {
   if (!Array.isArray(value)) {
     if (typeof value === "string" && value.trim()) {

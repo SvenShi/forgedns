@@ -25,63 +25,42 @@ import {
   Minimize2,
   Minus,
   Plus,
-  Save,
-  Search,
   Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { YamlEditor } from "@/components/config/yaml-editor";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { pluginTypeAccentHex } from "@/components/plugins/display";
+import { CreatePluginDialog } from "@/components/plugins/create-plugin-dialog";
+import { PluginReferencePicker } from "@/components/plugins/plugin-reference-picker";
 import {
-  getPluginCatalogItem,
-  getPluginCatalogItemsByType,
-  renderPluginKindIcon,
-  type PluginCatalogItem,
-} from "@/components/plugins/catalog";
+  InlineSelect,
+  QuickSetupRow,
+  createItemId,
+  createStableItemId,
+  firstQuickSetupKind,
+  formatQuickSetupValue,
+  isQuickSetupValue,
+  parseQuickSetupValue,
+  stripReferencePrefix,
+} from "@/components/plugins/plugin-ref-editor";
+import type { PluginInstance } from "@/lib/types";
 import {
-  createDefaultPluginConfigValues,
-  PluginConfigFieldsEditor,
-  serializePluginConfigValues,
-} from "@/components/plugins/plugin-config-fields-editor";
-import { useAppStore } from "@/lib/store";
-import type { PluginInstance, PluginType } from "@/lib/types";
-import { PLUGIN_TYPE_LABELS } from "@/lib/types";
-import {
-  parsePluginConfigYaml,
-  stringifyPluginConfigYaml,
+  parseArgsLevelPluginConfigYaml,
+  stringifyArgsLevelPluginConfigYaml,
 } from "@/lib/plugin-config-yaml";
+import { cn } from "@/lib/utils";
 
-type ConditionMode = "reference" | "text";
-type ActionMode = "reference" | "control" | "text";
+type ConditionMode = "reference" | "quick_setup" | "text";
+type ActionMode = "reference" | "quick_setup" | "control" | "text";
 type ControlKind = "accept" | "return" | "reject" | "mark" | "jump" | "goto";
 
 type SequenceFlowNode =
@@ -151,11 +130,13 @@ interface SequenceCanvasProps {
 
 const conditionModeLabels: Record<ConditionMode, string> = {
   reference: "引用",
+  quick_setup: "快捷",
   text: "文本",
 };
 
 const actionModeLabels: Record<ActionMode, string> = {
   reference: "引用",
+  quick_setup: "快捷",
   control: "控制流",
   text: "文本",
 };
@@ -196,7 +177,7 @@ export function SequenceComposer({
   const [view, setView] = useState<"visual" | "yaml">("visual");
   const [expanded, setExpanded] = useState(false);
   const [yamlText, setYamlText] = useState(() =>
-    stringifyPluginConfigYaml(value),
+    stringifyArgsLevelPluginConfigYaml(value, true),
   );
   const [yamlError, setYamlError] = useState<string | null>(null);
   const rules = useMemo(() => parseSequenceRules(value.args), [value.args]);
@@ -252,7 +233,7 @@ export function SequenceComposer({
 
   const handleViewChange = (nextView: "visual" | "yaml") => {
     if (nextView === "yaml") {
-      setYamlText(stringifyPluginConfigYaml(value));
+      setYamlText(stringifyArgsLevelPluginConfigYaml(value, true));
       setYamlError(null);
     }
     setView(nextView);
@@ -262,7 +243,7 @@ export function SequenceComposer({
     setYamlText(nextYaml);
     if (readOnly) return;
 
-    const parsed = parsePluginConfigYaml(nextYaml);
+    const parsed = parseArgsLevelPluginConfigYaml(nextYaml, true);
     if (parsed.error) {
       setYamlError(parsed.error);
       return;
@@ -300,6 +281,7 @@ export function SequenceComposer({
         )}
         {!readOnly && view === "visual" && (
           <div className="flex flex-wrap items-center gap-2">
+            <CreateDependencyPluginButton />
             <Button
               type="button"
               variant="outline"
@@ -562,6 +544,10 @@ function buildSequenceFlow({
     ? new Set([currentSequenceName])
     : new Set<string>();
   let currentY = 0;
+  // Tracks the bottom of the last placed preview node so previews never overlap.
+  let rightColumnBottom = 0;
+  // Rule nodes are 1200px wide; leave a 140px gap before the preview column.
+  const PREVIEW_X = 1340;
 
   rules.forEach((rule, index) => {
     const ruleId = `rule-${rule.id}`;
@@ -602,10 +588,13 @@ function buildSequenceFlow({
     const target = getSequenceControlTarget(rule.action);
     if (target) {
       const previewId = `preview-${rule.id}-${target}`;
+      // Align with the rule's Y when possible, but push down if a previous
+      // preview occupies that vertical space.
+      const previewY = Math.max(ruleY, rightColumnBottom);
       nodes.push({
         id: previewId,
         type: "preview",
-        position: { x: 1120, y: ruleY },
+        position: { x: PREVIEW_X, y: previewY },
         data: {
           action: rule.action,
           plugins,
@@ -616,15 +605,21 @@ function buildSequenceFlow({
         selectable: false,
         focusable: false,
       });
+      rightColumnBottom = previewY + estimatePreviewHeight(target, plugins) + 40;
+      // Colour the branch edge to match the dependency-graph palette so the
+      // canvas reads as the same system: forward references / jumps use sky
+      // (executor accent), goto uses red dashed/animated like a back-edge.
+      const isGoto = rule.action.control === "goto";
       edges.push({
         id: `branch-${rule.id}-${target}`,
         source: ruleId,
         target: previewId,
         type: "smoothstep",
-        animated: rule.action.control === "goto",
+        animated: isGoto,
         style: {
-          stroke: rule.action.control === "goto" ? "var(--destructive)" : "var(--primary)",
+          stroke: isGoto ? "#ef4444" : pluginTypeAccentHex.executor,
           strokeWidth: 2,
+          strokeDasharray: isGoto ? "6 3" : undefined,
         },
       });
     }
@@ -639,7 +634,22 @@ function estimateRuleNodeHeight(rule: SequenceRule) {
   const baseHeight = 176;
   const conditionCount = Math.max(rule.matches.length, 1);
   const extraConditions = Math.max(conditionCount - 1, 0);
-  return baseHeight + extraConditions * 94;
+  return baseHeight + extraConditions * 56;
+}
+
+function estimatePreviewHeight(targetTag: string, plugins: PluginInstance[]): number {
+  const targetPlugin = plugins.find(
+    (p) => p.name === targetTag && p.type === "executor" && p.pluginKind === "sequence",
+  );
+  if (!targetPlugin) return 100;
+  const targetRules = parseSequenceRules(targetPlugin.config.args);
+  if (targetRules.length === 0) return 100;
+  const rulesHeight = targetRules.reduce(
+    (sum, r) => sum + estimateRuleNodeHeight(r),
+    0,
+  );
+  // 60px: outer padding (24px) + header row (36px). 12px gap between sub-rules.
+  return 60 + rulesHeight + Math.max(targetRules.length - 1, 0) * 12;
 }
 
 function SequenceRuleFlowNode({ data }: NodeProps<Node<RuleNodeData, "rule">>) {
@@ -670,39 +680,6 @@ function SequencePreviewFlowNode({
 
 function InteractiveNodeFrame({ children }: { children: ReactNode }) {
   return <div className={sequenceNodeInteractionClass}>{children}</div>;
-}
-
-function InlineSelect({
-  value,
-  options,
-  disabled,
-  onChange,
-  placeholder,
-  className,
-}: {
-  value: string;
-  options: Array<{ value: string; label: string }>;
-  disabled: boolean;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  className?: string;
-}) {
-  return (
-    <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger
-        className={`h-8 min-w-0 bg-background ${className ?? ""}`}
-      >
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent className="z-[1200]">
-        {options.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
-            {option.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
 }
 
 function SequenceRuleNode({
@@ -747,12 +724,22 @@ function SequenceRuleNode({
     });
   };
 
+  const branchTarget = getSequenceControlTarget(rule.action);
+  const hasBranch = Boolean(branchTarget);
+
   return (
     <div className={sequenceNodeInteractionClass}>
-      <Card className="w-[980px] max-w-[94vw] rounded-lg bg-background py-0 shadow-sm">
+      <Card className="w-[1200px] max-w-[96vw] rounded-lg bg-background py-0 shadow-sm">
         <CardHeader className="grid grid-cols-[1fr_auto] items-center gap-2 border-b px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
-            <Badge variant="secondary" className="font-mono">
+            <Badge
+              variant="secondary"
+              className={cn(
+                "font-mono",
+                hasBranch &&
+                  "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-200",
+              )}
+            >
               #{index + 1}
             </Badge>
             <CardTitle className="truncate text-sm">
@@ -793,11 +780,11 @@ function SequenceRuleNode({
             </div>
           )}
         </CardHeader>
-        <CardContent className="grid gap-4 p-3 lg:grid-cols-[minmax(20rem,1fr)_auto_minmax(27rem,1fr)]">
+        <CardContent className="grid gap-4 p-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-xs font-medium text-muted-foreground">
-                匹配条件
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                IF · 匹配条件
               </div>
               {!readOnly && (
                 <Button
@@ -825,19 +812,22 @@ function SequenceRuleNode({
                 ))}
               </div>
             ) : (
-              <div className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+              <div className="rounded-md border border-dashed border-amber-300/60 bg-amber-50/30 px-3 py-4 text-center text-xs italic text-muted-foreground dark:border-amber-800/40 dark:bg-amber-950/15">
                 无条件，始终命中
               </div>
             )}
           </div>
 
-          <div className="hidden items-center px-1 text-muted-foreground lg:flex">
+          <div
+            className="hidden items-center px-1 lg:flex"
+            style={{ color: pluginTypeAccentHex.executor }}
+          >
             <ArrowRight className="h-5 w-5" />
           </div>
 
           <div className="space-y-2">
-            <div className="text-xs font-medium text-muted-foreground">
-              执行动作
+            <div className="text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
+              THEN · 执行动作
             </div>
             <ActionEditor
               action={rule.action}
@@ -866,52 +856,66 @@ function ConditionEditor({
   onChange: (patch: Partial<SequenceCondition>) => void;
   onDelete: () => void;
 }) {
-  return (
-    <div className="rounded-md border bg-muted/20 p-2">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <div className="flex shrink-0 items-center gap-1">
-          <InlineSelect
-            value={condition.mode}
-            onChange={(mode) => {
-              const nextMode = mode as ConditionMode;
-              const currentValue = condition.value.trim();
-              const nextValue =
-                nextMode === "reference"
-                  ? stripReferencePrefix(currentValue) || "has_resp"
-                  : nextMode === condition.mode
-                    ? currentValue
-                    : defaultConditionValue(nextMode);
+  // localMode is authoritative for the dropdown — it is NOT reset by YAML
+  // round-trips that re-classify condition.mode. The component is keyed by
+  // condition.id so useState initialises fresh whenever a different condition
+  // is displayed.
+  const [localMode, setLocalMode] = useState<ConditionMode>(condition.mode);
 
-              onChange({
-                mode: nextMode,
-                value:
-                  nextMode === "reference" ? `$${stripReferencePrefix(nextValue)}` : nextValue,
-              });
-            }}
+  const handleModeChange = (mode: ConditionMode) => {
+    if (mode === localMode) return;
+    setLocalMode(mode);
+    if (mode === "text") {
+      // Text mode is a raw-edit lens over the current serialised value.
+      // No value reset needed — just change the display mode locally.
+      return;
+    }
+    if (mode === "reference") {
+      const tag = stripReferencePrefix(condition.value);
+      onChange({ mode, value: tag ? `$${tag}` : "$has_resp" });
+      return;
+    }
+    onChange({ mode, value: defaultConditionValue(mode) });
+  };
+
+  return (
+    <div className="rounded-md border border-amber-200/80 bg-amber-50/40 px-2 py-1.5 dark:border-amber-800/40 dark:bg-amber-950/20">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <InlineSelect
+          value={localMode}
+          onChange={(mode) => handleModeChange(mode as ConditionMode)}
+          disabled={readOnly}
+          className="w-[4.5rem] shrink-0"
+          options={Object.entries(conditionModeLabels).map(([value, label]) => ({
+            value,
+            label,
+          }))}
+        />
+        {(localMode === "reference" || localMode === "quick_setup") && (
+          <InvertCheckbox
+            checked={condition.invert}
             disabled={readOnly}
-            className={condition.mode === "reference" ? "w-[5rem]" : "w-[5.5rem]"}
-            options={Object.entries(conditionModeLabels).map(([value, label]) => ({
-              value,
-              label,
-            }))}
+            onCheckedChange={(invert) => onChange({ invert })}
           />
-          {condition.mode === "reference" && (
-            <InvertCheckbox
-              checked={condition.invert}
-              disabled={readOnly}
-              onCheckedChange={(invert) => onChange({ invert })}
-            />
-          )}
-        </div>
-        <div className="min-w-[14rem] flex-1">
-          {condition.mode === "reference" ? (
-            <ReferenceCreatePicker
+        )}
+        <div className="min-w-0 flex-1">
+          {localMode === "reference" ? (
+            <PluginReferencePicker
               plugins={plugins}
               value={stripReferencePrefix(condition.value)}
               referenceTypes={["matcher"]}
               disabled={readOnly}
               placeholder="选择 matcher"
+              allowCreate
               onChange={(tag) => onChange({ value: `$${tag}` })}
+            />
+          ) : localMode === "quick_setup" ? (
+            <QuickSetupRow
+              type="matcher"
+              value={condition.value}
+              plugins={plugins}
+              readOnly={readOnly}
+              onChange={(next) => onChange({ value: next })}
             />
           ) : (
             <Input
@@ -926,13 +930,13 @@ function ConditionEditor({
         {!readOnly && (
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
             onClick={onDelete}
             aria-label="删除条件"
           >
-            <Minus className="h-4 w-4" />
+            <Minus className="h-3.5 w-3.5" />
           </Button>
         )}
       </div>
@@ -954,11 +958,12 @@ function InvertCheckbox({
       <TooltipTrigger asChild>
         <button
           type="button"
-          className={`flex h-8 w-6 shrink-0 items-center justify-center rounded-md border font-mono text-sm font-bold leading-none ${
+          className={cn(
+            "flex h-8 w-6 shrink-0 items-center justify-center rounded-md border font-mono text-sm font-bold leading-none disabled:cursor-not-allowed disabled:opacity-50",
             checked
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-input bg-background text-transparent"
-          } disabled:cursor-not-allowed disabled:opacity-50`}
+              ? "border-rose-400 bg-rose-500 text-white dark:border-rose-500 dark:bg-rose-600"
+              : "border-input bg-background text-muted-foreground/25 hover:text-muted-foreground/60",
+          )}
           aria-label="取反匹配"
           disabled={disabled}
           onClick={() => onCheckedChange(!checked)}
@@ -994,11 +999,13 @@ function SequenceReferencePreview({
       plugin.pluginKind === "sequence",
   );
 
+  // Preview cards adopt sky tinting so they read as visually continuous with
+  // the sky-coloured branch edge that connects them to the rule node.
   if (isSelfReference || isVisited) {
     return (
-      <div className="w-[360px] rounded-lg border border-dashed bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm">
+      <div className="w-[360px] rounded-lg border border-dashed border-sky-300/70 bg-sky-50/50 px-3 py-2 text-xs text-sky-900 shadow-sm dark:border-sky-800/50 dark:bg-sky-950/30 dark:text-sky-200">
         {action.control} 指向{" "}
-        <span className="font-mono text-foreground">{target}</span>
+        <span className="font-mono">{target}</span>
         ，已用指向标记表示，避免循环展开。
       </div>
     );
@@ -1006,9 +1013,9 @@ function SequenceReferencePreview({
 
   if (!targetPlugin) {
     return (
-      <div className="w-[360px] rounded-lg border border-dashed bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm">
+      <div className="w-[360px] rounded-lg border border-dashed border-sky-300/70 bg-sky-50/50 px-3 py-2 text-xs text-sky-900 shadow-sm dark:border-sky-800/50 dark:bg-sky-950/30 dark:text-sky-200">
         {action.control} 目标{" "}
-        <span className="font-mono text-foreground">{target}</span> 尚未创建。
+        <span className="font-mono">{target}</span> 尚未创建。
       </div>
     );
   }
@@ -1016,9 +1023,9 @@ function SequenceReferencePreview({
   const targetRules = parseSequenceRules(targetPlugin.config.args);
 
   return (
-      <div className="w-max rounded-lg border border-dashed bg-background/95 p-3 shadow-sm">
-        <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
-          <GitBranch className="h-3.5 w-3.5 text-primary" />
+      <div className="w-max rounded-lg border border-sky-300/70 bg-sky-50/30 p-3 shadow-sm dark:border-sky-800/50 dark:bg-sky-950/15">
+        <div className="mb-3 flex items-center gap-2 text-xs text-sky-700 dark:text-sky-300">
+          <GitBranch className="h-3.5 w-3.5" />
           <span>
             {action.control} 到{" "}
             <span className="font-mono text-foreground">{target}</span>{" "}
@@ -1076,14 +1083,19 @@ function ActionEditor({
       return;
     }
 
-    const nextValue =
-      mode === action.mode
-        ? action.value
-        : mode === "text"
-          ? action.mode === "text"
-            ? action.value
-            : ""
-          : action.value || defaultActionValue(mode);
+    // Switching INTO quick_setup from anything else: seed with the first
+    // quick-setup-capable executor kind (e.g. `drop_resp`). Switching INTO
+    // text from non-text: reset to empty so the user starts fresh.
+    let nextValue: string;
+    if (mode === action.mode) {
+      nextValue = action.value;
+    } else if (mode === "quick_setup") {
+      nextValue = defaultActionValue(mode);
+    } else if (mode === "text") {
+      nextValue = action.mode === "text" ? action.value : "";
+    } else {
+      nextValue = action.value || defaultActionValue(mode);
+    }
 
     onChange({
       mode,
@@ -1101,7 +1113,7 @@ function ActionEditor({
   };
 
   return (
-    <div className="w-full rounded-md border bg-muted/20 p-2">
+    <div className="w-full rounded-md border border-sky-200/80 bg-sky-50/40 p-2 dark:border-sky-800/40 dark:bg-sky-950/20">
       <div className="grid min-w-0 gap-2 sm:grid-cols-[8rem_8rem_minmax(8rem,1fr)]">
         <InlineSelect
           value={action.mode}
@@ -1116,14 +1128,29 @@ function ActionEditor({
 
         {action.mode === "reference" && (
           <div className="min-w-0 sm:col-span-2">
-            <ReferenceCreatePicker
+            <PluginReferencePicker
               plugins={plugins}
               value={stripReferencePrefix(action.value)}
               referenceTypes={["executor"]}
               disabled={readOnly}
               placeholder="选择 executor"
+              allowCreate
               onChange={(tag) =>
                 onChange({ mode: "reference", value: `$${tag}`, control: action.control })
+              }
+            />
+          </div>
+        )}
+
+        {action.mode === "quick_setup" && (
+          <div className="min-w-0 sm:col-span-2">
+            <QuickSetupRow
+              type="executor"
+              value={action.value}
+              plugins={plugins}
+              readOnly={readOnly}
+              onChange={(next) =>
+                onChange({ mode: "quick_setup", value: next, control: "accept" })
               }
             />
           </div>
@@ -1235,257 +1262,22 @@ function SequenceTargetInput({
   );
 }
 
-function ReferenceCreatePicker({
-  plugins,
-  value,
-  referenceTypes,
-  disabled,
-  placeholder,
-  onChange,
-}: {
-  plugins: PluginInstance[];
-  value: string;
-  referenceTypes: PluginType[];
-  disabled: boolean;
-  placeholder: string;
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
-  const normalizedSearch = search.trim().toLowerCase();
-  const selectedPlugin = plugins.find((plugin) => plugin.name === value);
-  const filteredPlugins = plugins.filter((plugin) => {
-    if (!referenceTypes.includes(plugin.type)) return false;
-    if (!normalizedSearch) return true;
-    const definition = getPluginCatalogItem(plugin.pluginKind);
-    return [
-      plugin.name,
-      plugin.pluginKind,
-      plugin.type,
-      definition?.name,
-      definition?.description,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-      .includes(normalizedSearch);
-  });
+// ─── Standalone "create dependency plugin" entry ─────────────────────────────
 
+function CreateDependencyPluginButton() {
   return (
-    <>
-      <Popover open={open && !disabled} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-8 w-full min-w-0 justify-between bg-background font-normal"
-            disabled={disabled}
-          >
-            {selectedPlugin ? (
-              <span className="flex min-w-0 items-center gap-2">
-                {renderPluginKindIcon(
-                  getPluginCatalogItem(selectedPlugin.pluginKind)?.icon ?? "Database",
-                  { className: "h-4 w-4 shrink-0 text-primary" },
-                )}
-                <span className="truncate font-mono text-xs">
-                  {selectedPlugin.name}
-                </span>
-              </span>
-            ) : value ? (
-              <span className="truncate font-mono text-xs">{value}</span>
-            ) : (
-              <span className="text-xs text-muted-foreground">{placeholder}</span>
-            )}
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          className="z-[1100] w-[26rem] max-w-[calc(100vw-3rem)] p-2"
-        >
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索插件 tag、类型或说明"
-              className="h-8 pl-9"
-            />
-          </div>
-          <div className="mt-2 max-h-64 space-y-1 overflow-y-auto">
-            {filteredPlugins.map((plugin) => (
-              <button
-                key={plugin.id}
-                type="button"
-                className="flex w-full items-center gap-2 rounded-md border bg-background p-2 text-left hover:bg-accent"
-                onClick={() => {
-                  onChange(plugin.name);
-                  setOpen(false);
-                  setSearch("");
-                }}
-              >
-                {renderPluginKindIcon(
-                  getPluginCatalogItem(plugin.pluginKind)?.icon ?? "Database",
-                  { className: "h-4 w-4 shrink-0 text-primary" },
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-mono text-xs">
-                    {plugin.name}
-                  </span>
-                  <span className="block truncate text-[0.7rem] text-muted-foreground">
-                    {PLUGIN_TYPE_LABELS[plugin.type]} · {getPluginCatalogItem(plugin.pluginKind)?.name ?? plugin.pluginKind}
-                  </span>
-                </span>
-              </button>
-            ))}
-            {filteredPlugins.length === 0 && (
-              <div className="rounded-md border border-dashed p-3 text-center text-xs text-muted-foreground">
-                没有匹配的插件
-              </div>
-            )}
-          </div>
-          <div className="mt-2 border-t pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full"
-              onClick={() => {
-                setCreateOpen(true);
-                setOpen(false);
-              }}
-            >
-              <Plus className="h-4 w-4" />
-              快速创建{referenceTypes.includes("matcher") ? " Matcher" : " Executor"}
-            </Button>
-          </div>
-        </PopoverContent>
-      </Popover>
-      <QuickCreatePluginDialog
-        key={`${referenceTypes[0]}-${search.trim()}`}
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        pluginType={referenceTypes[0]}
-        defaultName={search.trim()}
-        onCreated={onChange}
-      />
-    </>
-  );
-}
-
-function QuickCreatePluginDialog({
-  open,
-  onOpenChange,
-  pluginType,
-  defaultName,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  pluginType: PluginType;
-  defaultName: string;
-  onCreated: (tag: string) => void;
-}) {
-  const addPlugin = useAppStore((state) => state.addPlugin);
-  const plugins = useAppStore((state) => state.plugins);
-  const catalogItems = getPluginCatalogItemsByType(pluginType);
-  const [selectedKind, setSelectedKind] = useState<PluginCatalogItem | null>(
-    catalogItems[0] ?? null,
-  );
-  const [instanceName, setInstanceName] = useState(defaultName);
-  const [configValues, setConfigValues] = useState<Record<string, unknown>>(
-    () =>
-      catalogItems[0]
-        ? createDefaultPluginConfigValues(catalogItems[0].configSchema)
-        : {},
-  );
-
-  const handleKindChange = (kind: string) => {
-    const nextKind = catalogItems.find((item) => item.kind === kind) ?? null;
-    setSelectedKind(nextKind);
-    setConfigValues(
-      nextKind ? createDefaultPluginConfigValues(nextKind.configSchema) : {},
-    );
-  };
-
-  const handleCreate = () => {
-    const tag = instanceName.trim();
-    if (!selectedKind || !tag) return;
-    addPlugin({
-      name: tag,
-      type: selectedKind.type,
-      pluginKind: selectedKind.kind,
-      status: "stopped",
-      enabled: false,
-      pinned: false,
-      config: serializePluginConfigValues(selectedKind.configSchema, configValues),
-    });
-    onCreated(tag);
-    onOpenChange(false);
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:!max-w-[760px]">
-        <DialogHeader>
-          <DialogTitle>快速创建插件</DialogTitle>
-          <DialogDescription>
-            创建后会立即回填到当前 sequence 规则中。
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid max-h-[70vh] gap-4 overflow-y-auto pr-1">
-          <FieldGroup>
-            <Field>
-              <FieldLabel>插件类型</FieldLabel>
-              <Select
-                value={selectedKind?.kind ?? ""}
-                onValueChange={handleKindChange}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="选择插件类型" />
-                </SelectTrigger>
-                <SelectContent>
-                  {catalogItems.map((item) => (
-                    <SelectItem key={item.kind} value={item.kind}>
-                      {item.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel>实例名称</FieldLabel>
-              <Input
-                value={instanceName}
-                onChange={(event) => setInstanceName(event.target.value)}
-                placeholder={`${selectedKind?.kind ?? pluginType}_main`}
-                className="font-mono"
-              />
-            </Field>
-            {selectedKind && (
-              <Field>
-                <FieldLabel>插件配置</FieldLabel>
-                <PluginConfigFieldsEditor
-                  fields={selectedKind.configSchema}
-                  plugins={plugins}
-                  values={configValues}
-                  onChange={setConfigValues}
-                />
-              </Field>
-            )}
-          </FieldGroup>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
-          </Button>
-          <Button onClick={handleCreate} disabled={!selectedKind || !instanceName.trim()}>
-            <Save className="h-4 w-4" />
-            创建并引用
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <CreatePluginDialog
+      defaultType="matcher"
+      supportedTypes={["executor", "matcher", "provider"]}
+      title="新建依赖插件"
+      description="创建后会出现在当前 sequence 画布的引用选择器中。"
+      trigger={
+        <Button type="button" variant="outline" size="sm">
+          <Plus className="h-4 w-4" />
+          新建依赖插件
+        </Button>
+      }
+    />
   );
 }
 
@@ -1544,6 +1336,15 @@ function parseCondition(value: string, conditionId: string): SequenceCondition {
       invert: inverted,
     };
   }
+  // Detect "qname $foo" / "client_ip 192.168.0.0/16" etc — quick_setup syntax.
+  if (isQuickSetupValue(withoutInvert, "matcher")) {
+    return {
+      id: conditionId,
+      mode: "quick_setup",
+      value: withoutInvert,
+      invert: inverted,
+    };
+  }
   return {
     id: conditionId,
     mode: "text",
@@ -1560,6 +1361,11 @@ function parseAction(value: unknown): SequenceAction {
   }
   if (control) {
     return { mode: "control", value: text, control };
+  }
+  // quick_setup detection — recognise inline executor forms like
+  // `query_summary main pipeline` or `drop_resp` before falling back to text.
+  if (text && isQuickSetupValue(text, "executor")) {
+    return { mode: "quick_setup", value: text, control: "accept" };
   }
   if (text) {
     return {
@@ -1580,6 +1386,9 @@ function serializeMatches(matches: SequenceCondition[]) {
         const tag = stripReferencePrefix(value);
         return `${condition.invert ? "!" : ""}$${tag}`;
       }
+      // For `quick_setup` and `text` modes the stored value is already the
+      // raw YAML form (e.g. "qname $domain_set", "has_resp 1"). Just prepend
+      // the invert mark if needed.
       return `${condition.invert ? "!" : ""}${value}`;
     })
     .filter(Boolean);
@@ -1601,6 +1410,7 @@ function serializeAction(action: SequenceAction) {
     }
     return `${action.control} ${arg}`.trim();
   }
+  // `quick_setup` and `text` modes both store the raw form already.
   return action.value.trim();
 }
 
@@ -1615,19 +1425,27 @@ function createEmptyRule(): SequenceRule {
 function createEmptyCondition(): SequenceCondition {
   return {
     id: createItemId(),
-    mode: "text",
-    value: "has_resp",
+    mode: "quick_setup",
+    value: firstQuickSetupKind("matcher") || "has_resp",
     invert: false,
   };
 }
 
 function defaultConditionValue(mode: ConditionMode) {
   if (mode === "reference") return "$has_resp";
-  return "has_resp";
+  if (mode === "quick_setup") {
+    const kind = firstQuickSetupKind("matcher") || "has_resp";
+    return kind;
+  }
+  return "";
 }
 
 function defaultActionValue(mode: ActionMode) {
   if (mode === "reference") return "$forward_main";
+  if (mode === "quick_setup") {
+    const kind = firstQuickSetupKind("executor") || "drop_resp";
+    return kind;
+  }
   if (mode === "text") return "accept";
   return "accept";
 }
@@ -1655,12 +1473,6 @@ function getSequenceControlTarget(action: SequenceAction) {
   return getControlArg(action).trim();
 }
 
-function stripReferencePrefix(value: unknown) {
-  const text = typeof value === "string" ? value.trim() : "";
-  const withoutInvert = text.startsWith("!") ? text.slice(1) : text;
-  return withoutInvert.startsWith("$") ? withoutInvert.slice(1) : withoutInvert;
-}
-
 function summarizeRule(rule: SequenceRule) {
   const matches =
     rule.matches.length === 0
@@ -1668,12 +1480,4 @@ function summarizeRule(rule: SequenceRule) {
       : rule.matches.map((condition) => serializeMatches([condition])).join(" && ");
   const action = serializeAction(rule.action) || "未配置动作";
   return `${matches} -> ${action}`;
-}
-
-function createItemId() {
-  return `seq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function createStableItemId(scope: string, index: number) {
-  return `${scope}_${index}`;
 }

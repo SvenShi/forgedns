@@ -208,6 +208,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: false,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "1.1.1.1 short_circuit=true",
+    },
   },
   {
     kind: "cache",
@@ -283,6 +286,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: false,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "short_circuit=true",
+    },
   },
   {
     kind: "fallback",
@@ -449,6 +455,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: 48,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "203.0.113.10/24",
+    },
   },
   {
     kind: "forward_edns0opt",
@@ -465,6 +474,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         "定义允许从请求复制到响应中的 EDNS0 option code 集合。",
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "10,12",
+    },
   },
   {
     kind: "ttl",
@@ -492,6 +504,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         type: "number",
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "300 / 60-600",
+    },
   },
   {
     kind: "prefer_ipv4",
@@ -515,6 +530,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: 3600,
       },
     ],
+    quickSetup: {},
   },
   {
     kind: "prefer_ipv6",
@@ -538,6 +554,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: 3600,
       },
     ],
+    quickSetup: {},
   },
   {
     kind: "black_hole",
@@ -561,6 +578,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: false,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "0.0.0.0 :: short_circuit=true",
+    },
   },
   {
     kind: "drop_resp",
@@ -569,6 +589,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     description: "清空当前上下文中的响应",
     icon: "Ban",
     configSchema: [],
+    quickSetup: {},
   },
   {
     kind: "reverse_lookup",
@@ -616,6 +637,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: "query summary",
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "main pipeline",
+    },
   },
   {
     kind: "query_recorder",
@@ -691,6 +715,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: "default",
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "main",
+    },
   },
   {
     kind: "debug_print",
@@ -707,6 +734,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: "debug print",
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "cron refresh",
+    },
   },
   {
     kind: "sleep",
@@ -723,6 +753,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: 0,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "250ms / 2s",
+    },
   },
   {
     kind: "http_request",
@@ -966,6 +999,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: 32,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "oxidns_v4,inet,24 oxidns_v6,inet6,64",
+    },
   },
   {
     kind: "nftset",
@@ -1045,6 +1081,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         type: "number",
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "ip,mangle,dns_v4,ipv4_addr,24",
+    },
   },
   {
     kind: "ros_address_list",
@@ -1245,6 +1284,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: false,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "force=true",
+    },
   },
   {
     kind: "download",
@@ -1315,6 +1357,9 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         default: true,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "https://example.com/rules.txt /etc/oxidns",
+    },
   },
   {
     kind: "reload_provider",
@@ -1337,6 +1382,10 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         },
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "$geosite_cn",
+      paramReferenceTypes: ["provider"],
+    },
   },
   {
     kind: "reload",
@@ -1345,6 +1394,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     description: "触发一次应用级全量 reload",
     icon: "RefreshCw",
     configSchema: [],
+    quickSetup: {},
   },
   {
     kind: "cron",

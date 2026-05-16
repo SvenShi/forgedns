@@ -8,6 +8,30 @@ export interface PluginKindDefinition {
   description: string;
   icon: string;
   configSchema: ConfigField[];
+  /**
+   * Marks this plugin kind as usable inline inside a sequence rule via
+   * `quick_setup` syntax. Drives the "快捷" mode in the sequence canvas
+   * (sequence-composer.tsx) so the user can write e.g. `qname $domain_set`
+   * directly without first defining a named plugin instance.
+   *
+   * Leave undefined for kinds whose `fn quick_setup` is not implemented in the
+   * Rust backend — those can only be referenced via a normal plugin tag.
+   */
+  quickSetup?: {
+    /**
+     * Placeholder shown in the param input when no value is set yet.
+     * For example: "domain:example.com 或 $domain_set" for qname.
+     */
+    paramPlaceholder?: string;
+    /**
+     * If the param is typically a `$tag` reference to another plugin, list the
+     * plugin type(s) here. The composer will render a reference picker
+     * limited to those types instead of a free-text input. Leave empty for
+     * builtins with no param (e.g. `has_resp`, `true_matcher`) or pure
+     * scalar params (e.g. `random 0.1`).
+     */
+    paramReferenceTypes?: PluginType[];
+  };
 }
 export type ConfigFieldType =
   | "text"

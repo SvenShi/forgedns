@@ -35,6 +35,10 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         ],
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "$domain_set",
+      paramReferenceTypes: ["provider"],
+    },
   },
   {
     kind: "question",
@@ -58,6 +62,10 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         },
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "$ad_rules",
+      paramReferenceTypes: ["provider"],
+    },
   },
   {
     kind: "qtype",
@@ -74,6 +82,9 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         "定义允许命中的查询类型集合。",
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "1,28 或 A,AAAA",
+    },
   },
   {
     kind: "qclass",
@@ -90,6 +101,9 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         "定义允许命中的查询类别集合。",
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "1",
+    },
   },
   {
     kind: "client_ip",
@@ -111,6 +125,10 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         ],
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "$lan_ip_set",
+      paramReferenceTypes: ["provider"],
+    },
   },
   {
     kind: "resp_ip",
@@ -132,6 +150,10 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         ],
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "$ip_set",
+      paramReferenceTypes: ["provider"],
+    },
   },
   {
     kind: "ptr_ip",
@@ -153,6 +175,10 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         ],
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "$lan_ip_set",
+      paramReferenceTypes: ["provider"],
+    },
   },
   {
     kind: "cname",
@@ -174,6 +200,10 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         ],
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "$domain_set",
+      paramReferenceTypes: ["provider"],
+    },
   },
   {
     kind: "rcode",
@@ -190,6 +220,9 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         "定义允许命中的响应码集合。",
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "0,2,3",
+    },
   },
   {
     kind: "has_resp",
@@ -198,6 +231,7 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     description: "上下文中已有响应时命中",
     icon: "CheckCircle",
     configSchema: [],
+    quickSetup: {},
   },
   {
     kind: "has_wanted_ans",
@@ -206,6 +240,7 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     description: "响应 answers 中包含请求 qtype 对应记录时命中",
     icon: "CheckCircle",
     configSchema: [],
+    quickSetup: {},
   },
   {
     kind: "mark",
@@ -222,6 +257,9 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         "定义允许命中的 mark 集合。",
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "100,200",
+    },
   },
   {
     kind: "env",
@@ -238,6 +276,9 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         "第一行为变量名，第二行为可选期望值。",
       ),
     ],
+    quickSetup: {
+      paramPlaceholder: "PROFILE prod",
+    },
   },
   {
     kind: "random",
@@ -248,6 +289,9 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     configSchema: [
       stringArrayField("args", "概率", "0.1", true, "定义 matcher 命中概率。"),
     ],
+    quickSetup: {
+      paramPlaceholder: "0.1",
+    },
   },
   {
     kind: "rate_limiter",
@@ -285,6 +329,9 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         default: 48,
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "20 40",
+    },
   },
   {
     kind: "string_exp",
@@ -302,6 +349,9 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         placeholder: "url_path prefix /dns-",
       },
     ],
+    quickSetup: {
+      paramPlaceholder: "url_path prefix /dns-",
+    },
   },
   {
     kind: "_true",
@@ -310,6 +360,7 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     description: "恒为真，可作为保底命中条件",
     icon: "CheckCircle",
     configSchema: [],
+    quickSetup: {},
   },
   {
     kind: "_false",
@@ -318,5 +369,6 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     description: "恒为假，可用于临时禁用某条规则",
     icon: "Ban",
     configSchema: [],
+    quickSetup: {},
   },
 ];

@@ -140,6 +140,12 @@ soon as any question is matched by any referenced provider.
   - Type: `array[string]`; Required: yes; Default: none
   - Purpose: References providers that implement `contains_question` using `"$provider_tag"` entries.
 
+### quick setup
+
+```yaml
+- matches: "question $ad_rules"
+```
+
 ### Behavior
 
 - Scans all questions in the request.
@@ -758,6 +764,12 @@ Always returns true.
 
 No standalone configuration fields.
 
+### quick setup
+
+```yaml
+- matches: "_true"
+```
+
 ### Typical Uses
 
 - Fallback match condition.
@@ -783,6 +795,12 @@ Always returns false.
 ### Configuration Details
 
 No standalone configuration fields.
+
+### quick setup
+
+```yaml
+- matches: "_false"
+```
 
 ### Typical Uses
 

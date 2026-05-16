@@ -331,7 +331,10 @@ api:
   - `string_exp ...`
 - executor
   - `forward ...`
+  - `cache ...`
   - `ttl ...`
+  - `prefer_ipv4`
+  - `prefer_ipv6`
   - `sleep ...`
   - `debug_print ...`
   - `query_summary ...`
@@ -342,6 +345,10 @@ api:
   - `forward_edns0opt ...`
   - `ipset ...`
   - `nftset ...`
+  - `upgrade ...`
+  - `download ...`
+  - `reload_provider ...`
+  - `reload`
 
 ## sequence 内建控制流
 

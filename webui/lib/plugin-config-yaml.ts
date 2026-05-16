@@ -21,3 +21,34 @@ export function parsePluginConfigYaml(input: string): YamlParseResult {
     error: result.error,
   };
 }
+
+export function stringifyArgsLevelPluginConfigYaml(
+  value: unknown,
+  alreadyArgsLevel = false,
+): string {
+  return stringifyPluginConfigYaml(alreadyArgsLevel ? value : { args: value });
+}
+
+export function parseArgsLevelPluginConfigYaml(
+  input: string,
+  alreadyArgsLevel = false,
+): YamlParseResult {
+  const parsed = parsePluginConfigYaml(input);
+  if (parsed.error || alreadyArgsLevel) return parsed;
+
+  if (
+    parsed.value &&
+    typeof parsed.value === "object" &&
+    !Array.isArray(parsed.value) &&
+    "args" in parsed.value
+  ) {
+    return {
+      value: (parsed.value as Record<string, unknown>).args ?? {},
+    };
+  }
+
+  return {
+    value: undefined,
+    error: "插件 YAML 必须包含 args 字段",
+  };
+}

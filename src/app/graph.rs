@@ -63,6 +63,7 @@ pub(crate) fn render_dependency_graph(report: &DependencyGraphReport) -> String 
         if idx > 0 {
             lines.push(String::new());
         }
+        let mut path = HashSet::new();
         render_dependency_tree(
             root,
             "",
@@ -70,12 +71,14 @@ pub(crate) fn render_dependency_graph(report: &DependencyGraphReport) -> String 
             &node_map,
             &dependency_map,
             &flow_map,
+            &mut path,
             &mut lines,
         );
     }
     lines.join("\n")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_dependency_tree<'a>(
     tag: &'a str,
     prefix: &str,
@@ -83,6 +86,7 @@ fn render_dependency_tree<'a>(
     node_map: &HashMap<&'a str, &'a DependencyGraphNode>,
     dependency_map: &HashMap<&'a str, Vec<&'a DependencyGraphEdge>>,
     flow_map: &HashMap<&'a str, &'a SequenceFlowReport>,
+    path: &mut HashSet<&'a str>,
     lines: &mut Vec<String>,
 ) {
     let Some(node) = node_map.get(tag) else {
@@ -105,6 +109,11 @@ fn render_dependency_tree<'a>(
         node.plugin_type
     ));
 
+    if !path.insert(tag) {
+        lines.push(format!("{prefix}   (already shown)"));
+        return;
+    }
+
     let child_prefix = if prefix.is_empty() {
         String::new()
     } else if is_last {
@@ -114,7 +123,16 @@ fn render_dependency_tree<'a>(
     };
 
     if let Some(flow) = flow_map.get(tag) {
-        render_sequence_flow(flow, &child_prefix, lines);
+        render_sequence_flow(
+            flow,
+            &child_prefix,
+            node_map,
+            dependency_map,
+            flow_map,
+            path,
+            lines,
+        );
+        path.remove(tag);
         return;
     }
 
@@ -156,17 +174,28 @@ fn render_dependency_tree<'a>(
             node_map,
             dependency_map,
             flow_map,
+            path,
             lines,
         );
     }
+    path.remove(tag);
 }
 
-fn render_sequence_flow(flow: &SequenceFlowReport, prefix: &str, lines: &mut Vec<String>) {
+fn render_sequence_flow<'a>(
+    flow: &'a SequenceFlowReport,
+    prefix: &str,
+    node_map: &HashMap<&'a str, &'a DependencyGraphNode>,
+    dependency_map: &HashMap<&'a str, Vec<&'a DependencyGraphEdge>>,
+    flow_map: &HashMap<&'a str, &'a SequenceFlowReport>,
+    path: &mut HashSet<&'a str>,
+    lines: &mut Vec<String>,
+) {
     if flow.rules.is_empty() {
         lines.push(format!("{prefix}(empty sequence)"));
         return;
     }
 
+    lines.push(format!("{prefix}sequence:"));
     for (idx, rule) in flow.rules.iter().enumerate() {
         if idx > 0 {
             lines.push(format!("{prefix}   else continue"));
@@ -185,8 +214,106 @@ fn render_sequence_flow(flow: &SequenceFlowReport, prefix: &str, lines: &mut Vec
             .as_ref()
             .map(render_sequence_expression)
             .unwrap_or_else(|| "<no exec>".to_string());
-        lines.push(format!("{prefix}#{} IF {matches}", rule.index));
-        lines.push(format!("{prefix}   THEN {exec}"));
+        lines.push(format!("{prefix}  #{} IF {matches}", rule.index));
+        if rule.matches.is_empty() {
+            lines.push(format!("{prefix}     deps: none"));
+        } else {
+            for expression in &rule.matches {
+                render_sequence_expression_dependencies(
+                    expression,
+                    flow.tag.as_str(),
+                    node_map,
+                    dependency_map,
+                    flow_map,
+                    path,
+                    lines,
+                    &format!("{prefix}     "),
+                );
+            }
+        }
+        lines.push(format!("{prefix}     THEN {exec}"));
+        if let Some(exec) = &rule.exec {
+            render_sequence_expression_dependencies(
+                exec,
+                flow.tag.as_str(),
+                node_map,
+                dependency_map,
+                flow_map,
+                path,
+                lines,
+                &format!("{prefix}       "),
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_sequence_expression_dependencies<'a>(
+    expression: &'a SequenceFlowExpression,
+    source_tag: &'a str,
+    node_map: &HashMap<&'a str, &'a DependencyGraphNode>,
+    dependency_map: &HashMap<&'a str, Vec<&'a DependencyGraphEdge>>,
+    flow_map: &HashMap<&'a str, &'a SequenceFlowReport>,
+    path: &mut HashSet<&'a str>,
+    lines: &mut Vec<String>,
+    prefix: &str,
+) {
+    match expression.kind {
+        SequenceFlowExpressionKind::Plugin => {
+            let Some(target_tag) = expression.target_tag.as_deref() else {
+                return;
+            };
+            render_dependency_tree(
+                target_tag,
+                prefix,
+                true,
+                node_map,
+                dependency_map,
+                flow_map,
+                path,
+                lines,
+            );
+        }
+        SequenceFlowExpressionKind::Builtin => {
+            let Some(target_tag) = expression.target_tag.as_deref() else {
+                return;
+            };
+            render_dependency_tree(
+                target_tag,
+                prefix,
+                true,
+                node_map,
+                dependency_map,
+                flow_map,
+                path,
+                lines,
+            );
+        }
+        SequenceFlowExpressionKind::QuickSetup => {
+            let deps = dependency_map
+                .get(source_tag)
+                .into_iter()
+                .flat_map(|deps| deps.iter())
+                .filter(|edge| edge.field.starts_with(&format!("{} ->", expression.field)))
+                .collect::<Vec<_>>();
+            if deps.is_empty() {
+                return;
+            }
+            lines.push(format!("{prefix}deps:"));
+            for dep in deps {
+                render_dependency_tree(
+                    dep.target_tag.as_str(),
+                    &format!("{prefix}  "),
+                    true,
+                    node_map,
+                    dependency_map,
+                    flow_map,
+                    path,
+                    lines,
+                );
+            }
+        }
+        SequenceFlowExpressionKind::Invalid => {}
     }
 }
 

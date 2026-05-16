@@ -140,11 +140,17 @@ sidebar_position: 4
   - 类型：`array[string]`；必填：是；默认值：无
   - 作用：使用 `"$provider_tag"` 形式引用实现了 `contains_question` 的 provider。
 
+### quick setup
+
+```yaml
+- matches: "question $ad_rules"
+```
+
 ### 行为说明
 
 - 会遍历请求中的所有 question。
 - 任意 question 被任意 provider 命中时返回 `true`。
-- quick setup 也支持同样的 `"$provider_tag"` 写法。
+- quick setup 支持同样的 `"$provider_tag"` 写法。
 
 ### 典型用途
 
@@ -798,6 +804,12 @@ args:
 
 无独立配置字段。
 
+### quick setup
+
+```yaml
+- matches: "_true"
+```
+
 ### 典型用途
 
 - 作为保底命中条件。
@@ -823,6 +835,12 @@ args:
 ### 配置项
 
 无独立配置字段。
+
+### quick setup
+
+```yaml
+- matches: "_false"
+```
 
 ### 典型用途
 

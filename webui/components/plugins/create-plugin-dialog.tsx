@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   Dialog,
   DialogContent,
@@ -38,7 +39,22 @@ import {
   isPluginConfigFormValid,
 } from "@/components/plugins/plugin-config-fields-editor";
 import { PluginConfigModeEditor } from "@/components/plugins/plugin-config-mode-editor";
-import { SequenceComposer } from "@/components/plugins/sequence-composer";
+
+const SequenceComposer = dynamic(
+  () =>
+    import("@/components/plugins/sequence-composer").then(
+      (module) => module.SequenceComposer,
+    ),
+  { ssr: false },
+);
+
+const CronComposer = dynamic(
+  () =>
+    import("@/components/plugins/kinds/cron").then(
+      (module) => module.CronComposer,
+    ),
+  { ssr: false },
+);
 
 const typeIcons: Record<PluginType, React.ReactNode> = {
   server: <Server className="h-4 w-4" />,
@@ -49,17 +65,51 @@ const typeIcons: Record<PluginType, React.ReactNode> = {
 
 interface CreatePluginDialogProps {
   defaultType?: PluginType;
+  supportedTypes?: PluginType[];
+  defaultName?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onCreated?: (tag: string) => void;
+  trigger?: React.ReactNode;
+  createButtonLabel?: string;
+  title?: string;
+  description?: string;
   supportedPluginKinds?: string[];
 }
 
 export function CreatePluginDialog({
   defaultType,
+  supportedTypes,
+  defaultName = "",
+  open: controlledOpen,
+  onOpenChange,
+  onCreated,
+  trigger,
+  createButtonLabel = "创建插件",
+  title = "添加插件",
+  description = "选择要添加的插件类型",
   supportedPluginKinds,
 }: CreatePluginDialogProps) {
-  const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<PluginType>(
-    defaultType || "server",
+  const visibleTypes = useMemo(
+    () =>
+      supportedTypes?.length
+        ? supportedTypes
+        : (Object.keys(PLUGIN_TYPE_LABELS) as PluginType[]),
+    [supportedTypes],
   );
+  const initialType =
+    defaultType && visibleTypes.includes(defaultType)
+      ? defaultType
+      : visibleTypes[0] || "server";
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = (nextOpen: boolean) => {
+    if (controlledOpen === undefined) {
+      setUncontrolledOpen(nextOpen);
+    }
+    onOpenChange?.(nextOpen);
+  };
+  const [activeTab, setActiveTab] = useState<PluginType>(initialType);
   const [selectedKind, setSelectedKind] = useState<PluginCatalogItem | null>(
     null,
   );
@@ -117,14 +167,14 @@ export function CreatePluginDialog({
     setSelectedKind(kind);
     setConfigValues(createDefaultPluginConfigValues(kind.configSchema));
     setConfigValid(true);
-    setInstanceName("");
+    setInstanceName(defaultName);
   };
 
   const handleBack = () => {
     setSelectedKind(null);
     setConfigValues({});
     setConfigValid(true);
-    setInstanceName("");
+    setInstanceName(defaultName);
   };
 
   const handleCreate = async () => {
@@ -132,8 +182,9 @@ export function CreatePluginDialog({
 
     const processedConfig = configValues;
 
+    const tag = instanceName.trim();
     addPlugin({
-      name: instanceName.trim(),
+      name: tag,
       type: selectedKind.type,
       pluginKind: selectedKind.kind,
       status: "stopped",
@@ -144,6 +195,7 @@ export function CreatePluginDialog({
 
     try {
       await saveConfig();
+      onCreated?.(tag);
       handleClose();
     } catch {
       // Store-level config error remains visible in the config editor.
@@ -155,9 +207,9 @@ export function CreatePluginDialog({
     setSelectedKind(null);
     setConfigValues({});
     setConfigValid(true);
-    setInstanceName("");
+    setInstanceName(defaultName);
     setSearch("");
-    setActiveTab(defaultType || "server");
+    setActiveTab(initialType);
   };
 
   const isValid = () => {
@@ -191,19 +243,27 @@ export function CreatePluginDialog({
 
   return (
     <Dialog
-      open={open}
       onOpenChange={(isOpen) => {
         if (!isOpen && isSequenceFullscreenOpen()) return;
         if (!isOpen) handleClose();
-        else setOpen(true);
+        else {
+          setActiveTab(initialType);
+          setInstanceName(defaultName);
+          setOpen(true);
+        }
       }}
+      open={open}
     >
-      <DialogTrigger asChild>
-        <Button>
-          <Plus className="h-4 w-4 mr-1.5" />
-          新建插件
-        </Button>
-      </DialogTrigger>
+      {trigger === null ? null : (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button>
+              <Plus className="h-4 w-4 mr-1.5" />
+              新建插件
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent
         className="w-[calc(100vw-2rem)] sm:!max-w-[920px] lg:!max-w-[1080px] max-h-[90vh] p-4 gap-0 overflow-hidden"
         onPointerDownOutside={(event) => {
@@ -216,8 +276,8 @@ export function CreatePluginDialog({
         {!selectedKind ? (
           <>
             <DialogHeader className="px-6 pt-6 pb-4">
-              <DialogTitle>添加插件</DialogTitle>
-              <DialogDescription>选择要添加的插件类型</DialogDescription>
+              <DialogTitle>{title}</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
             </DialogHeader>
             <Tabs
               value={activeTab}
@@ -225,17 +285,20 @@ export function CreatePluginDialog({
               className="flex-1"
             >
               <div className="px-6">
-                <TabsList className="w-full grid grid-cols-4">
-                  {(Object.keys(PLUGIN_TYPE_LABELS) as PluginType[]).map(
-                    (type) => (
+                <TabsList
+                  className="grid w-full"
+                  style={{
+                    gridTemplateColumns: `repeat(${visibleTypes.length}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {visibleTypes.map((type) => (
                       <TabsTrigger key={type} value={type} className="gap-1.5">
                         {typeIcons[type]}
                         <span className="hidden sm:inline">
                           {PLUGIN_TYPE_LABELS[type]}
                         </span>
                       </TabsTrigger>
-                    ),
-                  )}
+                    ))}
                 </TabsList>
               </div>
               <div className="px-6 py-3">
@@ -255,8 +318,7 @@ export function CreatePluginDialog({
                 </p>
               </div>
               <ScrollArea className="h-[min(560px,calc(90vh-180px))] px-6">
-                {(Object.keys(PLUGIN_TYPE_LABELS) as PluginType[]).map(
-                  (type) => (
+                {visibleTypes.map((type) => (
                     <TabsContent
                       key={type}
                       value={type}
@@ -270,8 +332,7 @@ export function CreatePluginDialog({
                         </div>
                       )}
                     </TabsContent>
-                  ),
-                )}
+                  ))}
               </ScrollArea>
             </Tabs>
           </>
@@ -327,6 +388,12 @@ export function CreatePluginDialog({
                         plugins={plugins}
                         currentSequenceName={instanceName.trim() || undefined}
                       />
+                    ) : selectedKind.kind === "cron" ? (
+                      <CronComposer
+                        value={configValues}
+                        onChange={setConfigValues}
+                        plugins={plugins}
+                      />
                     ) : (
                       <PluginConfigModeEditor
                         key={selectedKind.kind}
@@ -349,7 +416,7 @@ export function CreatePluginDialog({
                 onClick={handleCreate}
                 disabled={!isValid() || isConfigSaving}
               >
-                {isConfigSaving ? "保存中" : "创建插件"}
+                {isConfigSaving ? "保存中" : createButtonLabel}
               </Button>
             </DialogFooter>
           </>

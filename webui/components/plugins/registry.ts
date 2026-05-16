@@ -21,6 +21,7 @@ import { prometheusPlugin } from "./kinds/prometheus";
 import { httpPlugin } from "./kinds/http";
 import { sequencePlugin } from "./kinds/sequence";
 import { queryRecorderPlugin } from "./kinds/query-recorder";
+import { cronPlugin } from "./kinds/cron";
 
 // Optional card/detail overrides live here. If a kind is omitted or exports an
 // empty definition, the plugin center falls back to the generic templates.
@@ -30,6 +31,7 @@ export const pluginComponentRegistry: Record<
 > = {
   sequence: sequencePlugin,
   query_recorder: queryRecorderPlugin,
+  cron: cronPlugin,
   udp: udpPlugin,
   tcp: tcpPlugin,
   doh: dohPlugin,

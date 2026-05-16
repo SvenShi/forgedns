@@ -187,6 +187,67 @@ plugins:
     }
 
     #[test]
+    fn print_dependency_graph_expands_nested_sequence_targets() {
+        let summary = config::validate_text(
+            r#"
+plugins:
+  - tag: cache
+    type: cache
+  - tag: child_seq
+    type: sequence
+    args:
+      - exec: $cache
+  - tag: main_seq
+    type: sequence
+    args:
+      - exec: jump child_seq
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_seq
+"#,
+        )
+        .expect("config should validate");
+
+        let graph = render_dependency_graph(&summary);
+        assert!(graph.contains("main_seq [executor:sequence]"));
+        assert!(graph.contains("THEN jump child_seq [args[0].exec]"));
+        assert!(graph.contains("child_seq [executor:sequence]"));
+        assert!(graph.contains("THEN $cache [args[0].exec]"));
+        assert!(graph.contains("cache [executor:cache]"));
+    }
+
+    #[test]
+    fn print_dependency_graph_shows_quick_setup_provider_deps_under_rule() {
+        let summary = config::validate_text(
+            r#"
+plugins:
+  - tag: seq
+    type: sequence
+    args:
+      - matches:
+          - qname $domain_rules
+        exec: accept
+  - tag: domain_rules
+    type: domain_set
+    args:
+      exps:
+        - example.com
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: seq
+"#,
+        )
+        .expect("config should validate");
+
+        let graph = render_dependency_graph(&summary);
+        assert!(graph.contains("quick_setup(qname) $domain_rules"));
+        assert!(graph.contains("deps:"));
+        assert!(graph.contains("domain_rules [provider:domain_set]"));
+    }
+
+    #[test]
     fn dependency_graph_serializes_sequence_flows_without_dropping_legacy_fields() {
         let summary = config::validate_text(
             r#"

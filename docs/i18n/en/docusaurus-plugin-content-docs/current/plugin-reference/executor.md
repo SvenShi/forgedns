@@ -947,6 +947,18 @@ Biases dual-stack results toward one address family.
 - Unit: seconds
 - Purpose: Retention for the preference cache.
 
+### quick setup
+
+```yaml
+- exec: "prefer_ipv4"
+- exec: "prefer_ipv6"
+```
+
+Notes:
+
+- Quick setup uses the default configuration: `cache: true` and `cache_ttl: 3600`.
+- Use the full plugin configuration when you need to disable the cache or change its TTL.
+
 ### Behavior
 
 - Helps make A and AAAA selection more stable when both families exist.
@@ -1699,7 +1711,7 @@ Writes response IPs into Linux `ipset` through the embedded Rust netlink backend
 ### quick setup
 
 ```yaml
-- exec: "ipset oxidns_v4,4,24 oxidns_v6,6,64"
+- exec: "ipset oxidns_v4,inet,24 oxidns_v6,inet6,64"
 ```
 
 Format:
@@ -1708,7 +1720,7 @@ Format:
 <set_name>,<family>,<mask>
 ```
 
-Here, `family` is `4` or `6`.
+Here, `family` is `inet` or `inet6`.
 
 ### Behavior
 

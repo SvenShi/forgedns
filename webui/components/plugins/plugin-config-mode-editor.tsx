@@ -13,8 +13,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ConfigField } from "@/lib/plugin-definitions";
 import type { PluginInstance } from "@/lib/types";
 import {
-  parsePluginConfigYaml,
-  stringifyPluginConfigYaml,
+  parseArgsLevelPluginConfigYaml,
+  stringifyArgsLevelPluginConfigYaml,
 } from "@/lib/plugin-config-yaml";
 import {
   createPluginConfigFormValues,
@@ -45,9 +45,10 @@ export function PluginConfigModeEditor({
   fieldLabel = "字段",
   yamlLabel = "YAML",
 }: PluginConfigModeEditorProps) {
+  const alreadyArgsLevel = isAlreadyArgsLevelSchema(fields);
   const [mode, setMode] = useState<"fields" | "yaml">("fields");
   const [yamlText, setYamlText] = useState(() =>
-    stringifyPluginConfigYaml(values),
+    stringifyArgsLevelPluginConfigYaml(values, alreadyArgsLevel),
   );
   const [yamlError, setYamlError] = useState<string | null>(null);
   const [fieldValues, setFieldValues] = useState(() =>
@@ -57,8 +58,9 @@ export function PluginConfigModeEditor({
   const handleModeChange = (nextMode: "fields" | "yaml") => {
     if (nextMode === "yaml") {
       setYamlText(
-        stringifyPluginConfigYaml(
+        stringifyArgsLevelPluginConfigYaml(
           serializePluginConfigValues(fields, fieldValues),
+          alreadyArgsLevel,
         ),
       );
       setYamlError(null);
@@ -77,7 +79,7 @@ export function PluginConfigModeEditor({
     setYamlText(nextYaml);
     if (readOnly) return;
 
-    const parsed = parsePluginConfigYaml(nextYaml);
+    const parsed = parseArgsLevelPluginConfigYaml(nextYaml, alreadyArgsLevel);
     if (parsed.error) {
       setYamlError(parsed.error);
       onValidityChange?.(false);
@@ -143,4 +145,8 @@ export function PluginConfigModeEditor({
       )}
     </div>
   );
+}
+
+function isAlreadyArgsLevelSchema(fields: ConfigField[]) {
+  return fields.length === 1 && fields[0]?.key === "args";
 }
