@@ -94,6 +94,7 @@ function SequenceDetail({
               plugins={plugins}
               readOnly={!editing}
               currentSequenceName={plugin.name}
+              heightMode="detail"
             />
           </CardContent>
         </Card>

@@ -387,6 +387,7 @@ export function CreatePluginDialog({
                         onChange={setConfigValues}
                         plugins={plugins}
                         currentSequenceName={instanceName.trim() || undefined}
+                        heightMode="dialog"
                       />
                     ) : selectedKind.kind === "cron" ? (
                       <CronComposer

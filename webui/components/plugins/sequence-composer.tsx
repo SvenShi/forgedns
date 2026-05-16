@@ -107,12 +107,15 @@ interface SequenceRule {
   action: SequenceAction;
 }
 
+type SequenceCanvasHeightMode = "inline" | "detail" | "dialog";
+
 interface SequenceComposerProps {
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
   plugins: PluginInstance[];
   readOnly?: boolean;
   currentSequenceName?: string;
+  heightMode?: SequenceCanvasHeightMode;
 }
 
 interface SequenceCanvasProps {
@@ -122,6 +125,7 @@ interface SequenceCanvasProps {
   readOnly: boolean;
   currentSequenceName?: string;
   fullHeight?: boolean;
+  heightMode?: SequenceCanvasHeightMode;
   onAddRule: () => void;
   onUpdateRule: (ruleId: string, patch: Partial<SequenceRule>) => void;
   onMoveRule: (index: number, offset: number) => void;
@@ -173,6 +177,7 @@ export function SequenceComposer({
   plugins,
   readOnly = false,
   currentSequenceName,
+  heightMode = "inline",
 }: SequenceComposerProps) {
   const [view, setView] = useState<"visual" | "yaml">("visual");
   const [expanded, setExpanded] = useState(false);
@@ -318,6 +323,7 @@ export function SequenceComposer({
             sequenceTags={sequenceTags}
             readOnly={readOnly}
             currentSequenceName={currentSequenceName}
+            heightMode={heightMode}
             onAddRule={addRule}
             onUpdateRule={updateRule}
             onMoveRule={moveRule}
@@ -442,6 +448,7 @@ function SequenceCanvas({
   readOnly,
   currentSequenceName,
   fullHeight = false,
+  heightMode = "inline",
   onAddRule,
   onUpdateRule,
   onMoveRule,
@@ -450,11 +457,10 @@ function SequenceCanvas({
   if (rules.length === 0) {
     return (
       <div
-        className={
-          fullHeight
-            ? "flex h-full flex-col items-center justify-center rounded-lg border border-dashed p-8 text-center"
-            : "rounded-lg border border-dashed p-8 text-center"
-        }
+        className={cn(
+          "flex flex-col items-center justify-center rounded-lg border border-dashed p-8 text-center",
+          getSequenceCanvasHeightClass(heightMode, fullHeight),
+        )}
       >
         <GitBranch className="mx-auto h-8 w-8 text-muted-foreground" />
         <div className="mt-3 text-sm font-medium">暂无规则</div>
@@ -484,11 +490,10 @@ function SequenceCanvas({
 
   return (
     <div
-      className={
-        fullHeight
-          ? "sequence-flow h-full min-h-0 rounded-lg border bg-muted/20"
-          : "sequence-flow h-[520px] rounded-lg border bg-muted/20"
-      }
+      className={cn(
+        "sequence-flow min-h-0 rounded-lg border bg-muted/20",
+        getSequenceCanvasHeightClass(heightMode, fullHeight),
+      )}
     >
       <ReactFlow<SequenceFlowNode, Edge>
         nodes={nodes}
@@ -517,6 +522,23 @@ function SequenceCanvas({
       </ReactFlow>
     </div>
   );
+}
+
+function getSequenceCanvasHeightClass(
+  mode: SequenceCanvasHeightMode,
+  fullHeight: boolean,
+) {
+  if (fullHeight) return "h-full";
+
+  switch (mode) {
+    case "dialog":
+      return "h-[clamp(240px,30dvh,320px)]";
+    case "detail":
+      return "h-[clamp(360px,52dvh,620px)]";
+    case "inline":
+    default:
+      return "h-[clamp(340px,50dvh,560px)]";
+  }
 }
 
 function buildSequenceFlow({
