@@ -59,7 +59,7 @@ sidebar_position: 4
 - 支持元素：
   - matcher tag 引用（如 `"$match_tag"`）
   - quick setup matcher 表达式（如 `"qname domain:example.com"`）
-  - 取反 matcher 表达式（如 `"!$has_resp"`）
+  - 取反 matcher 表达式（如 `"!has_resp"` 或 `"!$blocked_qname"`）
 - 运行影响：
   - 按配置顺序依次判断，命中任意一个后立即短路返回 `true`。
   - 全部不命中时返回 `false`。

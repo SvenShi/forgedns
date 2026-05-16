@@ -16,7 +16,7 @@ Inside `sequence`, quick-setup matcher expressions are usually the clearest form
   exec: "$forward_main"
 ```
 
-You can combine other quick-setup matchers in the same way:
+Other quick-setup matchers can be combined in the same way:
 
 ```yaml
 - matches:
@@ -59,7 +59,7 @@ Composes multiple matcher expressions and returns `true` when any one of them ma
 - Supported entries:
   - matcher tag references (for example `"$match_tag"`)
   - quick-setup matcher expressions (for example `"qname domain:example.com"`)
-  - negated matcher expressions (for example `"!$has_resp"`)
+  - negated matcher expressions (for example `"!has_resp"` or `"!$blocked_qname"`)
 - Runtime impact:
   - Evaluates entries in order and short-circuits on the first matched entry.
   - Returns `false` only when all entries fail.

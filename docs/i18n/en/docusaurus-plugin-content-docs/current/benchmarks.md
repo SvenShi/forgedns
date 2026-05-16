@@ -3,7 +3,7 @@ title: Performance and Benchmarks
 sidebar_position: 8
 ---
 
-This page collects the performance notes moved out of the README and keeps public benchmark snapshots by version. The goal is not to claim an absolute winner, but to show the performance profile of OxiDNS under different levels of policy complexity, concurrency, and transport-path pressure.
+This page provides OxiDNS performance priorities and public benchmark snapshots. The data is intended to show the performance profile under different levels of policy complexity, concurrency, and transport-path pressure, not to claim an absolute winner.
 
 ## What OxiDNS Cares About
 
@@ -137,7 +137,7 @@ The three tables below focus on average latency and jitter first, while `QPS` re
 
 ### v0.3.0 Result Readout
 
-* If your real deployment relies on complex rule sets, large datasets, or multi-upstream racing, OxiDNS is in a stronger position in `v0.3.0`; `domain set`, `composite provider chain`, and `concurrent upstreams` are all clearly ahead.
+* For deployments that rely on complex rule sets, large datasets, or multi-upstream racing, OxiDNS is in a stronger position in `v0.3.0`; `domain set`, `composite provider chain`, and `concurrent upstreams` are all clearly ahead.
 * `cache hotpath` now shows a small lead for OxiDNS, which means the gap on high-frequency cache-hit traffic has narrowed substantially.
 * In local-answer workloads, the gap between OxiDNS and mosdns is already fairly small; the `ip set` result is also more constrained by the local-answer performance ceiling than by a completely separate bottleneck.
 * For `forward`, `dual-entry`, and `concurrent upstreams`, the numbers should be read as end-to-end proxy behavior. Upstream latency and upstream response stability are the dominant factors there, not just local implementation overhead.

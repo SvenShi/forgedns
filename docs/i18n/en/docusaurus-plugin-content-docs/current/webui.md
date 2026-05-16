@@ -6,7 +6,7 @@ sidebar_position: 5
 The OxiDNS WebUI is a separately built static frontend. It is not compiled into the Rust backend binary. There are two recommended deployment modes:
 
 - Backend-hosted WebUI: the OxiDNS management HTTP service serves the WebUI static directory directly. This is the simplest path for bare-metal hosts, NAS boxes, and small servers without nginx.
-- Standalone nginx deployment: nginx serves the WebUI static files and reverse-proxies `/api/*` to the OxiDNS backend. This is better when you already use a domain, HTTPS, a gateway, or a shared service entry point.
+- Standalone nginx deployment: nginx serves the WebUI static files and reverse-proxies `/api/*` to the OxiDNS backend. This is better for environments that already use a domain, HTTPS, a gateway, or a shared service entry point.
 
 In both modes, the WebUI defaults to the relative backend URL `/api`. When the WebUI page and `/api/*` share the same browser origin, no CORS setup is needed.
 
@@ -21,9 +21,9 @@ LICENSE
 webui/
 ```
 
-If you run OxiDNS from the extracted release directory, the default `webui.root: "./webui"` config works directly. Docker images also place the same WebUI static files under `/etc/oxidns/webui`.
+When OxiDNS runs from the extracted release directory, the default `webui.root: "./webui"` config works directly. Docker images also place the same WebUI static files under `/etc/oxidns/webui`.
 
-You only need to build the WebUI manually when building from source, developing the WebUI, or publishing static files yourself through nginx or caddy.
+Manual WebUI builds are only needed when building from source, developing the WebUI, or publishing static files separately through nginx or caddy.
 
 ## Build The WebUI Manually
 

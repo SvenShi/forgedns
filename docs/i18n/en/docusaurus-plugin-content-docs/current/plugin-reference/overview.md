@@ -14,9 +14,7 @@ OxiDNS plugins are organized into four layers:
 - `provider`
   - Provides reusable datasets consumed by matchers and executors.
 
-Recommended reading order:
-
-Within each category page, plugins are also ordered by request-path importance and common usage priority, with maintenance and side-effect oriented helpers placed later.
+Recommended reading order is listed below. Within each category page, plugins are also ordered by request-path importance and common usage priority, with maintenance and side-effect oriented helpers placed later.
 
 1. Server plugins: understand how requests enter the system.
 2. Executor plugins: understand what actually happens to requests and responses.
@@ -32,4 +30,3 @@ server -> sequence
   -> provider supplies datasets
   -> upstream or side effect
 ```
-

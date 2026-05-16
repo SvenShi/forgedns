@@ -3,9 +3,9 @@ title: CLI Tools
 sidebar_position: 3
 ---
 
-This page documents every CLI command currently supported by OxiDNS.
+This page explains the OxiDNS CLI by day-to-day task. For normal deployment, the most common flow is to run `check` first and then `start`.
 
-OxiDNS currently ships a single executable: `oxidns`.
+OxiDNS ships a single executable: `oxidns`.
 
 Available top-level commands:
 
@@ -14,6 +14,18 @@ Available top-level commands:
 - `export-dat`
 - `service`
 - `upgrade`
+
+## Common Tasks
+
+| Goal | Command |
+| --- | --- |
+| Validate a config | `oxidns check -c config.yaml` |
+| Start in the foreground | `oxidns start -c config.yaml` |
+| Temporarily enable debug logging | `oxidns start -c config.yaml -l debug` |
+| Print the plugin dependency graph | `oxidns check -c config.yaml --graph` |
+| Install as a system service | `sudo oxidns service install -d /etc/oxidns -c /etc/oxidns/config.yaml` |
+| Check for a new release | `oxidns upgrade check` |
+| Export rules from a dat file | `oxidns export-dat --file ./rules/geosite.dat --kind geosite --selector cn --out-dir ./rules/exported` |
 
 ## Help
 
@@ -306,6 +318,6 @@ Behavior:
 - On Unix, `apply` unpacks the `.tar.gz`, backs up the current binary, and replaces it. Windows currently supports only `check` and `download`.
 - After a successful `apply`, the CLI asks whether to clean the cache and backup directories. The default answer is `Y`.
 
-## Current Scope
+## Page Scope
 
-The CLI currently consists of the commands listed on this page, and this page is the source of truth for their behavior.
+This page covers the commands above. To confirm every argument supported by the local binary, run `oxidns <subcommand> --help`.

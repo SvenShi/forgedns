@@ -11,7 +11,7 @@ OxiDNS exposes a standalone control plane for:
 * Plugin extension APIs
 * Prometheus metrics export
 
-This chapter documents the current management API surface.
+This chapter covers management API enablement, authentication and transport, core endpoints, and metrics export.
 
 ## How to Enable It
 
@@ -377,7 +377,7 @@ Good fit:
 
 Notes:
 
-* If the change also updates `config.yaml`, provider topology, the plugin list, or other non-provider structures, you still need `POST /api/reload`.
+* When the change also updates `config.yaml`, provider topology, the plugin list, or other non-provider structures, `POST /api/reload` is still required.
 
 #### `GET /api/plugins/<cache_tag>/dump`
 
@@ -552,7 +552,7 @@ Current exported metrics include:
 * `oxidns_query_latency_count`
 * `oxidns_query_latency_sum_ms`
 
-These metrics carry plugin-level labels so you can distinguish different observation points in the policy graph.
+These metrics carry plugin-level labels to distinguish different observation points in the policy graph.
 
 ## Config Reference
 

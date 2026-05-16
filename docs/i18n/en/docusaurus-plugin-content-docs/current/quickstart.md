@@ -3,9 +3,9 @@ title: Quick Start
 sidebar_position: 2
 ---
 
-This page covers the currently supported installation paths for OxiDNS and the shortest way to get a runnable instance.
+This page describes the OxiDNS installation paths and the shortest path from download to first successful start.
 
-If you only want to get it running quickly, prefer:
+For quick evaluation, prefer:
 
 - Linux servers: release archives or `.deb` packages
 - Containerized environments: the GHCR Docker image
@@ -14,7 +14,7 @@ If you only want to get it running quickly, prefer:
 
 ## 1. Build From Source
 
-This is the best fit when you want to debug, modify the code, or avoid waiting for packaged builds.
+This path is suitable for debugging, code changes, or cases where packaged builds are not used.
 
 Requirements:
 
@@ -28,13 +28,15 @@ git clone https://github.com/svenshi/oxidns.git
 cd oxidns
 
 cargo build --release
+./target/release/oxidns check -c config.yaml
 ./target/release/oxidns start -c config.yaml
 ```
 
 Run with debug logging:
 
 ```bash
-cargo run -- -c config.yaml -l debug
+cargo run -- check -c config.yaml
+cargo run -- start -c config.yaml -l debug
 ```
 
 ## 2. Install From GitHub Release Archives
@@ -71,7 +73,7 @@ Windows targets use `.zip`:
 
 ### How To Choose The Right Release Asset
 
-If you are not sure which asset to download, use this mapping:
+When the correct asset is unclear, use this mapping:
 
 | System / Environment | Recommended release asset | Notes |
 | --- | --- | --- |
@@ -90,7 +92,7 @@ If you are not sure which asset to download, use this mapping:
 | Windows ARM64 | `oxidns-aarch64-pc-windows-msvc.zip` | ARM-based Windows devices |
 | FreeBSD x86_64 | `oxidns-x86_64-unknown-freebsd.tar.gz` | FreeBSD hosts |
 
-If you still need to verify your platform, check it first:
+To verify the platform first, run:
 
 ```bash
 uname -s
@@ -99,8 +101,8 @@ uname -m
 
 Common output mapping:
 
-- `Linux` + `x86_64`: default to `x86_64-unknown-linux-musl`; use `x86_64-unknown-linux-gnu` only when you explicitly need a glibc dynamic build
-- `Linux` + `aarch64`: default to `aarch64-unknown-linux-musl`; use `aarch64-unknown-linux-gnu` only when you explicitly need a glibc dynamic build
+- `Linux` + `x86_64`: default to `x86_64-unknown-linux-musl`; use `x86_64-unknown-linux-gnu` only when a glibc dynamic build is explicitly required
+- `Linux` + `aarch64`: default to `aarch64-unknown-linux-musl`; use `aarch64-unknown-linux-gnu` only when a glibc dynamic build is explicitly required
 - `Linux` + `armv7l`: use `arm-unknown-linux-musleabihf`
 - `Darwin` + `x86_64`: use `x86_64-apple-darwin`
 - `Darwin` + `arm64`: use `aarch64-apple-darwin`
@@ -126,10 +128,11 @@ tar -xzf oxidns.tar.gz -C oxidns
 cd oxidns
 
 chmod +x oxidns
+./oxidns check -c config.yaml
 ./oxidns start -c config.yaml
 ```
 
-If you cannot guarantee the target machine's glibc compatibility, or you are running Alpine Linux, prefer a `*-linux-musl` archive instead of defaulting to `gnu`.
+When the target machine's glibc compatibility is unclear, or when running Alpine Linux, prefer a `*-linux-musl` archive instead of defaulting to `gnu`.
 
 ### Windows Example
 
@@ -165,6 +168,12 @@ Default installed paths:
 
 The project also ships systemd packaging metadata, so Debian-family systems are a good fit for service-based deployment.
 
+After changing the default config, validate it before starting the service:
+
+```bash
+oxidns check -c /etc/oxidns/config.yaml
+```
+
 Verify service status:
 
 ```bash
@@ -199,12 +208,12 @@ docker pull svenshi/oxidns:latest
 docker run --rm \
   -p 53:53/udp \
   -p 53:53/tcp \
-  -p 9088:9088/tcp \
+  -p 9199:9199/tcp \
   -v "$(pwd)/config.yaml:/etc/oxidns/config.yaml:ro" \
   svenshi/oxidns:latest
 ```
 
-If the default-branch image is published, you can also use the `latest` tag.
+When the default-branch image is published, the `latest` tag is also available.
 
 The image entrypoint effectively runs:
 
@@ -216,11 +225,11 @@ The container exposes:
 
 - `53/udp`
 - `53/tcp`
-- `9088/tcp`
+- `9199/tcp`
 
 ### Docker Compose Example
 
-If you prefer Compose for port mappings and config management, use this `docker-compose.yml`:
+For Compose-based port mapping and config management, use this `docker-compose.yml`:
 
 ```yaml
 services:
@@ -231,7 +240,7 @@ services:
     ports:
       - "53:53/udp"
       - "53:53/tcp"
-      - "9088:9088/tcp"
+      - "9199:9199/tcp"
     volumes:
       - ./config.yaml:/etc/oxidns/config.yaml:ro
 ```
@@ -248,7 +257,7 @@ Follow logs with:
 docker compose logs -f oxidns
 ```
 
-## 5. Which One Should You Use?
+## 5. Selection Guide
 
 - Fastest evaluation path: download a release archive
 - Long-running Linux service: prefer the Debian package

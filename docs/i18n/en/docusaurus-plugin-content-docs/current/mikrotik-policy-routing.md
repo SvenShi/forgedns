@@ -83,8 +83,8 @@ This pattern is especially useful when:
 
 * The resolution results of a domain set must use a specific egress path.
 * A service class should keep a stable egress instead of being randomly split across routes.
-* You want RouterOS address-lists to be driven by domain policy sets instead of by manually curated IP inventories.
-* You want DNS-layer policy and network-layer policy to form a closed loop.
+* RouterOS address-lists should be driven by domain policy sets instead of manually curated IP inventories.
+* DNS-layer policy and network-layer policy should form a closed loop.
 
 ## Configuration Example and Parameter Notes
 
@@ -224,8 +224,8 @@ Meaning:
 
 Good fits:
 
-* You want a predictable refresh interval.
-* You do not want upstream TTL differences to change policy-routing behavior.
+* A predictable refresh interval is required.
+* Upstream TTL differences should not change policy-routing behavior.
 
 ### `persistent`
 
@@ -245,7 +245,7 @@ Meaning:
 Good fits:
 
 * Some destinations must always remain in the policy set.
-* You want dynamic learning and static policy to coexist in one managed set.
+* Dynamic learning and static policy should coexist in one managed set.
 
 ## RouterOS Policy-Routing Model
 
@@ -316,13 +316,13 @@ There are still boundary conditions:
 
 ### How to Reduce the Impact of This Window
 
-You can improve it from three angles:
+The impact can be reduced from three angles:
 
 1. Keep the OxiDNS-to-RouterOS API path stable and low-latency.
 2. Do not set `min_ttl` too low, which reduces RouterOS churn.
 3. Use `persistent` for critical targets so the first dynamic write is not the only protection.
 
-If your environment is extremely sensitive to "the very first packet must already hit policy routing", then:
+For environments where "the very first packet must already hit policy routing" is a strict requirement:
 
 * Put the most critical targets into `persistent`, or
 * Use `async: false` and accept the added latency on the DNS path.
@@ -365,7 +365,7 @@ Characteristics:
 
 Good fit:
 
-* You need both dynamic policy and static fallback policy.
+* Both dynamic policy and static fallback policy are required.
 
 ## Example: Multiple Policy Egress Paths
 
@@ -431,7 +431,7 @@ plugins:
         exec: "$ros_address_list_backup"
 ```
 
-On RouterOS, you can then map:
+On RouterOS, map:
 
 * `policy_media_v4` to egress A
 * `policy_backup_v4` to egress B
@@ -476,7 +476,7 @@ Some services change addresses frequently. In that case, tune these more careful
 * `fixed_ttl`
 * `persistent`
 
-Otherwise you may see:
+Otherwise, possible symptoms include:
 
 * Old IPs lingering too long
 * Excessively frequent updates
@@ -485,7 +485,7 @@ Otherwise you may see:
 
 `async: true` is usually the recommended default, but it does not guarantee that RouterOS has already finished writing the address-list by the exact moment the DNS response is returned.
 
-If you need stronger consistency, you must trade DNS-path latency against write-path certainty.
+Stronger consistency requires trading DNS-path latency against write-path certainty.
 
 ## Implementation Recommendations
 

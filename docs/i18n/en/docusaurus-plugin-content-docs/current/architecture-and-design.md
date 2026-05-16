@@ -3,7 +3,7 @@ title: Architecture and Design
 sidebar_position: 7
 ---
 
-This page expands on the architectural background that is only summarized in the README. The focus is the request path, the plugin layering model, and the performance constraints behind the design.
+This page explains the OxiDNS request path, plugin layering, and performance boundaries. It is intended as background for configuration design, policy composition, and troubleshooting.
 
 ## Core Request Path
 
@@ -116,4 +116,3 @@ At a high level there are two layers:
 4. Keep logging, metrics, and route sync off the critical path when correctness allows.
 5. Respect TTL and negative-cache semantics.
 6. Watch lock contention and shared-state growth.
-

@@ -3,9 +3,9 @@ title: Configuration Overview
 sidebar_position: 2
 ---
 
-## Before You Start
+## Before Starting
 
-OxiDNS uses YAML configuration. The current top-level layout has five parts:
+OxiDNS uses YAML configuration. For day-to-day editing, it is easiest to understand the file as five top-level parts:
 
 ```yaml
 runtime:
@@ -39,6 +39,20 @@ Where:
   - Load plugin definitions from other configuration files.
 - `plugins`
   - All plugin instance definitions. OxiDNS composes the full DNS pipeline from plugins.
+
+After editing a config, validate it before starting:
+
+```bash
+oxidns check -c config.yaml
+```
+
+If the config uses relative paths and the runtime working directory is not the config directory, pass the working directory explicitly:
+
+```bash
+oxidns check -c config.yaml -d /etc/oxidns
+```
+
+When the plugin composition is still undecided, start from [Common Scenarios](scenarios.md), then return to this page for field details.
 
 ## Top-Level Fields
 
@@ -269,7 +283,7 @@ Example:
         - "$lan_clients"
         - "qtype 1"
       exec: "$cache_main"
-    - matches: "!$has_resp"
+    - matches: "!has_resp"
       exec: "$forward_main"
     - exec: "accept"
 ```
@@ -292,7 +306,7 @@ Use `$tag` to reference a plugin that has already been defined:
 - exec: "$forward_main"
 - matches:
     - "$is_internal"
-    - "!$has_resp"
+    - "!has_resp"
   exec: "$cache_main"
 ```
 
@@ -373,7 +387,7 @@ Besides calling plugins, `sequence.args[].exec` can also use built-in control fl
 
 - Builds a DNS response from the current request immediately and ends the current `sequence`.
 - The default `rcode` is `REFUSED`, so plain `reject` means “reject this request”.
-- You can provide a decimal numeric code explicitly, for example:
+- A decimal numeric code can be provided explicitly, for example:
   - `reject 2` => `SERVFAIL`
   - `reject 3` => `NXDOMAIN`
 - The parameter currently accepts decimal integers only, not mnemonic names such as `SERVFAIL`.

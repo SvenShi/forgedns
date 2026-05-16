@@ -205,7 +205,7 @@ Listens for DNS over TCP. If `cert` and `key` are both configured, it can also s
 ### Notes
 
 - `cert` and `key` must be configured together.
-- If you need both plaintext TCP and DoT, define two separate plugin instances.
+- Define two separate plugin instances when both plaintext TCP and DoT are required.
 
 ---
 

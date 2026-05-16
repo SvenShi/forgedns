@@ -3,9 +3,9 @@ title: 命令行工具
 sidebar_position: 3
 ---
 
-本页介绍 OxiDNS 当前所有实际支持的命令行工具。
+本页按使用任务介绍 OxiDNS 的命令行工具。日常部署时，最常用的是先 `check` 校验配置，再 `start` 启动服务。
 
-当前主程序只有一个二进制：`oxidns`。
+主程序只有一个二进制：`oxidns`。
 
 可用顶层命令如下：
 
@@ -14,6 +14,18 @@ sidebar_position: 3
 - `export-dat`
 - `service`
 - `upgrade`
+
+## 常用任务
+
+| 目标 | 命令 |
+| --- | --- |
+| 校验配置 | `oxidns check -c config.yaml` |
+| 前台启动 | `oxidns start -c config.yaml` |
+| 临时开启调试日志 | `oxidns start -c config.yaml -l debug` |
+| 查看插件依赖图 | `oxidns check -c config.yaml --graph` |
+| 安装系统服务 | `sudo oxidns service install -d /etc/oxidns -c /etc/oxidns/config.yaml` |
+| 检查新版本 | `oxidns upgrade check` |
+| 从 dat 导出规则文件 | `oxidns export-dat --file ./rules/geosite.dat --kind geosite --selector cn --out-dir ./rules/exported` |
 
 ## 查看帮助
 
@@ -199,7 +211,7 @@ oxidns export-dat \
 
 管理系统服务安装与运行状态。
 
-当前支持以下子命令：
+支持以下子命令：
 
 - `service install`
 - `service start`
@@ -250,7 +262,7 @@ sudo oxidns service uninstall
 
 检查、下载或应用 GitHub Release 中的 OxiDNS 升级包。
 
-当前支持以下子命令：
+支持以下子命令：
 
 - `upgrade check`
 - `upgrade download`
@@ -306,6 +318,6 @@ sudo oxidns upgrade apply --restart service
 - `apply` 在 Unix 平台会解包 `.tar.gz`、备份当前二进制并替换；Windows 当前只支持 `check` 和 `download`。
 - `apply` 成功后会询问是否清理缓存目录和备份目录，默认选择 `Y`。
 
-## 当前范围
+## 页面范围
 
-当前 CLI 包含上述命令；本页即为当前实际行为的说明。
+本页覆盖上面这些命令。需要确认本机二进制的完整参数时，可运行 `oxidns <subcommand> --help` 查看。

@@ -150,7 +150,7 @@ Loads reusable domain rules from v2ray-rules-dat `geosite.dat`.
 - `Full` becomes `full:`.
 - Can be referenced directly by `qname`, `cname`, and `question`, or aggregated by `domain_set`.
 - Supports independent refresh through `reload_provider` or `POST /plugins/<tag>/reload`.
-- If you want to pre-export selected rules into text files before runtime, use `oxidns export-dat --kind geosite`.
+- To pre-export selected rules into text files before runtime, use `oxidns export-dat --kind geosite`.
 
 ---
 
@@ -337,4 +337,4 @@ Loads reusable IP and CIDR rules from v2ray-rules-dat `geoip.dat`.
 - Exposes IP-only membership checks.
 - Can be referenced directly by `client_ip`, `resp_ip`, and `ptr_ip`, or composed by `ip_set`.
 - Supports independent refresh through `reload_provider` or `POST /plugins/<tag>/reload`.
-- If you want to pre-export selected rules into text files before runtime, use `oxidns export-dat --kind geoip`.
+- To pre-export selected rules into text files before runtime, use `oxidns export-dat --kind geoip`.

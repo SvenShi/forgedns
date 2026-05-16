@@ -5,7 +5,7 @@ sidebar_position: 2
 
 ## 写在最前
 
-OxiDNS 的配置文件是 YAML。当前顶层结构由五部分组成：
+OxiDNS 的配置文件是 YAML。日常修改配置时，可以先把它理解为五个顶层部分：
 
 ```yaml
 runtime:
@@ -39,6 +39,20 @@ plugins:
   - 从其他配置文件载入插件定义。
 - `plugins`
   - 所有插件实例定义。OxiDNS 通过插件组合完成完整 DNS 流程。
+
+修改完成后，建议先校验再启动：
+
+```bash
+oxidns check -c config.yaml
+```
+
+如果配置中使用了相对路径，并且实际工作目录不是配置文件所在目录，可以配合 `-d` 指定工作目录：
+
+```bash
+oxidns check -c config.yaml -d /etc/oxidns
+```
+
+尚未确定插件组合方式时，建议先阅读《[常见策略场景](scenarios.md)》，再回到本页查询字段含义。
 
 ## 顶层字段
 
@@ -270,7 +284,7 @@ api:
         - "$lan_clients"
         - "qtype 1"
       exec: "$cache_main"
-    - matches: "!$has_resp"
+    - matches: "!has_resp"
       exec: "$forward_main"
     - exec: "accept"
 ```
@@ -293,7 +307,7 @@ api:
 - exec: "$forward_main"
 - matches:
     - "$is_internal"
-    - "!$has_resp"
+    - "!has_resp"
   exec: "$cache_main"
 ```
 

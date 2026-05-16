@@ -3,27 +3,117 @@ title: Common Policy Scenarios
 sidebar_position: 6
 ---
 
-This chapter gives deployment patterns closer to real-world use. The examples are organized by policy goal rather than by geography.
+This chapter provides configuration examples for common deployment needs. Start with the minimal runnable DNS gateway, then add home-gateway policy, domain routing, upstream fallback, encrypted upstreams, subscription refresh, auditing, or network integration as needed.
 
-## Scenario 1: Cache-First Basic Forwarding
+Each example can be used as either a complete configuration or a policy fragment. Examples without `udp_server` / `tcp_server` focus on the policy chain itself; for deployment, attach their `seq_main` to the listeners from the minimal runnable gateway scenario.
+
+## Scenario 1: Minimal Runnable DNS Gateway
 
 Policy goals:
 
-* Prefer cache hits to reduce latency
-* Fall back to the primary upstream on misses
-* Record query summaries and metrics
+* Expose both standard UDP and TCP DNS listeners
+* Prefer local hosts, then cache, then the public upstream
+* Use a non-privileged port so the config is easy to test locally or in a container
 
 ```yaml
+api:
+  http: "127.0.0.1:9088"
+
+plugins:
+  - tag: local_hosts
+    type: hosts
+    args:
+      entries:
+        - "full:router.lan 192.168.1.1"
+        - "domain:svc.lan 192.168.10.10 fd00::10"
+      short_circuit: true
+
+  - tag: cache_main
+    type: cache
+    args:
+      size: 4096
+      short_circuit: true
+      cache_negative: true
+
+  - tag: forward_main
+    type: forward
+    args:
+      upstreams:
+        - addr: "udp://1.1.1.1:53"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: "$local_hosts"
+      - exec: "$cache_main"
+      - matches: "!has_resp"
+        exec: "$forward_main"
+
+  - tag: udp_lan
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: ":5353"
+
+  - tag: tcp_lan
+    type: tcp_server
+    args:
+      entry: "seq_main"
+      listen: ":5353"
+```
+
+Good fits:
+
+* First-time OxiDNS validation
+* Home or lab networks starting from a small gateway config
+* Avoiding `:53` permissions, port conflicts, and system resolver overlap during testing
+
+## Scenario 2: Home or Small Office All-in-One Policy
+
+Policy goals:
+
+* Return local names first
+* Sinkhole ad-rule hits
+* Use cache and public upstreams for everything else
+* Keep metrics ready for later observability
+
+```yaml
+api:
+  http:
+    listen: "127.0.0.1:9088"
+    auth:
+      type: basic
+      username: "admin"
+      password: "secret"
+
 plugins:
   - tag: metrics_main
     type: metrics_collector
     args:
-      name: "main"
+      name: "home"
 
-  - tag: summary_main
-    type: query_summary
+  - tag: local_hosts
+    type: hosts
     args:
-      msg: "main path"
+      entries:
+        - "full:router.lan 192.168.1.1"
+        - "full:nas.lan 192.168.1.20"
+        - "domain:svc.lan 192.168.10.10"
+      short_circuit: true
+
+  - tag: ad_rules
+    type: adguard_rule
+    args:
+      rules:
+        - "||ads.example.com^"
+        - "||tracking.example.net^"
+        - "@@||safe.ads.example.com^"
+
+  - tag: blocked
+    type: sequence
+    args:
+      - exec: "black_hole 0.0.0.0 ::"
+      - exec: accept
 
   - tag: cache_main
     type: cache
@@ -37,30 +127,99 @@ plugins:
     args:
       upstreams:
         - addr: "udp://1.1.1.1:53"
+        - addr: "udp://8.8.8.8:53"
 
   - tag: seq_main
     type: sequence
     args:
       - exec: "$metrics_main"
-      - exec: "$summary_main"
+      - exec: "$local_hosts"
+      - matches: "question $ad_rules"
+        exec: goto blocked
       - exec: "$cache_main"
-      - matches: "!$has_resp"
+      - matches: "!has_resp"
         exec: "$forward_main"
 
-  - tag: udp_in
+  - tag: udp_lan
     type: udp_server
     args:
       entry: "seq_main"
-      listen: ":53"
+      listen: ":5353"
+
+  - tag: tcp_lan
+    type: tcp_server
+    args:
+      entry: "seq_main"
+      listen: ":5353"
 ```
 
 Good fits:
 
-* A single primary upstream
-* Latency-sensitive deployments
-* Configurations that should stay explicit and easy to read
+* Home gateways, sidecar DNS, and small office DNS
+* One config handling local names, ad blocking, cache, and default forwarding
+* Starting with inline rules before moving to external rule files
 
-## Scenario 2: Dual-Upstream Fast Fallback
+## Scenario 3: Route Domains to Different Upstreams
+
+Policy goals:
+
+* Send internal domains to an internal DNS server
+* Send selected domains to a dedicated upstream
+* Send everything else to the default upstream
+
+```yaml
+plugins:
+  - tag: internal_domains
+    type: domain_set
+    args:
+      exps:
+        - "domain:corp.lan"
+        - "domain:internal.example"
+
+  - tag: privacy_domains
+    type: domain_set
+    args:
+      exps:
+        - "domain:example.org"
+        - "full:secure.example.net"
+
+  - tag: forward_internal
+    type: forward
+    args:
+      upstreams:
+        - addr: "udp://192.168.1.1:53"
+
+  - tag: forward_privacy
+    type: forward
+    args:
+      upstreams:
+        - addr: "tls://dns.quad9.net:853"
+          bootstrap: "9.9.9.9:53"
+
+  - tag: forward_default
+    type: forward
+    args:
+      upstreams:
+        - addr: "udp://1.1.1.1:53"
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - matches: "qname $internal_domains"
+        exec: "$forward_internal"
+      - matches: "qname $privacy_domains"
+        exec: "$forward_privacy"
+      - matches: "!has_resp"
+        exec: "$forward_default"
+```
+
+Good fits:
+
+* Mixed internal and public DNS environments
+* Sending only a small domain set through a specific egress or encrypted upstream
+* Avoiding repeated domain lists across multiple `sequence` rules
+
+## Scenario 4: Multi-Upstream Resilience and Fast Fallback
 
 Policy goals:
 
@@ -74,15 +233,15 @@ plugins:
     type: forward
     args:
       upstreams:
-        - addr: "https://resolver-a.example/dns-query"
-          bootstrap: "8.8.8.8:53"
+        - addr: "https://cloudflare-dns.com/dns-query"
+          bootstrap: "1.1.1.1:53"
 
   - tag: forward_stable
     type: forward
     args:
       upstreams:
-        - addr: "tls://resolver-b.example:853"
-          bootstrap: "8.8.4.4:53"
+        - addr: "tls://dns.google:853"
+          bootstrap: "8.8.8.8:53"
 
   - tag: fallback_main
     type: fallback
@@ -102,28 +261,126 @@ Good fits:
 
 * One upstream optimized for speed and another for stability
 * Tail-latency improvement
+* Keeping fallback logic in one executor instead of repeating backup rules
 
-## Scenario 3: Prefer Local Static Answers, Then Forward
+## Scenario 5: Use Encrypted DNS Upstreams
 
 Policy goals:
 
-* Return local overrides first for internal services and fixed names
-* Query external upstreams only on misses
+* Keep normal UDP / TCP DNS access for LAN clients
+* Use DoH / DoT between OxiDNS and upstream resolvers
+* Race multiple encrypted upstreams
 
 ```yaml
 plugins:
-  - tag: local_hosts
-    type: hosts
+  - tag: cache_main
+    type: cache
     args:
-      entries:
-        - "full:router.local 192.168.1.1"
-        - "domain:svc.local 10.0.0.10 fd00::10"
+      size: 8192
+      short_circuit: true
+      cache_negative: true
 
-  - tag: local_records
-    type: arbitrary
+  - tag: forward_encrypted
+    type: forward
     args:
-      rules:
-        - "status.local. 60 IN TXT \"ok\""
+      concurrent: 2
+      upstreams:
+        - tag: "cloudflare_doh"
+          addr: "https://cloudflare-dns.com/dns-query"
+          bootstrap: "1.1.1.1:53"
+          timeout: 5s
+        - tag: "google_dot"
+          addr: "tls://dns.google:853"
+          bootstrap: "8.8.8.8:53"
+          timeout: 5s
+
+  - tag: seq_main
+    type: sequence
+    args:
+      - exec: "$cache_main"
+      - matches: "!has_resp"
+        exec: "$forward_encrypted"
+
+  - tag: udp_lan
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: ":5353"
+
+  - tag: tcp_lan
+    type: tcp_server
+    args:
+      entry: "seq_main"
+      listen: ":5353"
+```
+
+Good fits:
+
+* LAN clients should keep using ordinary DNS
+* Outbound resolver traffic should be encrypted
+* Domain-based upstreams need `bootstrap` to avoid a resolver bootstrap loop
+
+To expose encrypted DNS to clients, add a TLS-enabled `tcp_server`, `http_server`, or `quic_server` on top of this policy and make sure the certificate and private key files already exist and are readable.
+
+## Scenario 6: Automatically Refresh Ad-Blocking Subscriptions
+
+Policy goals:
+
+* Fill the local rule file automatically on first startup
+* Download rule subscriptions in the background
+* Reload only the affected provider after download, without a full process reload
+
+```yaml
+plugins:
+  - tag: subscription_download
+    type: download
+    args:
+      timeout: 60s
+      startup_if_missing: true
+      downloads:
+        - url: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt"
+          dir: "./rules"
+          filename: "adguard.txt"
+
+  - tag: ad_rules
+    type: adguard_rule
+    args:
+      files:
+        - "./rules/adguard.txt"
+
+  - tag: reload_ad_rules
+    type: reload_provider
+    args:
+      - "$ad_rules"
+
+  - tag: subscription_refresh
+    type: sequence
+    args:
+      - exec: "$subscription_download"
+      - exec: "$reload_ad_rules"
+
+  - tag: subscription_cron
+    type: cron
+    args:
+      timezone: "Asia/Shanghai"
+      jobs:
+        - name: refresh_ad_rules
+          interval: 12h
+          executors:
+            - "$subscription_refresh"
+
+  - tag: blocked
+    type: sequence
+    args:
+      - exec: "black_hole 0.0.0.0 ::"
+      - exec: accept
+
+  - tag: cache_main
+    type: cache
+    args:
+      size: 8192
+      short_circuit: true
+      cache_negative: true
 
   - tag: forward_main
     type: forward
@@ -134,33 +391,63 @@ plugins:
   - tag: seq_main
     type: sequence
     args:
-      - exec: "$local_hosts"
-      - matches: "!has_resp"
-        exec: "$local_records"
+      - matches: "question $ad_rules"
+        exec: goto blocked
+      - exec: "$cache_main"
       - matches: "!has_resp"
         exec: "$forward_main"
 ```
 
 Good fits:
 
-* Local service discovery
-* Fixed overrides
-* Small-scale authoritative-style local data maintenance
+* Rule files maintained by remote subscriptions
+* Updating rule data independently from the main configuration
+* Keeping full `reload` actions out of the real-time request path
 
-## Scenario 4: Dual-Stack Preference
+## Scenario 7: Debugging, Auditing, and Path Analysis
 
 Policy goals:
 
-* Prefer IPv4 or IPv6 depending on the network target
-* Make dual-stack names resolve more consistently to the preferred address family
+* Record query summaries and structured query history
+* Preserve `sequence` execution paths for rule-hit analysis
+* Expose metrics and management APIs at the same time
 
 ```yaml
+api:
+  http:
+    listen: "127.0.0.1:9088"
+    auth:
+      type: basic
+      username: "admin"
+      password: "secret"
+
 plugins:
-  - tag: prefer_v4
-    type: prefer_ipv4
+  - tag: metrics_main
+    type: metrics_collector
     args:
-      cache: true
-      cache_ttl: 1800
+      name: "debug"
+
+  - tag: recorder_main
+    type: query_recorder
+    args:
+      path: "./query-recorder.sqlite"
+      queue_size: 8192
+      batch_size: 256
+      flush_interval_ms: 200
+      memory_tail: 1024
+      retention_days: 7
+
+  - tag: summary_main
+    type: query_summary
+    args:
+      msg: "debug path"
+
+  - tag: cache_main
+    type: cache
+    args:
+      size: 4096
+      short_circuit: true
+      cache_negative: true
 
   - tag: forward_main
     type: forward
@@ -171,58 +458,33 @@ plugins:
   - tag: seq_main
     type: sequence
     args:
-      - exec: "$prefer_v4"
+      - exec: "$metrics_main"
+      - exec: "$recorder_main"
+      - exec: "$summary_main"
+      - exec: "$cache_main"
       - matches: "!has_resp"
         exec: "$forward_main"
+
+  - tag: udp_debug
+    type: udp_server
+    args:
+      entry: "seq_main"
+      listen: ":5353"
 ```
 
 Good fits:
 
-* Clients with inconsistent stack support
-* Networks where one address family is less reliable
+* Observing rule hits before a new policy goes live
+* Explaining why one domain reached a specific branch
+* Feeding historical and live query data into the WebUI or external tools
 
-## Scenario 5: Tiered Policy by Client Subnet
-
-Policy goals:
-
-* Use different logic for different client sources
-* Host several policy classes in one OxiDNS instance
-
-```yaml
-plugins:
-  - tag: forward_a
-    type: forward
-    args:
-      upstreams:
-        - addr: "udp://1.1.1.1:53"
-
-  - tag: forward_b
-    type: forward
-    args:
-      upstreams:
-        - addr: "udp://8.8.8.8:53"
-
-  - tag: seq_main
-    type: sequence
-    args:
-      - matches: "client_ip 192.168.10.0/24"
-        exec: "$forward_a"
-      - matches: "!has_resp"
-        exec: "$forward_b"
-```
-
-Good fits:
-
-* Multi-tenant LANs
-* Office and guest network splits
-* A single process serving multiple policy groups
-
-## Scenario 6: Drive Network Integration from DNS Results
+## Scenario 8: Drive Network Integration from DNS Results
 
 Policy goals:
 
 * Turn resolved target IPs into system-side effects
 * Feed firewall, route, or address-list state from DNS answers
+* Sync only selected domains instead of writing every answer into the external system
 
 ```yaml
 plugins:
@@ -241,9 +503,10 @@ plugins:
   - tag: route_sync
     type: ros_address_list
     args:
-      address: "http://192.168.88.1"
-      username: "admin"
-      password: "password"
+      address: "172.16.1.1:8728"
+      username: "api-user"
+      password: "secret"
+      async: true
       address_list4: "policy_v4"
       address_list6: "policy_v6"
 
@@ -259,84 +522,7 @@ Good fits:
 
 * Policy routing
 * Firewall address lists
-* Systems that consume DNS-learned targets
-
-## Scenario 7: AdGuard-Based Ad Blocking
-
-Policy goals:
-
-* Reuse existing AdGuard DNS rule files
-* Return sinkhole answers immediately when rules match
-* Forward unmatched traffic through the normal upstream path
-
-```yaml
-plugins:
-  - tag: ad_rules
-    type: adguard_rule
-    args:
-      files:
-        - "/etc/oxidns/adguard.txt"
-
-  - tag: blocked
-    type: sequence
-    args:
-      - exec: "black_hole 0.0.0.0 ::"
-      - exec: accept
-
-  - tag: forward_main
-    type: forward
-    args:
-      upstreams:
-        - addr: "udp://1.1.1.1:53"
-
-  - tag: seq_main
-    type: sequence
-    args:
-      - matches: "question $ad_rules"
-        exec: goto blocked
-      - exec: "$forward_main"
-```
-
-Good fits:
-
-* Home networks or gateways that want DNS-level ad blocking
-* Deployments that prefer to reuse maintained AdGuard rule files
-* Policy graphs that want a clear split between blocking and normal resolution
-
-## Scenario 8: Separate the Control Plane and Observability Plane
-
-Policy goals:
-
-* Expose management APIs and metrics separately from client-facing DNS listeners
-* Keep operational interfaces easy to secure and monitor
-
-```yaml
-api:
-  http:
-    listen: "127.0.0.1:9088"
-    auth:
-      type: basic
-      username: "admin"
-      password: "secret"
-
-plugins:
-  - tag: metrics_main
-    type: metrics_collector
-    args:
-      name: "main"
-
-  - tag: seq_main
-    type: sequence
-    args:
-      - exec: "$metrics_main"
-      - exec: "$forward_main"
-```
-
-Good fits:
-
-* Hosts that expose DNS to clients but keep management local
-* Integrations with Prometheus or operational platforms
-* Environments that need explicit separation between serving traffic and operating the service
+* Deployments that need DNS-learned targets in network-device policy
 
 ## Composition Principles
 

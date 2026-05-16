@@ -4,22 +4,21 @@ sidebar_position: 1
 slug: /
 ---
 
-This documentation explains OxiDNS configuration, plugin composition, management APIs, common policy patterns, and the project architecture.
+For first-time use, start with a minimal runnable setup, then choose the common scenario closest to the deployment goal and extend from there.
 
-Recommended reading order:
+Recommended reading path:
 
 1. Read [Quick Start](quickstart.md) to choose an installation path and complete the first successful start.
-2. Read [CLI Tools](cli.md) for the current `start`, `export-dat`, and `service` commands and their arguments.
-3. Read [Configuration Overview](configuration.md) to understand the top-level YAML layout and `sequence` orchestration model.
-4. Read [Plugin Overview](plugin-reference/overview.md) and then the four plugin categories: `server`, `executor`, `matcher`, and `provider`.
-5. Read [Management API](api.md) when integrating OxiDNS with control planes, dashboards, or automation.
-6. Read [WebUI Deployment](webui.md) when deploying the management console.
-7. Read [Common Scenarios](scenarios.md) for policy composition patterns.
-8. Read [Architecture and Design](architecture-and-design.md) and [Benchmarks](benchmarks.md) for implementation background and performance direction.
+2. Read [Common Scenarios](scenarios.md) and choose the configuration closest to the deployment goal.
+3. Read [Configuration Overview](configuration.md) to understand the top-level YAML layout, `include` splitting, and `sequence` orchestration.
+4. Read [CLI Tools](cli.md) for daily commands such as `check`, `start`, `service`, `export-dat`, and `upgrade`.
+5. For tuning a specific capability, read [Plugin Overview](plugin-reference/overview.md) and the relevant plugin category.
+6. Read [WebUI Deployment](webui.md) when deploying the management console; read [Management API](api.md) when integrating scripts, platforms, or monitoring.
+7. Read [Architecture and Design](architecture-and-design.md) and [Benchmarks](benchmarks.md) when evaluating performance or design trade-offs.
 
 ## Scope
 
-OxiDNS ships with the following built-in plugin families:
+The index below lists the built-in plugin families. In normal use, start from a scenario config first, then come back here to look up the fields and behavior of individual plugins.
 
 <div className="doc-plugin-grid">
   <div className="doc-plugin-grid__column">

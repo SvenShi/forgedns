@@ -3,9 +3,9 @@ title: 快速开始
 sidebar_position: 2
 ---
 
-本页介绍 OxiDNS 当前支持的几种安装方式，并给出最短可运行路径。
+本页介绍 OxiDNS 的安装方式，并给出从下载到首次启动的最短路径。
 
-如果你只是想先跑起来，优先使用以下方式：
+仅需快速验证时，优先使用以下方式：
 
 - Linux 服务器：优先使用 release 压缩包或 `.deb`
 - 容器环境：优先使用 GHCR Docker 镜像
@@ -28,13 +28,15 @@ git clone https://github.com/svenshi/oxidns.git
 cd oxidns
 
 cargo build --release
+./target/release/oxidns check -c config.yaml
 ./target/release/oxidns start -c config.yaml
 ```
 
 调试运行：
 
 ```bash
-cargo run -- -c config.yaml -l debug
+cargo run -- check -c config.yaml
+cargo run -- start -c config.yaml -l debug
 ```
 
 ## 2. 使用 GitHub Releases 二进制包
@@ -71,7 +73,7 @@ Windows 平台使用 `.zip`：
 
 ### 不同系统如何选择 release 文件
 
-如果你不知道该点哪个 asset，可以直接按下面选择：
+无法确定应该下载哪个 asset 时，可按下面选择：
 
 | 系统 / 环境 | 推荐 release 文件 | 说明 |
 | --- | --- | --- |
@@ -126,10 +128,11 @@ tar -xzf oxidns.tar.gz -C oxidns
 cd oxidns
 
 chmod +x oxidns
+./oxidns check -c config.yaml
 ./oxidns start -c config.yaml
 ```
 
-如果你不能确认目标机的 glibc 版本，或运行在 Alpine Linux 上，应优先选择 `*-linux-musl` 版本，不要默认使用 `gnu` 版本。
+无法确认目标机的 glibc 版本，或运行在 Alpine Linux 上时，应优先选择 `*-linux-musl` 版本，不要默认使用 `gnu` 版本。
 
 ### Windows 安装示例
 
@@ -165,6 +168,12 @@ sudo dpkg -i oxidns_*_arm64.deb
 
 项目也包含 systemd 打包配置，因此在 Debian 系发行版上适合直接作为系统服务部署。
 
+默认配置被修改后，建议先校验一次：
+
+```bash
+oxidns check -c /etc/oxidns/config.yaml
+```
+
 验证服务状态：
 
 ```bash
@@ -199,7 +208,7 @@ docker pull svenshi/oxidns:latest
 docker run --rm \
   -p 53:53/udp \
   -p 53:53/tcp \
-  -p 9088:9088/tcp \
+  -p 9199:9199/tcp \
   -v "$(pwd)/config.yaml:/etc/oxidns/config.yaml:ro" \
   svenshi/oxidns:latest
 ```
@@ -216,11 +225,11 @@ oxidns start -c /etc/oxidns/config.yaml
 
 - `53/udp`
 - `53/tcp`
-- `9088/tcp`
+- `9199/tcp`
 
 ### Docker Compose 示例
 
-如果你更习惯用 Compose 管理配置和端口映射，可以使用下面的 `docker-compose.yml`：
+使用 Compose 管理配置和端口映射时，可参考下面的 `docker-compose.yml`：
 
 ```yaml
 services:
@@ -231,7 +240,7 @@ services:
     ports:
       - "53:53/udp"
       - "53:53/tcp"
-      - "9088:9088/tcp"
+      - "9199:9199/tcp"
     volumes:
       - ./config.yaml:/etc/oxidns/config.yaml:ro
 ```

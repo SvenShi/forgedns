@@ -393,7 +393,7 @@ Provides TTL-aware response caching with negative cache support and persistence.
 - Purpose: Stop the chain when the cache produces a response.
 - Notes:
   - When set to `false`, later executors still run even if cache has already populated `response`.
-  - If you want to skip later `forward` stages on cache hits, handle it explicitly in `sequence`, for example with `has_resp` or `accept`.
+  - To skip later `forward` stages on cache hits, handle it explicitly in `sequence`, for example with `has_resp` or `accept`.
 
 #### `cache_negative`
 
@@ -957,7 +957,7 @@ Biases dual-stack results toward one address family.
 Notes:
 
 - Quick setup uses the default configuration: `cache: true` and `cache_ttl: 3600`.
-- Use the full plugin configuration when you need to disable the cache or change its TTL.
+- Use the full plugin configuration when disabling the cache or changing its TTL.
 
 ### Behavior
 
@@ -1295,7 +1295,7 @@ Persists the entry request, the post-`next` response, and `sequence` execution-p
 
 ### Notes
 
-- Place the recorder close to the entry point if you want the full main-path trace.
+- Place the recorder close to the entry point when the full main-path trace is required.
 - If an earlier branch short-circuits before the recorder, that request will not be recorded.
 - If `next` fails and the server later emits a fallback response, the database still reflects the plugin's point of view: `error` plus an empty response.
 - If the management API is disabled, the recorder still writes SQLite data but does not expose query or SSE routes.
@@ -1566,7 +1566,7 @@ Sends callback requests to external `http/https` services. It can trigger before
 - `args.body`, `args.json`, and `args.form` are mutually exclusive.
 - This is a side-effect executor. In v1 it cannot rewrite DNS requests, responses, marks, or attrs based on the HTTP result.
 - v1 does not support multipart uploads or quick setup syntax.
-- If you need both trigger moments, configure two separate `http_request` plugin instances.
+- Configure two separate `http_request` plugin instances when both trigger moments are required.
 
 ---
 
@@ -2109,7 +2109,7 @@ Downloads one or more `http/https` files into a local directory and overwrites t
 - `socks5` accepts `host:port` and `username:password@host:port`; bracket IPv6 addresses such as `"[::1]:1080"` are supported too.
 - `startup_if_missing` only fills missing files; it does not overwrite existing targets on every startup.
 - When used inside a normal `sequence`, the download time is paid directly by that request.
-- Overwriting a local file does not apply automatically. If you only need file-backed providers to pick up the new data, prefer chaining `reload_provider`; if `config.yaml`, dependency topology, or the plugin list changed too, use `reload`.
+- Overwriting a local file does not apply automatically. For file-backed providers that only need to pick up new data, prefer chaining `reload_provider`; if `config.yaml`, dependency topology, or the plugin list changed too, use `reload`.
 
 ### Recommended Pairing
 
@@ -2201,7 +2201,7 @@ Notes:
 - `reload_provider` refreshes only the affected provider snapshots without rebuilding unrelated plugins.
 - `startup_if_missing: true` is useful for first-time deployment when files may not exist yet.
 - If the subscription source requires a proxy, set a SOCKS5 proxy on `subscription_download.args.socks5`.
-- If you do not want startup to overwrite existing files, keep the default behavior and only bootstrap missing files.
+- To avoid overwriting existing files at startup, keep the default behavior and only bootstrap missing files.
 - If the update also changes `config.yaml`, provider topology, or the plugin list, use a full `reload` instead.
 
 ### Full Reload Still Fits Config Changes
@@ -2256,7 +2256,7 @@ Reloads one or more providers in place by tag, rebuilding their internal snapsho
 ### Notes
 
 - `args` only accepts provider references such as `"$geoip_cn"`; inline rules and file references are rejected.
-- If the update changes `config.yaml`, provider topology, the plugin list, or other non-provider structures, you still need `reload`.
+- If the update changes `config.yaml`, provider topology, the plugin list, or other non-provider structures, `reload` is still required.
 - Running this on a live request path may trigger file reads and recompilation, so it is usually a better fit for background `cron` or maintenance `sequence` flows.
 
 ---

@@ -1675,7 +1675,7 @@ sidebar_position: 3
 - `args.body`、`args.json`、`args.form` 三者互斥。
 - 这是副作用执行器，v1 不支持根据 HTTP 返回结果改写 DNS 请求、响应、marks 或 attrs。
 - v1 不支持 multipart 上传，也不支持 quick setup 语法。
-- 如果你同时需要 `before` 和 `after` 两种时机，请配置两个独立的 `http_request` 插件实例。
+- 同时需要 `before` 和 `after` 两种时机时，请配置两个独立的 `http_request` 插件实例。
 
 ---
 
@@ -2328,7 +2328,7 @@ plugins:
 - `reload_provider` 负责只刷新相关 provider 的内部快照，不会重建其它插件。
 - `startup_if_missing: true` 适合首次部署时自动补齐缺失文件。
 - 如果订阅源需要代理，可直接在 `subscription_download.args.socks5` 中配置 SOCKS5 代理。
-- 如果你不希望定时任务在启动后立刻覆盖已有文件，可以保留默认行为，仅在文件缺失时做启动补齐。
+- 不希望定时任务在启动后立刻覆盖已有文件时，可以保留默认行为，仅在文件缺失时做启动补齐。
 - 如果这次更新还改动了 `config.yaml`、provider 依赖拓扑或插件列表，请改用全量 `reload`。
 
 ### 配置变更场景仍使用全量 reload
