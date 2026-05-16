@@ -14,6 +14,7 @@ use bytes::Bytes;
 use http::{Method, Request, StatusCode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tokio::sync::mpsc;
 
 use crate::api::{ApiHandler, ApiRegister, json_error, json_ok, json_response};
@@ -28,12 +29,20 @@ pub enum ControlCommand {
     Reload,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessMetrics {
+    pub cpu_percent: f32,
+    pub memory_mb: u64,
+    pub system_memory_total_mb: u64,
+}
+
 #[derive(Debug)]
 pub struct AppController {
     started_at_ms: u64,
     config_path: PathBuf,
     state: Mutex<ControlState>,
     command_tx: mpsc::UnboundedSender<ControlCommand>,
+    sysinfo: Mutex<System>,
 }
 
 #[derive(Debug, Default)]
@@ -85,15 +94,43 @@ impl Display for ControlRequestError {
 impl AppController {
     pub fn new(config_path: PathBuf) -> (Arc<Self>, mpsc::UnboundedReceiver<ControlCommand>) {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let pid = Pid::from_u32(std::process::id());
+        let refresh_kind = ProcessRefreshKind::nothing().with_cpu().with_memory();
+        let mut sys =
+            System::new_with_specifics(RefreshKind::nothing().with_processes(refresh_kind));
+        // Prime the CPU baseline so the first real sample isn't always 0%.
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), false, refresh_kind);
         (
             Arc::new(Self {
                 started_at_ms: AppClock::elapsed_millis(),
                 config_path,
                 state: Mutex::new(ControlState::default()),
                 command_tx,
+                sysinfo: Mutex::new(sys),
             }),
             command_rx,
         )
+    }
+
+    pub fn sample_process_metrics(&self) -> ProcessMetrics {
+        let pid = Pid::from_u32(std::process::id());
+        let mut sys = self.sysinfo.lock().expect("sysinfo poisoned");
+        sys.refresh_memory();
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            false,
+            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+        );
+        let cpu_count = sys.cpus().len().max(1) as f32;
+        let (cpu_percent, memory_mb) = sys
+            .process(pid)
+            .map(|p| (p.cpu_usage() / cpu_count, p.memory() / 1_048_576))
+            .unwrap_or((0.0, 0));
+        ProcessMetrics {
+            cpu_percent,
+            memory_mb,
+            system_memory_total_mb: sys.total_memory() / 1_048_576,
+        }
     }
 
     pub fn config_path(&self) -> &Path {
@@ -256,6 +293,9 @@ struct SystemResponse {
     config_path: String,
     api_enabled: bool,
     reload: ReloadSnapshot,
+    process_cpu_percent: f32,
+    process_memory_mb: u64,
+    system_memory_total_mb: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -367,6 +407,7 @@ impl ApiHandler for ReloadStatusHandler {
 impl ApiHandler for SystemHandler {
     async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
         let snapshot = self.controller.snapshot();
+        let metrics = self.controller.sample_process_metrics();
         json_ok(
             StatusCode::OK,
             &SystemResponse {
@@ -378,6 +419,9 @@ impl ApiHandler for SystemHandler {
                 config_path: snapshot.config_path,
                 api_enabled: true,
                 reload: snapshot.reload,
+                process_cpu_percent: metrics.cpu_percent,
+                process_memory_mb: metrics.memory_mb,
+                system_memory_total_mb: metrics.system_memory_total_mb,
             },
         )
     }

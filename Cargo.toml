@@ -38,6 +38,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+sysinfo = { version = "0.35", default-features = false, features = ["system"] }
 
 # Core data structures and utility crates
 ahash = "0.8.12"

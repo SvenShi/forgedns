@@ -18,10 +18,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, LayoutGrid, List, Pin, GitBranch } from "lucide-react";
+import { Search, LayoutGrid, List, Pin, PinOff, Trash2, GitBranch } from "lucide-react";
 import type { PluginType } from "@/lib/types";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   getPluginCatalogItem,
   renderPluginKindIcon,
@@ -53,7 +58,7 @@ function PluginsPageContent() {
 
   const plugins = useAppStore((s) => s.plugins);
   const dependencyGraph = useAppStore((s) => s.dependencyGraph);
-  const { setSelectedPlugin, setDetailOpen } = useAppStore();
+  const { setSelectedPlugin, setDetailOpen, togglePluginPin, deletePlugin } = useAppStore();
 
   const filteredPlugins = plugins.filter((p) => {
     const definition = getPluginCatalogItem(p.pluginKind);
@@ -172,13 +177,14 @@ function PluginsPageContent() {
                         <TableHead>名称</TableHead>
                         <TableHead>类型</TableHead>
                         <TableHead>插件</TableHead>
+                        <TableHead className="w-[80px]" />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredPlugins.map((plugin) => (
                         <TableRow
                           key={plugin.id}
-                          className="cursor-pointer"
+                          className="group cursor-pointer"
                           onClick={() => handleRowClick(plugin)}
                         >
                           <TableCell className="font-mono font-medium">
@@ -203,6 +209,51 @@ function PluginsPageContent() {
                           </TableCell>
                           <TableCell>
                             <PluginKindBadge pluginKind={plugin.pluginKind} />
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className={cn(
+                                      "h-7 w-7",
+                                      plugin.pinned && "text-primary",
+                                    )}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      togglePluginPin(plugin.id);
+                                    }}
+                                  >
+                                    {plugin.pinned ? (
+                                      <PinOff className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <Pin className="h-3.5 w-3.5" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom">
+                                  {plugin.pinned ? "取消固定" : "固定到仪表盘"}
+                                </TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 hover:text-destructive"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      deletePlugin(plugin.id);
+                                    }}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom">删除</TooltipContent>
+                              </Tooltip>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}

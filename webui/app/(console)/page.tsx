@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { AppHeader } from "@/components/shell/app-header";
 import { SystemMetrics } from "@/components/dashboard/system-metrics";
 import { PluginCard } from "@/components/plugins/plugin-card";
@@ -10,7 +11,15 @@ import { ArrowRight } from "lucide-react";
 
 export default function DashboardPage() {
   const plugins = useAppStore((s) => s.plugins);
+  const refreshRuntimeState = useAppStore((s) => s.refreshRuntimeState);
   const pinnedPlugins = plugins.filter((p) => p.pinned);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      void refreshRuntimeState();
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [refreshRuntimeState]);
 
   return (
     <>

@@ -4,13 +4,6 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  MoreVertical,
   Pin,
   PinOff,
   Trash2,
@@ -129,42 +122,22 @@ export function PluginCardTemplate({
               {plugin.pinned ? "取消固定" : "固定到仪表盘"}
             </TooltipContent>
           </Tooltip>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+          <Tooltip>
+            <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 flex-shrink-0"
+                className="h-7 w-7 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deletePlugin(plugin.id);
+                }}
               >
-                <MoreVertical className="h-4 w-4" />
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <DropdownMenuItem onClick={() => togglePluginPin(plugin.id)}>
-                {plugin.pinned ? (
-                  <>
-                    <PinOff className="mr-2 h-4 w-4" />
-                    取消固定
-                  </>
-                ) : (
-                  <>
-                    <Pin className="mr-2 h-4 w-4" />
-                    固定到仪表盘
-                  </>
-                )}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => deletePlugin(plugin.id)}
-                className="text-destructive focus:text-destructive"
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                删除
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">删除</TooltipContent>
+          </Tooltip>
         </div>
       </CardHeader>
       {children && (

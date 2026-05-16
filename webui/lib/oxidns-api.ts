@@ -73,6 +73,9 @@ export interface SystemResponse {
   config_path: string;
   api_enabled: boolean;
   reload: ReloadSnapshot;
+  process_cpu_percent?: number;
+  process_memory_mb?: number;
+  system_memory_total_mb?: number;
 }
 
 export interface DependencyGraphNode {

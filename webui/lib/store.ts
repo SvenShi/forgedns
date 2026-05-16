@@ -111,7 +111,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    const plugins = pluginsFromConfig(parsed.config);
+    const plugins = restorePinnedState(pluginsFromConfig(parsed.config));
     set({
       configModel: parsed.config,
       configText: config,
@@ -222,6 +222,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const plugins = state.plugins.map((p) =>
         p.id === id ? { ...p, pinned: !p.pinned } : p,
       );
+      savePinnedIds(new Set(plugins.filter((p) => p.pinned).map((p) => p.id)));
       return {
         plugins,
         selectedPlugin: syncSelectedPlugin(state.selectedPlugin, plugins),
@@ -310,7 +311,7 @@ function applyConfigFileResponse(response: ConfigFileResponse, set: StoreSet) {
     yamlConfig: response.content,
     configVersion: response.version,
     configPath: response.path,
-    plugins: pluginsFromConfig(parsed.config),
+    plugins: restorePinnedState(pluginsFromConfig(parsed.config)),
     configError: parsed.diagnostics[0] ?? null,
     configDiagnostics: parsed.diagnostics,
   });
@@ -351,4 +352,27 @@ function syncSelectedPlugin(
 ) {
   if (!selectedPlugin) return null;
   return plugins.find((plugin) => plugin.id === selectedPlugin.id) ?? null;
+}
+
+const PINNED_PLUGINS_KEY = "oxidns:pinned-plugins";
+
+function loadPinnedIds(): Set<string> {
+  try {
+    const stored = localStorage.getItem(PINNED_PLUGINS_KEY);
+    return stored ? new Set(JSON.parse(stored) as string[]) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function savePinnedIds(ids: Set<string>): void {
+  try {
+    localStorage.setItem(PINNED_PLUGINS_KEY, JSON.stringify([...ids]));
+  } catch {}
+}
+
+function restorePinnedState(plugins: PluginInstance[]): PluginInstance[] {
+  const pinnedIds = loadPinnedIds();
+  if (pinnedIds.size === 0) return plugins;
+  return plugins.map((p) => ({ ...p, pinned: pinnedIds.has(p.id) }));
 }
