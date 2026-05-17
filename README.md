@@ -35,7 +35,7 @@ DNS 在复杂网络里往往不只是“查询一个域名”。
 - 在多个上游之间并发、回退、兜底或按结果决策
 - 对响应进行 TTL 调整、ECS 处理、重写或本地应答
 - 将 DNS 结果同步到 `ipset`、`nftset` 或 MikroTik RouterOS
-- 记录查询过程，并通过日志、查询记录和基础指标理解系统状态
+- 记录查询过程，并通过日志、查询记录和 Prometheus 插件指标理解系统状态
 - 在不中断服务的情况下热更新配置、规则和 Provider
 
 OxiDNS 为这些场景提供的是一套统一的编排模型，而不是分散的功能补丁。
@@ -80,7 +80,7 @@ OxiDNS 不试图替你隐藏复杂性。
 | 匹配器 | `qname`、`question`、`qtype`、`qclass`、`client_ip`、`resp_ip`、`rcode`、`rate_limiter` 等 |
 | 数据集 | `domain_set`、`ip_set`、`geoip`、`geosite`、`adguard_rule` |
 | 系统联动 | `ipset`、`nftset`、`ros_address_list`、`reverse_lookup` |
-| 调试与运维 | 健康检查、配置校验、热重载、查询记录、基础指标、实时日志 |
+| 调试与运维 | 健康检查、配置校验、热重载、查询记录、Prometheus 插件指标、实时日志 |
 | 部署能力 | 多平台构建、Debian 包、独立 WebUI 托管、服务化安装 |
 
 ---

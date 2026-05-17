@@ -82,9 +82,11 @@ fn test_api_hub_with_options(
             webui,
         }))),
     };
-    ApiHub::from_config(&config)
+    let hub = ApiHub::from_config(&config)
         .expect("api hub config should be valid")
-        .expect("api hub should be enabled")
+        .expect("api hub should be enabled");
+    register_builtin_routes(&hub).expect("builtin routes should register");
+    hub
 }
 
 async fn start_test_api_hub(hub: &Arc<ApiHub>) {
@@ -712,6 +714,40 @@ async fn test_hyper_http2_serves_builtin_health_route() {
         .expect("collect body")
         .to_bytes();
     assert_eq!(body, Bytes::from_static(b"ok"));
+
+    hub.stop().await;
+}
+
+#[tokio::test]
+async fn test_hyper_serves_builtin_metrics_route() {
+    AppClock::start();
+    let addr = reserve_local_addr();
+    let hub = test_api_hub(addr, None);
+
+    start_test_api_hub(&hub).await;
+
+    let client = http1_client();
+    let uri: Uri = format!("http://{addr}/api/metrics")
+        .parse()
+        .expect("request uri");
+    let response = client
+        .request(
+            HyperRequest::builder()
+                .method(Method::GET)
+                .uri(uri)
+                .body(Empty::new())
+                .expect("request"),
+        )
+        .await
+        .expect("metrics response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE),
+        Some(&http::HeaderValue::from_static(
+            "text/plain; version=0.0.4; charset=utf-8"
+        ))
+    );
 
     hub.stop().await;
 }

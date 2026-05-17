@@ -694,6 +694,13 @@ args:
 - 命中含义是“允许通过并消费一个令牌”。
 - 返回 `false` 表示当前限流，不允许通过。
 
+### Metrics
+
+通过全局 `GET /api/metrics` 导出：
+
+- `ratelimit_allowed_total`
+- `ratelimit_rejected_total`
+
 ### 典型用途
 
 - 源地址维度的入口保护。

@@ -35,7 +35,7 @@ You may need to:
 - Race, fallback, fail over, or make decisions based on upstream results
 - Adjust TTL, handle ECS, rewrite responses, or return local answers
 - Sync DNS results into `ipset`, `nftset`, or MikroTik RouterOS
-- Record query behavior and understand system state through logs, query records, and basic metrics
+- Record query behavior and understand system state through logs, query records, and Prometheus plugin metrics
 - Reload configuration, rules, and providers without interrupting the service
 
 OxiDNS provides a unified orchestration model for these scenarios instead of a collection of isolated feature switches.
@@ -80,7 +80,7 @@ It is better suited for users who want explicit control over DNS behavior, rathe
 | Matchers | `qname`, `question`, `qtype`, `qclass`, `client_ip`, `resp_ip`, `rcode`, `rate_limiter`, and more |
 | Data sets | `domain_set`, `ip_set`, `geoip`, `geosite`, `adguard_rule` |
 | System integrations | `ipset`, `nftset`, `ros_address_list`, `reverse_lookup` |
-| Debugging and operations | Health checks, config validation, hot reload, query records, basic metrics, real-time logs |
+| Debugging and operations | Health checks, config validation, hot reload, query records, Prometheus plugin metrics, real-time logs |
 | Deployment | Multi-platform builds, Debian packages, standalone WebUI hosting, service installation |
 
 ---

@@ -19,6 +19,7 @@
 //!   server request handler can generate a failure response.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -29,6 +30,10 @@ use tokio::task::JoinSet;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -61,6 +66,58 @@ struct FallbackExecutor {
     threshold: Duration,
     always_standby: bool,
     short_circuit: bool,
+    metrics: Arc<FallbackMetrics>,
+}
+
+#[derive(Debug)]
+struct FallbackMetrics {
+    tag: String,
+    primary_total: AtomicU64,
+    primary_error_total: AtomicU64,
+    secondary_total: AtomicU64,
+}
+
+impl FallbackMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            primary_total: AtomicU64::new(0),
+            primary_error_total: AtomicU64::new(0),
+            secondary_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for FallbackMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "fallback"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "fallback_primary_total",
+            "Total fallback primary executions.",
+            &labels,
+            self.primary_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "fallback_primary_error_total",
+            "Total fallback primary executions that failed to produce a response.",
+            &labels,
+            self.primary_error_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "fallback_secondary_total",
+            "Total fallback secondary executions.",
+            &labels,
+            self.secondary_total.load(Ordering::Relaxed),
+        ));
+    }
 }
 
 struct Outcome {
@@ -83,10 +140,11 @@ impl Plugin for FallbackExecutor {
     }
 
     async fn init(&mut self) -> Result<()> {
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         Ok(())
     }
 }
@@ -100,13 +158,22 @@ impl Executor for FallbackExecutor {
 
         let primary = self.primary.clone();
         let primary_ctx = context.copy_for_subquery();
+        let primary_metrics = self.metrics.clone();
         join_set.spawn(async move {
+            primary_metrics
+                .primary_total
+                .fetch_add(1, Ordering::Relaxed);
             let outcome = run_executor(primary, primary_ctx, "primary").await;
             let state = if outcome.context.is_some() {
                 PrimaryState::Success
             } else {
                 PrimaryState::Failed
             };
+            if state == PrimaryState::Failed {
+                primary_metrics
+                    .primary_error_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
             let _ = primary_state_tx.send(state);
             outcome
         });
@@ -116,6 +183,7 @@ impl Executor for FallbackExecutor {
         let delay = self.threshold;
         let always_standby = self.always_standby;
         let mut primary_state_rx = primary_state_rx.clone();
+        let secondary_metrics = self.metrics.clone();
         join_set.spawn(async move {
             if !always_standby {
                 let sleeper = tokio::time::sleep(delay);
@@ -144,6 +212,9 @@ impl Executor for FallbackExecutor {
                     }
                 }
             }
+            secondary_metrics
+                .secondary_total
+                .fetch_add(1, Ordering::Relaxed);
             run_executor(secondary, secondary_ctx, "secondary").await
         });
 
@@ -293,6 +364,7 @@ impl PluginFactory for FallbackFactory {
             }),
             always_standby: cfg.always_standby,
             short_circuit: cfg.short_circuit,
+            metrics: Arc::new(FallbackMetrics::new(plugin_config.tag.clone())),
         })))
     }
 }
@@ -492,6 +564,7 @@ short_circuit: true
 
     #[tokio::test]
     async fn test_fallback_execute_stops_when_short_circuit_enabled() {
+        let metrics = Arc::new(FallbackMetrics::new("fb".to_string()));
         let executor = FallbackExecutor {
             tag: "fb".to_string(),
             primary_tag: "primary".to_string(),
@@ -511,6 +584,7 @@ short_circuit: true
             threshold: Duration::from_secs(60),
             always_standby: false,
             short_circuit: true,
+            metrics: metrics.clone(),
         };
 
         let mut context = test_context();
@@ -518,5 +592,43 @@ short_circuit: true
 
         assert!(matches!(step, ExecStep::Stop));
         assert!(context.response().is_some());
+        assert_eq!(metrics.primary_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.primary_error_total.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.secondary_total.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_metrics_record_primary_error_and_secondary() {
+        let metrics = Arc::new(FallbackMetrics::new("fb".to_string()));
+        let executor = FallbackExecutor {
+            tag: "fb".to_string(),
+            primary_tag: "primary".to_string(),
+            secondary_tag: "secondary".to_string(),
+            primary: Arc::new(StubExecutor {
+                tag: "primary".to_string(),
+                should_fail: true,
+                produce_response: false,
+                refused_with_next: false,
+            }),
+            secondary: Arc::new(StubExecutor {
+                tag: "secondary".to_string(),
+                should_fail: false,
+                produce_response: true,
+                refused_with_next: false,
+            }),
+            threshold: Duration::ZERO,
+            always_standby: false,
+            short_circuit: false,
+            metrics: metrics.clone(),
+        };
+
+        let mut context = test_context();
+        let step = executor.execute(&mut context).await.unwrap();
+
+        assert!(matches!(step, ExecStep::Next));
+        assert!(context.response().is_some());
+        assert_eq!(metrics.primary_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.primary_error_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.secondary_total.load(Ordering::Relaxed), 1);
     }
 }

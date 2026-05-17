@@ -8,7 +8,7 @@
 //! are periodically cleaned up.
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use ahash::AHashSet;
@@ -24,8 +24,12 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::core::task_center;
-use crate::core::ttl_cache::TtlCache;
+use crate::core::ttl_cache::{TtlCache, TtlCacheLookup};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::proto::{Message, Rcode};
@@ -135,6 +139,164 @@ struct CacheLookup {
     hit_kind: Option<CacheHitKind>,
 }
 
+#[derive(Debug)]
+struct CacheMetrics {
+    tag: String,
+    cache_map: OnceLock<CacheMap>,
+    lookup_total: AtomicU64,
+    fresh_hit_total: AtomicU64,
+    stale_hit_total: AtomicU64,
+    miss_total: AtomicU64,
+    expired_total: AtomicU64,
+    insert_total: AtomicU64,
+    skip_truncated_total: AtomicU64,
+    skip_no_ttl_total: AtomicU64,
+    lazy_refresh_started_total: AtomicU64,
+    lazy_refresh_success_total: AtomicU64,
+    lazy_refresh_failed_total: AtomicU64,
+}
+
+impl CacheMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            cache_map: OnceLock::new(),
+            lookup_total: AtomicU64::new(0),
+            fresh_hit_total: AtomicU64::new(0),
+            stale_hit_total: AtomicU64::new(0),
+            miss_total: AtomicU64::new(0),
+            expired_total: AtomicU64::new(0),
+            insert_total: AtomicU64::new(0),
+            skip_truncated_total: AtomicU64::new(0),
+            skip_no_ttl_total: AtomicU64::new(0),
+            lazy_refresh_started_total: AtomicU64::new(0),
+            lazy_refresh_success_total: AtomicU64::new(0),
+            lazy_refresh_failed_total: AtomicU64::new(0),
+        }
+    }
+
+    fn set_cache_map(&self, cache_map: CacheMap) {
+        let _ = self.cache_map.set(cache_map);
+    }
+}
+
+impl MetricSource for CacheMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "cache"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let base = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "cache_lookup_total",
+            "Total cache lookups with a cacheable request key.",
+            &base,
+            self.lookup_total.load(Ordering::Relaxed),
+        ));
+        let fresh = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("kind", "fresh"),
+        ];
+        sink.emit(MetricSample::counter(
+            "cache_hit_total",
+            "Total cache hits by freshness kind.",
+            &fresh,
+            self.fresh_hit_total.load(Ordering::Relaxed),
+        ));
+        let stale = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("kind", "stale"),
+        ];
+        sink.emit(MetricSample::counter(
+            "cache_hit_total",
+            "Total cache hits by freshness kind.",
+            &stale,
+            self.stale_hit_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "cache_miss_total",
+            "Total cache misses.",
+            &base,
+            self.miss_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "cache_expired_total",
+            "Total cache lookups that found and removed expired entries.",
+            &base,
+            self.expired_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "cache_insert_total",
+            "Total cache entry inserts or updates.",
+            &base,
+            self.insert_total.load(Ordering::Relaxed),
+        ));
+        let skip_truncated = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("reason", "truncated"),
+        ];
+        sink.emit(MetricSample::counter(
+            "cache_skip_total",
+            "Total responses skipped by cache write policy.",
+            &skip_truncated,
+            self.skip_truncated_total.load(Ordering::Relaxed),
+        ));
+        let skip_no_ttl = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("reason", "no_ttl"),
+        ];
+        sink.emit(MetricSample::counter(
+            "cache_skip_total",
+            "Total responses skipped by cache write policy.",
+            &skip_no_ttl,
+            self.skip_no_ttl_total.load(Ordering::Relaxed),
+        ));
+        let lazy_started = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("result", "started"),
+        ];
+        sink.emit(MetricSample::counter(
+            "cache_lazy_refresh_total",
+            "Total lazy refresh attempts by result.",
+            &lazy_started,
+            self.lazy_refresh_started_total.load(Ordering::Relaxed),
+        ));
+        let lazy_success = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("result", "success"),
+        ];
+        sink.emit(MetricSample::counter(
+            "cache_lazy_refresh_total",
+            "Total lazy refresh attempts by result.",
+            &lazy_success,
+            self.lazy_refresh_success_total.load(Ordering::Relaxed),
+        ));
+        let lazy_failed = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("result", "failed"),
+        ];
+        sink.emit(MetricSample::counter(
+            "cache_lazy_refresh_total",
+            "Total lazy refresh attempts by result.",
+            &lazy_failed,
+            self.lazy_refresh_failed_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::gauge(
+            "cache_entry_count",
+            "Current number of cache entries.",
+            &base,
+            self.cache_map
+                .get()
+                .map(|cache_map| cache_map.len() as u64)
+                .unwrap_or(0),
+        ));
+    }
+}
+
 /// DNS response cache executor.
 #[derive(Debug)]
 pub struct Cache {
@@ -169,6 +331,9 @@ pub struct Cache {
 
     /// Number of cache entry updates since last dump.
     updated_keys: Arc<AtomicU64>,
+
+    /// Low-overhead cache metrics.
+    metrics: Arc<CacheMetrics>,
 
     /// Periodic dump task id, if dump persistence is enabled.
     dump_task_id: Mutex<Option<u64>>,
@@ -348,23 +513,69 @@ impl Cache {
     #[hotpath::measure]
     fn try_cache_hit(&self, context: &mut DnsContext, cache_map: &CacheMap) -> Option<CacheLookup> {
         let key = Self::build_cache_key(context, self.ecs_in_key)?;
+        self.metrics.lookup_total.fetch_add(1, Ordering::Relaxed);
 
         let now = AppClock::elapsed_millis();
 
-        if let Some(item) = cache_map.get_retained_cloned(&key, now, LAST_ACCESS_TOUCH_INTERVAL_MS)
-        {
-            if now < item.value.fresh_until_ms {
-                let remaining_ttl = item
-                    .value
-                    .fresh_until_ms
-                    .saturating_sub(now)
-                    .saturating_div(1000) as u32;
-                let resp =
-                    Self::restore_cached_message(&item.value, context.request.id(), remaining_ttl);
-                context.set_response(resp);
+        match cache_map.get_retained_cloned_status(&key, now, LAST_ACCESS_TOUCH_INTERVAL_MS) {
+            Some(TtlCacheLookup::Hit(item)) => {
+                if now < item.value.fresh_until_ms {
+                    self.metrics.fresh_hit_total.fetch_add(1, Ordering::Relaxed);
+                    let remaining_ttl = item
+                        .value
+                        .fresh_until_ms
+                        .saturating_sub(now)
+                        .saturating_div(1000) as u32;
+                    let resp = Self::restore_cached_message(
+                        &item.value,
+                        context.request.id(),
+                        remaining_ttl,
+                    );
+                    context.set_response(resp);
 
+                    debug!(
+                        "cache hit: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}, kind=fresh",
+                        key.domain,
+                        key.record_type,
+                        key.dns_class,
+                        key.do_bit,
+                        key.cd_bit,
+                        key.ecs_scope.is_some()
+                    );
+                    return Some(CacheLookup {
+                        key,
+                        hit_kind: Some(CacheHitKind::Fresh),
+                    });
+                }
+
+                if self.config.lazy_cache_ttl.is_some() && now < item.expire_at_ms {
+                    self.metrics.stale_hit_total.fetch_add(1, Ordering::Relaxed);
+                    let resp = Self::restore_cached_message(
+                        &item.value,
+                        context.request.id(),
+                        self.stale_reply_ttl(&item.value),
+                    );
+                    context.set_response(resp);
+
+                    debug!(
+                        "cache hit: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}, kind=stale",
+                        key.domain,
+                        key.record_type,
+                        key.dns_class,
+                        key.do_bit,
+                        key.cd_bit,
+                        key.ecs_scope.is_some()
+                    );
+                    return Some(CacheLookup {
+                        key,
+                        hit_kind: Some(CacheHitKind::Stale),
+                    });
+                }
+            }
+            Some(TtlCacheLookup::Expired) => {
+                self.metrics.expired_total.fetch_add(1, Ordering::Relaxed);
                 debug!(
-                    "cache hit: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}, kind=fresh",
+                    "cache expired: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}",
                     key.domain,
                     key.record_type,
                     key.dns_class,
@@ -374,35 +585,14 @@ impl Cache {
                 );
                 return Some(CacheLookup {
                     key,
-                    hit_kind: Some(CacheHitKind::Fresh),
+                    hit_kind: None,
                 });
             }
-
-            if self.config.lazy_cache_ttl.is_some() && now < item.expire_at_ms {
-                let resp = Self::restore_cached_message(
-                    &item.value,
-                    context.request.id(),
-                    self.stale_reply_ttl(&item.value),
-                );
-                context.set_response(resp);
-
-                debug!(
-                    "cache hit: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}, kind=stale",
-                    key.domain,
-                    key.record_type,
-                    key.dns_class,
-                    key.do_bit,
-                    key.cd_bit,
-                    key.ecs_scope.is_some()
-                );
-                return Some(CacheLookup {
-                    key,
-                    hit_kind: Some(CacheHitKind::Stale),
-                });
-            }
+            None => {}
         }
 
         if cache_map.remove_if_expired(&key, now) {
+            self.metrics.expired_total.fetch_add(1, Ordering::Relaxed);
             debug!(
                 "cache expired: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}",
                 key.domain,
@@ -413,6 +603,7 @@ impl Cache {
                 key.ecs_scope.is_some()
             );
         } else {
+            self.metrics.miss_total.fetch_add(1, Ordering::Relaxed);
             debug!(
                 "cache miss: domain={}, type={:?}, class={:?}, do={}, cd={}, ecs={}",
                 key.domain,
@@ -504,6 +695,7 @@ impl Cache {
         );
         cache_map.insert_or_update(key, Arc::new(item), now, expire_time);
         self.updated_keys.fetch_add(1, Ordering::Relaxed);
+        self.metrics.insert_total.fetch_add(1, Ordering::Relaxed);
     }
 
     fn try_start_lazy_refresh(
@@ -526,6 +718,9 @@ impl Cache {
                 return;
             }
         }
+        self.metrics
+            .lazy_refresh_started_total
+            .fetch_add(1, Ordering::Relaxed);
 
         let key = key.clone();
         let cache_map = cache_map.clone();
@@ -538,6 +733,7 @@ impl Cache {
         let max_negative_ttl = self.max_negative_ttl;
         let negative_ttl_without_soa = self.negative_ttl_without_soa;
         let updated_keys = self.updated_keys.clone();
+        let metrics = self.metrics.clone();
 
         tokio::spawn(async move {
             let refresh = tokio::time::timeout(DEFAULT_LAZY_REFRESH_TIMEOUT, async {
@@ -576,11 +772,33 @@ impl Cache {
                             expire_at_ms,
                         );
                         updated_keys.fetch_add(1, Ordering::Relaxed);
+                        metrics.insert_total.fetch_add(1, Ordering::Relaxed);
+                        metrics
+                            .lazy_refresh_success_total
+                            .fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        metrics
+                            .lazy_refresh_failed_total
+                            .fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                Ok(Ok(_)) => {}
-                Ok(Err(err)) => warn!("lazy cache refresh failed for {}: {}", key.domain, err),
-                Err(_) => warn!("lazy cache refresh timed out for {}", key.domain),
+                Ok(Ok(_)) => {
+                    metrics
+                        .lazy_refresh_failed_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(Err(err)) => {
+                    metrics
+                        .lazy_refresh_failed_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    warn!("lazy cache refresh failed for {}: {}", key.domain, err);
+                }
+                Err(_) => {
+                    metrics
+                        .lazy_refresh_failed_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    warn!("lazy cache refresh timed out for {}", key.domain);
+                }
             }
 
             inflight
@@ -601,7 +819,9 @@ impl Plugin for Cache {
         let cache_map = CacheMap::with_capacity(self.cache_size);
 
         let _ = self.cache_map.set(cache_map.clone());
+        self.metrics.set_cache_map(cache_map.clone());
         api::register(&self.tag, cache_map.clone(), self.ecs_in_key)?;
+        register_metric_source(self.metrics.clone())?;
 
         if let Some(dump_file) = &self.config.dump_file {
             self.spawn_load_task(cache_map.clone(), dump_file.clone(), self.ecs_in_key);
@@ -624,6 +844,7 @@ impl Plugin for Cache {
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         let dump_task_id = self
             .dump_task_id
             .lock()
@@ -708,11 +929,18 @@ impl Executor for Cache {
             };
 
             if response.truncated() {
+                self.metrics
+                    .skip_truncated_total
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(next_step);
             }
 
             if let Some(ttl) = self.compute_cache_ttl(response) {
                 self.update_cache_entry(cache_map, key, response.clone(), ttl);
+            } else {
+                self.metrics
+                    .skip_no_ttl_total
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
         Ok(next_step)
@@ -870,6 +1098,7 @@ impl CacheFactory {
         cache_config: CacheConfig,
         _registry: Arc<PluginRegistry>,
     ) -> Result<UninitializedPlugin> {
+        let metrics = Arc::new(CacheMetrics::new(tag.clone()));
         Ok(UninitializedPlugin::Executor(Box::new(Cache {
             cache_map: OnceCell::new(),
             tag,
@@ -885,6 +1114,7 @@ impl CacheFactory {
             cache_size: cache_config.size.unwrap_or(DEFAULT_CACHE_SIZE),
             config: cache_config,
             updated_keys: Arc::new(AtomicU64::new(0)),
+            metrics,
             dump_task_id: Mutex::new(None),
             cleanup_task_id: Mutex::new(None),
             lazy_refresh_inflight: Arc::new(Mutex::new(AHashSet::new())),
@@ -970,6 +1200,7 @@ mod tests {
             ecs_in_key,
             config,
             updated_keys: Arc::new(AtomicU64::new(0)),
+            metrics: Arc::new(CacheMetrics::new("cache_test".to_string())),
             cache_size,
             dump_task_id: Mutex::new(None),
             cleanup_task_id: Mutex::new(None),
@@ -1078,6 +1309,23 @@ mod tests {
             ));
             context.set_response(response);
             continue_next!(next, context)
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingRefreshExecutor;
+
+    #[async_trait]
+    impl Plugin for FailingRefreshExecutor {
+        fn tag(&self) -> &str {
+            "failing_refresh_executor"
+        }
+    }
+
+    #[async_trait]
+    impl Executor for FailingRefreshExecutor {
+        async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
+            Err(DnsError::plugin("refresh failed"))
         }
     }
 
@@ -1239,6 +1487,13 @@ mod tests {
 
         let cache_map = cache.cache_map.get().unwrap();
         assert_eq!(cache_map.len(), 0);
+        assert_eq!(
+            cache
+                .metrics
+                .skip_truncated_total
+                .load(AtomicOrdering::Relaxed),
+            1
+        );
     }
 
     #[tokio::test]
@@ -1281,6 +1536,12 @@ mod tests {
             (119..=120).contains(&response.answers()[0].ttl()),
             "fresh cache hit should preserve the original TTL or decrement by at most one second"
         );
+        assert_eq!(cache.metrics.lookup_total.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(
+            cache.metrics.fresh_hit_total.load(AtomicOrdering::Relaxed),
+            1
+        );
+        assert_eq!(cache.metrics.insert_total.load(AtomicOrdering::Relaxed), 1);
     }
 
     #[tokio::test]
@@ -1327,6 +1588,75 @@ mod tests {
             .expect("stale cache hit should populate response");
         assert_eq!(response.id(), 9);
         assert_eq!(response.answers()[0].ttl(), 30);
+        assert_eq!(cache.metrics.lookup_total.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(
+            cache.metrics.stale_hit_total.load(AtomicOrdering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_metrics_distinguish_miss_and_expired_lookup() {
+        AppClock::start();
+        let mut cache = test_cache(default_test_config());
+        let _ = cache.init().await;
+
+        let mut miss = make_context(make_request_with_query("missing.example.", false, false));
+        let miss_lookup = cache
+            .try_cache_hit(&mut miss, cache.cache_map.get().unwrap())
+            .expect("cache lookup should exist");
+        assert_eq!(miss_lookup.hit_kind, None);
+
+        let mut expired = make_context(make_request_with_query("expired.example.", false, false));
+        let key = Cache::build_cache_key(&mut expired, false).unwrap();
+        let mut response = Message::new();
+        response.set_rcode(Rcode::NoError);
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("expired.example.").unwrap(),
+            1,
+            RData::A(crate::proto::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+        ));
+        cache.cache_map.get().unwrap().insert_or_update_with_meta(
+            key,
+            Arc::new(CacheItem::new(response, 1, AppClock::elapsed_millis())),
+            0,
+            AppClock::elapsed_millis(),
+            0,
+        );
+
+        let expired_lookup = cache
+            .try_cache_hit(&mut expired, cache.cache_map.get().unwrap())
+            .expect("cache lookup should exist");
+        assert_eq!(expired_lookup.hit_kind, None);
+
+        assert_eq!(cache.metrics.lookup_total.load(AtomicOrdering::Relaxed), 2);
+        assert_eq!(cache.metrics.miss_total.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(cache.metrics.expired_total.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_metrics_record_no_ttl_skip() {
+        AppClock::start();
+        let mut cache = test_cache(default_test_config());
+        let _ = cache.init().await;
+
+        let mut context = make_context(make_request_with_query("servfail.example.", false, false));
+        context.set_response({
+            let mut response = Message::new();
+            response.set_rcode(Rcode::ServFail);
+            response
+        });
+
+        cache.execute_with_next(&mut context, None).await.unwrap();
+
+        assert_eq!(
+            cache
+                .metrics
+                .skip_no_ttl_total
+                .load(AtomicOrdering::Relaxed),
+            1
+        );
+        assert_eq!(cache.metrics.insert_total.load(AtomicOrdering::Relaxed), 0);
     }
 
     #[tokio::test]
@@ -1432,6 +1762,21 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(
+            cache
+                .metrics
+                .lazy_refresh_started_total
+                .load(AtomicOrdering::Relaxed),
+            1
+        );
+        assert_eq!(
+            cache
+                .metrics
+                .lazy_refresh_success_total
+                .load(AtomicOrdering::Relaxed),
+            1
+        );
+        assert_eq!(cache.metrics.insert_total.load(AtomicOrdering::Relaxed), 1);
         let stored = cache
             .cache_map
             .get()
@@ -1443,6 +1788,65 @@ mod tests {
                 .value
                 .resp
                 .has_answer_ip(|ip| ip == std::net::IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)))
+        );
+    }
+
+    #[tokio::test]
+    async fn lazy_refresh_metrics_record_failed_refresh() {
+        AppClock::start();
+        let mut cfg = default_test_config();
+        cfg.lazy_cache_ttl = Some(30);
+        cfg.short_circuit = Some(true);
+        let mut cache = test_cache(cfg);
+        let _ = cache.init().await;
+
+        let program =
+            ChainProgram::single_with_next_executor_for_test(Arc::new(FailingRefreshExecutor));
+        let next = ExecutorNext::from_program_for_test(program, 0);
+
+        let mut context = make_context(make_request_with_query("example.com.", false, false));
+        let key = Cache::build_cache_key(&mut context, false).unwrap();
+        let mut response = Message::new();
+        response.set_rcode(Rcode::NoError);
+        response.add_question(Question::new(
+            Name::from_ascii("example.com.").unwrap(),
+            RecordType::A,
+            DNSClass::IN,
+        ));
+        response.add_answer(Record::from_rdata(
+            Name::from_ascii("example.com.").unwrap(),
+            120,
+            RData::A(crate::proto::rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
+        ));
+
+        let now = AppClock::elapsed_millis();
+        cache.cache_map.get().unwrap().insert_or_update_with_meta(
+            key,
+            Arc::new(CacheItem::new(response, 120, now.saturating_sub(1_000))),
+            now.saturating_sub(121_000),
+            now.saturating_add(10_000),
+            now.saturating_sub(100),
+        );
+
+        let _ = cache
+            .execute_with_next(&mut context, Some(next))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(
+            cache
+                .metrics
+                .lazy_refresh_started_total
+                .load(AtomicOrdering::Relaxed),
+            1
+        );
+        assert_eq!(
+            cache
+                .metrics
+                .lazy_refresh_failed_total
+                .load(AtomicOrdering::Relaxed),
+            1
         );
     }
 

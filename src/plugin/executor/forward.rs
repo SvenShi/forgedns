@@ -9,6 +9,7 @@
 //! - multi-upstream concurrent racing (`concurrent`) with first-success return
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use rand::RngExt;
@@ -17,8 +18,13 @@ use tokio::task::JoinSet;
 use tracing::{Level, debug, event_enabled, info, warn};
 
 use crate::config::types::PluginConfig;
+use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
@@ -26,6 +32,109 @@ use crate::plugin_factory;
 use crate::proto::{Message, Rcode};
 
 const MAX_CONCURRENT_QUERIES: usize = 3;
+
+#[derive(Debug)]
+struct ForwardMetrics {
+    tag: String,
+    query_total: AtomicU64,
+    success_total: AtomicU64,
+    error_total: AtomicU64,
+    timeout_total: AtomicU64,
+    latency_count: AtomicU64,
+    latency_sum_ms: AtomicU64,
+}
+
+impl ForwardMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            query_total: AtomicU64::new(0),
+            success_total: AtomicU64::new(0),
+            error_total: AtomicU64::new(0),
+            timeout_total: AtomicU64::new(0),
+            latency_count: AtomicU64::new(0),
+            latency_sum_ms: AtomicU64::new(0),
+        }
+    }
+
+    #[inline]
+    fn record_query_start(&self) -> u64 {
+        self.query_total.fetch_add(1, Ordering::Relaxed);
+        AppClock::elapsed_millis()
+    }
+
+    #[inline]
+    fn record_success(&self, start_ms: u64) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        self.record_latency(start_ms);
+    }
+
+    #[inline]
+    fn record_error(&self, start_ms: u64, timeout: bool) {
+        self.error_total.fetch_add(1, Ordering::Relaxed);
+        if timeout {
+            self.timeout_total.fetch_add(1, Ordering::Relaxed);
+        }
+        self.record_latency(start_ms);
+    }
+
+    #[inline]
+    fn record_latency(&self, start_ms: u64) {
+        let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
+        self.latency_count.fetch_add(1, Ordering::Relaxed);
+        self.latency_sum_ms.fetch_add(elapsed, Ordering::Relaxed);
+    }
+}
+
+impl MetricSource for ForwardMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "forward"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "forward_query_total",
+            "Total forward executor queries.",
+            &labels,
+            self.query_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "forward_success_total",
+            "Total successful forward queries.",
+            &labels,
+            self.success_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "forward_error_total",
+            "Total failed forward queries.",
+            &labels,
+            self.error_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "forward_timeout_total",
+            "Total forward queries that timed out.",
+            &labels,
+            self.timeout_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "forward_latency_count",
+            "Total forward queries included in latency statistics.",
+            &labels,
+            self.latency_count.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "forward_latency_sum_ms",
+            "Total forward query latency in milliseconds.",
+            &labels,
+            self.latency_sum_ms.load(Ordering::Relaxed),
+        ));
+    }
+}
 
 /// Single-upstream DNS forwarder
 ///
@@ -42,6 +151,8 @@ pub struct SingleDnsForwarder {
 
     /// Whether to stop the executor chain after a successful upstream response.
     pub short_circuit: bool,
+
+    metrics: Arc<ForwardMetrics>,
 }
 
 #[async_trait]
@@ -52,10 +163,11 @@ impl Plugin for SingleDnsForwarder {
 
     async fn init(&mut self) -> Result<()> {
         info!("DNS SingleDnsForwarder initialized tag: {}", self.tag);
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         Ok(())
     }
 }
@@ -64,11 +176,14 @@ impl Plugin for SingleDnsForwarder {
 impl Executor for SingleDnsForwarder {
     #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+        let start_ms = self.metrics.record_query_start();
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
                 context.set_response(res);
+                self.metrics.record_success(start_ms);
             }
             Err(e) => {
+                self.metrics.record_error(start_ms, is_timeout_error(&e));
                 warn!(
                     "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
                     context.peer_addr(),
@@ -109,6 +224,8 @@ pub struct ConcurrentForwarder {
 
     /// Whether to stop the executor chain after a successful upstream response.
     pub short_circuit: bool,
+
+    metrics: Arc<ForwardMetrics>,
 }
 
 #[async_trait]
@@ -119,10 +236,11 @@ impl Plugin for ConcurrentForwarder {
 
     async fn init(&mut self) -> Result<()> {
         info!("DNS ConcurrentForwarder initialized tag: {}", self.tag);
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         Ok(())
     }
 }
@@ -131,13 +249,17 @@ impl Plugin for ConcurrentForwarder {
 impl Executor for ConcurrentForwarder {
     #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
-        let (response, last_error) = self.query_any_upstream(context.request.clone()).await;
+        let start_ms = self.metrics.record_query_start();
+        let (response, last_error, timed_out) =
+            self.query_any_upstream(context.request.clone()).await;
         if let Some(response) = response {
             context.set_response(response);
+            self.metrics.record_success(start_ms);
             return Ok(self.completion_step());
         }
 
         let err = last_error.unwrap_or_else(|| "no upstream response".to_string());
+        self.metrics.record_error(start_ms, timed_out);
         warn!(
             "forward plugin '{}' failed across all concurrent upstreams: {}",
             self.tag, err
@@ -159,14 +281,18 @@ impl ConcurrentForwarder {
         }
     }
 
-    async fn query_any_upstream(&self, request: Message) -> (Option<Message>, Option<String>) {
+    async fn query_any_upstream(
+        &self,
+        request: Message,
+    ) -> (Option<Message>, Option<String>, bool) {
         let total_upstreams = self.upstreams.len();
         if total_upstreams == 0 {
-            return (None, Some("no upstream configured".to_string()));
+            return (None, Some("no upstream configured".to_string()), false);
         }
 
         let mut join_set = JoinSet::new();
         let mut last_error: Option<String> = None;
+        let mut last_timeout = false;
         let mut completed = 0usize;
         let start_idx = rand::rng().random_range(0..total_upstreams);
 
@@ -195,10 +321,11 @@ impl ConcurrentForwarder {
                         continue;
                     }
                     join_set.abort_all();
-                    return (Some(response), None);
+                    return (Some(response), None, false);
                 }
                 Ok(Err(e)) => {
                     warn!("DNS query failed: {}", e);
+                    last_timeout |= is_timeout_error(&e);
                     last_error = Some(e.to_string());
                 }
                 Err(e) => {
@@ -207,13 +334,17 @@ impl ConcurrentForwarder {
             }
         }
 
-        (None, last_error)
+        (None, last_error, last_timeout)
     }
 }
 
 #[inline]
 fn is_preferred_rcode(code: Rcode) -> bool {
     code == Rcode::NoError || code == Rcode::NXDomain
+}
+
+fn is_timeout_error(err: &DnsError) -> bool {
+    err.to_string().to_ascii_lowercase().contains("timeout")
 }
 
 fn parse_forward_config(plugin_config: &PluginConfig) -> Result<ForwardConfig> {
@@ -379,6 +510,7 @@ impl PluginFactory for ForwardFactory {
                     tag: plugin_config.tag.clone(),
                     upstream: build_upstream(upstream_config.clone())?,
                     short_circuit,
+                    metrics: Arc::new(ForwardMetrics::new(plugin_config.tag.clone())),
                 },
             )))
         } else {
@@ -397,6 +529,7 @@ impl PluginFactory for ForwardFactory {
                     active_concurrent,
                     upstreams,
                     short_circuit,
+                    metrics: Arc::new(ForwardMetrics::new(plugin_config.tag.clone())),
                 },
             )))
         }
@@ -428,6 +561,7 @@ impl PluginFactory for ForwardFactory {
                     tag: tag.to_string(),
                     upstream: build_upstream(upstream_config)?,
                     short_circuit,
+                    metrics: Arc::new(ForwardMetrics::new(tag.to_string())),
                 },
             )))
         } else {
@@ -441,6 +575,7 @@ impl PluginFactory for ForwardFactory {
                     active_concurrent: MAX_CONCURRENT_QUERIES,
                     upstreams,
                     short_circuit,
+                    metrics: Arc::new(ForwardMetrics::new(tag.to_string())),
                 },
             )))
         }
@@ -507,6 +642,7 @@ mod tests {
     }
 
     fn make_context() -> DnsContext {
+        AppClock::start();
         let mut request = Message::new();
         request.add_question(Question::new(
             Name::from_ascii("example.com.").unwrap(),
@@ -528,8 +664,13 @@ mod tests {
         }
     }
 
+    fn test_metrics() -> Arc<ForwardMetrics> {
+        Arc::new(ForwardMetrics::new("forward-test".to_string()))
+    }
+
     #[tokio::test]
     async fn concurrent_returns_error_when_all_upstreams_fail() {
+        let metrics = test_metrics();
         let forwarder = ConcurrentForwarder {
             tag: "forward-test".to_string(),
             active_concurrent: 2,
@@ -538,6 +679,7 @@ mod tests {
                 Arc::new(MockUpstream::fail("u2 fail", Duration::ZERO)),
             ],
             short_circuit: false,
+            metrics: metrics.clone(),
         };
 
         let mut context = make_context();
@@ -548,6 +690,9 @@ mod tests {
                 .contains("failed across all concurrent upstreams")
         );
         assert!(context.response().is_none());
+        assert_eq!(metrics.query_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.error_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.latency_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -651,6 +796,7 @@ upstreams:
             active_concurrent: 1,
             upstreams: vec![Arc::new(MockUpstream::ok())],
             short_circuit: false,
+            metrics: test_metrics(),
         };
 
         let mut context = make_context();
@@ -661,16 +807,44 @@ upstreams:
 
     #[tokio::test]
     async fn single_success_stops_when_short_circuit_enabled() {
+        let metrics = test_metrics();
         let forwarder = SingleDnsForwarder {
             tag: "forward-test".to_string(),
             upstream: Box::new(MockUpstream::ok()),
             short_circuit: true,
+            metrics: metrics.clone(),
         };
 
         let mut context = make_context();
         let step = forwarder.execute(&mut context).await.unwrap();
         assert!(matches!(step, ExecStep::Stop));
         assert!(context.response().is_some());
+        assert_eq!(metrics.query_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.success_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.latency_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn single_metrics_record_error_and_timeout() {
+        let metrics = test_metrics();
+        let forwarder = SingleDnsForwarder {
+            tag: "forward-test".to_string(),
+            upstream: Box::new(MockUpstream::fail(
+                "DNS query timeout after 1s",
+                Duration::ZERO,
+            )),
+            short_circuit: false,
+            metrics: metrics.clone(),
+        };
+
+        let mut context = make_context();
+        let err = forwarder.execute(&mut context).await.unwrap_err();
+
+        assert!(err.to_string().contains("query failed"));
+        assert_eq!(metrics.query_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.error_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.timeout_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.latency_count.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
@@ -680,6 +854,7 @@ upstreams:
             active_concurrent: 1,
             upstreams: vec![Arc::new(MockUpstream::ok())],
             short_circuit: true,
+            metrics: test_metrics(),
         };
 
         let mut context = make_context();
@@ -701,6 +876,7 @@ upstreams:
                 )),
             ],
             short_circuit: false,
+            metrics: test_metrics(),
         };
 
         let mut context = make_context();
@@ -725,6 +901,7 @@ upstreams:
                 )),
             ],
             short_circuit: false,
+            metrics: test_metrics(),
         };
 
         let mut context = make_context();

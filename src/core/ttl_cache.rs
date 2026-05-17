@@ -30,6 +30,15 @@ pub struct TtlCacheEntry<V> {
     pub last_access_ms: u64,
 }
 
+/// Result of a retained-entry lookup.
+#[derive(Debug, Clone)]
+pub enum TtlCacheLookup<V> {
+    /// Entry exists and is still retained.
+    Hit(TtlCacheEntry<V>),
+    /// Entry existed but expired and was removed.
+    Expired,
+}
+
 /// Shared concurrent TTL cache.
 #[derive(Debug)]
 pub struct TtlCache<K, V>
@@ -133,13 +142,31 @@ where
     where
         V: Clone,
     {
+        match self.get_retained_cloned_status(key, now_ms, touch_interval_ms) {
+            Some(TtlCacheLookup::Hit(entry)) => Some(entry),
+            Some(TtlCacheLookup::Expired) | None => None,
+        }
+    }
+
+    /// Get one retained entry and distinguish expired entries from missing
+    /// keys while preserving the expired-entry removal behavior.
+    #[inline]
+    pub fn get_retained_cloned_status(
+        &self,
+        key: &K,
+        now_ms: u64,
+        touch_interval_ms: u64,
+    ) -> Option<TtlCacheLookup<V>>
+    where
+        V: Clone,
+    {
         let entry = self.map.get(key)?;
         if entry.expire_at_ms <= now_ms {
             drop(entry);
             let _ = self
                 .map
                 .remove_if(key, |_, existing| existing.expire_at_ms <= now_ms);
-            return None;
+            return Some(TtlCacheLookup::Expired);
         }
 
         let snapshot = TtlCacheEntry {
@@ -159,7 +186,7 @@ where
             existing.last_access_ms = now_ms;
         }
 
-        Some(snapshot)
+        Some(TtlCacheLookup::Hit(snapshot))
     }
 
     /// Remove one entry only when already expired at `now_ms`.
@@ -338,6 +365,17 @@ mod tests {
 
         // Assert
         assert!(hit.is_none());
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_get_retained_cloned_status_reports_expired_entry() {
+        let cache = TtlCache::with_capacity(4);
+        cache.insert_or_update_with_meta("k", 1u32, 10, 20, 10);
+
+        let status = cache.get_retained_cloned_status(&"k", 20, 10);
+
+        assert!(matches!(status, Some(TtlCacheLookup::Expired)));
         assert!(cache.is_empty());
     }
 

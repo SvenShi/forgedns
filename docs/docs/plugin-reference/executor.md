@@ -370,6 +370,17 @@ sidebar_position: 3
 - 多上游模式：从随机起点选择上游并发查询，先返回成功结果者胜出。
 - 开启 `short_circuit` 时，一旦拿到可用上游响应，就会立即停止后续 executor 链。
 
+### Metrics
+
+通过全局 `GET /api/metrics` 导出：
+
+- `forward_query_total`
+- `forward_success_total`
+- `forward_error_total`
+- `forward_timeout_total`
+- `forward_latency_count`
+- `forward_latency_sum_ms`
+
 ### 常见用途
 
 - 标准转发。
@@ -510,6 +521,19 @@ sidebar_position: 3
 - `POST /plugins/<tag>/load_dump`
   - 导入缓存 dump。
 
+### Metrics
+
+通过全局 `GET /api/metrics` 导出，不提供 cache 专属 stats/metrics 接口。
+
+- `cache_lookup_total`
+- `cache_hit_total{kind="fresh|stale"}`
+- `cache_miss_total`
+- `cache_expired_total`
+- `cache_insert_total`
+- `cache_skip_total{reason="truncated|no_ttl"}`
+- `cache_lazy_refresh_total{result="started|success|failed"}`
+- `cache_entry_count`
+
 ### 典型用途
 
 - 所有转发入口前置缓存。
@@ -580,6 +604,14 @@ sidebar_position: 3
 - 谁先拿到有效响应，谁赢。
 - 另一分支会被取消。
 - 开启 `short_circuit` 时，胜出分支写回响应后会直接结束后续 executor 链。
+
+### Metrics
+
+通过全局 `GET /api/metrics` 导出：
+
+- `fallback_primary_total`
+- `fallback_primary_error_total`
+- `fallback_secondary_total`
 
 ### 典型用途
 
@@ -652,6 +684,13 @@ sidebar_position: 3
 - 域名命中但请求家族没有对应地址时，返回 `NoError + 空 Answer + fake SOA`，不会透传后续执行。
 - 未命中时透传后续执行。
 - 命中后默认继续后续执行；开启 `short_circuit` 时，无论是正向答案还是空本地答复，都会立即停止后续 executor 链。
+
+### Metrics
+
+通过全局 `GET /api/metrics` 导出：
+
+- `hosts_hit_total`
+- `hosts_miss_total`
 
 ### 典型用途
 
@@ -1105,6 +1144,12 @@ sidebar_position: 3
 - 其它类型透传。
 - 命中后默认继续后续执行；开启 `short_circuit` 时会立即返回。
 
+### Metrics
+
+通过全局 `GET /api/metrics` 导出：
+
+- `blackhole_block_total`
+
 ### 典型用途
 
 - 拦截、黑洞、占位地址返回。
@@ -1410,7 +1455,7 @@ sidebar_position: 3
 - tag: metrics_main
   type: metrics_collector
   args:
-    # 指标名称标签；导出到 /metrics 时会带上它
+    # 指标名称标签；导出到 /api/metrics 时会带上它
     name: "main"
 ```
 
@@ -1440,8 +1485,8 @@ sidebar_position: 3
 
 ### API
 
-- `GET /metrics`
-  - Prometheus 文本格式。
+- `GET /api/metrics`
+  - Prometheus 文本格式，全局唯一；其它插件的内置 metrics 也会汇总到同一接口。
 
 ### 典型用途
 

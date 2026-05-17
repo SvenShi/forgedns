@@ -542,17 +542,39 @@ Notes:
 
 ### `GET /api/metrics`
 
-This endpoint is registered when the API is enabled and at least one `metrics_collector` is configured.
+This endpoint is registered when the API is enabled. It is the single Prometheus text endpoint; plugins do not expose separate stats/metrics HTTP endpoints.
 
 Current exported metrics include:
 
-* `oxidns_query_total`
-* `oxidns_query_error_total`
-* `oxidns_query_inflight`
-* `oxidns_query_latency_count`
-* `oxidns_query_latency_sum_ms`
+* `query_total`
+* `query_error_total`
+* `query_inflight`
+* `query_latency_count`
+* `query_latency_sum_ms`
+* `cache_lookup_total`
+* `cache_hit_total`
+* `cache_miss_total`
+* `cache_expired_total`
+* `cache_insert_total`
+* `cache_skip_total`
+* `cache_lazy_refresh_total`
+* `cache_entry_count`
+* `forward_query_total`
+* `forward_success_total`
+* `forward_error_total`
+* `forward_timeout_total`
+* `forward_latency_count`
+* `forward_latency_sum_ms`
+* `fallback_primary_total`
+* `fallback_primary_error_total`
+* `fallback_secondary_total`
+* `blackhole_block_total`
+* `hosts_hit_total`
+* `hosts_miss_total`
+* `ratelimit_allowed_total`
+* `ratelimit_rejected_total`
 
-These metrics carry plugin-level labels to distinguish different observation points in the policy graph.
+These metrics use low-cardinality plugin-level labels such as `plugin_tag`, `name`, `kind`, `reason`, and `result`. High-cardinality values such as qname, client IP, or upstream address are intentionally excluded from the generic metrics layer; use `query_recorder` when per-query detail is needed.
 
 ## Config Reference
 

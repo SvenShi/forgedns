@@ -314,6 +314,17 @@ Use the full plugin form for bootstrap, proxy, HTTP/3, pool settings, and other 
 - Multi-upstream mode races queries from a randomized starting point and keeps the first successful answer.
 - With `short_circuit` enabled, a successful upstream response stops the remaining executor chain immediately.
 
+### Metrics
+
+Exported through the global `GET /api/metrics` endpoint:
+
+- `forward_query_total`
+- `forward_success_total`
+- `forward_error_total`
+- `forward_timeout_total`
+- `forward_latency_count`
+- `forward_latency_sum_ms`
+
 ### Typical Uses
 
 - Standard forwarding
@@ -443,6 +454,19 @@ Provides TTL-aware response caching with negative cache support and persistence.
 - `GET /plugins/<cache_tag>/dump`
 - `POST /plugins/<cache_tag>/load_dump`
 
+### Metrics
+
+Exported through the global `GET /api/metrics` endpoint. The cache plugin does not expose a cache-specific stats/metrics endpoint.
+
+- `cache_lookup_total`
+- `cache_hit_total{kind="fresh|stale"}`
+- `cache_miss_total`
+- `cache_expired_total`
+- `cache_insert_total`
+- `cache_skip_total{reason="truncated|no_ttl"}`
+- `cache_lazy_refresh_total{result="started|success|failed"}`
+- `cache_entry_count`
+
 ### Typical Uses
 
 - Lower upstream latency
@@ -510,6 +534,14 @@ Runs a primary executor first and falls back to a secondary executor when the pr
 - Provides controlled degradation instead of unconditional double-querying.
 - Useful when one path is usually faster but another path is more complete or stable.
 - With `short_circuit` enabled, the winning branch writes its response and then immediately stops the remaining executor chain.
+
+### Metrics
+
+Exported through the global `GET /api/metrics` endpoint:
+
+- `fallback_primary_total`
+- `fallback_primary_error_total`
+- `fallback_secondary_total`
 
 ### Typical Uses
 
@@ -587,6 +619,13 @@ Rule format:
 - If the domain matches but the requested address family is missing, the plugin returns `NoError + empty answer + fake SOA` instead of passing through.
 - Non-matching queries pass through to subsequent execution.
 - By default it keeps running the remaining chain after a local response; enable `short_circuit` to stop immediately for both positive and empty local replies.
+
+### Metrics
+
+Exported through the global `GET /api/metrics` endpoint:
+
+- `hosts_hit_total`
+- `hosts_miss_total`
 
 ### Typical Uses
 
@@ -1020,6 +1059,12 @@ Returns sinkhole IPs directly.
 - Generates immediate answers that point to sinkhole addresses.
 - By default it keeps running the remaining chain after a match; enable `short_circuit` to stop immediately.
 
+### Metrics
+
+Exported through the global `GET /api/metrics` endpoint:
+
+- `blackhole_block_total`
+
 ### Typical Uses
 
 - Blocking domains
@@ -1314,7 +1359,7 @@ Collects Prometheus metrics for query handling.
 - tag: metrics_main
   type: metrics_collector
   args:
-    # Collector label exported through /metrics
+    # Collector label exported through /api/metrics
     name: "main"
 ```
 
@@ -1337,7 +1382,8 @@ Collects Prometheus metrics for query handling.
 
 ### API
 
-- `GET /metrics`
+- `GET /api/metrics`
+  - Prometheus text format. This is the single global endpoint, and built-in metrics from other plugins are exported through the same route.
 
 ### Typical Uses
 

@@ -100,5 +100,7 @@ out/
 # Crash/report files
 core
 core.*
+!src/core/
+!src/core/**
 hs_err_pid*
 replay_pid*

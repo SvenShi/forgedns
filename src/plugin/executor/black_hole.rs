@@ -16,6 +16,7 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -24,6 +25,10 @@ use serde_yaml_ng::Value;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::plugin_factory;
@@ -47,6 +52,42 @@ struct BlackHole {
     ipv4: Vec<Arc<RData>>,
     ipv6: Vec<Arc<RData>>,
     short_circuit: bool,
+    metrics: Arc<BlackHoleMetrics>,
+}
+
+#[derive(Debug)]
+struct BlackHoleMetrics {
+    tag: String,
+    block_total: AtomicU64,
+}
+
+impl BlackHoleMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            block_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for BlackHoleMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "black_hole"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "blackhole_block_total",
+            "Total black_hole synthetic responses.",
+            &labels,
+            self.block_total.load(Ordering::Relaxed),
+        ));
+    }
 }
 
 #[async_trait]
@@ -56,10 +97,11 @@ impl Plugin for BlackHole {
     }
 
     async fn init(&mut self) -> Result<()> {
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         Ok(())
     }
 }
@@ -81,6 +123,7 @@ impl Executor for BlackHole {
             _ => return Ok(ExecStep::Next),
         };
         context.set_response(response);
+        self.metrics.block_total.fetch_add(1, Ordering::Relaxed);
 
         if self.short_circuit {
             Ok(ExecStep::Stop)
@@ -109,6 +152,7 @@ impl PluginFactory for BlackHoleFactory {
             ipv4,
             ipv6,
             short_circuit,
+            metrics: Arc::new(BlackHoleMetrics::new(plugin_config.tag.clone())),
         })))
     }
 
@@ -128,6 +172,7 @@ impl PluginFactory for BlackHoleFactory {
             ipv4,
             ipv6,
             short_circuit,
+            metrics: Arc::new(BlackHoleMetrics::new(tag.to_string())),
         })))
     }
 }
@@ -261,6 +306,10 @@ mod tests {
         )
     }
 
+    fn test_metrics() -> Arc<BlackHoleMetrics> {
+        Arc::new(BlackHoleMetrics::new("bh".to_string()))
+    }
+
     #[test]
     fn test_parse_ip_tokens_validation() {
         assert!(parse_ip_tokens(vec![]).is_ok());
@@ -289,11 +338,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_black_hole_execute_generates_a_answers() {
+        let metrics = test_metrics();
         let plugin = BlackHole {
             tag: "bh".to_string(),
             ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
             short_circuit: false,
+            metrics: metrics.clone(),
         };
         let mut ctx = make_context(RecordType::A);
         let step = plugin
@@ -304,6 +355,29 @@ mod tests {
         let resp = ctx.response().expect("response should exist");
         assert_eq!(resp.answers().len(), 1);
         assert_eq!(resp.answers()[0].rr_type(), RecordType::A);
+        assert_eq!(metrics.block_total.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_black_hole_metrics_ignore_pass_through() {
+        let metrics = test_metrics();
+        let plugin = BlackHole {
+            tag: "bh".to_string(),
+            ipv4: vec![],
+            ipv6: vec![],
+            short_circuit: false,
+            metrics: metrics.clone(),
+        };
+
+        let mut ctx = make_context(RecordType::A);
+        let step = plugin
+            .execute(&mut ctx)
+            .await
+            .expect("execute should succeed");
+
+        assert!(matches!(step, ExecStep::Next));
+        assert!(ctx.response().is_none());
+        assert_eq!(metrics.block_total.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
@@ -313,6 +387,7 @@ mod tests {
             ipv4: vec![],
             ipv6: vec![Arc::new(RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)))],
             short_circuit: false,
+            metrics: test_metrics(),
         };
         let mut ctx = make_context(RecordType::AAAA);
         let step = plugin
@@ -332,6 +407,7 @@ mod tests {
             ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
             short_circuit: false,
+            metrics: test_metrics(),
         };
         let mut ctx = make_context(RecordType::A);
 
@@ -352,6 +428,7 @@ mod tests {
             ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
             short_circuit: false,
+            metrics: test_metrics(),
         };
         let mut ctx = make_context(RecordType::A);
         ctx.request.questions_mut().push(Question::new(
@@ -377,6 +454,7 @@ mod tests {
             ipv4: vec![Arc::new(RData::A(A(Ipv4Addr::new(1, 1, 1, 1))))],
             ipv6: vec![],
             short_circuit: true,
+            metrics: test_metrics(),
         };
         let mut ctx = make_context(RecordType::A);
         let step = plugin

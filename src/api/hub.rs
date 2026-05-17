@@ -10,11 +10,11 @@ use ahash::AHashMap;
 use http::Method;
 use tokio::sync::{Mutex, oneshot, watch};
 
+use crate::api::ApiHandler;
 use crate::api::health::HealthState;
 use crate::api::route::{PrefixRoute, RouteKey, build_plugin_route_path, normalize_route_path};
 use crate::api::server::{ApiServerContext, build_tls_acceptor, run_api_server};
 use crate::api::static_files::StaticFileServer;
-use crate::api::{ApiHandler, health};
 use crate::config::types::{ApiConfig, ResolvedApiHttpConfig};
 use crate::core::error::{DnsError, Result};
 use crate::network::listen::parse_listen_addr;
@@ -310,11 +310,7 @@ impl ApiHub {
             health: Arc::new(HealthState::new()),
             shutdown_tx,
             task_handle: Mutex::new(None),
-        }))
-        .inspect(|hub| {
-            health::register_builtin_routes(&ApiRegister::new(hub.clone()), hub.health.clone())
-                .expect("builtin API routes should register");
-        }))
+        })))
     }
 
     pub fn register_plugin_route(
@@ -457,6 +453,10 @@ impl ApiHub {
     pub fn mark_plugins_initialized(&self, total_plugins: usize, server_plugins: usize) {
         self.health
             .mark_plugins_initialized(total_plugins, server_plugins);
+    }
+
+    pub(crate) fn health_state(&self) -> Arc<HealthState> {
+        self.health.clone()
     }
 }
 

@@ -22,6 +22,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ahash::AHashMap;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
@@ -33,6 +34,10 @@ use serde_yaml_ng::Value;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
 use crate::plugin_factory;
@@ -93,6 +98,50 @@ struct HostsExecutor {
     tag: String,
     index: RuleIndex,
     short_circuit: bool,
+    metrics: Arc<HostsMetrics>,
+}
+
+#[derive(Debug)]
+struct HostsMetrics {
+    tag: String,
+    hit_total: AtomicU64,
+    miss_total: AtomicU64,
+}
+
+impl HostsMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            hit_total: AtomicU64::new(0),
+            miss_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for HostsMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "hosts"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "hosts_hit_total",
+            "Total hosts local response hits.",
+            &labels,
+            self.hit_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "hosts_miss_total",
+            "Total hosts pass-through misses.",
+            &labels,
+            self.miss_total.load(Ordering::Relaxed),
+        ));
+    }
 }
 
 #[derive(Debug)]
@@ -165,10 +214,11 @@ impl Plugin for HostsExecutor {
     }
 
     async fn init(&mut self) -> Result<()> {
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         Ok(())
     }
 }
@@ -178,25 +228,31 @@ impl Executor for HostsExecutor {
     #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         if context.request.questions().len() != 1 {
+            self.metrics.miss_total.fetch_add(1, Ordering::Relaxed);
             return Ok(ExecStep::Next);
         }
 
         let Some(question) = context.request.first_question() else {
+            self.metrics.miss_total.fetch_add(1, Ordering::Relaxed);
             return Ok(ExecStep::Next);
         };
         if question.qclass() != DNSClass::IN {
+            self.metrics.miss_total.fetch_add(1, Ordering::Relaxed);
             return Ok(ExecStep::Next);
         }
         if question.qtype() != RecordType::A && question.qtype() != RecordType::AAAA {
+            self.metrics.miss_total.fetch_add(1, Ordering::Relaxed);
             return Ok(ExecStep::Next);
         }
 
         let Some(answers) = self.index.match_answers(question.name().normalized()) else {
+            self.metrics.miss_total.fetch_add(1, Ordering::Relaxed);
             return Ok(ExecStep::Next);
         };
 
         let response = build_hosts_response(&context.request, question, answers)?;
         context.set_response(response);
+        self.metrics.hit_total.fetch_add(1, Ordering::Relaxed);
 
         if self.short_circuit {
             Ok(ExecStep::Stop)
@@ -224,6 +280,7 @@ impl PluginFactory for HostsFactory {
             tag: plugin_config.tag.clone(),
             index,
             short_circuit: cfg.short_circuit,
+            metrics: Arc::new(HostsMetrics::new(plugin_config.tag.clone())),
         })))
     }
 }
@@ -656,6 +713,7 @@ mod tests {
             tag: "hosts".to_string(),
             index: build_rule_index(&cfg).expect("rules should parse"),
             short_circuit: cfg.short_circuit,
+            metrics: Arc::new(HostsMetrics::new("hosts".to_string())),
         }
     }
 
@@ -679,6 +737,7 @@ mod tests {
                 .answer_ips(),
             vec![IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))]
         );
+        assert_eq!(plugin.metrics.hit_total.load(Ordering::Relaxed), 1);
 
         let mut subdomain = make_context("www.example.com.", RecordType::A);
         plugin
@@ -686,6 +745,7 @@ mod tests {
             .await
             .expect("execute should work");
         assert!(subdomain.response().is_none());
+        assert_eq!(plugin.metrics.miss_total.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

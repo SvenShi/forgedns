@@ -17,25 +17,25 @@
 //! Design goal is low overhead on hot paths: atomics with relaxed ordering and
 //! no allocation in steady-state execution.
 
-use std::fmt::Write as _;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, StatusCode};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 use tracing::debug;
 
-use crate::api::{ApiHandler, global_api_register, simple_response};
 use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
-use crate::{continue_next, plugin_factory, register_api_route};
+use crate::{continue_next, plugin_factory};
 
 const DEFAULT_NAME: &str = "default";
 
@@ -62,12 +62,6 @@ struct MetricsCollectorStats {
     latency_sum_ms: AtomicU64,
 }
 
-#[derive(Debug, Default)]
-struct MetricsExporter {
-    route_registered: AtomicU64,
-    collectors: Mutex<Vec<Arc<MetricsCollectorStats>>>,
-}
-
 #[async_trait]
 impl Plugin for MetricsCollector {
     fn tag(&self) -> &str {
@@ -75,33 +69,11 @@ impl Plugin for MetricsCollector {
     }
 
     async fn init(&mut self) -> Result<()> {
-        let exporter = metrics_exporter();
-        {
-            let mut collectors = exporter
-                .collectors
-                .lock()
-                .expect("metrics collectors poisoned");
-            collectors.push(self.stats.clone());
-        }
-        if exporter.route_registered.load(Ordering::Relaxed) == 0 && global_api_register().is_some()
-        {
-            register_api_route!(
-                GET "/metrics" => MetricsHandler {
-                    exporter: metrics_exporter().clone(),
-                },
-            )?;
-            exporter.route_registered.store(1, Ordering::Relaxed);
-        }
-        Ok(())
+        register_metric_source(self.stats.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
-        let exporter = metrics_exporter();
-        let mut collectors = exporter
-            .collectors
-            .lock()
-            .expect("metrics collectors poisoned");
-        collectors.retain(|collector| collector.tag != self.stats.tag);
+        unregister_metric_source(&self.stats.tag);
         Ok(())
     }
 }
@@ -217,95 +189,51 @@ impl MetricsCollectorStats {
     }
 }
 
-#[derive(Debug)]
-struct MetricsHandler {
-    exporter: Arc<MetricsExporter>,
-}
-
-#[async_trait]
-impl ApiHandler for MetricsHandler {
-    async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
-        let body = render_prometheus_metrics(&self.exporter);
-        let mut response = simple_response(StatusCode::OK, Bytes::from(body));
-        response.headers_mut().insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
-        );
-        response
-    }
-}
-
-fn metrics_exporter() -> &'static Arc<MetricsExporter> {
-    static EXPORTER: OnceLock<Arc<MetricsExporter>> = OnceLock::new();
-    EXPORTER.get_or_init(|| Arc::new(MetricsExporter::default()))
-}
-
-fn render_prometheus_metrics(exporter: &MetricsExporter) -> String {
-    let collectors = exporter
-        .collectors
-        .lock()
-        .expect("metrics collectors poisoned");
-    let mut out = String::new();
-    out.push_str("# HELP oxidns_query_total Total DNS queries observed by metrics_collector.\n");
-    out.push_str("# TYPE oxidns_query_total counter\n");
-    out.push_str("# HELP oxidns_query_error_total Total DNS queries without a response.\n");
-    out.push_str("# TYPE oxidns_query_error_total counter\n");
-    out.push_str("# HELP oxidns_query_inflight Current number of inflight DNS queries.\n");
-    out.push_str("# TYPE oxidns_query_inflight gauge\n");
-    out.push_str("# HELP oxidns_query_latency_count Total completed queries included in latency statistics.\n");
-    out.push_str("# TYPE oxidns_query_latency_count counter\n");
-    out.push_str(
-        "# HELP oxidns_query_latency_sum_ms Total latency in milliseconds for completed queries.\n",
-    );
-    out.push_str("# TYPE oxidns_query_latency_sum_ms counter\n");
-
-    for collector in collectors.iter() {
-        let labels = format!(
-            "plugin_tag=\"{}\",name=\"{}\"",
-            escape_label_value(&collector.tag),
-            escape_label_value(&collector.name)
-        );
-        let _ = writeln!(
-            out,
-            "oxidns_query_total{{{labels}}} {}",
-            collector.query_total.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            out,
-            "oxidns_query_error_total{{{labels}}} {}",
-            collector.err_total.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            out,
-            "oxidns_query_inflight{{{labels}}} {}",
-            collector.inflight.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            out,
-            "oxidns_query_latency_count{{{labels}}} {}",
-            collector.latency_count.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            out,
-            "oxidns_query_latency_sum_ms{{{labels}}} {}",
-            collector.latency_sum_ms.load(Ordering::Relaxed)
-        );
+impl MetricSource for MetricsCollectorStats {
+    fn tag(&self) -> &str {
+        &self.tag
     }
 
-    out
-}
-
-fn escape_label_value(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            _ => out.push(ch),
-        }
+    fn plugin_type(&self) -> &'static str {
+        "metrics_collector"
     }
-    out
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("name", self.name.as_str()),
+        ];
+        sink.emit(MetricSample::counter(
+            "query_total",
+            "Total DNS queries observed by metrics_collector.",
+            &labels,
+            self.query_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "query_error_total",
+            "Total DNS queries without a response.",
+            &labels,
+            self.err_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::gauge(
+            "query_inflight",
+            "Current number of inflight DNS queries.",
+            &labels,
+            self.inflight.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "query_latency_count",
+            "Total completed queries included in latency statistics.",
+            &labels,
+            self.latency_count.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "query_latency_sum_ms",
+            "Total latency in milliseconds for completed queries.",
+            &labels,
+            self.latency_sum_ms.load(Ordering::Relaxed),
+        ));
+    }
 }
 
 fn parse_name(args: Option<Value>) -> Option<String> {
@@ -389,7 +317,8 @@ mod tests {
 
     #[test]
     fn test_render_prometheus_metrics_includes_labels_and_values() {
-        let exporter = MetricsExporter::default();
+        let _guard = crate::core::metrics::metrics_test_guard();
+        crate::core::metrics::reset_metrics_for_tests();
         let stats = Arc::new(MetricsCollectorStats::new(
             "metrics_main".to_string(),
             "default".to_string(),
@@ -399,24 +328,14 @@ mod tests {
         stats.inflight.store(2, Ordering::Relaxed);
         stats.latency_count.store(2, Ordering::Relaxed);
         stats.latency_sum_ms.store(15, Ordering::Relaxed);
-        exporter
-            .collectors
-            .lock()
-            .expect("metrics collectors poisoned")
-            .push(stats);
+        register_metric_source(stats).expect("metric source should register");
 
-        let output = render_prometheus_metrics(&exporter);
+        let output = crate::core::metrics::render_prometheus_metrics();
+        assert!(output.contains("query_total{plugin_tag=\"metrics_main\",name=\"default\"} 3"));
         assert!(
-            output.contains("oxidns_query_total{plugin_tag=\"metrics_main\",name=\"default\"} 3")
+            output.contains("query_error_total{plugin_tag=\"metrics_main\",name=\"default\"} 1")
         );
-        assert!(
-            output.contains(
-                "oxidns_query_error_total{plugin_tag=\"metrics_main\",name=\"default\"} 1"
-            )
-        );
-        assert!(
-            output
-                .contains("oxidns_query_inflight{plugin_tag=\"metrics_main\",name=\"default\"} 2")
-        );
+        assert!(output.contains("query_inflight{plugin_tag=\"metrics_main\",name=\"default\"} 2"));
+        crate::core::metrics::reset_metrics_for_tests();
     }
 }

@@ -542,17 +542,39 @@ GET /api/plugins/reverse_lookup_main?ip=8.8.8.8
 
 ### `GET /api/metrics`
 
-当配置了至少一个 `metrics_collector` 且 API 已启用时，会注册该接口。
+当 API 启用时会注册该接口。该接口是唯一的 Prometheus 文本入口；插件不会额外暴露独立的 stats/metrics HTTP 接口。
 
 当前导出的指标包括：
 
-* `oxidns_query_total`
-* `oxidns_query_error_total`
-* `oxidns_query_inflight`
-* `oxidns_query_latency_count`
-* `oxidns_query_latency_sum_ms`
+* `query_total`
+* `query_error_total`
+* `query_inflight`
+* `query_latency_count`
+* `query_latency_sum_ms`
+* `cache_lookup_total`
+* `cache_hit_total`
+* `cache_miss_total`
+* `cache_expired_total`
+* `cache_insert_total`
+* `cache_skip_total`
+* `cache_lazy_refresh_total`
+* `cache_entry_count`
+* `forward_query_total`
+* `forward_success_total`
+* `forward_error_total`
+* `forward_timeout_total`
+* `forward_latency_count`
+* `forward_latency_sum_ms`
+* `fallback_primary_total`
+* `fallback_primary_error_total`
+* `fallback_secondary_total`
+* `blackhole_block_total`
+* `hosts_hit_total`
+* `hosts_miss_total`
+* `ratelimit_allowed_total`
+* `ratelimit_rejected_total`
 
-这些指标带有插件级标签信息，可用于区分不同流水线观测点。
+这些指标带有低基数插件级标签，例如 `plugin_tag`、`name`、`kind`、`reason`、`result`。域名、客户端 IP、上游地址等高基数字段不会进入通用指标层；需要逐条查询明细时请使用 `query_recorder`。
 
 ## 配置参考
 

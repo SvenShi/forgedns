@@ -20,7 +20,7 @@
 //! - `destroy` stops cleanup task and releases background resources.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,6 +32,10 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::matcher::Matcher;
@@ -73,6 +77,50 @@ struct RateLimiter {
     buckets: TtlCache<IpAddr, Bucket>,
     cleanup_started: AtomicBool,
     cleanup_task_id: Mutex<Option<u64>>,
+    metrics: Arc<RateLimiterMetrics>,
+}
+
+#[derive(Debug)]
+struct RateLimiterMetrics {
+    tag: String,
+    allowed_total: AtomicU64,
+    rejected_total: AtomicU64,
+}
+
+impl RateLimiterMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            allowed_total: AtomicU64::new(0),
+            rejected_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for RateLimiterMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "rate_limiter"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "ratelimit_allowed_total",
+            "Total rate_limiter allowed matches.",
+            &labels,
+            self.allowed_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "ratelimit_rejected_total",
+            "Total rate_limiter rejected matches.",
+            &labels,
+            self.rejected_total.load(Ordering::Relaxed),
+        ));
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +146,7 @@ impl PluginFactory for RateLimiterFactory {
             buckets: TtlCache::with_capacity(4096),
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: Mutex::new(None),
+            metrics: Arc::new(RateLimiterMetrics::new(plugin_config.tag.clone())),
         })))
     }
 
@@ -119,6 +168,7 @@ impl PluginFactory for RateLimiterFactory {
             buckets: TtlCache::with_capacity(4096),
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: Mutex::new(None),
+            metrics: Arc::new(RateLimiterMetrics::new(tag.to_string())),
         })))
     }
 }
@@ -130,6 +180,7 @@ impl Plugin for RateLimiter {
     }
 
     async fn init(&mut self) -> DnsResult<()> {
+        register_metric_source(self.metrics.clone())?;
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
             return Ok(());
         }
@@ -153,6 +204,7 @@ impl Plugin for RateLimiter {
     }
 
     async fn destroy(&self) -> DnsResult<()> {
+        unregister_metric_source(&self.tag);
         let task_id = if let Ok(mut guard) = self.cleanup_task_id.lock() {
             guard.take()
         } else {
@@ -171,6 +223,7 @@ impl Matcher for RateLimiter {
     fn is_match(&self, context: &mut DnsContext) -> bool {
         let masked = mask_ip(context.peer_addr().ip(), self.mask4, self.mask6);
         let Some(masked) = masked else {
+            self.metrics.allowed_total.fetch_add(1, Ordering::Relaxed);
             return true;
         };
 
@@ -189,10 +242,12 @@ impl Matcher for RateLimiter {
                 bucket.tokens -= 1.0;
                 self.buckets
                     .insert_or_update(masked, bucket, now, expire_at_ms);
+                self.metrics.allowed_total.fetch_add(1, Ordering::Relaxed);
                 true
             } else {
                 self.buckets
                     .insert_or_update(masked, bucket, now, expire_at_ms);
+                self.metrics.rejected_total.fetch_add(1, Ordering::Relaxed);
                 false
             }
         } else {
@@ -206,6 +261,7 @@ impl Matcher for RateLimiter {
                 now,
                 expire_at_ms,
             );
+            self.metrics.allowed_total.fetch_add(1, Ordering::Relaxed);
             true
         }
     }
@@ -349,6 +405,7 @@ mod tests {
 
     #[test]
     fn test_rate_limiter_consumes_tokens_and_blocks_when_exhausted() {
+        let metrics = Arc::new(RateLimiterMetrics::new("rl".to_string()));
         let limiter = RateLimiter {
             tag: "rl".to_string(),
             qps: 1.0,
@@ -358,11 +415,14 @@ mod tests {
             buckets: TtlCache::with_capacity(16),
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: Mutex::new(None),
+            metrics: metrics.clone(),
         };
 
         let mut ctx = make_context(Ipv4Addr::new(10, 0, 0, 1));
         assert!(limiter.is_match(&mut ctx));
         assert!(!limiter.is_match(&mut ctx));
+        assert_eq!(metrics.allowed_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.rejected_total.load(Ordering::Relaxed), 1);
     }
 
     #[test]

@@ -653,6 +653,13 @@ Prefer the full configuration so `qps`, `burst`, and `mask` stay explicit.
 - Applies rate limiting per source prefix rather than only per exact IP.
 - Useful for protecting upstreams or constraining abusive traffic.
 
+### Metrics
+
+Exported through the global `GET /api/metrics` endpoint:
+
+- `ratelimit_allowed_total`
+- `ratelimit_rejected_total`
+
 ### Typical Uses
 
 - Query throttling.

@@ -27,11 +27,14 @@ mod global;
 mod handler;
 pub mod health;
 mod hub;
+mod metrics;
 mod request;
 mod response;
 mod route;
 mod server;
 mod static_files;
+
+use std::sync::Arc;
 
 #[cfg(test)]
 pub(super) use auth::is_authorized;
@@ -45,6 +48,31 @@ pub(super) use request::{rewrite_request_path, strip_api_prefix};
 pub use response::{json_error, json_ok, json_response, simple_response, streaming_response};
 #[cfg(test)]
 pub(super) use route::build_plugin_route_path;
+
+use crate::core::error::Result;
+
+/// Register process-wide API routes that do not depend on application control
+/// state.
+///
+/// Plugin-scoped routes are still registered by each plugin under
+/// `/plugins/<tag>/...`; this function is only for global API surfaces such as
+/// health and metrics.
+pub fn register_builtin_routes(hub: &Arc<ApiHub>) -> Result<()> {
+    let register = ApiRegister::new(hub.clone());
+    health::register_builtin_routes(&register, hub.health_state())?;
+    metrics::register_builtin_routes(&register)?;
+    Ok(())
+}
+
+/// Register process-wide control routes that need the application controller.
+pub fn register_control_routes(
+    hub: &Arc<ApiHub>,
+    controller: Arc<control::AppController>,
+) -> Result<()> {
+    let register = ApiRegister::new(hub.clone());
+    control::register_builtin_routes(&register, controller)?;
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests;

@@ -674,6 +674,7 @@ mod tests {
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
+    use crate::api::{clear_global_api_register, global_api_test_guard};
     use crate::config::types::PluginConfig;
     use crate::plugin::dependency::{
         DependencyGraphEdge, DependencyGraphNode, DependencyGraphReport, DependencySpec,
@@ -1071,6 +1072,7 @@ mod tests {
         let subscriber = tracing_subscriber::fmt()
             .with_writer(logs.clone())
             .without_time()
+            .with_max_level(tracing::Level::WARN)
             .with_target(false)
             .with_ansi(false)
             .finish();
@@ -1090,11 +1092,23 @@ mod tests {
             "unused provider should not be created"
         );
         let output = logs.contents();
-        assert!(output.contains("WARN"));
-        assert!(output.contains("orphan_provider"));
-        assert!(output.contains("capture_provider"));
-        assert!(output.contains("no live dependents"));
-        assert!(output.contains("skipped provider initialization"));
+        assert!(output.contains("WARN"), "captured logs: {output}");
+        assert!(
+            output.contains("orphan_provider"),
+            "captured logs: {output}"
+        );
+        assert!(
+            output.contains("capture_provider"),
+            "captured logs: {output}"
+        );
+        assert!(
+            output.contains("no live dependents"),
+            "captured logs: {output}"
+        );
+        assert!(
+            output.contains("skipped provider initialization"),
+            "captured logs: {output}"
+        );
 
         registry.destory().await;
     }
@@ -1163,6 +1177,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_reload_provider_calls_runtime_provider_reload() {
+        let _guard = global_api_test_guard().await;
+        clear_global_api_register();
         let reload_count = Arc::new(AtomicUsize::new(0));
         let mut registry = PluginRegistry::new();
         registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
@@ -1201,10 +1217,13 @@ mod tests {
         assert_eq!(reload_count.load(Ordering::Relaxed), 1);
 
         registry.destory().await;
+        clear_global_api_register();
     }
 
     #[tokio::test]
     async fn test_reload_provider_rejects_non_provider_and_missing_tags() {
+        let _guard = global_api_test_guard().await;
+        clear_global_api_register();
         let reload_count = Arc::new(AtomicUsize::new(0));
         let mut registry = PluginRegistry::new();
         registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
@@ -1247,5 +1266,6 @@ mod tests {
         assert!(err.to_string().contains("is not loaded"));
 
         registry.destory().await;
+        clear_global_api_register();
     }
 }

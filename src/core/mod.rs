@@ -10,6 +10,7 @@
 //! - [`context`]: [`context::DnsContext`] and related state passed through the
 //!   plugin pipeline during request execution.
 //! - [`error`]: common error types and result aliases.
+//! - [`metrics`]: shared low-overhead plugin metrics registry and renderer.
 //! - [`rule_matcher`]: reusable domain and string matching helpers.
 //! - [`task_center`]: shared async task orchestration helpers.
 //! - [`ttl_cache`]: concurrent TTL-aware cache building block.
@@ -20,6 +21,7 @@
 pub mod app_clock;
 pub mod context;
 pub mod error;
+pub mod metrics;
 pub mod rule_matcher;
 pub mod system_utils;
 pub mod task_center;
