@@ -5,6 +5,11 @@
 //!
 //! This executor reloads one or more provider plugins in place using their
 //! existing runtime configuration, without rebuilding the full application.
+//!
+//! Provider reload is resolved through the process-wide runtime manager. During
+//! a runtime swap, an in-flight request from an older runtime reloads providers
+//! in the current runtime; if no runtime is currently installed, execution
+//! fails with the manager-level initialization error.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

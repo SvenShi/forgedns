@@ -596,7 +596,7 @@ plugins:
     );
     assert!(registry.get_plugin("debug").is_some());
 
-    registry.destory().await;
+    registry.destroy().await;
     assert_eq!(registry.plugin_count(), 0, "plugins should be destroyed");
     Ok(())
 }
@@ -633,7 +633,7 @@ plugins:
     assert_eq!(sequence.plugin_type, PluginType::Executor);
     assert_eq!(sequence.plugin_name, "sequence");
 
-    registry.destory().await;
+    registry.destroy().await;
     assert_eq!(registry.plugin_count(), 0);
     Ok(())
 }
@@ -739,7 +739,7 @@ plugins:
     assert!(matches!(step, ExecStep::Stop));
     assert!(context.response().is_none());
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -780,7 +780,7 @@ plugins:
         Rcode::ServFail
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -900,7 +900,7 @@ plugins:
         Rcode::ServFail
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -941,7 +941,7 @@ plugins:
     assert!(!context.marks().contains(&4));
     assert!(context.response().is_none());
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -988,7 +988,7 @@ plugins:
         Rcode::Refused
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1028,7 +1028,7 @@ plugins:
     assert!(!context.marks().contains(&3));
     assert!(context.marks().contains(&4));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1068,7 +1068,7 @@ plugins:
     assert!(!context.marks().contains(&3));
     assert!(!context.marks().contains(&4));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1108,7 +1108,7 @@ plugins:
     assert!(!context.marks().contains(&3));
     assert!(!context.marks().contains(&4));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1153,7 +1153,7 @@ plugins:
         Rcode::NoError
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1194,7 +1194,7 @@ plugins:
     let (registry, listen) =
         registry_and_addr.expect("UDP server should bind to a local port within retry budget");
     let response_result = exchange_udp_query(listen, "example.test.").await;
-    registry.destory().await;
+    registry.destroy().await;
     let response = response_result?;
 
     assert_eq!(response.id(), 0x1234);
@@ -1251,7 +1251,7 @@ plugins:
     let (registry, listen) =
         registry_and_addr.expect("UDP server should bind to a local port within retry budget");
     let response_result = exchange_udp_query(listen, "example.test.").await;
-    registry.destory().await;
+    registry.destroy().await;
     let response = response_result?;
 
     assert_eq!(response.rcode(), Rcode::NoError);
@@ -1307,7 +1307,7 @@ plugins:
     let (registry, listen) =
         registry_and_addr.expect("UDP server should bind to a local port within retry budget");
     let response_result = exchange_udp_query(listen, "example.test.").await;
-    registry.destory().await;
+    registry.destroy().await;
     let response = response_result?;
 
     assert_eq!(response.rcode(), Rcode::NoError);
@@ -1362,7 +1362,7 @@ plugins:
         registry_and_addr.expect("UDP server should bind to a local port within retry budget");
     let response_result =
         exchange_udp_query_with_qtype(listen, "example.test.", RecordType::AAAA).await;
-    registry.destory().await;
+    registry.destroy().await;
     let response = response_result?;
 
     assert_eq!(response.rcode(), Rcode::NoError);
@@ -1418,7 +1418,7 @@ plugins:
         Rcode::NoError
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1441,7 +1441,7 @@ plugins:
     assert_eq!(registry.plugin_count(), 0);
     assert!(registry.get_plugin("orphan_domain").is_none());
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1472,7 +1472,7 @@ plugins:
     assert!(registry.get_plugin("shared_domain").is_none());
     assert!(registry.get_plugin("combined_domain").is_none());
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1517,7 +1517,7 @@ plugins:
     let mut missing_ctx = make_context(registry.clone(), "missing.example.");
     assert!(!matcher.is_match(&mut missing_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1574,7 +1574,7 @@ plugins:
         make_context_with_qtype(registry.clone(), "ipv6-only.example.", RecordType::AAAA);
     assert!(question_matcher.is_match(&mut aaaa_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1628,7 +1628,7 @@ plugins:
         assert!(!matcher.is_match(&mut ctx), "{qname} should not match");
     }
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1676,7 +1676,7 @@ plugins:
     missing_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(198, 51, 101, 1), 5300)));
     assert!(!matcher.is_match(&mut missing_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1730,7 +1730,7 @@ plugins:
         assert!(!matcher.is_match(&mut ctx), "{ip} should not match");
     }
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1770,7 +1770,7 @@ plugins:
     foreign_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(8, 8, 8, 8), 5300)));
     assert!(!matcher.is_match(&mut foreign_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1808,7 +1808,7 @@ plugins:
     foreign_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(8, 8, 8, 8), 5300)));
     assert!(matcher.is_match(&mut foreign_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1858,7 +1858,7 @@ plugins:
     let mut question_ctx = make_context_with_qtype(registry.clone(), "a.ppy.sh.", RecordType::A);
     assert!(question_matcher.is_match(&mut question_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1894,7 +1894,7 @@ plugins:
     let mut foreign_ctx = make_context(registry.clone(), "a.ppy.sh.");
     assert!(matcher.is_match(&mut foreign_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -1935,7 +1935,7 @@ plugins:
     let mut global_ctx = make_context(registry.clone(), "mastercard.com.");
     assert!(!matcher.is_match(&mut global_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2005,7 +2005,7 @@ plugins:
     let mut foreign_ctx = make_context(registry.clone(), "a.ppy.sh.");
     assert!(question_matcher.is_match(&mut foreign_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2079,7 +2079,7 @@ plugins:
     let mut inline_domain_ctx = make_context(registry.clone(), "custom.example.");
     assert!(domain_matcher.is_match(&mut inline_domain_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2139,7 +2139,7 @@ plugins:
     let mut new_ctx = make_context(registry.clone(), "new.example.");
     assert!(matcher.is_match(&mut new_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2205,7 +2205,7 @@ plugins:
     new_ctx.set_peer_addr(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 8), 5300)));
     assert!(matcher.is_match(&mut new_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2265,7 +2265,7 @@ plugins:
     let mut new_ctx = make_context(registry.clone(), "new.example.");
     assert!(matcher.is_match(&mut new_ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2443,7 +2443,7 @@ plugins:
         Rcode::ServFail
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2485,7 +2485,7 @@ plugins:
         "qname should use name-only projection and ignore dnstype-only rules"
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2647,7 +2647,7 @@ plugins:
     ));
     assert_rejected("unsupported_modifier", &unsupported_modifier);
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2690,7 +2690,7 @@ plugins:
 
     assert!(matcher.is_match(&mut ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2804,7 +2804,7 @@ plugins:
             .plugin_name,
         "cron"
     );
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2836,7 +2836,7 @@ plugins:
             .plugin_name,
         "cron"
     );
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -2993,7 +2993,7 @@ plugins:
         "download-ok"
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3038,7 +3038,7 @@ plugins:
         "proxied-download"
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3103,7 +3103,7 @@ plugins:
     let mut ctx = make_context(registry.clone(), "265.com.");
     assert!(matcher.is_match(&mut ctx));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3143,7 +3143,7 @@ plugins:
         "quick-setup"
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3224,7 +3224,7 @@ plugins:
     assert!(output.contains("RESP_IP=192.0.2.1"));
     assert!(output.contains("CRON_JOB=nightly"));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3268,7 +3268,7 @@ plugins:
     let step = executor.execute(&mut context).await?;
 
     assert!(matches!(step, ExecStep::Next));
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3311,7 +3311,7 @@ plugins:
     let step = executor.execute(&mut context).await?;
 
     assert!(matches!(step, ExecStep::Stop));
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3357,7 +3357,7 @@ plugins:
         .expect_err("fail mode should return error");
 
     assert!(err.to_string().contains("script plugin"));
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3419,7 +3419,7 @@ plugins:
             .contains("name=example.com")
     );
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3478,7 +3478,7 @@ plugins:
     assert_eq!(body["rcode"], "NoError");
     assert_eq!(body["resp_ip"], "192.0.2.1");
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3521,7 +3521,7 @@ plugins:
     assert_eq!(captured.header("content-type"), Some("text/plain"));
     assert_eq!(captured.body_text(), "q=example.com&client=127.0.0.1");
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3572,7 +3572,7 @@ plugins:
     assert_eq!(form.get("client").map(String::as_str), Some("127.0.0.1"));
     assert_eq!(form.get("name").map(String::as_str), Some("example.com"));
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3615,7 +3615,7 @@ plugins:
     assert_eq!(first.path, "/start");
     assert_eq!(second.path, "/final");
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3657,7 +3657,7 @@ plugins:
     let captured = wait_for_captured_request(&mut rx).await?;
     assert_eq!(captured.path, "/proxy");
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3693,7 +3693,7 @@ plugins:
             .to_executor();
         let mut context = make_context(registry.clone(), "example.com.");
         let result = executor.execute(&mut context).await;
-        registry.destory().await;
+        registry.destroy().await;
         Ok(result)
     }
 
@@ -3747,7 +3747,7 @@ plugins:
     assert_eq!(captured.method, "POST");
     assert_eq!(captured.body_text(), "example.com");
 
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3790,7 +3790,7 @@ plugins:
     }
 
     assert!(saw_stop, "async queue should eventually become full");
-    registry.destory().await;
+    registry.destroy().await;
     Ok(())
 }
 
@@ -3819,7 +3819,7 @@ plugins:
         .expect("http_request plugin should exist")
         .to_executor();
 
-    registry.destory().await;
+    registry.destroy().await;
 
     let mut context = make_context(registry.clone(), "example.com.");
     let step = executor.execute(&mut context).await?;
@@ -3878,7 +3878,7 @@ plugins:
     let response_result = exchange_udp_query(listen, "example.test.").await;
     let kernel_result =
         wait_for_command_output_contains("ipset", &["list", &set_name], "192.0.2.0/24").await;
-    registry.destory().await;
+    registry.destroy().await;
 
     let response = response_result?;
     assert_eq!(response.rcode(), Rcode::NoError);
@@ -3958,7 +3958,7 @@ plugins:
         "192.0.2.0/24",
     )
     .await;
-    registry.destory().await;
+    registry.destroy().await;
 
     let response = response_result?;
     assert_eq!(response.rcode(), Rcode::NoError);

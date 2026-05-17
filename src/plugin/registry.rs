@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use dashmap::DashMap;
 use tokio::sync::Mutex as AsyncMutex;
@@ -26,6 +26,32 @@ use crate::plugin::{
     FactoryRegistration, PluginCreateContext, PluginDependent, PluginFactory, PluginHolder,
     PluginInfo, PluginType, dependency_kind_from_module_path,
 };
+
+// The lock helpers below recover the guarded value on poison instead of
+// propagating the poison. Every critical section in this module is a tiny,
+// panic-free state swap (replace/take/clone/clear); a thread panicking while
+// holding one of these locks must not permanently brick runtime swapping or
+// silently turn a failed `init_runtime` install into a success.
+fn lock_mutex<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| {
+        error!("plugin registry mutex was poisoned; recovering guarded state");
+        poisoned.into_inner()
+    })
+}
+
+fn read_rwlock<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(|poisoned| {
+        error!("plugin registry RwLock was poisoned during read; recovering guarded state");
+        poisoned.into_inner()
+    })
+}
+
+fn write_rwlock<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(|poisoned| {
+        error!("plugin registry RwLock was poisoned during write; recovering guarded state");
+        poisoned.into_inner()
+    })
+}
 
 #[cfg(debug_assertions)]
 #[derive(Debug)]
@@ -100,14 +126,26 @@ impl PluginCatalog {
     }
 }
 
-static GLOBAL_CATALOG: OnceLock<PluginCatalog> = OnceLock::new();
+static GLOBAL_CATALOG: OnceLock<std::result::Result<PluginCatalog, String>> = OnceLock::new();
 
-pub fn global_catalog() -> &'static PluginCatalog {
-    GLOBAL_CATALOG.get_or_init(|| {
-        PluginCatalog::from_inventory().expect("plugin catalog inventory should be valid")
-    })
+pub fn try_global_catalog() -> Result<&'static PluginCatalog> {
+    match GLOBAL_CATALOG
+        .get_or_init(|| PluginCatalog::from_inventory().map_err(|err| err.to_string()))
+    {
+        Ok(catalog) => Ok(catalog),
+        Err(message) => Err(DnsError::plugin(format!(
+            "plugin catalog inventory is invalid: {message}"
+        ))),
+    }
 }
 
+pub fn global_catalog() -> &'static PluginCatalog {
+    try_global_catalog().expect("plugin catalog inventory should be valid")
+}
+
+/// Build-time and runtime currently share the same concrete registry
+/// implementation; the aliases document intent while the registry split is
+/// still represented structurally by lifecycle ownership.
 pub type PluginBuildSession = PluginRegistry;
 pub type PluginRuntime = PluginRegistry;
 
@@ -128,7 +166,7 @@ impl PluginRuntimeManager {
     }
 
     pub fn current_runtime(&self) -> Option<Arc<PluginRuntime>> {
-        self.current.read().ok().and_then(|guard| guard.clone())
+        read_rwlock(&self.current).clone()
     }
 
     pub async fn init_runtime(&self, config: Config) -> Result<Arc<PluginRuntime>> {
@@ -142,21 +180,17 @@ impl PluginRuntimeManager {
         let mut candidate = PluginRegistry::new();
         #[cfg(debug_assertions)]
         candidate.set_test_runtime_guard(test_guard);
-        candidate.load_catalog(global_catalog());
-        if let Some(controller) = self.controller() {
-            candidate.set_controller(controller);
-        }
+        candidate.load_catalog(try_global_catalog()?);
         let candidate = Arc::new(candidate);
         if let Err(err) = candidate.clone().init_plugins(config.plugins).await {
             candidate.destroy().await;
             return Err(err);
         }
 
-        let previous = self
-            .current
-            .write()
-            .ok()
-            .and_then(|mut guard| guard.replace(candidate.clone()));
+        // Poison-tolerant swap: the install must always succeed once the
+        // candidate is built, otherwise a failed swap would masquerade as a
+        // successful reload while readers keep seeing the old/empty runtime.
+        let previous = write_rwlock(&self.current).replace(candidate.clone());
         if let Some(previous) = previous {
             previous.destroy().await;
         }
@@ -165,32 +199,25 @@ impl PluginRuntimeManager {
 
     pub async fn destroy_runtime(&self) {
         let _guard = self.lifecycle.lock().await;
-        let previous = self.current.write().ok().and_then(|mut guard| guard.take());
+        let previous = write_rwlock(&self.current).take();
         if let Some(previous) = previous {
             previous.destroy().await;
         }
     }
 
+    /// The manager is the single authoritative owner of the application
+    /// controller. Runtimes never carry their own copy, so swapping a runtime
+    /// can neither lose nor race the controller.
     pub fn set_controller(&self, controller: Arc<AppController>) {
-        if let Ok(mut guard) = self.controller.lock() {
-            *guard = Some(controller.clone());
-        }
-        if let Some(runtime) = self.current_runtime() {
-            runtime.set_controller(controller);
-        }
+        *lock_mutex(&self.controller) = Some(controller);
     }
 
     pub fn clear_controller(&self) {
-        if let Ok(mut guard) = self.controller.lock() {
-            *guard = None;
-        }
-        if let Some(runtime) = self.current_runtime() {
-            runtime.clear_controller();
-        }
+        *lock_mutex(&self.controller) = None;
     }
 
     fn controller(&self) -> Option<Arc<AppController>> {
-        self.controller.lock().ok().and_then(|guard| guard.clone())
+        lock_mutex(&self.controller).clone()
     }
 
     pub fn request_app_reload(&self) -> Result<()> {
@@ -227,11 +254,7 @@ impl PluginRuntimeManager {
     #[cfg(test)]
     async fn set_current_runtime_for_test(&self, runtime: Arc<PluginRuntime>) {
         let _guard = self.lifecycle.lock().await;
-        let previous = self
-            .current
-            .write()
-            .ok()
-            .and_then(|mut guard| guard.replace(runtime));
+        let previous = write_rwlock(&self.current).replace(runtime);
         if let Some(previous) = previous {
             previous.destroy().await;
         }
@@ -464,10 +487,6 @@ pub async fn set_current_runtime_for_test(runtime: Arc<PluginRuntime>) {
 /// - Proper dependency injection
 #[derive(Debug)]
 pub struct PluginRegistry {
-    /// Optional application controller used by plugins that need to trigger
-    /// process-level control actions such as a full configuration reload.
-    controller: Mutex<Option<Arc<AppController>>>,
-
     /// Map of plugin type names to their factory implementations
     factories: HashMap<String, Box<dyn PluginFactory>>,
 
@@ -492,7 +511,6 @@ impl PluginRegistry {
     /// Create a new empty plugin registry
     pub fn new() -> Self {
         Self {
-            controller: Mutex::new(None),
             factories: HashMap::new(),
             factory_kinds: HashMap::new(),
             plugins: DashMap::new(),
@@ -715,9 +733,7 @@ impl PluginRegistry {
             if plugin_type == PluginType::Provider {
                 register_reload_api_route(self.clone(), &plugin_config.tag)?;
             }
-            if let Ok(mut order) = self.init_order.lock() {
-                order.push(plugin_config.tag.clone());
-            }
+            lock_mutex(&self.init_order).push(plugin_config.tag.clone());
         }
 
         info!("All plugins initialized successfully");
@@ -754,39 +770,6 @@ impl PluginRegistry {
     /// Get a plugin instance by tag
     pub fn get_plugin(&self, tag: &str) -> Option<Arc<PluginInfo>> {
         self.plugins.get(tag).map(|entry| entry.clone())
-    }
-
-    /// Attach the application controller after the registry has been assembled.
-    pub fn set_controller(&self, controller: Arc<AppController>) {
-        if let Ok(mut guard) = self.controller.lock() {
-            *guard = Some(controller);
-        }
-    }
-
-    pub fn clear_controller(&self) {
-        if let Ok(mut guard) = self.controller.lock() {
-            *guard = None;
-        }
-    }
-
-    /// Get the application controller if the registry was assembled with one.
-    pub fn controller(&self) -> Option<Arc<AppController>> {
-        self.controller.lock().ok().and_then(|guard| guard.clone())
-    }
-
-    /// Request the same full reload flow used by the management control API.
-    pub fn request_app_reload(&self) -> Result<()> {
-        let controller = self.controller().ok_or_else(|| {
-            DnsError::plugin("reload executor requires application control context")
-        })?;
-        controller.request_reload().map_err(|err| match err {
-            ControlRequestError::ReloadBusy => {
-                DnsError::plugin("reload is already pending or in progress")
-            }
-            ControlRequestError::CommandChannelClosed => {
-                DnsError::plugin("application reload command channel is closed")
-            }
-        })
     }
 
     #[hotpath::measure]
@@ -964,11 +947,7 @@ impl PluginRegistry {
 
     /// Destroy all initialized plugins in reverse init order
     pub async fn destroy(&self) {
-        let order = self
-            .init_order
-            .lock()
-            .map(|order| order.clone())
-            .unwrap_or_default();
+        let order = lock_mutex(&self.init_order).clone();
 
         if order.is_empty() {
             #[cfg(debug_assertions)]
@@ -991,23 +970,15 @@ impl PluginRegistry {
             }
         }
 
-        if let Ok(mut order) = self.init_order.lock() {
-            order.clear();
-        }
+        lock_mutex(&self.init_order).clear();
         #[cfg(debug_assertions)]
         self.release_test_runtime_guard();
         info!("All plugins destroyed");
     }
 
-    pub async fn destory(&self) {
-        self.destroy().await;
-    }
-
     #[cfg(debug_assertions)]
     fn release_test_runtime_guard(&self) {
-        if let Ok(mut slot) = self.test_runtime_guard.lock() {
-            *slot = None;
-        }
+        *lock_mutex(&self.test_runtime_guard) = None;
     }
 }
 
@@ -1170,6 +1141,16 @@ mod tests {
     use crate::plugin::{Plugin, UninitializedPlugin};
     use crate::proto::Name;
 
+    fn test_config(plugins: Vec<PluginConfig>) -> Config {
+        Config {
+            include: Vec::new(),
+            runtime: Default::default(),
+            api: Default::default(),
+            log: Default::default(),
+            plugins,
+        }
+    }
+
     #[test]
     fn test_registry_creation() {
         let registry = PluginRegistry::new();
@@ -1181,6 +1162,55 @@ mod tests {
     fn test_get_nonexistent_plugin() {
         let registry = PluginRegistry::new();
         assert!(registry.get_plugin("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_init_runtime_failure_preserves_current_runtime() {
+        let manager = PluginRuntimeManager::new();
+        let first = manager
+            .init_runtime(test_config(Vec::new()))
+            .await
+            .expect("empty runtime should initialize");
+
+        let err = manager
+            .init_runtime(test_config(vec![PluginConfig {
+                tag: "bad".to_string(),
+                plugin_type: "missing_factory".to_string(),
+                args: None,
+            }]))
+            .await
+            .expect_err("unknown plugin type should fail initialization");
+        assert!(err.to_string().contains("Unknown plugin type"));
+
+        let current = manager
+            .current_runtime()
+            .expect("previous runtime should remain installed");
+        assert!(Arc::ptr_eq(&first, &current));
+
+        manager.destroy_runtime().await;
+    }
+
+    #[tokio::test]
+    async fn test_runtime_manager_recovers_poisoned_current_lock() {
+        let manager = PluginRuntimeManager::new();
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = manager
+                .current
+                .write()
+                .expect("current lock should not be poisoned yet");
+            panic!("poison current runtime lock");
+        });
+
+        let runtime = manager
+            .init_runtime(test_config(Vec::new()))
+            .await
+            .expect("runtime install should recover poisoned current lock");
+        let current = manager
+            .current_runtime()
+            .expect("runtime should be readable after poison recovery");
+        assert!(Arc::ptr_eq(&runtime, &current));
+
+        manager.destroy_runtime().await;
     }
 
     #[derive(Debug)]
@@ -1324,7 +1354,7 @@ mod tests {
             }]
         );
 
-        registry.destory().await;
+        registry.destroy().await;
     }
 
     #[test]
@@ -1489,7 +1519,7 @@ mod tests {
             ["shared_provider", "entry_provider"]
         );
 
-        registry.destory().await;
+        registry.destroy().await;
     }
 
     #[derive(Clone, Default)]
@@ -1599,7 +1629,7 @@ mod tests {
             "captured logs: {output}"
         );
 
-        registry.destory().await;
+        registry.destroy().await;
     }
 
     #[derive(Debug)]
@@ -1704,7 +1734,7 @@ mod tests {
             .expect("provider reload should succeed");
         assert_eq!(reload_count.load(Ordering::Relaxed), 1);
 
-        registry.destory().await;
+        registry.destroy().await;
         clear_global_api();
     }
 
@@ -1753,7 +1783,7 @@ mod tests {
             .expect_err("missing tag should be rejected");
         assert!(err.to_string().contains("is not loaded"));
 
-        registry.destory().await;
+        registry.destroy().await;
         clear_global_api();
     }
 }

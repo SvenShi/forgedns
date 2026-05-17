@@ -6,6 +6,11 @@
 //! This executor reuses the application-level reload path exposed by the
 //! control API. Triggering it schedules a full configuration reload instead of
 //! rebuilding selected plugin tags in place.
+//!
+//! The reload request is routed through the process-wide runtime manager. If a
+//! query that started on an older runtime triggers this executor during a
+//! runtime swap, the request is scheduled against the current application
+//! controller rather than an executor-local registry snapshot.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

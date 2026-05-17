@@ -316,6 +316,6 @@ mod tests {
         ));
         assert!(plugin.matcher().is_match(&mut ctx));
 
-        registry.destory().await;
+        registry.destroy().await;
     }
 }
