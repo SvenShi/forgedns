@@ -437,6 +437,7 @@ mod tests {
     fn make_request_handle(observed: Arc<Mutex<Option<ObservedRequest>>>) -> Arc<RequestHandle> {
         Arc::new(RequestHandle {
             entry_executor: Arc::new(CaptureAndRespondExecutor { observed }),
+            metrics: None,
         })
     }
 

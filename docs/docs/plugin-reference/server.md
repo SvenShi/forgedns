@@ -30,6 +30,18 @@ sidebar_position: 2
 
 监听地址支持 `ip:port`、`[ipv6]:port` 和 `:port`。其中 `:port` 会解析为 `[::]:port`，监听 socket 会关闭 `IPV6_V6ONLY`，用于在同一个监听器上同时接收 IPv6 和 IPv4 流量；如只想监听 IPv4，请显式写 `0.0.0.0:port` 或具体 IPv4 地址。
 
+### Metrics
+
+所有服务端插件通过全局 `GET /api/metrics` 导出统一的请求级指标，带 `plugin_tag` 与 `protocol`（`udp`/`tcp`/`dot`/`quic`/`doh`）标签：
+
+- `server_request_total`
+- `server_completed_total`
+- `server_controlled_total`
+- `server_failed_total`
+- `server_inflight`
+- `server_latency_count`
+- `server_latency_sum_ms`
+
 ---
 
 ## `udp_server`

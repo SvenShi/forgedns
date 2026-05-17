@@ -12,7 +12,8 @@
 //! - does not write HTTP responses back into DNS context in v1.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -30,6 +31,10 @@ use url::Url;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::core::system_utils::parse_simple_duration;
 use crate::network::http_client::{HttpClient, HttpClientOptions, HttpRequestOptions};
 use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
@@ -137,6 +142,57 @@ impl RenderedHttpRequest {
 }
 
 #[derive(Debug)]
+struct HttpRequestMetrics {
+    tag: String,
+    dispatch_total: AtomicU64,
+    error_total: AtomicU64,
+    dropped_total: AtomicU64,
+}
+
+impl HttpRequestMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            dispatch_total: AtomicU64::new(0),
+            error_total: AtomicU64::new(0),
+            dropped_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for HttpRequestMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "http_request"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "http_request_dispatch_total",
+            "Total http_request dispatch attempts.",
+            &labels,
+            self.dispatch_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "http_request_error_total",
+            "Total http_request failures (render, send, or async delivery).",
+            &labels,
+            self.error_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "http_request_dropped_total",
+            "Total http_request dispatches dropped because the async queue was full or closed.",
+            &labels,
+            self.dropped_total.load(Ordering::Relaxed),
+        ));
+    }
+}
+
+#[derive(Debug)]
 struct HttpRequestExecutor {
     tag: String,
     config: HttpRequestRuntimeConfig,
@@ -144,6 +200,7 @@ struct HttpRequestExecutor {
     async_tx: Option<mpsc::Sender<RenderedHttpRequest>>,
     stop_tx: Mutex<Option<oneshot::Sender<()>>>,
     worker_handle: Mutex<Option<JoinHandle<()>>>,
+    metrics: Arc<HttpRequestMetrics>,
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +214,8 @@ impl Plugin for HttpRequestExecutor {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
+        register_metric_source(self.metrics.clone())?;
+
         if !self.config.async_mode || self.async_tx.is_some() {
             return Ok(());
         }
@@ -170,6 +229,7 @@ impl Plugin for HttpRequestExecutor {
             self.config.max_redirects,
             rx,
             stop_rx,
+            self.metrics.clone(),
         ));
 
         self.async_tx = Some(tx);
@@ -185,6 +245,7 @@ impl Plugin for HttpRequestExecutor {
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         if let Some(stop_tx) = self.stop_tx.lock().ok().and_then(|mut slot| slot.take()) {
             let _ = stop_tx.send(());
         }
@@ -270,6 +331,15 @@ impl Executor for HttpRequestExecutor {
 
 impl HttpRequestExecutor {
     async fn dispatch_context(&self, context: &DnsContext) -> Result<()> {
+        self.metrics.dispatch_total.fetch_add(1, Ordering::Relaxed);
+        let result = self.dispatch_context_inner(context).await;
+        if result.is_err() {
+            self.metrics.error_total.fetch_add(1, Ordering::Relaxed);
+        }
+        result
+    }
+
+    async fn dispatch_context_inner(&self, context: &DnsContext) -> Result<()> {
         let rendered = self.render_request(context)?;
         if self.config.async_mode {
             let tx = self.async_tx.as_ref().ok_or_else(|| {
@@ -279,19 +349,25 @@ impl HttpRequestExecutor {
                 ))
             })?;
 
-            tx.try_send(rendered).map_err(|err| match err {
-                mpsc::error::TrySendError::Full(request) => DnsError::plugin(format!(
-                    "http_request plugin '{}' async queue is full for '{}'",
-                    self.tag,
-                    request.label()
-                )),
-                mpsc::error::TrySendError::Closed(request) => DnsError::plugin(format!(
-                    "http_request plugin '{}' async queue is closed for '{}'",
-                    self.tag,
-                    request.label()
-                )),
-            })?;
-            return Ok(());
+            return match tx.try_send(rendered) {
+                Ok(()) => Ok(()),
+                Err(mpsc::error::TrySendError::Full(request)) => {
+                    self.metrics.dropped_total.fetch_add(1, Ordering::Relaxed);
+                    Err(DnsError::plugin(format!(
+                        "http_request plugin '{}' async queue is full for '{}'",
+                        self.tag,
+                        request.label()
+                    )))
+                }
+                Err(mpsc::error::TrySendError::Closed(request)) => {
+                    self.metrics.dropped_total.fetch_add(1, Ordering::Relaxed);
+                    Err(DnsError::plugin(format!(
+                        "http_request plugin '{}' async queue is closed for '{}'",
+                        self.tag,
+                        request.label()
+                    )))
+                }
+            };
         }
 
         dispatch_rendered_request(
@@ -441,6 +517,7 @@ impl PluginFactory for HttpRequestFactory {
                 async_tx: None,
                 stop_tx: Mutex::new(None),
                 worker_handle: Mutex::new(None),
+                metrics: Arc::new(HttpRequestMetrics::new(plugin_config.tag.clone())),
             },
         )))
     }
@@ -695,6 +772,7 @@ async fn run_async_worker(
     max_redirects: usize,
     mut rx: mpsc::Receiver<RenderedHttpRequest>,
     mut stop_rx: oneshot::Receiver<()>,
+    metrics: Arc<HttpRequestMetrics>,
 ) {
     loop {
         tokio::select! {
@@ -704,6 +782,7 @@ async fn run_async_worker(
                     break;
                 };
                 if let Err(err) = dispatch_rendered_request(&client, timeout_duration, max_redirects, request).await {
+                    metrics.error_total.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         plugin = %plugin_tag,
                         error = %err,

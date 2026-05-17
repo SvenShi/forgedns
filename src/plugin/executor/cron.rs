@@ -16,6 +16,7 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -30,6 +31,10 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::core::system_utils::{parse_simple_duration, system_timezone_name};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
@@ -108,12 +113,64 @@ struct RuntimeJob {
 }
 
 #[derive(Debug)]
+struct CronMetrics {
+    tag: String,
+    run_total: AtomicU64,
+    skipped_total: AtomicU64,
+    executor_error_total: AtomicU64,
+}
+
+impl CronMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            run_total: AtomicU64::new(0),
+            skipped_total: AtomicU64::new(0),
+            executor_error_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for CronMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "cron"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "cron_job_run_total",
+            "Total cron job runs that were started.",
+            &labels,
+            self.run_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "cron_job_skipped_total",
+            "Total cron job triggers skipped because the previous run was still active.",
+            &labels,
+            self.skipped_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "cron_executor_error_total",
+            "Total executor failures across cron job runs.",
+            &labels,
+            self.executor_error_total.load(Ordering::Relaxed),
+        ));
+    }
+}
+
+#[derive(Debug)]
 struct CronExecutor {
     tag: String,
     config: CronConfig,
     quick_setup_executors: Vec<Arc<dyn Executor>>,
     stop_tx: Mutex<Option<oneshot::Sender<()>>>,
     scheduler_handle: Mutex<Option<JoinHandle<()>>>,
+    metrics: Arc<CronMetrics>,
 }
 
 #[async_trait]
@@ -123,6 +180,7 @@ impl Plugin for CronExecutor {
     }
 
     async fn init(&mut self, context: &PluginInitContext<'_>) -> Result<()> {
+        register_metric_source(self.metrics.clone())?;
         let mut prepared_jobs = Vec::with_capacity(self.config.jobs.len());
         let jobs = self.config.jobs.clone();
         for (job_index, job) in jobs.iter().enumerate() {
@@ -142,7 +200,12 @@ impl Plugin for CronExecutor {
         }
 
         let (stop_tx, stop_rx) = oneshot::channel();
-        let handle = tokio::spawn(run_scheduler(self.tag.clone(), runtime_jobs, stop_rx));
+        let handle = tokio::spawn(run_scheduler(
+            self.tag.clone(),
+            runtime_jobs,
+            stop_rx,
+            self.metrics.clone(),
+        ));
 
         *self.stop_tx.get_mut() = Some(stop_tx);
         *self.scheduler_handle.get_mut() = Some(handle);
@@ -150,6 +213,7 @@ impl Plugin for CronExecutor {
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         if let Some(stop_tx) = self.stop_tx.lock().await.take() {
             let _ = stop_tx.send(());
         }
@@ -338,6 +402,7 @@ impl PluginFactory for CronFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(CronExecutor {
             tag: plugin_config.tag.clone(),
+            metrics: Arc::new(CronMetrics::new(plugin_config.tag.clone())),
             config,
             quick_setup_executors: Vec::new(),
             stop_tx: Mutex::new(None),
@@ -582,6 +647,7 @@ async fn run_scheduler(
     plugin_tag: String,
     mut jobs: Vec<RuntimeJob>,
     mut stop_rx: oneshot::Receiver<()>,
+    metrics: Arc<CronMetrics>,
 ) {
     loop {
         reap_finished_job_handles(&plugin_tag, &mut jobs).await;
@@ -617,6 +683,7 @@ async fn run_scheduler(
                 }
 
                 if job.handle.is_some() {
+                    metrics.skipped_total.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         plugin = %plugin_tag,
                         job = %job.name,
@@ -630,6 +697,7 @@ async fn run_scheduler(
                 let trigger_kind = job.trigger.kind_name().to_string();
                 let executors = job.executors.clone();
                 let run_plugin_tag = plugin_tag.clone();
+                let run_metrics = metrics.clone();
                 job.handle = Some(tokio::spawn(async move {
                     run_job(
                         run_plugin_tag,
@@ -637,6 +705,7 @@ async fn run_scheduler(
                         trigger_kind,
                         scheduled_at_ms,
                         executors,
+                        run_metrics,
                     )
                     .await;
                 }));
@@ -710,7 +779,9 @@ async fn run_job(
     trigger_kind: String,
     scheduled_at_ms: i64,
     executors: Vec<Arc<dyn Executor>>,
+    metrics: Arc<CronMetrics>,
 ) {
+    metrics.run_total.fetch_add(1, Ordering::Relaxed);
     info!(
         plugin = %plugin_tag,
         job = %job_name,
@@ -729,6 +800,7 @@ async fn run_job(
         match executor.execute(&mut context).await {
             Ok(ExecStep::Next) | Ok(ExecStep::Stop) | Ok(ExecStep::Return) => {}
             Err(err) => {
+                metrics.executor_error_total.fetch_add(1, Ordering::Relaxed);
                 warn!(
                     plugin = %plugin_tag,
                     job = %job_name,
@@ -984,6 +1056,7 @@ jobs:
             "interval".to_string(),
             123,
             executors,
+            Arc::new(CronMetrics::new("cron".to_string())),
         )
         .await;
 
@@ -1017,7 +1090,12 @@ jobs:
             handle: None,
         };
         let (stop_tx, stop_rx) = oneshot::channel();
-        let scheduler = tokio::spawn(run_scheduler("cron".to_string(), vec![job], stop_rx));
+        let scheduler = tokio::spawn(run_scheduler(
+            "cron".to_string(),
+            vec![job],
+            stop_rx,
+            Arc::new(CronMetrics::new("cron".to_string())),
+        ));
 
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(executor.started.load(Ordering::Relaxed), 0);
@@ -1050,7 +1128,12 @@ jobs:
             handle: None,
         };
         let (stop_tx, stop_rx) = oneshot::channel();
-        let scheduler = tokio::spawn(run_scheduler("cron".to_string(), vec![job], stop_rx));
+        let scheduler = tokio::spawn(run_scheduler(
+            "cron".to_string(),
+            vec![job],
+            stop_rx,
+            Arc::new(CronMetrics::new("cron".to_string())),
+        ));
 
         tokio::time::timeout(Duration::from_secs(1), started.notified())
             .await
@@ -1090,6 +1173,7 @@ jobs:
             quick_setup_executors: vec![quick],
             stop_tx: Mutex::new(None),
             scheduler_handle: Mutex::new(None),
+            metrics: Arc::new(CronMetrics::new("cron".to_string())),
         };
 
         cron.destroy().await.unwrap();

@@ -14,6 +14,8 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -27,6 +29,10 @@ use url::Url;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::core::system_utils::deserialize_duration_option;
 use crate::network::http_client::{HttpClient, HttpClientOptions, HttpRequestOptions};
 use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
@@ -64,6 +70,57 @@ struct DownloadTarget {
 }
 
 #[derive(Debug)]
+struct DownloadMetrics {
+    tag: String,
+    success_total: AtomicU64,
+    failure_total: AtomicU64,
+    timeout_total: AtomicU64,
+}
+
+impl DownloadMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            success_total: AtomicU64::new(0),
+            failure_total: AtomicU64::new(0),
+            timeout_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for DownloadMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "download"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "download_success_total",
+            "Total successful file downloads.",
+            &labels,
+            self.success_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "download_failure_total",
+            "Total failed file downloads (excluding timeouts).",
+            &labels,
+            self.failure_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "download_timeout_total",
+            "Total file downloads that timed out.",
+            &labels,
+            self.timeout_total.load(Ordering::Relaxed),
+        ));
+    }
+}
+
+#[derive(Debug)]
 struct DownloadExecutor {
     tag: String,
     client: HttpClient,
@@ -71,6 +128,7 @@ struct DownloadExecutor {
     downloads: Vec<DownloadTarget>,
     insecure_skip_verify: bool,
     socks5: Option<String>,
+    metrics: Arc<DownloadMetrics>,
 }
 
 #[async_trait]
@@ -80,10 +138,11 @@ impl Plugin for DownloadExecutor {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         Ok(())
     }
 }
@@ -99,6 +158,7 @@ impl Executor for DownloadExecutor {
             match timeout(self.timeout, self.download_one(item)).await {
                 Ok(Ok(())) => {
                     success_count += 1;
+                    self.metrics.success_total.fetch_add(1, Ordering::Relaxed);
                     info!(
                         plugin = %self.tag,
                         url = %item.url,
@@ -111,6 +171,7 @@ impl Executor for DownloadExecutor {
                 }
                 Ok(Err(err)) => {
                     failure_count += 1;
+                    self.metrics.failure_total.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         plugin = %self.tag,
                         url = %item.url,
@@ -121,6 +182,7 @@ impl Executor for DownloadExecutor {
                 }
                 Err(_) => {
                     failure_count += 1;
+                    self.metrics.timeout_total.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         plugin = %self.tag,
                         url = %item.url,
@@ -194,6 +256,7 @@ impl PluginFactory for DownloadFactory {
                 downloads: runtime.downloads.clone(),
                 insecure_skip_verify: runtime.insecure_skip_verify,
                 socks5: runtime.raw_socks5,
+                metrics: Arc::new(DownloadMetrics::new(plugin_tag.clone())),
             };
 
             info!(
@@ -250,6 +313,7 @@ impl PluginFactory for DownloadFactory {
             downloads: runtime.downloads,
             insecure_skip_verify: runtime.insecure_skip_verify,
             socks5: runtime.raw_socks5,
+            metrics: Arc::new(DownloadMetrics::new(plugin_config.tag.clone())),
         })))
     }
 
@@ -274,6 +338,7 @@ impl PluginFactory for DownloadFactory {
             downloads,
             insecure_skip_verify: false,
             socks5: None,
+            metrics: Arc::new(DownloadMetrics::new(tag.to_string())),
         })))
     }
 }
@@ -519,6 +584,7 @@ mod tests {
             }],
             insecure_skip_verify: false,
             socks5: None,
+            metrics: Arc::new(DownloadMetrics::new("download".to_string())),
         };
         let mut ctx = test_context();
         let step = plugin

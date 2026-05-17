@@ -31,6 +31,7 @@
 
 use std::fs;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -49,6 +50,10 @@ use self::manager::{
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
 use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::proto::Rcode;
@@ -204,9 +209,70 @@ impl MikrotikConfigArgs {
 }
 
 #[derive(Debug)]
+struct RosMetrics {
+    tag: String,
+    observe_total: AtomicU64,
+    dropped_total: AtomicU64,
+    sync_error_total: AtomicU64,
+    sync_timeout_total: AtomicU64,
+}
+
+impl RosMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            observe_total: AtomicU64::new(0),
+            dropped_total: AtomicU64::new(0),
+            sync_error_total: AtomicU64::new(0),
+            sync_timeout_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for RosMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "ros_address_list"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "ros_address_list_observe_total",
+            "Total domain observations submitted to the RouterOS address-list manager.",
+            &labels,
+            self.observe_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "ros_address_list_dropped_total",
+            "Total observations dropped in async mode (queue full or channel closed).",
+            &labels,
+            self.dropped_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "ros_address_list_sync_error_total",
+            "Total sync-mode observations that failed at the RouterOS manager.",
+            &labels,
+            self.sync_error_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "ros_address_list_sync_timeout_total",
+            "Total sync-mode observations that timed out enqueueing or waiting.",
+            &labels,
+            self.sync_timeout_total.load(Ordering::Relaxed),
+        ));
+    }
+}
+
+#[derive(Debug)]
 struct MikrotikExecutor {
     /// Plugin tag from the global registry.
     tag: String,
+    /// Shared observability counters.
+    metrics: Arc<RosMetrics>,
     /// Fully validated immutable runtime config.
     config: MikrotikConfig,
     /// Pre-built manager consumed during `init()`.
@@ -225,6 +291,8 @@ impl Plugin for MikrotikExecutor {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
+        register_metric_source(self.metrics.clone())?;
+
         // `init()` may be called more than once by the plugin framework.
         // Keep it idempotent and only build the runtime once.
         if self.manager.is_none() || self.command_tx.is_some() {
@@ -248,6 +316,7 @@ impl Plugin for MikrotikExecutor {
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         if let Some(runtime) = self.runtime.lock().ok().and_then(|mut slot| slot.take()) {
             runtime.shutdown(self.config.cleanup_on_shutdown).await;
         }
@@ -282,6 +351,7 @@ impl Executor for MikrotikExecutor {
         let Some((domain, addrs)) = extract_observation(context, &self.config) else {
             return Ok(step);
         };
+        self.metrics.observe_total.fetch_add(1, Ordering::Relaxed);
 
         if self.config.async_mode {
             // Async mode keeps RouterOS I/O fully off the request path.
@@ -292,12 +362,14 @@ impl Executor for MikrotikExecutor {
             }) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(_)) => {
+                    self.metrics.dropped_total.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         plugin = %self.tag,
                         "ros_address_list observe queue is full, observation dropped"
                     );
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
+                    self.metrics.dropped_total.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         plugin = %self.tag,
                         "ros_address_list manager channel closed, observation dropped"
@@ -323,6 +395,9 @@ impl Executor for MikrotikExecutor {
         match send_outcome {
             Ok(Ok(())) => {}
             Ok(Err(_)) => {
+                self.metrics
+                    .sync_error_total
+                    .fetch_add(1, Ordering::Relaxed);
                 warn!(
                     plugin = %self.tag,
                     "ros_address_list manager channel closed in sync mode, DNS response is kept unchanged"
@@ -330,6 +405,9 @@ impl Executor for MikrotikExecutor {
                 return Ok(step);
             }
             Err(_) => {
+                self.metrics
+                    .sync_timeout_total
+                    .fetch_add(1, Ordering::Relaxed);
                 warn!(
                     plugin = %self.tag,
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
@@ -344,6 +422,9 @@ impl Executor for MikrotikExecutor {
         match wait_outcome {
             Ok(Ok(Ok(()))) => Ok(step),
             Ok(Ok(Err(e))) => {
+                self.metrics
+                    .sync_error_total
+                    .fetch_add(1, Ordering::Relaxed);
                 warn!(
                     plugin = %self.tag,
                     err = %e,
@@ -352,6 +433,9 @@ impl Executor for MikrotikExecutor {
                 Ok(step)
             }
             Ok(Err(_)) => {
+                self.metrics
+                    .sync_error_total
+                    .fetch_add(1, Ordering::Relaxed);
                 warn!(
                     plugin = %self.tag,
                     "ros_address_list manager dropped sync observe response, DNS response is kept unchanged"
@@ -359,6 +443,9 @@ impl Executor for MikrotikExecutor {
                 Ok(step)
             }
             Err(_) => {
+                self.metrics
+                    .sync_timeout_total
+                    .fetch_add(1, Ordering::Relaxed);
                 warn!(
                     plugin = %self.tag,
                     timeout_secs = SYNC_OBSERVE_TIMEOUT_SECS,
@@ -403,6 +490,7 @@ impl PluginFactory for MikrotikFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(MikrotikExecutor {
             tag: plugin_config.tag.clone(),
+            metrics: Arc::new(RosMetrics::new(plugin_config.tag.clone())),
             config,
             manager: Some(manager),
             command_tx: None,
@@ -945,6 +1033,7 @@ mod tests {
         };
         MikrotikExecutor {
             tag: tag.to_string(),
+            metrics: Arc::new(RosMetrics::new(tag.to_string())),
             config,
             manager: Some(AddressListManager::new(api, manager_cfg)),
             command_tx: None,

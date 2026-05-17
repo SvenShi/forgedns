@@ -18,7 +18,7 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -31,6 +31,10 @@ use crate::config::types::PluginConfig;
 use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
@@ -59,6 +63,65 @@ struct CacheEntry {
 }
 
 #[derive(Debug)]
+struct ReverseLookupMetrics {
+    tag: String,
+    cache: TtlCache<IpAddr, Arc<CacheEntry>>,
+    ptr_hit_total: AtomicU64,
+    ptr_miss_total: AtomicU64,
+    cache_insert_total: AtomicU64,
+}
+
+impl ReverseLookupMetrics {
+    fn new(tag: String, cache: TtlCache<IpAddr, Arc<CacheEntry>>) -> Self {
+        Self {
+            tag,
+            cache,
+            ptr_hit_total: AtomicU64::new(0),
+            ptr_miss_total: AtomicU64::new(0),
+            cache_insert_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for ReverseLookupMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "reverse_lookup"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "reverse_lookup_ptr_hit_total",
+            "Total PTR queries answered from the reverse cache.",
+            &labels,
+            self.ptr_hit_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "reverse_lookup_ptr_miss_total",
+            "Total PTR queries that missed the reverse cache.",
+            &labels,
+            self.ptr_miss_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "reverse_lookup_cache_insert_total",
+            "Total IP -> domain mappings inserted into the reverse cache.",
+            &labels,
+            self.cache_insert_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::gauge(
+            "reverse_lookup_cache_entries",
+            "Current number of entries in the reverse cache.",
+            &labels,
+            self.cache.len() as u64,
+        ));
+    }
+}
+
+#[derive(Debug)]
 struct ReverseLookup {
     tag: String,
     cache: TtlCache<IpAddr, Arc<CacheEntry>>,
@@ -67,6 +130,7 @@ struct ReverseLookup {
     handle_ptr: bool,
     cleanup_started: AtomicBool,
     cleanup_task_id: Option<u64>,
+    metrics: Arc<ReverseLookupMetrics>,
 }
 
 #[async_trait]
@@ -77,6 +141,7 @@ impl Plugin for ReverseLookup {
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         self.register_api_routes()?;
+        register_metric_source(self.metrics.clone())?;
 
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
             return Ok(());
@@ -114,6 +179,7 @@ impl Plugin for ReverseLookup {
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         if let Some(task_id) = self.cleanup_task_id {
             task_center::stop_task(task_id).await;
         }
@@ -139,11 +205,13 @@ impl Executor for ReverseLookup {
         context: &mut DnsContext,
         next: Option<ExecutorNext>,
     ) -> Result<ExecStep> {
-        if self.handle_ptr
-            && let Some(response) = self.try_handle_ptr(&context.request)
-        {
-            context.set_response(response);
-            return Ok(ExecStep::Stop);
+        if self.handle_ptr && is_ptr_query(&context.request) {
+            if let Some(response) = self.try_handle_ptr(&context.request) {
+                self.metrics.ptr_hit_total.fetch_add(1, Ordering::Relaxed);
+                context.set_response(response);
+                return Ok(ExecStep::Stop);
+            }
+            self.metrics.ptr_miss_total.fetch_add(1, Ordering::Relaxed);
         }
 
         let step = continue_next!(next, context)?;
@@ -174,6 +242,9 @@ impl Executor for ReverseLookup {
                 now,
                 expire_at_ms,
             );
+            self.metrics
+                .cache_insert_total
+                .fetch_add(1, Ordering::Relaxed);
         }
 
         Ok(step)
@@ -231,15 +302,21 @@ impl PluginFactory for ReverseLookupFactory {
 
         let size = cfg.size.unwrap_or(DEFAULT_SIZE);
         let ttl = cfg.ttl.unwrap_or(DEFAULT_TTL);
+        let cache = TtlCache::with_capacity(size);
+        let metrics = Arc::new(ReverseLookupMetrics::new(
+            plugin_config.tag.clone(),
+            cache.clone(),
+        ));
 
         Ok(UninitializedPlugin::Executor(Box::new(ReverseLookup {
             tag: plugin_config.tag.clone(),
-            cache: TtlCache::with_capacity(size),
+            cache,
             size,
             ttl,
             handle_ptr: cfg.handle_ptr.unwrap_or(false),
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
+            metrics,
         })))
     }
 }
@@ -308,6 +385,10 @@ fn parse_ptr_name(name: &Name) -> Option<IpAddr> {
     name.parse_arpa_name().ok().map(|net| net.addr())
 }
 
+fn is_ptr_query(request: &crate::proto::Message) -> bool {
+    request.question_count() == 1 && request.first_qtype() == Some(RecordType::PTR)
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
@@ -353,6 +434,10 @@ mod tests {
             handle_ptr: true,
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
+            metrics: Arc::new(ReverseLookupMetrics::new(
+                "reverse_lookup".to_string(),
+                TtlCache::with_capacity(64),
+            )),
         };
 
         let mut a_ctx = make_context("www.example.com.", RecordType::A);
@@ -395,6 +480,10 @@ mod tests {
             handle_ptr: false,
             cleanup_started: AtomicBool::new(false),
             cleanup_task_id: None,
+            metrics: Arc::new(ReverseLookupMetrics::new(
+                "reverse_lookup".to_string(),
+                TtlCache::with_capacity(64),
+            )),
         };
 
         let mut ctx = make_context("www.example.com.", RecordType::A);

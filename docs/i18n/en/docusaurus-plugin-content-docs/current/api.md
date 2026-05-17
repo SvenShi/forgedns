@@ -565,6 +565,12 @@ Current exported metrics include:
 * `forward_timeout_total`
 * `forward_latency_count`
 * `forward_latency_sum_ms`
+* `forward_upstream_query_total`
+* `forward_upstream_success_total`
+* `forward_upstream_error_total`
+* `forward_upstream_timeout_total`
+* `forward_upstream_latency_count`
+* `forward_upstream_latency_sum_ms`
 * `fallback_primary_total`
 * `fallback_primary_error_total`
 * `fallback_secondary_total`
@@ -573,8 +579,48 @@ Current exported metrics include:
 * `hosts_miss_total`
 * `ratelimit_allowed_total`
 * `ratelimit_rejected_total`
+* `server_request_total`
+* `server_completed_total`
+* `server_controlled_total`
+* `server_failed_total`
+* `server_inflight`
+* `server_latency_count`
+* `server_latency_sum_ms`
+* `ipset_entries_total`
+* `ipset_dropped_total`
+* `ipset_write_total`
+* `ipset_write_error_total`
+* `nftset_entries_total`
+* `nftset_dropped_total`
+* `nftset_write_total`
+* `nftset_write_error_total`
+* `ros_address_list_observe_total`
+* `ros_address_list_dropped_total`
+* `ros_address_list_sync_error_total`
+* `ros_address_list_sync_timeout_total`
+* `reverse_lookup_ptr_hit_total`
+* `reverse_lookup_ptr_miss_total`
+* `reverse_lookup_cache_insert_total`
+* `reverse_lookup_cache_entries`
+* `download_success_total`
+* `download_failure_total`
+* `download_timeout_total`
+* `http_request_dispatch_total`
+* `http_request_error_total`
+* `http_request_dropped_total`
+* `script_run_total`
+* `script_success_total`
+* `script_error_total`
+* `script_timeout_total`
+* `reload_trigger_total`
+* `reload_error_total`
+* `reload_provider_reload_total`
+* `reload_provider_reload_error_total`
+* `cron_job_run_total`
+* `cron_job_skipped_total`
+* `cron_executor_error_total`
 
-These metrics use low-cardinality plugin-level labels such as `plugin_tag`, `name`, `kind`, `reason`, and `result`. High-cardinality values such as qname, client IP, or upstream address are intentionally excluded from the generic metrics layer; use `query_recorder` when per-query detail is needed.
+These metrics use low-cardinality plugin-level labels such as `plugin_tag`, `name`, `kind`, `reason`, `result`, and `protocol`. `server_*` additionally carries a `protocol` label (`udp`/`tcp`/`dot`/`quic`/`doh`). `forward_upstream_*` carries an `upstream` label whose value is the upstream tag (or its resolved address when no tag is configured); since the upstream set is fixed at startup and bounded, this stays a low-cardinality dimension. High-cardinality values such as qname or client IP are intentionally excluded from the generic metrics layer; use `query_recorder` when per-query detail is needed.
 
 ## Config Reference
 

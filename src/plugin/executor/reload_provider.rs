@@ -6,6 +6,9 @@
 //! This executor reloads one or more provider plugins in place using their
 //! existing runtime configuration, without rebuilding the full application.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use async_trait::async_trait;
 use serde_yaml_ng::Value;
 use tracing::info;
@@ -13,6 +16,10 @@ use tracing::info;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::matcher_utils::{
@@ -22,9 +29,53 @@ use crate::plugin::{self, Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug)]
+struct ReloadProviderMetrics {
+    tag: String,
+    reload_total: AtomicU64,
+    reload_error_total: AtomicU64,
+}
+
+impl ReloadProviderMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            reload_total: AtomicU64::new(0),
+            reload_error_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for ReloadProviderMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "reload_provider"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "reload_provider_reload_total",
+            "Total provider reload attempts triggered by this executor.",
+            &labels,
+            self.reload_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "reload_provider_reload_error_total",
+            "Total provider reload attempts that failed.",
+            &labels,
+            self.reload_error_total.load(Ordering::Relaxed),
+        ));
+    }
+}
+
+#[derive(Debug)]
 struct ReloadProviderExecutor {
     tag: String,
     provider_tags: Vec<String>,
+    metrics: Arc<ReloadProviderMetrics>,
 }
 
 #[async_trait]
@@ -34,10 +85,11 @@ impl Plugin for ReloadProviderExecutor {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         Ok(())
     }
 }
@@ -52,7 +104,13 @@ impl Executor for ReloadProviderExecutor {
                 provider = %provider_tag,
                 "reload_provider executor reloading provider"
             );
-            plugin::reload_provider(provider_tag).await?;
+            self.metrics.reload_total.fetch_add(1, Ordering::Relaxed);
+            if let Err(err) = plugin::reload_provider(provider_tag).await {
+                self.metrics
+                    .reload_error_total
+                    .fetch_add(1, Ordering::Relaxed);
+                return Err(err);
+            }
         }
         Ok(ExecStep::Next)
     }
@@ -86,6 +144,7 @@ impl PluginFactory for ReloadProviderFactory {
             ReloadProviderExecutor {
                 tag: plugin_config.tag.clone(),
                 provider_tags,
+                metrics: Arc::new(ReloadProviderMetrics::new(plugin_config.tag.clone())),
             },
         )))
     }
@@ -96,6 +155,7 @@ impl PluginFactory for ReloadProviderFactory {
             ReloadProviderExecutor {
                 tag: tag.to_string(),
                 provider_tags,
+                metrics: Arc::new(ReloadProviderMetrics::new(tag.to_string())),
             },
         )))
     }

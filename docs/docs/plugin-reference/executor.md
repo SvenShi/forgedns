@@ -381,6 +381,15 @@ sidebar_position: 3
 - `forward_latency_count`
 - `forward_latency_sum_ms`
 
+每个上游另外导出带 `upstream` 标签的指标（标签值为上游 tag，未配置时为解析后的地址）：
+
+- `forward_upstream_query_total`
+- `forward_upstream_success_total`
+- `forward_upstream_error_total`
+- `forward_upstream_timeout_total`
+- `forward_upstream_latency_count`
+- `forward_upstream_latency_sum_ms`
+
 ### 常见用途
 
 - 标准转发。

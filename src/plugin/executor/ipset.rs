@@ -19,7 +19,7 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(target_os = "linux")]
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 #[cfg(target_os = "linux")]
@@ -38,6 +38,10 @@ use tracing::warn;
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
@@ -65,6 +69,65 @@ struct IpSetEntry {
 }
 
 #[derive(Debug)]
+struct IpSetMetrics {
+    tag: String,
+    entries_total: AtomicU64,
+    dropped_total: AtomicU64,
+    write_total: AtomicU64,
+    write_error_total: AtomicU64,
+}
+
+impl IpSetMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            entries_total: AtomicU64::new(0),
+            dropped_total: AtomicU64::new(0),
+            write_total: AtomicU64::new(0),
+            write_error_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for IpSetMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "ipset"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "ipset_entries_total",
+            "Total IP entries enqueued for ipset writes.",
+            &labels,
+            self.entries_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "ipset_dropped_total",
+            "Total ipset write batches dropped because the writer queue was full.",
+            &labels,
+            self.dropped_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "ipset_write_total",
+            "Total IP entries successfully written to ipset via netlink.",
+            &labels,
+            self.write_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "ipset_write_error_total",
+            "Total ipset netlink write failures.",
+            &labels,
+            self.write_error_total.load(Ordering::Relaxed),
+        ));
+    }
+}
+
+#[derive(Debug)]
 struct IpSetExecutor {
     tag: String,
     set_name4: Option<String>,
@@ -72,6 +135,7 @@ struct IpSetExecutor {
     mask4: u8,
     mask6: u8,
     enabled: Arc<AtomicBool>,
+    metrics: Arc<IpSetMetrics>,
     #[cfg(target_os = "linux")]
     writer: SyncSender<Vec<IpSetEntry>>,
 }
@@ -83,10 +147,11 @@ impl Plugin for IpSetExecutor {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         self.enabled.store(false, Ordering::Relaxed);
         #[cfg(target_os = "linux")]
         {
@@ -140,19 +205,25 @@ impl Executor for IpSetExecutor {
         #[cfg(target_os = "linux")]
         {
             let entries: Vec<IpSetEntry> = entries.into_iter().collect();
-            if let Err(e) = self.writer.try_send(entries) {
-                match e {
-                    TrySendError::Full(_) => {
-                        // Best-effort side effect: dropping write preserves DNS
-                        // path latency.
-                    }
-                    TrySendError::Disconnected(_) => {
-                        warn!(
-                            plugin = %self.tag,
-                            "ipset writer disconnected, disabling plugin"
-                        );
-                        self.enabled.store(false, Ordering::Relaxed);
-                    }
+            let entry_count = entries.len() as u64;
+            match self.writer.try_send(entries) {
+                Ok(()) => {
+                    self.metrics
+                        .entries_total
+                        .fetch_add(entry_count, Ordering::Relaxed);
+                }
+                Err(TrySendError::Full(_)) => {
+                    // Best-effort side effect: dropping write preserves DNS
+                    // path latency.
+                    self.metrics.dropped_total.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.metrics.dropped_total.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        plugin = %self.tag,
+                        "ipset writer disconnected, disabling plugin"
+                    );
+                    self.enabled.store(false, Ordering::Relaxed);
                 }
             }
         }
@@ -190,10 +261,13 @@ impl PluginFactory for IpSetFactory {
             "ipset plugin configured"
         );
 
+        let metrics = Arc::new(IpSetMetrics::new(plugin_config.tag.clone()));
+
         #[cfg(target_os = "linux")]
         let enabled = Arc::new(AtomicBool::new(true));
         #[cfg(target_os = "linux")]
-        let writer = spawn_ipset_writer(plugin_config.tag.as_str(), enabled.clone())?;
+        let writer =
+            spawn_ipset_writer(plugin_config.tag.as_str(), enabled.clone(), metrics.clone())?;
 
         #[cfg(not(target_os = "linux"))]
         let enabled = Arc::new(AtomicBool::new(true));
@@ -205,6 +279,7 @@ impl PluginFactory for IpSetFactory {
             mask4,
             mask6,
             enabled,
+            metrics,
             #[cfg(target_os = "linux")]
             writer,
         })))
@@ -247,10 +322,12 @@ impl PluginFactory for IpSetFactory {
         let mask6 = cfg.mask6.unwrap_or(32);
         validate_masks(mask4, mask6)?;
 
+        let metrics = Arc::new(IpSetMetrics::new(tag.to_string()));
+
         #[cfg(target_os = "linux")]
         let enabled = Arc::new(AtomicBool::new(true));
         #[cfg(target_os = "linux")]
-        let writer = spawn_ipset_writer(tag, enabled.clone())?;
+        let writer = spawn_ipset_writer(tag, enabled.clone(), metrics.clone())?;
 
         #[cfg(not(target_os = "linux"))]
         let enabled = Arc::new(AtomicBool::new(true));
@@ -262,6 +339,7 @@ impl PluginFactory for IpSetFactory {
             mask4,
             mask6,
             enabled,
+            metrics,
             #[cfg(target_os = "linux")]
             writer,
         })))
@@ -288,7 +366,11 @@ fn validate_masks(mask4: u8, mask6: u8) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn spawn_ipset_writer(tag: &str, enabled: Arc<AtomicBool>) -> Result<SyncSender<Vec<IpSetEntry>>> {
+fn spawn_ipset_writer(
+    tag: &str,
+    enabled: Arc<AtomicBool>,
+    metrics: Arc<IpSetMetrics>,
+) -> Result<SyncSender<Vec<IpSetEntry>>> {
     let (tx, rx) = sync_channel::<Vec<IpSetEntry>>(IPSET_WRITER_QUEUE_SIZE);
     let thread_tag = tag.to_string();
     thread::Builder::new()
@@ -301,7 +383,9 @@ fn spawn_ipset_writer(tag: &str, enabled: Arc<AtomicBool>) -> Result<SyncSender<
                 if entries.is_empty() {
                     continue;
                 }
+                let entry_count = entries.len() as u64;
                 if let Err(e) = write_ipset_entries(&entries) {
+                    metrics.write_error_total.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         plugin = %thread_tag,
                         err = %e,
@@ -310,6 +394,9 @@ fn spawn_ipset_writer(tag: &str, enabled: Arc<AtomicBool>) -> Result<SyncSender<
                     enabled.store(false, Ordering::Relaxed);
                     break;
                 }
+                metrics
+                    .write_total
+                    .fetch_add(entry_count, Ordering::Relaxed);
             }
         })
         .map_err(|e| DnsError::plugin(format!("failed to spawn ipset writer thread: {}", e)))?;

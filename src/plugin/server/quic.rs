@@ -23,6 +23,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{register_metric_source, unregister_metric_source};
 use crate::core::system_utils::deserialize_duration_option;
 use crate::network::listen::parse_listen_addr;
 use crate::network::tls_config::load_tls_config;
@@ -31,7 +32,9 @@ use crate::network::transport::quic_transport::{
 };
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::DEFAULT_SERVER_IDLE_TIMEOUT;
-use crate::plugin::server::{ConnectionGuard, RequestHandle, RequestMeta, Server, udp};
+use crate::plugin::server::{
+    ConnectionGuard, RequestHandle, RequestMeta, Server, ServerMetrics, udp,
+};
 use crate::plugin::{Plugin, PluginFactory};
 use crate::plugin_factory;
 
@@ -80,6 +83,7 @@ pub struct QuicServer {
     server_config: ServerConfig,
     idle_timeout: Option<Duration>,
     request_handle: Arc<RequestHandle>,
+    metrics: Arc<ServerMetrics>,
     shutdown_tx: watch::Sender<bool>,
     task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -135,6 +139,7 @@ impl Plugin for QuicServer {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
+        register_metric_source(self.metrics.clone())?;
         let (startup_tx, startup_rx) = oneshot::channel();
         self.spawn_server_task(Some(startup_tx))?;
         match startup_rx.await {
@@ -147,6 +152,7 @@ impl Plugin for QuicServer {
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         let _ = self.shutdown_tx.send(true);
         let handle = self
             .task_handle
@@ -406,13 +412,19 @@ impl PluginFactory for QuicServerFactory {
                 return Err("Failed to load TLS config".into());
             };
 
+        let metrics = Arc::new(ServerMetrics::new(plugin_config.tag.clone(), "quic"));
+
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             QuicServer {
                 tag: plugin_config.tag.clone(),
                 listen,
                 server_config,
                 idle_timeout: quic_config.idle_timeout,
-                request_handle: Arc::new(RequestHandle { entry_executor }),
+                request_handle: Arc::new(RequestHandle {
+                    entry_executor,
+                    metrics: Some(metrics.clone()),
+                }),
+                metrics,
                 shutdown_tx: watch::channel(false).0,
                 task_handle: Mutex::new(None),
             },

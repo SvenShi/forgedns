@@ -30,6 +30,18 @@ Every server plugin depends on an `entry`. It must reference an existing executo
 
 Listen addresses support `ip:port`, `[ipv6]:port`, and `:port`. The `:port` shorthand resolves to `[::]:port`, and the listener socket clears `IPV6_V6ONLY` so one listener can accept both IPv6 and IPv4 traffic. To listen on IPv4 only, explicitly use `0.0.0.0:port` or a concrete IPv4 address.
 
+### Metrics
+
+Every server plugin exports a shared set of request-level metrics through the global `GET /api/metrics` endpoint, labelled with `plugin_tag` and `protocol` (`udp`/`tcp`/`dot`/`quic`/`doh`):
+
+- `server_request_total`
+- `server_completed_total`
+- `server_controlled_total`
+- `server_failed_total`
+- `server_inflight`
+- `server_latency_count`
+- `server_latency_sum_ms`
+
 ---
 
 ## `udp_server`

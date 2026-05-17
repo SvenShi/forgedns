@@ -33,6 +33,44 @@ use crate::proto::{Message, Rcode};
 
 const MAX_CONCURRENT_QUERIES: usize = 3;
 
+/// Per-upstream forward counters.
+///
+/// One entry per configured upstream, index-aligned with the forwarder's
+/// upstream list. The `upstream` label value is the upstream tag when set, else
+/// its resolved address; both are startup-fixed and bounded by the config, so
+/// this stays within the generic metrics layer's low-cardinality contract.
+#[derive(Debug)]
+struct UpstreamMetrics {
+    name: String,
+    query_total: AtomicU64,
+    success_total: AtomicU64,
+    error_total: AtomicU64,
+    timeout_total: AtomicU64,
+    latency_count: AtomicU64,
+    latency_sum_ms: AtomicU64,
+}
+
+impl UpstreamMetrics {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            query_total: AtomicU64::new(0),
+            success_total: AtomicU64::new(0),
+            error_total: AtomicU64::new(0),
+            timeout_total: AtomicU64::new(0),
+            latency_count: AtomicU64::new(0),
+            latency_sum_ms: AtomicU64::new(0),
+        }
+    }
+
+    #[inline]
+    fn record_latency(&self, start_ms: u64) {
+        let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
+        self.latency_count.fetch_add(1, Ordering::Relaxed);
+        self.latency_sum_ms.fetch_add(elapsed, Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug)]
 struct ForwardMetrics {
     tag: String,
@@ -42,10 +80,11 @@ struct ForwardMetrics {
     timeout_total: AtomicU64,
     latency_count: AtomicU64,
     latency_sum_ms: AtomicU64,
+    upstreams: Vec<UpstreamMetrics>,
 }
 
 impl ForwardMetrics {
-    fn new(tag: String) -> Self {
+    fn new(tag: String, upstream_names: Vec<String>) -> Self {
         Self {
             tag,
             query_total: AtomicU64::new(0),
@@ -54,6 +93,10 @@ impl ForwardMetrics {
             timeout_total: AtomicU64::new(0),
             latency_count: AtomicU64::new(0),
             latency_sum_ms: AtomicU64::new(0),
+            upstreams: upstream_names
+                .into_iter()
+                .map(UpstreamMetrics::new)
+                .collect(),
         }
     }
 
@@ -83,6 +126,33 @@ impl ForwardMetrics {
         let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
         self.latency_count.fetch_add(1, Ordering::Relaxed);
         self.latency_sum_ms.fetch_add(elapsed, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn record_upstream_start(&self, idx: usize) -> u64 {
+        if let Some(up) = self.upstreams.get(idx) {
+            up.query_total.fetch_add(1, Ordering::Relaxed);
+        }
+        AppClock::elapsed_millis()
+    }
+
+    #[inline]
+    fn record_upstream_success(&self, idx: usize, start_ms: u64) {
+        if let Some(up) = self.upstreams.get(idx) {
+            up.success_total.fetch_add(1, Ordering::Relaxed);
+            up.record_latency(start_ms);
+        }
+    }
+
+    #[inline]
+    fn record_upstream_error(&self, idx: usize, start_ms: u64, timeout: bool) {
+        if let Some(up) = self.upstreams.get(idx) {
+            up.error_total.fetch_add(1, Ordering::Relaxed);
+            if timeout {
+                up.timeout_total.fetch_add(1, Ordering::Relaxed);
+            }
+            up.record_latency(start_ms);
+        }
     }
 }
 
@@ -133,7 +203,69 @@ impl MetricSource for ForwardMetrics {
             &labels,
             self.latency_sum_ms.load(Ordering::Relaxed),
         ));
+
+        for up in &self.upstreams {
+            let labels = [
+                MetricLabel::new("plugin_tag", self.tag.as_str()),
+                MetricLabel::new("upstream", up.name.as_str()),
+            ];
+            sink.emit(MetricSample::counter(
+                "forward_upstream_query_total",
+                "Total queries attempted against this upstream.",
+                &labels,
+                up.query_total.load(Ordering::Relaxed),
+            ));
+            sink.emit(MetricSample::counter(
+                "forward_upstream_success_total",
+                "Total successful responses from this upstream.",
+                &labels,
+                up.success_total.load(Ordering::Relaxed),
+            ));
+            sink.emit(MetricSample::counter(
+                "forward_upstream_error_total",
+                "Total failed attempts against this upstream.",
+                &labels,
+                up.error_total.load(Ordering::Relaxed),
+            ));
+            sink.emit(MetricSample::counter(
+                "forward_upstream_timeout_total",
+                "Total attempts against this upstream that timed out.",
+                &labels,
+                up.timeout_total.load(Ordering::Relaxed),
+            ));
+            sink.emit(MetricSample::counter(
+                "forward_upstream_latency_count",
+                "Total attempts against this upstream included in latency statistics.",
+                &labels,
+                up.latency_count.load(Ordering::Relaxed),
+            ));
+            sink.emit(MetricSample::counter(
+                "forward_upstream_latency_sum_ms",
+                "Total per-upstream attempt latency in milliseconds.",
+                &labels,
+                up.latency_sum_ms.load(Ordering::Relaxed),
+            ));
+        }
     }
+}
+
+/// Resolve a stable, collision-free label value for each upstream.
+///
+/// Uses the upstream tag when configured, otherwise its resolved address. Any
+/// duplicate identity is disambiguated with a `#<index>` suffix so emitted
+/// time series never share an identical label set.
+fn upstream_metric_names(infos: &[&ConnectionInfo]) -> Vec<String> {
+    let mut names = Vec::with_capacity(infos.len());
+    for (idx, info) in infos.iter().enumerate() {
+        let base = info.tag.clone().unwrap_or_else(|| info.raw_addr.clone());
+        let name = if names.iter().any(|existing| existing == &base) {
+            format!("{}#{}", base, idx)
+        } else {
+            base
+        };
+        names.push(name);
+    }
+    names
 }
 
 /// Single-upstream DNS forwarder
@@ -177,13 +309,17 @@ impl Executor for SingleDnsForwarder {
     #[hotpath::measure]
     async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
         let start_ms = self.metrics.record_query_start();
+        self.metrics.record_upstream_start(0);
         match self.upstream.query(context.request.clone()).await {
             Ok(res) => {
                 context.set_response(res);
                 self.metrics.record_success(start_ms);
+                self.metrics.record_upstream_success(0, start_ms);
             }
             Err(e) => {
-                self.metrics.record_error(start_ms, is_timeout_error(&e));
+                let timeout = is_timeout_error(&e);
+                self.metrics.record_error(start_ms, timeout);
+                self.metrics.record_upstream_error(0, start_ms, timeout);
                 warn!(
                     "DNS query failed - source: {}, queries: {:?}, id: {}, reason: {}",
                     context.peer_addr(),
@@ -300,8 +436,16 @@ impl ConcurrentForwarder {
             let selected_idx = (start_idx + i) % total_upstreams;
             let upstream = self.upstreams[selected_idx].clone();
             let message = request.clone();
+            let metrics = self.metrics.clone();
             join_set.spawn(async move {
+                let up_start = metrics.record_upstream_start(selected_idx);
                 let result: Result<Message> = upstream.query(message).await;
+                match &result {
+                    Ok(_) => metrics.record_upstream_success(selected_idx, up_start),
+                    Err(e) => {
+                        metrics.record_upstream_error(selected_idx, up_start, is_timeout_error(e))
+                    }
+                }
                 if event_enabled!(Level::DEBUG) {
                     debug!(
                         "DNS ConcurrentForwarder received message {}, remote_addr: {}",
@@ -504,12 +648,15 @@ impl PluginFactory for ForwardFactory {
                 plugin_config.tag, upstream_config.addr
             );
 
+            let upstream = build_upstream(upstream_config.clone())?;
+            let names = upstream_metric_names(&[upstream.connection_info()]);
+
             Ok(UninitializedPlugin::Executor(Box::new(
                 SingleDnsForwarder {
                     tag: plugin_config.tag.clone(),
-                    upstream: build_upstream(upstream_config.clone())?,
+                    upstream,
                     short_circuit,
-                    metrics: Arc::new(ForwardMetrics::new(plugin_config.tag.clone())),
+                    metrics: Arc::new(ForwardMetrics::new(plugin_config.tag.clone(), names)),
                 },
             )))
         } else {
@@ -521,6 +668,12 @@ impl PluginFactory for ForwardFactory {
                 upstreams.push(build_upstream(upstream_config)?.into());
             }
 
+            let infos: Vec<&ConnectionInfo> = upstreams
+                .iter()
+                .map(|u: &Arc<dyn Upstream>| u.connection_info())
+                .collect();
+            let names = upstream_metric_names(&infos);
+
             // Multi-upstream concurrent configuration
             Ok(UninitializedPlugin::Executor(Box::new(
                 ConcurrentForwarder {
@@ -528,7 +681,7 @@ impl PluginFactory for ForwardFactory {
                     active_concurrent,
                     upstreams,
                     short_circuit,
-                    metrics: Arc::new(ForwardMetrics::new(plugin_config.tag.clone())),
+                    metrics: Arc::new(ForwardMetrics::new(plugin_config.tag.clone(), names)),
                 },
             )))
         }
@@ -550,12 +703,14 @@ impl PluginFactory for ForwardFactory {
 
         if upstream_configs.len() == 1 {
             let upstream_config = upstream_configs.pop().unwrap();
+            let upstream = build_upstream(upstream_config)?;
+            let names = upstream_metric_names(&[upstream.connection_info()]);
             Ok(UninitializedPlugin::Executor(Box::new(
                 SingleDnsForwarder {
                     tag: tag.to_string(),
-                    upstream: build_upstream(upstream_config)?,
+                    upstream,
                     short_circuit,
-                    metrics: Arc::new(ForwardMetrics::new(tag.to_string())),
+                    metrics: Arc::new(ForwardMetrics::new(tag.to_string(), names)),
                 },
             )))
         } else {
@@ -563,13 +718,18 @@ impl PluginFactory for ForwardFactory {
             for upstream_config in upstream_configs {
                 upstreams.push(build_upstream(upstream_config)?.into());
             }
+            let infos: Vec<&ConnectionInfo> = upstreams
+                .iter()
+                .map(|u: &Arc<dyn Upstream>| u.connection_info())
+                .collect();
+            let names = upstream_metric_names(&infos);
             Ok(UninitializedPlugin::Executor(Box::new(
                 ConcurrentForwarder {
                     tag: tag.to_string(),
                     active_concurrent: MAX_CONCURRENT_QUERIES,
                     upstreams,
                     short_circuit,
-                    metrics: Arc::new(ForwardMetrics::new(tag.to_string())),
+                    metrics: Arc::new(ForwardMetrics::new(tag.to_string(), names)),
                 },
             )))
         }
@@ -655,7 +815,10 @@ mod tests {
     }
 
     fn test_metrics() -> Arc<ForwardMetrics> {
-        Arc::new(ForwardMetrics::new("forward-test".to_string()))
+        Arc::new(ForwardMetrics::new(
+            "forward-test".to_string(),
+            vec!["u0".to_string(), "u1".to_string()],
+        ))
     }
 
     #[tokio::test]

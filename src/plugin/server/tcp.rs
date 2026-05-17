@@ -30,6 +30,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{register_metric_source, unregister_metric_source};
 use crate::core::system_utils::deserialize_duration_option;
 use crate::network::listen;
 use crate::network::tls_config::load_tls_config;
@@ -37,7 +38,7 @@ use crate::network::transport::tcp_transport::TcpTransport;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::DEFAULT_SERVER_IDLE_TIMEOUT;
 use crate::plugin::server::{
-    ConnectionGuard, RequestHandle, RequestMeta, Server, parse_listen_addr,
+    ConnectionGuard, RequestHandle, RequestMeta, Server, ServerMetrics, parse_listen_addr,
 };
 use crate::plugin::{Plugin, PluginFactory};
 use crate::plugin_factory;
@@ -88,6 +89,7 @@ pub struct TcpServer {
     tag: String,
     listen: SocketAddr,
     request_handle: Arc<RequestHandle>,
+    metrics: Arc<ServerMetrics>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     idle_timeout: Option<Duration>,
     shutdown_tx: watch::Sender<bool>,
@@ -146,6 +148,7 @@ impl Plugin for TcpServer {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
+        register_metric_source(self.metrics.clone())?;
         let (startup_tx, startup_rx) = oneshot::channel();
         self.spawn_server_task(Some(startup_tx))?;
         match startup_rx.await {
@@ -158,6 +161,7 @@ impl Plugin for TcpServer {
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         let _ = self.shutdown_tx.send(true);
         let handle = self
             .task_handle
@@ -416,11 +420,18 @@ impl PluginFactory for TcpServerFactory {
             }
         };
 
+        let protocol = if tls_acceptor.is_some() { "dot" } else { "tcp" };
+        let metrics = Arc::new(ServerMetrics::new(plugin_config.tag.clone(), protocol));
+
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             TcpServer {
                 tag: plugin_config.tag.clone(),
                 listen,
-                request_handle: Arc::new(RequestHandle { entry_executor }),
+                request_handle: Arc::new(RequestHandle {
+                    entry_executor,
+                    metrics: Some(metrics.clone()),
+                }),
+                metrics,
                 tls_acceptor,
                 idle_timeout: tcp_config.idle_timeout,
                 shutdown_tx: watch::channel(false).0,

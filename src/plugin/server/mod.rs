@@ -25,7 +25,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::{Level, debug, event_enabled, warn};
 
+use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
+use crate::core::metrics::{MetricLabel, MetricSample, MetricSink, MetricSource};
 pub(crate) use crate::network::listen::parse_listen_addr;
 use crate::plugin::Plugin;
 use crate::plugin::executor::{ExecStep, Executor};
@@ -76,9 +78,128 @@ impl Drop for ConnectionGuard {
     }
 }
 
+/// Shared per-server-plugin request metrics.
+///
+/// One instance per server plugin tag, shared by every [`RequestHandle`] the
+/// plugin owns (the HTTP server owns one handle per route but a single metrics
+/// instance). Counters are owned `AtomicU64`s updated with relaxed ordering on
+/// the request path; the `protocol` label is startup-fixed and low-cardinality,
+/// keeping this within the generic metrics layer's constraints.
+#[derive(Debug)]
+pub(crate) struct ServerMetrics {
+    tag: String,
+    protocol: &'static str,
+    request_total: AtomicU64,
+    completed_total: AtomicU64,
+    controlled_total: AtomicU64,
+    failed_total: AtomicU64,
+    inflight: AtomicU64,
+    latency_count: AtomicU64,
+    latency_sum_ms: AtomicU64,
+}
+
+impl ServerMetrics {
+    pub(crate) fn new(tag: String, protocol: &'static str) -> Self {
+        Self {
+            tag,
+            protocol,
+            request_total: AtomicU64::new(0),
+            completed_total: AtomicU64::new(0),
+            controlled_total: AtomicU64::new(0),
+            failed_total: AtomicU64::new(0),
+            inflight: AtomicU64::new(0),
+            latency_count: AtomicU64::new(0),
+            latency_sum_ms: AtomicU64::new(0),
+        }
+    }
+
+    #[inline]
+    fn on_request_start(&self) -> u64 {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+        self.inflight.fetch_add(1, Ordering::Relaxed);
+        AppClock::elapsed_millis()
+    }
+
+    #[inline]
+    fn on_request_finish(&self, start_ms: u64, exit: RequestExit) {
+        self.inflight.fetch_sub(1, Ordering::Relaxed);
+        let counter = match exit {
+            RequestExit::Completed => &self.completed_total,
+            RequestExit::Controlled => &self.controlled_total,
+            RequestExit::Failed => &self.failed_total,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        let elapsed = AppClock::elapsed_millis().saturating_sub(start_ms);
+        self.latency_count.fetch_add(1, Ordering::Relaxed);
+        self.latency_sum_ms.fetch_add(elapsed, Ordering::Relaxed);
+    }
+}
+
+impl MetricSource for ServerMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "server"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [
+            MetricLabel::new("plugin_tag", self.tag.as_str()),
+            MetricLabel::new("protocol", self.protocol),
+        ];
+        sink.emit(MetricSample::counter(
+            "server_request_total",
+            "Total inbound DNS requests handled by the server.",
+            &labels,
+            self.request_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "server_completed_total",
+            "Total requests that finished by running the executor chain to completion.",
+            &labels,
+            self.completed_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "server_controlled_total",
+            "Total requests stopped early by an executor (stop/return).",
+            &labels,
+            self.controlled_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "server_failed_total",
+            "Total requests that produced a SERVFAIL because the entry executor failed.",
+            &labels,
+            self.failed_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::gauge(
+            "server_inflight",
+            "Current number of in-flight requests being handled by the server.",
+            &labels,
+            self.inflight.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "server_latency_count",
+            "Total requests included in server latency statistics.",
+            &labels,
+            self.latency_count.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "server_latency_sum_ms",
+            "Total server request handling latency in milliseconds.",
+            &labels,
+            self.latency_sum_ms.load(Ordering::Relaxed),
+        ));
+    }
+}
+
 #[derive(Debug)]
 pub struct RequestHandle {
     pub entry_executor: Arc<dyn Executor>,
+    /// Shared server metrics. `None` for internal/test handles that should not
+    /// emit server-level metrics.
+    pub(crate) metrics: Option<Arc<ServerMetrics>>,
 }
 pub use crate::core::context::RequestMeta;
 
@@ -105,6 +226,8 @@ impl RequestHandle {
         src_addr: SocketAddr,
         meta: RequestMeta,
     ) -> RequestResult {
+        let metrics_start = self.metrics.as_ref().map(|m| m.on_request_start());
+
         let mut context = DnsContext::new(src_addr, msg);
         self.apply_request_meta(&mut context, meta);
 
@@ -159,6 +282,10 @@ impl RequestHandle {
                 response.edns(),
                 response.answers()
             );
+        }
+
+        if let (Some(metrics), Some(start_ms)) = (self.metrics.as_ref(), metrics_start) {
+            metrics.on_request_finish(start_ms, exit);
         }
 
         RequestResult {
@@ -232,6 +359,7 @@ mod tests {
     fn make_request_handle(executor: Arc<dyn Executor>) -> RequestHandle {
         RequestHandle {
             entry_executor: executor,
+            metrics: None,
         }
     }
 

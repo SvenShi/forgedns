@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -27,6 +29,10 @@ use tracing::{info, warn};
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{
+    MetricLabel, MetricSample, MetricSink, MetricSource, register_metric_source,
+    unregister_metric_source,
+};
 use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::template::Template;
 use crate::plugin::executor::{ExecStep, Executor};
@@ -57,6 +63,65 @@ enum ScriptErrorMode {
 }
 
 #[derive(Debug)]
+struct ScriptMetrics {
+    tag: String,
+    run_total: AtomicU64,
+    success_total: AtomicU64,
+    error_total: AtomicU64,
+    timeout_total: AtomicU64,
+}
+
+impl ScriptMetrics {
+    fn new(tag: String) -> Self {
+        Self {
+            tag,
+            run_total: AtomicU64::new(0),
+            success_total: AtomicU64::new(0),
+            error_total: AtomicU64::new(0),
+            timeout_total: AtomicU64::new(0),
+        }
+    }
+}
+
+impl MetricSource for ScriptMetrics {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn plugin_type(&self) -> &'static str {
+        "script"
+    }
+
+    fn collect(&self, sink: &mut dyn MetricSink) {
+        let labels = [MetricLabel::new("plugin_tag", self.tag.as_str())];
+        sink.emit(MetricSample::counter(
+            "script_run_total",
+            "Total script executions started.",
+            &labels,
+            self.run_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "script_success_total",
+            "Total script executions that exited successfully.",
+            &labels,
+            self.success_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "script_error_total",
+            "Total script executions that failed (non-zero exit or runtime error).",
+            &labels,
+            self.error_total.load(Ordering::Relaxed),
+        ));
+        sink.emit(MetricSample::counter(
+            "script_timeout_total",
+            "Total script executions that timed out.",
+            &labels,
+            self.timeout_total.load(Ordering::Relaxed),
+        ));
+    }
+}
+
+#[derive(Debug)]
 struct ScriptExecutor {
     tag: String,
     command: String,
@@ -66,6 +131,7 @@ struct ScriptExecutor {
     timeout: Duration,
     error_mode: ScriptErrorMode,
     max_output_bytes: usize,
+    metrics: Arc<ScriptMetrics>,
 }
 
 #[derive(Debug, Default)]
@@ -101,10 +167,11 @@ impl Plugin for ScriptExecutor {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
-        Ok(())
+        register_metric_source(self.metrics.clone())
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         Ok(())
     }
 }
@@ -124,11 +191,13 @@ impl Executor for ScriptExecutor {
             .map(|(key, template)| (key.clone(), template.render(context)))
             .collect::<Vec<_>>();
 
+        self.metrics.run_total.fetch_add(1, Ordering::Relaxed);
         match self
             .run_process(rendered_args.as_slice(), rendered_env.as_slice())
             .await
         {
             Ok(output) => {
+                self.metrics.success_total.fetch_add(1, Ordering::Relaxed);
                 info!(
                     plugin = %self.tag,
                     command = %self.command,
@@ -140,7 +209,17 @@ impl Executor for ScriptExecutor {
                 );
                 Ok(ExecStep::Next)
             }
-            Err(failure) => self.handle_failure(failure, rendered_args.as_slice()),
+            Err(failure) => {
+                match &failure {
+                    ExecutionFailure::Timeout { .. } => {
+                        self.metrics.timeout_total.fetch_add(1, Ordering::Relaxed);
+                    }
+                    ExecutionFailure::Exit { .. } | ExecutionFailure::Runtime { .. } => {
+                        self.metrics.error_total.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                self.handle_failure(failure, rendered_args.as_slice())
+            }
         }
     }
 }
@@ -395,6 +474,7 @@ fn build_executor(tag: &str, config: ScriptConfig) -> Result<ScriptExecutor> {
         timeout,
         error_mode: config.error_mode.unwrap_or_default(),
         max_output_bytes,
+        metrics: Arc::new(ScriptMetrics::new(tag.to_string())),
     })
 }
 

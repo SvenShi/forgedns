@@ -27,11 +27,12 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::types::PluginConfig;
 use crate::core::error::{DnsError, Result};
+use crate::core::metrics::{register_metric_source, unregister_metric_source};
 use crate::core::system_utils::deserialize_duration_option;
 use crate::network::tls_config::load_tls_config;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
-use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
+use crate::plugin::server::{RequestHandle, Server, ServerMetrics, parse_listen_addr};
 use crate::plugin::{Plugin, PluginFactory};
 use crate::plugin_factory;
 
@@ -137,6 +138,8 @@ pub struct HttpServer {
     shutdown_tx: watch::Sender<bool>,
     /// Spawned top-level server task handles
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Shared request metrics, registered once for the whole server.
+    metrics: Arc<ServerMetrics>,
 }
 
 impl std::fmt::Debug for HttpServer {
@@ -231,6 +234,7 @@ impl Plugin for HttpServer {
     }
 
     async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
+        register_metric_source(self.metrics.clone())?;
         let (h2_tx, h2_rx) = oneshot::channel();
         let (h3_tx, h3_rx) = if self.enable_http3.unwrap_or(false) {
             let (tx, rx) = oneshot::channel();
@@ -267,6 +271,7 @@ impl Plugin for HttpServer {
     }
 
     async fn destroy(&self) -> Result<()> {
+        unregister_metric_source(&self.tag);
         let _ = self.shutdown_tx.send(true);
         let handles = {
             let mut task_handles = self
@@ -338,6 +343,8 @@ impl PluginFactory for HttpServerFactory {
             ))
         })?;
 
+        let metrics = Arc::new(ServerMetrics::new(plugin_config.tag.clone(), "doh"));
+
         // Create HTTP dispatcher for routing requests
         let mut dispatcher = HttpDispatcher::new();
 
@@ -351,6 +358,7 @@ impl PluginFactory for HttpServerFactory {
             // Create request handle that wraps the executor
             let request_handle = Arc::new(RequestHandle {
                 entry_executor: executor,
+                metrics: Some(metrics.clone()),
             });
 
             // Register GET route (DoH RFC 8484: DNS query in URL parameter)
@@ -397,6 +405,7 @@ impl PluginFactory for HttpServerFactory {
                 http2_alt_svc: http2_alt_svc_for_config(http_config.enable_http3, listen)?,
                 shutdown_tx: watch::channel(false).0,
                 task_handles: Mutex::new(Vec::new()),
+                metrics,
             },
         )))
     }

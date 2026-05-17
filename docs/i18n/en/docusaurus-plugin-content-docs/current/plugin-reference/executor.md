@@ -325,6 +325,15 @@ Exported through the global `GET /api/metrics` endpoint:
 - `forward_latency_count`
 - `forward_latency_sum_ms`
 
+Per-upstream series are also exported with an `upstream` label (the upstream tag, or its resolved address when no tag is configured):
+
+- `forward_upstream_query_total`
+- `forward_upstream_success_total`
+- `forward_upstream_error_total`
+- `forward_upstream_timeout_total`
+- `forward_upstream_latency_count`
+- `forward_upstream_latency_sum_ms`
+
 ### Typical Uses
 
 - Standard forwarding
