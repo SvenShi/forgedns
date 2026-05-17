@@ -166,6 +166,8 @@ export interface CacheEntryRow {
   dns_class: string;
   rcode: string;
   answer_count: number;
+  authority_count?: number;
+  additional_count?: number;
   ttl: number;
   remaining_ttl: number;
   fresh: boolean;
@@ -173,8 +175,15 @@ export interface CacheEntryRow {
   cache_time_ms: number;
   expire_at_ms: number;
   last_access_ms: number;
+  cache_time_unix_ms?: number;
+  expire_at_unix_ms?: number;
+  last_access_unix_ms?: number;
   do_bit: boolean;
   cd_bit: boolean;
+  answers_json?: QueryRecordPayload[];
+  authorities_json?: QueryRecordPayload[];
+  additionals_json?: QueryRecordPayload[];
+  signature_json?: QueryRecordPayload[];
   ecs_scope?: {
     family: number;
     source_prefix: number;
@@ -352,23 +361,33 @@ export async function fetchCacheEntries(
 
 export async function deleteCacheEntry(tag: string, id: string): Promise<void> {
   const response = await fetch(
-    apiUrl(`/plugins/${encodeURIComponent(tag)}/entries/${encodeURIComponent(id)}`),
+    apiUrl(
+      `/plugins/${encodeURIComponent(tag)}/entries/${encodeURIComponent(id)}`,
+    ),
     { method: "DELETE", headers: apiHeaders() },
   );
   await readJsonResponse<unknown>(response);
 }
 
 export async function flushCache(tag: string): Promise<void> {
-  const response = await fetch(apiUrl(`/plugins/${encodeURIComponent(tag)}/flush`), {
-    method: "GET",
-    headers: apiHeaders(),
-  });
+  const response = await fetch(
+    apiUrl(`/plugins/${encodeURIComponent(tag)}/flush`),
+    {
+      method: "GET",
+      headers: apiHeaders(),
+    },
+  );
   await readJsonResponse<unknown>(response);
 }
 
 export async function fetchQueryRecords(
   tag: string,
-  options: { limit?: number; cursor?: string; sinceMs?: number; untilMs?: number } = {},
+  options: {
+    limit?: number;
+    cursor?: string;
+    sinceMs?: number;
+    untilMs?: number;
+  } = {},
 ): Promise<QueryRecordsResponse> {
   const params = new URLSearchParams();
   if (options.limit) params.set("limit", String(options.limit));

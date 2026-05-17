@@ -17,7 +17,7 @@ export default function DashboardPage() {
   useEffect(() => {
     const id = setInterval(() => {
       void refreshRuntimeState();
-    }, 5_000);
+    }, 3_000);
     return () => clearInterval(id);
   }, [refreshRuntimeState]);
 

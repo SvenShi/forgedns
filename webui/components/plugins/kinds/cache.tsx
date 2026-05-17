@@ -24,6 +24,7 @@ import type {
   PluginComponentDefinition,
   PluginDetailComponentProps,
 } from "../types";
+import { DnsRecordDetailDialog } from "../dns-record-detail-dialog";
 import { PluginCardTemplate } from "../plugin-card-template";
 import { PluginDetailTemplate } from "../plugin-detail-template";
 
@@ -74,6 +75,7 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
   const [entries, setEntries] = useState<CacheEntryRow[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [total, setTotal] = useState(0);
+  const [selected, setSelected] = useState<CacheEntryRow | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -122,15 +124,31 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader className="grid grid-cols-[1fr_auto] items-center p-4 pb-2">
-          <div>
+        <CardHeader className="grid gap-3 p-4 pb-2 sm:grid-cols-[1fr_auto] sm:items-center">
+          <div className="min-w-0">
             <CardTitle className="text-sm">缓存项</CardTitle>
-            <div className="mt-1 text-xs text-muted-foreground">
-              共 {total} 项，按最近访问排序
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span className="rounded-full border bg-muted/30 px-2 py-0.5">
+                共 {total} 项
+              </span>
+              <span className="rounded-full border bg-muted/30 px-2 py-0.5">
+                已载入 {entries.length} 项
+              </span>
+              <span className="rounded-full border bg-muted/30 px-2 py-0.5">
+                fresh {entries.filter((entry) => entry.fresh).length}
+              </span>
+              <span className="rounded-full border bg-muted/30 px-2 py-0.5">
+                stale {entries.filter((entry) => entry.stale).length}
+              </span>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => load()}>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading}
+              onClick={() => load()}
+            >
               <RefreshCw className="h-4 w-4" />
               刷新
             </Button>
@@ -146,53 +164,96 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
               {error}
             </div>
           )}
-          <div className="overflow-x-auto rounded-md border">
-            <Table>
+          <div className="overflow-hidden rounded-md border">
+            <Table className="min-w-[820px]">
               <TableHeader>
-                <TableRow>
-                  <TableHead>域名</TableHead>
-                  <TableHead>类型</TableHead>
+                <TableRow className="bg-muted/30 hover:bg-muted/30">
+                  <TableHead>缓存键</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead>TTL</TableHead>
                   <TableHead>RCODE</TableHead>
                   <TableHead>答案</TableHead>
-                  <TableHead>TTL</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>ECS</TableHead>
+                  <TableHead>最近访问</TableHead>
                   <TableHead className="w-16" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {entries.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="max-w-[14rem] truncate font-mono">
-                      {entry.domain}
+                  <TableRow
+                    key={entry.id}
+                    className="cursor-pointer"
+                    onClick={() => setSelected(entry)}
+                  >
+                    <TableCell className="max-w-[24rem]">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="truncate font-mono"
+                          title={`${entry.domain} ${entry.dns_class} ${entry.record_type}`}
+                        >
+                          {entry.domain}
+                        </span>
+                        <Badge variant="secondary" className="font-mono">
+                          {entry.record_type}
+                        </Badge>
+                        <Badge variant="outline" className="font-mono">
+                          {entry.dns_class}
+                        </Badge>
+                      </div>
                     </TableCell>
+                    <TableCell>{cacheStatusBadge(entry)}</TableCell>
                     <TableCell className="font-mono">
-                      {entry.record_type}
+                      <div className="flex items-baseline gap-1">
+                        <span>{entry.remaining_ttl}s</span>
+                        <span className="text-xs text-muted-foreground">
+                          / {entry.ttl}s
+                        </span>
+                      </div>
                     </TableCell>
                     <TableCell className="font-mono">{entry.rcode}</TableCell>
-                    <TableCell>{entry.answer_count}</TableCell>
-                    <TableCell className="font-mono">
-                      {entry.remaining_ttl}s
-                    </TableCell>
                     <TableCell>
-                      <Badge variant={entry.fresh ? "secondary" : "outline"}>
-                        {entry.fresh
-                          ? "fresh"
-                          : entry.stale
-                            ? "stale"
-                            : "expired"}
-                      </Badge>
+                      <div className="flex items-center gap-1 font-mono text-xs">
+                        <span>{entry.answer_count}</span>
+                        <span className="text-muted-foreground">
+                          /{" "}
+                          {entry.authority_count ??
+                            entry.authorities_json?.length ??
+                            0}
+                          /{" "}
+                          {entry.additional_count ??
+                            entry.additionals_json?.length ??
+                            0}
+                        </span>
+                      </div>
                     </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {entry.ecs_scope
-                        ? `${entry.ecs_scope.family}/${entry.ecs_scope.source_prefix}`
-                        : "-"}
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span
+                          title={formatCacheFullTime(
+                            entry.last_access_unix_ms,
+                            entry.last_access_ms,
+                          )}
+                        >
+                          {formatCacheShortTime(
+                            entry.last_access_unix_ms,
+                            entry.last_access_ms,
+                          )}
+                        </span>
+                        {entry.ecs_scope && (
+                          <Badge variant="outline" className="font-mono">
+                            ECS {entry.ecs_scope.family}/
+                            {entry.ecs_scope.source_prefix}
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        onClick={() => handleDelete(entry)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleDelete(entry);
+                        }}
                         aria-label="删除缓存项"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -203,7 +264,7 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
                 {!entries.length && (
                   <TableRow>
                     <TableCell
-                      colSpan={8}
+                      colSpan={7}
                       className="h-24 text-center text-muted-foreground"
                     >
                       {loading ? "正在读取缓存项..." : "暂无缓存项"}
@@ -225,6 +286,10 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
             </Button>
           )}
         </CardContent>
+        <CacheEntryDetailDialog
+          entry={selected}
+          onClose={() => setSelected(null)}
+        />
       </Card>
 
       <Card>
@@ -237,6 +302,211 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
       </Card>
     </div>
   );
+}
+
+function CacheEntryDetailDialog({
+  entry,
+  onClose,
+}: {
+  entry: CacheEntryRow | null;
+  onClose: () => void;
+}) {
+  return (
+    <DnsRecordDetailDialog
+      open={Boolean(entry)}
+      onOpenChange={(open) => !open && onClose()}
+      title={entry ? `${entry.domain} ${entry.record_type}` : "缓存详情"}
+      subtitle={
+        entry
+          ? `缓存项 · 写入 ${formatCacheFullTime(entry.cache_time_unix_ms, entry.cache_time_ms)}`
+          : undefined
+      }
+      status={entry ? cacheStatusBadge(entry) : undefined}
+      summaryItems={
+        entry
+          ? [
+              {
+                label: "Domain",
+                value: entry.domain,
+                title: entry.domain,
+                mono: true,
+                wide: true,
+              },
+              { label: "Type", value: entry.record_type, mono: true },
+              { label: "Class", value: entry.dns_class, mono: true },
+              { label: "RCODE", value: entry.rcode, mono: true },
+              { label: "TTL", value: `${entry.ttl}s`, mono: true },
+              {
+                label: "剩余 TTL",
+                value: `${entry.remaining_ttl}s`,
+                mono: true,
+              },
+              {
+                label: "响应记录",
+                value: `${entry.answer_count} / ${entry.authority_count ?? entry.authorities_json?.length ?? 0} / ${entry.additional_count ?? entry.additionals_json?.length ?? 0}`,
+                title: "answer / authority / additional",
+                mono: true,
+              },
+              {
+                label: "缓存标志",
+                value: `DO=${entry.do_bit ? "1" : "0"} CD=${entry.cd_bit ? "1" : "0"}`,
+                mono: true,
+              },
+              {
+                label: "写入时间",
+                value: formatCacheFullTime(
+                  entry.cache_time_unix_ms,
+                  entry.cache_time_ms,
+                ),
+                title: `runtime +${entry.cache_time_ms}ms`,
+                mono: true,
+                wide: true,
+              },
+              {
+                label: "过期时间",
+                value: formatCacheFullTime(
+                  entry.expire_at_unix_ms,
+                  entry.expire_at_ms,
+                ),
+                title: `runtime +${entry.expire_at_ms}ms`,
+                mono: true,
+                wide: true,
+              },
+              {
+                label: "最近访问",
+                value: formatCacheFullTime(
+                  entry.last_access_unix_ms,
+                  entry.last_access_ms,
+                ),
+                title: `runtime +${entry.last_access_ms}ms`,
+                mono: true,
+                wide: true,
+              },
+            ]
+          : []
+      }
+      questions={
+        entry
+          ? [
+              {
+                name: entry.domain,
+                qclass: entry.dns_class,
+                qtype: entry.record_type,
+              },
+            ]
+          : []
+      }
+      sections={
+        entry
+          ? [
+              {
+                title: "Answers",
+                records: entry.answers_json ?? [],
+                emptyLabel: "无 answer",
+              },
+              {
+                title: "Authorities",
+                records: entry.authorities_json ?? [],
+                emptyLabel: "无 authority",
+              },
+              {
+                title: "Additionals",
+                records: entry.additionals_json ?? [],
+                emptyLabel: "无 additional",
+              },
+              {
+                title: "Signatures",
+                records: entry.signature_json ?? [],
+                emptyLabel: "无 signature",
+              },
+            ]
+          : []
+      }
+      blocks={
+        entry
+          ? [
+              {
+                title: "Cache Key",
+                children: (
+                  <div className="break-all font-mono text-xs text-muted-foreground">
+                    {entry.id}
+                  </div>
+                ),
+              },
+              ...(entry.ecs_scope
+                ? [
+                    {
+                      title: "ECS Scope",
+                      children: (
+                        <div className="grid gap-2 font-mono text-xs text-muted-foreground sm:grid-cols-2">
+                          <span>family={entry.ecs_scope.family}</span>
+                          <span>source={entry.ecs_scope.source_prefix}</span>
+                          <span>scope={entry.ecs_scope.scope_prefix}</span>
+                          <span className="break-all">
+                            network={entry.ecs_scope.network_hex}
+                          </span>
+                        </div>
+                      ),
+                    },
+                  ]
+                : []),
+            ]
+          : []
+      }
+    />
+  );
+}
+
+function cacheStatusBadge(entry: CacheEntryRow) {
+  if (entry.fresh) return <Badge variant="secondary">fresh</Badge>;
+  if (entry.stale) return <Badge variant="outline">stale</Badge>;
+  return <Badge variant="destructive">expired</Badge>;
+}
+
+function formatCacheShortTime(ms?: number, runtimeMs?: number) {
+  if (typeof ms !== "number") {
+    return typeof runtimeMs === "number" ? formatRuntimeMs(runtimeMs) : "-";
+  }
+  return new Date(ms).toLocaleString([], {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatCacheFullTime(ms?: number, runtimeMs?: number) {
+  if (typeof ms !== "number") {
+    return typeof runtimeMs === "number" ? formatRuntimeMs(runtimeMs) : "-";
+  }
+  return new Date(ms).toLocaleString([], {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatRuntimeMs(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (days > 0) {
+    return `+${days}d ${hours}h`;
+  }
+  if (hours > 0) {
+    return `+${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `+${minutes}m ${seconds}s`;
+  }
+  return `+${seconds}s`;
 }
 
 export const cachePlugin: PluginComponentDefinition = {

@@ -1,17 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { Radio, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -33,6 +26,7 @@ import type {
   PluginDetailComponentProps,
 } from "../types";
 import { PluginDetailTemplate } from "../plugin-detail-template";
+import { DnsRecordDetailDialog } from "../dns-record-detail-dialog";
 
 function QueryRecorderDetail(props: PluginDetailComponentProps) {
   return (
@@ -41,8 +35,14 @@ function QueryRecorderDetail(props: PluginDetailComponentProps) {
       icon={<Radio className="h-5 w-5" />}
       summaryItems={[
         { label: "SQLite", value: String(props.plugin.config.path ?? "-") },
-        { label: "Tail", value: String(props.plugin.config.memory_tail ?? "默认") },
-        { label: "保留", value: `${String(props.plugin.config.retention_days ?? "默认")}天` },
+        {
+          label: "Tail",
+          value: String(props.plugin.config.memory_tail ?? "默认"),
+        },
+        {
+          label: "保留",
+          value: `${String(props.plugin.config.retention_days ?? "默认")}天`,
+        },
       ]}
       metricsContent={<QueryRecordsPanel tag={props.plugin.name} />}
     />
@@ -58,21 +58,24 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const load = useCallback(async (cursor?: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetchQueryRecords(tag, { limit: 100, cursor });
-      setRecords((current) =>
-        cursor ? [...current, ...response.records] : response.records,
-      );
-      setNextCursor(response.next_cursor);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "读取查询记录失败");
-    } finally {
-      setLoading(false);
-    }
-  }, [tag]);
+  const load = useCallback(
+    async (cursor?: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetchQueryRecords(tag, { limit: 100, cursor });
+        setRecords((current) =>
+          cursor ? [...current, ...response.records] : response.records,
+        );
+        setNextCursor(response.next_cursor);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "读取查询记录失败");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [tag],
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -129,7 +132,12 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
             .join("\n");
           if (!data) continue;
           const record = JSON.parse(data) as QueryRecordDetail;
-          setRecords((current) => [record, ...current.filter((item) => item.id !== record.id)].slice(0, 200));
+          setRecords((current) =>
+            [record, ...current.filter((item) => item.id !== record.id)].slice(
+              0,
+              200,
+            ),
+          );
         }
       }
     } catch (err) {
@@ -146,15 +154,30 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
 
   return (
     <Card>
-      <CardHeader className="grid grid-cols-[1fr_auto] items-center p-4 pb-2">
-        <div>
+      <CardHeader className="grid gap-3 p-4 pb-2 sm:grid-cols-[1fr_auto] sm:items-center">
+        <div className="min-w-0">
           <CardTitle className="text-sm">查询记录</CardTitle>
-          <div className="mt-1 text-xs text-muted-foreground">
-            列表与详情来自 query_recorder 插件 API
+          <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span className="rounded-full border bg-muted/30 px-2 py-0.5">
+              已载入 {records.length} 条
+            </span>
+            <span className="rounded-full border bg-muted/30 px-2 py-0.5">
+              错误 {records.filter((record) => record.error).length} 条
+            </span>
+            {streaming && (
+              <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-primary">
+                实时接收中
+              </span>
+            )}
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => load()}>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={loading}
+            onClick={() => load()}
+          >
             <RefreshCw className="h-4 w-4" />
             刷新
           </Button>
@@ -174,16 +197,16 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
             {error}
           </div>
         )}
-        <div className="overflow-x-auto rounded-md border">
-          <Table>
+        <div className="overflow-hidden rounded-md border">
+          <Table className="min-w-[760px]">
             <TableHeader>
-              <TableRow>
-                <TableHead>时间</TableHead>
-                <TableHead>客户端</TableHead>
+              <TableRow className="bg-muted/30 hover:bg-muted/30">
                 <TableHead>Query</TableHead>
-                <TableHead>RCODE</TableHead>
+                <TableHead>客户端</TableHead>
+                <TableHead>时间</TableHead>
+                <TableHead>结果</TableHead>
                 <TableHead>耗时</TableHead>
-                <TableHead>答案</TableHead>
+                <TableHead>记录数</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -193,25 +216,47 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
                   className="cursor-pointer"
                   onClick={() => openDetail(record)}
                 >
+                  <TableCell className="max-w-[22rem]">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span
+                        className="truncate font-mono"
+                        title={formatQuestion(record)}
+                      >
+                        {formatQuestion(record)}
+                      </span>
+                      {record.has_response && (
+                        <Badge variant="outline" className="font-mono">
+                          resp
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell className="font-mono text-xs">
+                    {record.client_ip}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
                     {formatTime(record.created_at_ms)}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{record.client_ip}</TableCell>
-                  <TableCell className="max-w-[16rem] truncate font-mono">
-                    {formatQuestion(record)}
+                  <TableCell>{queryStatusBadge(record)}</TableCell>
+                  <TableCell className="font-mono">
+                    {record.elapsed_ms}ms
                   </TableCell>
                   <TableCell>
-                    <Badge variant={record.error ? "destructive" : "outline"}>
-                      {record.error ? "ERR" : (record.rcode ?? "-")}
-                    </Badge>
+                    <div className="flex items-center gap-1 font-mono text-xs">
+                      <span>{record.answer_count}</span>
+                      <span className="text-muted-foreground">
+                        / {record.authority_count} / {record.additional_count}
+                      </span>
+                    </div>
                   </TableCell>
-                  <TableCell className="font-mono">{record.elapsed_ms}ms</TableCell>
-                  <TableCell>{record.answer_count}</TableCell>
                 </TableRow>
               ))}
               {!records.length && (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                  <TableCell
+                    colSpan={6}
+                    className="h-24 text-center text-muted-foreground"
+                  >
                     {loading ? "正在读取查询记录..." : "暂无查询记录"}
                   </TableCell>
                 </TableRow>
@@ -244,83 +289,104 @@ function RecordDetailDialog({
   onClose: () => void;
 }) {
   return (
-    <Dialog open={Boolean(record)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>查询详情 #{record?.id}</DialogTitle>
-        </DialogHeader>
-        {record && (
-          <div className="space-y-4 text-sm">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <DetailItem label="Client" value={record.client_ip} />
-              <DetailItem label="RCODE" value={record.rcode ?? "-"} />
-              <DetailItem label="Elapsed" value={`${record.elapsed_ms}ms`} />
-            </div>
-            <DetailBlock title="Question">
-              {record.questions_json.map((question) => (
-                <div key={`${question.name}-${question.qtype}`} className="font-mono">
-                  {question.name} {question.qclass} {question.qtype}
-                </div>
-              ))}
-            </DetailBlock>
-            <DetailBlock title="Answers">
-              {record.answers_json.length ? (
-                record.answers_json.map((answer, index) => (
-                  <div key={index} className="font-mono">
-                    {answer.name} {answer.ttl} {answer.class} {answer.rr_type}{" "}
-                    {answer.payload_text}
-                  </div>
-                ))
-              ) : (
-                <span className="text-muted-foreground">无 answer</span>
-              )}
-            </DetailBlock>
-            <DetailBlock title="Sequence Steps">
-              {record.steps.map((step) => (
-                <div key={step.event_index} className="font-mono">
-                  #{step.event_index} {step.sequence_tag} {step.kind}
-                  {step.tag ? `:${step.tag}` : ""} {step.outcome}
-                </div>
-              ))}
-            </DetailBlock>
-            {record.error && (
-              <DetailBlock title="Error">
-                <span className="text-destructive">{record.error}</span>
-              </DetailBlock>
-            )}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+    <DnsRecordDetailDialog
+      open={Boolean(record)}
+      onOpenChange={(open) => !open && onClose()}
+      title={`查询详情 #${record?.id ?? ""}`}
+      subtitle={record ? formatFullTime(record.created_at_ms) : undefined}
+      status={record ? queryStatusBadge(record) : undefined}
+      summaryItems={
+        record
+          ? [
+              { label: "Client", value: record.client_ip, mono: true },
+              {
+                label: "Request ID",
+                value: String(record.request_id),
+                mono: true,
+              },
+              { label: "Elapsed", value: `${record.elapsed_ms}ms`, mono: true },
+              { label: "RCODE", value: record.rcode ?? "-", mono: true },
+              {
+                label: "响应记录",
+                value: `${record.answer_count} / ${record.authority_count} / ${record.additional_count}`,
+                title: "answer / authority / additional",
+                mono: true,
+              },
+              {
+                label: "请求标志",
+                value: `RD=${flag(record.req_rd)} CD=${flag(record.req_cd)} AD=${flag(record.req_ad)}`,
+                mono: true,
+                wide: true,
+              },
+              {
+                label: "响应标志",
+                value: record.has_response
+                  ? `AA=${flag(record.resp_aa)} TC=${flag(record.resp_tc)} RA=${flag(record.resp_ra)} AD=${flag(record.resp_ad)} CD=${flag(record.resp_cd)}`
+                  : "-",
+                mono: true,
+                wide: true,
+              },
+            ]
+          : []
+      }
+      questions={record?.questions_json}
+      sections={
+        record
+          ? [
+              {
+                title: "Answers",
+                records: record.answers_json,
+                emptyLabel: "无 answer",
+              },
+              {
+                title: "Authorities",
+                records: record.authorities_json,
+                emptyLabel: "无 authority",
+              },
+              {
+                title: "Additionals",
+                records: record.additionals_json,
+                emptyLabel: "无 additional",
+              },
+              {
+                title: "Signatures",
+                records: record.signature_json,
+                emptyLabel: "无 signature",
+              },
+            ]
+          : []
+      }
+      steps={record?.steps}
+      error={record?.error ?? null}
+    />
   );
 }
 
-function DetailItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border px-3 py-2">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate font-mono">{value}</div>
-    </div>
-  );
+function queryStatusBadge(record: QueryRecordRow | QueryRecordDetail) {
+  if (record.error) {
+    return <Badge variant="destructive">ERR</Badge>;
+  }
+  if (record.rcode === "NOERROR") {
+    return <Badge variant="secondary">NOERROR</Badge>;
+  }
+  return <Badge variant="outline">{record.rcode ?? "-"}</Badge>;
 }
 
-function DetailBlock({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="space-y-2 rounded-md border p-3">
-      <div className="text-xs font-medium text-muted-foreground">{title}</div>
-      <div className="space-y-1">{children}</div>
-    </div>
-  );
+function flag(value: unknown) {
+  if (typeof value !== "boolean") return "-";
+  return value ? "1" : "0";
 }
 
 function formatTime(ms: number) {
-  return new Date(ms).toLocaleTimeString();
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatFullTime(ms: number) {
+  return new Date(ms).toLocaleString();
 }
 
 function formatQuestion(record: QueryRecordRow) {

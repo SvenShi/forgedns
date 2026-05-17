@@ -20,13 +20,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import {
-  Pencil,
-  Pin,
-  PinOff,
-  Save,
-  Trash2,
-} from "lucide-react";
+import { Pencil, Pin, PinOff, Save, Trash2 } from "lucide-react";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -111,10 +105,16 @@ export function PluginDetailTemplate({
   };
 
   const resolvedSummaryItems = summaryItems ?? [];
+  const hasStatsContent =
+    metricsContent !== undefined &&
+    metricsContent !== null &&
+    metricsContent !== false;
+  const visibleTabCount =
+    1 + (hasStatsContent ? 1 : 0) + (hasMetricSeries ? 1 : 0);
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="border-b bg-sidebar/70 px-5 py-5 pr-14">
+      <header className="border-b bg-sidebar/70 px-5 py-5 pr-24">
         <div className="flex min-w-0 items-start gap-4">
           <div className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/12 text-primary [&_svg]:size-5">
             {resolvedIcon}
@@ -222,9 +222,17 @@ export function PluginDetailTemplate({
       </header>
 
       <Tabs defaultValue="config" className="flex-1 px-5 py-5">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList
+          className={cn(
+            "grid w-full",
+            visibleTabCount === 1 && "grid-cols-1",
+            visibleTabCount === 2 && "grid-cols-2",
+            visibleTabCount === 3 && "grid-cols-3",
+          )}
+        >
           <TabsTrigger value="config">配置</TabsTrigger>
-          <TabsTrigger value="metrics">统计</TabsTrigger>
+          {hasStatsContent && <TabsTrigger value="stats">统计</TabsTrigger>}
+          {hasMetricSeries && <TabsTrigger value="metrics">指标</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="config" className="mt-4 space-y-4">
@@ -293,17 +301,17 @@ export function PluginDetailTemplate({
           />
         </TabsContent>
 
-        <TabsContent value="metrics" className="mt-4 space-y-4">
-          {metricsContent}
-          <PluginMetricsPanel tag={plugin.name} />
-          {!metricsContent && !hasMetricSeries && (
-            <Card>
-              <CardContent className="p-6 text-sm text-muted-foreground">
-                此插件没有可展示的统计信息。
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
+        {hasStatsContent && (
+          <TabsContent value="stats" className="mt-4 space-y-4">
+            {metricsContent}
+          </TabsContent>
+        )}
+
+        {hasMetricSeries && (
+          <TabsContent value="metrics" className="mt-4 space-y-4">
+            <PluginMetricsPanel tag={plugin.name} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
@@ -318,8 +326,12 @@ function DependencySection({
 }) {
   if (!dependencyGraph) return null;
   const initIndex = dependencyGraph.init_order.indexOf(tag);
-  const upstream = dependencyGraph.edges.filter((edge) => edge.source_tag === tag);
-  const downstream = dependencyGraph.edges.filter((edge) => edge.target_tag === tag);
+  const upstream = dependencyGraph.edges.filter(
+    (edge) => edge.source_tag === tag,
+  );
+  const downstream = dependencyGraph.edges.filter(
+    (edge) => edge.target_tag === tag,
+  );
 
   return (
     <Card>
@@ -333,8 +345,12 @@ function DependencySection({
             value: initIndex >= 0 ? String(initIndex + 1) : "-",
           }}
         />
-        <SummaryItem item={{ label: "依赖插件", value: String(upstream.length) }} />
-        <SummaryItem item={{ label: "被引用", value: String(downstream.length) }} />
+        <SummaryItem
+          item={{ label: "依赖插件", value: String(upstream.length) }}
+        />
+        <SummaryItem
+          item={{ label: "被引用", value: String(downstream.length) }}
+        />
         <div className="space-y-1 sm:col-span-3">
           {[...upstream, ...downstream].length ? (
             [...upstream, ...downstream].map((edge) => (
