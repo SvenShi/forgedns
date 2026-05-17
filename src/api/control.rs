@@ -54,6 +54,10 @@ struct ControlState {
     last_reload_completed_ms: Option<u64>,
     last_reload_success_ms: Option<u64>,
     last_reload_error: Option<String>,
+    /// SHA256 of the config the backend has actually assembled and is running.
+    running_config_version: Option<String>,
+    /// SHA256 of the config the most recent reload attempted to apply.
+    last_reload_target_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +78,10 @@ pub struct ReloadSnapshot {
     last_completed_ms: Option<u64>,
     last_success_ms: Option<u64>,
     last_error: Option<String>,
+    /// Config version (SHA256) the backend is actually running right now.
+    running_version: Option<String>,
+    /// Config version (SHA256) the most recent reload attempted to apply.
+    target_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -183,12 +191,21 @@ impl AppController {
             .map_err(|_| ControlRequestError::CommandChannelClosed)
     }
 
-    pub fn mark_reload_started(&self) {
+    /// Record the config version (SHA256) the backend is actually running.
+    /// Called once after the initial assembly and after every successful
+    /// reload so clients can authoritatively tell "on-disk" from "running".
+    pub fn set_running_config_version(&self, version: Option<String>) {
+        let mut state = self.state.lock().expect("control state poisoned");
+        state.running_config_version = version;
+    }
+
+    pub fn mark_reload_started(&self, target_version: Option<String>) {
         let mut state = self.state.lock().expect("control state poisoned");
         state.reload_pending = false;
         state.reload_in_progress = true;
         state.last_reload_started_ms = Some(AppClock::elapsed_millis());
         state.last_reload_error = None;
+        state.last_reload_target_version = target_version;
     }
 
     pub fn mark_reload_succeeded(&self) {
@@ -199,6 +216,10 @@ impl AppController {
         state.last_reload_completed_ms = Some(now);
         state.last_reload_success_ms = Some(now);
         state.last_reload_error = None;
+        // The applied target is now the running config.
+        if state.last_reload_target_version.is_some() {
+            state.running_config_version = state.last_reload_target_version.clone();
+        }
     }
 
     pub fn mark_reload_failed(&self, message: impl Into<String>) {
@@ -230,6 +251,8 @@ impl ControlState {
             last_completed_ms: self.last_reload_completed_ms,
             last_success_ms: self.last_reload_success_ms,
             last_error: self.last_reload_error.clone(),
+            running_version: self.running_config_version.clone(),
+            target_version: self.last_reload_target_version.clone(),
         }
     }
 }
@@ -740,6 +763,12 @@ fn config_version(content: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// SHA256 of the on-disk config file, matching the `version` that
+/// `GET /config` reports. Returns `None` if the file can't be read.
+pub fn config_file_version(path: &Path) -> Option<String> {
+    fs::read_to_string(path).ok().map(|c| config_version(&c))
+}
+
 fn config_updated_at_ms(path: &Path) -> Option<u64> {
     fs::metadata(path)
         .ok()
@@ -1099,7 +1128,7 @@ plugins:
         controller.request_reload().expect("request reload");
         assert_eq!(controller.reload_snapshot().status, "pending");
 
-        controller.mark_reload_started();
+        controller.mark_reload_started(None);
         assert_eq!(controller.reload_snapshot().status, "in_progress");
 
         controller.mark_reload_failed("boom");
@@ -1108,7 +1137,7 @@ plugins:
         assert_eq!(snapshot.last_error.as_deref(), Some("boom"));
 
         controller.request_reload().expect("request second reload");
-        controller.mark_reload_started();
+        controller.mark_reload_started(None);
         controller.mark_reload_succeeded();
         assert_eq!(controller.reload_snapshot().status, "ok");
     }

@@ -21,40 +21,53 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/spinner";
-import { useAuthStore } from "@/lib/auth-store";
 
 export function ConfigEditorView() {
   const yamlConfig = useAppStore((s) => s.configText);
   const setYamlConfig = useAppStore((s) => s.setYamlConfig);
-  const loadConfig = useAppStore((s) => s.loadConfig);
   const saveConfig = useAppStore((s) => s.saveConfig);
-  const isRestarting = useAppStore((s) => s.isRestarting);
   const isConfigLoading = useAppStore((s) => s.isConfigLoading);
   const isConfigSaving = useAppStore((s) => s.isConfigSaving);
   const configError = useAppStore((s) => s.configError);
   const configPath = useAppStore((s) => s.configPath);
   const configVersion = useAppStore((s) => s.configVersion);
   const plugins = useAppStore((s) => s.plugins);
-  const isConnected = useAuthStore((s) => s.isConnected);
 
   const yamlEditorRef = useRef<YamlEditorHandle>(null);
   const [originalConfig, setOriginalConfig] = useState(yamlConfig);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">(
     "idle",
   );
+  const [isMac, setIsMac] = useState(false);
 
   const hasChanges = yamlConfig !== originalConfig;
+  const modKey = isMac ? "⌘" : "Ctrl";
 
   useEffect(() => {
-    if (!isConnected) return;
-    void loadConfig();
-  }, [isConnected, loadConfig]);
+    const mac =
+      typeof navigator !== "undefined" &&
+      /mac|iphone|ipad|ipod/i.test(
+        navigator.platform || navigator.userAgent,
+      );
+    const timer = window.setTimeout(() => setIsMac(mac), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
+  // Config is loaded once on connect by the console layout. Do NOT reload
+  // here on mount — switching into editor mode must not refetch and clobber
+  // local state (apply-failed status, runningVersion, unsaved edits).
+
+  // Resync the dirty-tracking baseline only when the persisted config
+  // changes (after load or save) — NOT on every keystroke, otherwise
+  // hasChanges collapses immediately and 保存 stays disabled.
   useEffect(() => {
     if (!configVersion) return;
-    const timer = window.setTimeout(() => setOriginalConfig(yamlConfig), 0);
+    const timer = window.setTimeout(
+      () => setOriginalConfig(useAppStore.getState().configText),
+      0,
+    );
     return () => window.clearTimeout(timer);
-  }, [configVersion, yamlConfig]);
+  }, [configVersion]);
 
   const handleSave = async () => {
     setSaveStatus("idle");
@@ -68,22 +81,12 @@ export function ConfigEditorView() {
     }
   };
 
-  const handleSaveAndRestart = async () => {
-    setSaveStatus("idle");
-    try {
-      await saveConfig({ reload: true });
-      setOriginalConfig(yamlConfig);
-      setSaveStatus("success");
-      setTimeout(() => setSaveStatus("idle"), 3000);
-    } catch {
-      setSaveStatus("error");
-    }
-  };
-
   const handleReset = () => {
     setYamlConfig(originalConfig);
     setSaveStatus("idle");
   };
+
+  const busy = isConfigSaving;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -129,7 +132,7 @@ export function ConfigEditorView() {
             variant="outline"
             size="sm"
             onClick={handleReset}
-            disabled={!hasChanges || isConfigSaving}
+            disabled={!hasChanges || busy}
           >
             <RotateCcw className="h-4 w-4 mr-1.5" />
             重置
@@ -138,7 +141,7 @@ export function ConfigEditorView() {
             variant="outline"
             size="sm"
             onClick={handleSave}
-            disabled={!hasChanges || isConfigSaving || Boolean(configError)}
+            disabled={!hasChanges || busy || Boolean(configError)}
           >
             {isConfigSaving ? (
               <Spinner className="h-4 w-4 mr-1.5" />
@@ -146,18 +149,6 @@ export function ConfigEditorView() {
               <Save className="h-4 w-4 mr-1.5" />
             )}
             保存
-          </Button>
-          <Button
-            size="sm"
-            onClick={handleSaveAndRestart}
-            disabled={isConfigSaving || isRestarting || Boolean(configError)}
-          >
-            {isRestarting || isConfigSaving ? (
-              <Spinner className="h-4 w-4 mr-1.5" />
-            ) : (
-              <Save className="h-4 w-4 mr-1.5" />
-            )}
-            保存并重启
           </Button>
         </div>
       </div>
@@ -169,6 +160,9 @@ export function ConfigEditorView() {
               ref={yamlEditorRef}
               value={yamlConfig}
               onChange={setYamlConfig}
+              onSave={() => {
+                if (hasChanges && !busy && !configError) void handleSave();
+              }}
               className="h-full"
               readOnly={isConfigLoading}
               variant="config"
@@ -196,14 +190,14 @@ export function ConfigEditorView() {
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">保存</span>
                 <div className="flex gap-0.5">
-                  <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">Ctrl</kbd>
+                  <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">{modKey}</kbd>
                   <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">S</kbd>
                 </div>
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">撤销</span>
                 <div className="flex gap-0.5">
-                  <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">Ctrl</kbd>
+                  <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">{modKey}</kbd>
                   <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-xs">Z</kbd>
                 </div>
               </div>

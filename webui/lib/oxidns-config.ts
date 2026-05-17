@@ -1,6 +1,6 @@
 "use client";
 
-import { parseDocument, stringify } from "yaml";
+import { parseDocument, stringify, isSeq, isMap } from "yaml";
 import { getPluginKindDefinition } from "@/lib/plugin-definitions";
 import type { PluginInstance, PluginType } from "@/lib/types";
 
@@ -75,6 +75,57 @@ export function stringifyOxiDnsConfig(config: OxiDnsConfig): string {
     lineWidth: 0,
     nullStr: "null",
   });
+}
+
+// Re-serialize after a console-mode plugin edit while keeping the original
+// file's comments and blank lines. Only the `plugins` value is rewritten;
+// other top-level keys and the comment before `plugins:` are untouched.
+//
+// No value comparison: the caller passes the exact set of tags it changed.
+// Every plugin whose tag is NOT in that set reuses its original YAML node
+// verbatim (comments/blank lines fully preserved); only the edited plugin —
+// and brand-new tags — are generated fresh. Falls back to a plain stringify
+// if the previous text can't be parsed, so saving never breaks.
+export function serializePluginsPreserving(
+  prevText: string,
+  config: OxiDnsConfig,
+  changedTags: Set<string>,
+): string {
+  const newPlugins = config.plugins;
+  // Fallback must serialize the WHOLE config — serializing only `plugins`
+  // would wipe runtime/api/log/include when prevText is empty/unparseable.
+  const fallback = (): string => stringifyOxiDnsConfig(config);
+  if (!prevText || !prevText.trim()) return fallback();
+  try {
+    const doc = parseDocument(prevText);
+    if (doc.errors.length > 0) return fallback();
+
+    const oldNodeByTag = new Map<string, unknown>();
+    const oldSeq = doc.get("plugins", true);
+    if (isSeq(oldSeq)) {
+      for (const item of oldSeq.items) {
+        if (isMap(item)) {
+          const tag = item.get("tag");
+          if (typeof tag === "string" && !oldNodeByTag.has(tag)) {
+            oldNodeByTag.set(tag, item);
+          }
+        }
+      }
+    }
+
+    const items = newPlugins.map((p) => {
+      const node = p.tag ? oldNodeByTag.get(p.tag) : undefined;
+      if (node && isMap(node) && !changedTags.has(p.tag)) return node;
+      return doc.createNode(cleanUndefined(p));
+    });
+
+    const seq = doc.createNode(newPlugins.map((p) => cleanUndefined(p)));
+    if (isSeq(seq)) seq.items = items as typeof seq.items;
+    doc.set("plugins", seq);
+    return doc.toString({ lineWidth: 0 });
+  } catch {
+    return fallback();
+  }
 }
 
 export function pluginsFromConfig(config: OxiDnsConfig): PluginInstance[] {

@@ -11,11 +11,10 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
-import { Moon, Sun, RotateCw, Code2, LayoutDashboard } from "lucide-react";
+import { Moon, Sun, Code2, LayoutDashboard } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAppStore } from "@/lib/store";
-import { useAuthStore } from "@/lib/auth-store";
-import { Spinner } from "@/components/ui/spinner";
+import { ConfigSyncControl } from "@/components/config/config-sync-status";
 import {
   Tooltip,
   TooltipContent,
@@ -31,9 +30,6 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
   const { theme, setTheme } = useTheme();
   const editorMode = useAppStore((s) => s.editorMode);
   const setEditorMode = useAppStore((s) => s.setEditorMode);
-  const isRestarting = useAppStore((s) => s.isRestarting);
-  const restartService = useAppStore((s) => s.restartService);
-  const isConnected = useAuthStore((s) => s.isConnected);
   const showNavigation = !editorMode;
 
   return (
@@ -77,7 +73,9 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
         </div>
       )}
 
-      <div className="ml-auto flex items-center rounded-lg border border-border/60 bg-background/80 p-0.5 shadow-sm">
+      <div className="ml-auto flex items-center gap-2">
+        <ConfigSyncControl />
+        <div className="flex items-center rounded-lg border border-border/60 bg-background/80 p-0.5 shadow-sm">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -107,32 +105,6 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
               variant="ghost"
               size="icon-sm"
               className="rounded-md"
-              onClick={() => restartService()}
-              disabled={isRestarting || !isConnected}
-            >
-              {isRestarting ? (
-                <Spinner className="h-4 w-4" />
-              ) : (
-                <RotateCw className="h-4 w-4" />
-              )}
-              <span className="sr-only">重启服务</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            {!isConnected
-              ? "连接后台服务后可重启"
-              : isRestarting
-                ? "正在重启..."
-                : "重启服务"}
-          </TooltipContent>
-        </Tooltip>
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="rounded-md"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             >
               <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
@@ -142,6 +114,7 @@ export function AppHeader({ title, breadcrumbs = [] }: AppHeaderProps) {
           </TooltipTrigger>
           <TooltipContent>切换主题</TooltipContent>
         </Tooltip>
+        </div>
       </div>
     </header>
   );

@@ -54,6 +54,10 @@ export interface ReloadSnapshot {
   last_completed_ms?: number;
   last_success_ms?: number;
   last_error?: string;
+  /** SHA256 of the config the backend is actually running (authoritative). */
+  running_version?: string;
+  /** SHA256 of the config the most recent reload attempted to apply. */
+  target_version?: string;
 }
 
 export interface ControlResponse {

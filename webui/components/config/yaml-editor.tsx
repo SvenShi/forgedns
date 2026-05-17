@@ -35,6 +35,8 @@ interface YamlEditorProps {
   pluginKind?: string;
   fields?: ConfigField[];
   currentPluginName?: string;
+  /** Bound to Cmd+S (macOS) / Ctrl+S (Windows/Linux) via Monaco. */
+  onSave?: () => void;
 }
 
 export const YamlEditor = forwardRef<YamlEditorHandle, YamlEditorProps>(
@@ -49,12 +51,16 @@ export const YamlEditor = forwardRef<YamlEditorHandle, YamlEditorProps>(
     pluginKind,
     fields,
     currentPluginName,
+    onSave,
   }, ref) {
   const { resolvedTheme } = useTheme();
   const editorRef = useRef<MonacoEditor | null>(null);
   const monacoRef = useRef<MonacoApi | null>(null);
   const modelRef = useRef<MonacoModel | null>(null);
   const validationSeqRef = useRef(0);
+  // Bound once in onMount; deref the latest handler so we never re-bind.
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
 
   useImperativeHandle(ref, () => ({
     jumpToLine(line: number) {
@@ -95,6 +101,12 @@ export const YamlEditor = forwardRef<YamlEditorHandle, YamlEditorProps>(
     modelRef.current = model;
 
     registerOxiDnsYamlLanguage(monaco);
+    // KeyMod.CtrlCmd maps to ⌘ on macOS and Ctrl on Windows/Linux
+    // automatically, so the save shortcut is OS-correct by construction and
+    // the browser "save page" dialog is suppressed while the editor is focused.
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      onSaveRef.current?.();
+    });
     if (model) {
       setOxiDnsYamlModelContext(model, context);
       updateOxiDnsYamlMarkers(monaco, model, context, backendDiagnostics);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
@@ -9,25 +9,25 @@ import { useAppStore } from "@/lib/store";
 
 // Ticks locally every second; re-calibrates whenever backendUptimeMs changes.
 function useLocalUptime(backendUptimeMs: number): number {
-  const [localUptime, setLocalUptime] = useState(backendUptimeMs);
-  const base = useRef({ uptimeMs: backendUptimeMs, receivedAt: Date.now() });
+  const [syncedUptime, setSyncedUptime] = useState(backendUptimeMs);
+  const [elapsedMs, setElapsedMs] = useState(0);
 
-  // Calibrate on each backend sync
+  // Adjust state during render when the backend reports a new uptime, so the
+  // displayed value snaps to it immediately (no setState-in-effect needed).
+  if (syncedUptime !== backendUptimeMs) {
+    setSyncedUptime(backendUptimeMs);
+    setElapsedMs(0);
+  }
+
+  // Restart the wall-clock ticker on each backend sync; reading the clock
+  // inside an effect/interval keeps render pure.
   useEffect(() => {
-    base.current = { uptimeMs: backendUptimeMs, receivedAt: Date.now() };
-    setLocalUptime(backendUptimeMs);
+    const syncedAt = Date.now();
+    const id = setInterval(() => setElapsedMs(Date.now() - syncedAt), 1000);
+    return () => clearInterval(id);
   }, [backendUptimeMs]);
 
-  // Local 1-second tick
-  useEffect(() => {
-    const id = setInterval(() => {
-      const { uptimeMs, receivedAt } = base.current;
-      setLocalUptime(uptimeMs + (Date.now() - receivedAt));
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  return localUptime;
+  return syncedUptime + elapsedMs;
 }
 
 function formatUptime(ms: number): string {

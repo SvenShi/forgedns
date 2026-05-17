@@ -477,6 +477,9 @@ async fn run_async_main(options: StartOptions, config: Config) -> Result<()> {
     let mut assembly =
         match bootstrap::assemble(&current_config, Some(app_controller.clone())).await {
             Ok(assembly) => {
+                app_controller.set_running_config_version(
+                    crate::api::control::config_file_version(app_controller.config_path()),
+                );
                 info!("OxiDNS server started successfully");
                 assembly
             }
@@ -546,7 +549,9 @@ async fn handle_reload_command(
     current_config: &mut Config,
     controller: std::sync::Arc<AppController>,
 ) -> Result<()> {
-    controller.mark_reload_started();
+    controller.mark_reload_started(crate::api::control::config_file_version(
+        controller.config_path(),
+    ));
 
     let candidate_config = match load_config_from_path(controller.config_path()) {
         Ok(config) => config,

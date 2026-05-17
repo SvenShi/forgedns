@@ -32,8 +32,10 @@ export default function SettingsPage() {
   const reloadStatus = useAppStore((s) => s.reloadStatus);
   const setYamlConfig = useAppStore((s) => s.setYamlConfig);
   const saveConfig = useAppStore((s) => s.saveConfig);
+  const applyConfig = useAppStore((s) => s.applyConfig);
   const loadConfig = useAppStore((s) => s.loadConfig);
   const isConfigSaving = useAppStore((s) => s.isConfigSaving);
+  const isApplying = useAppStore((s) => s.isApplying);
 
   const [backendUrl, setBackendUrl] = useState(serverConfig.url);
   const [requiresAuth, setRequiresAuth] = useState(serverConfig.requiresAuth);
@@ -108,7 +110,8 @@ export default function SettingsPage() {
       },
     };
     setYamlConfig(stringifyOxiDnsConfig(nextConfig));
-    await saveConfig({ reload });
+    await saveConfig();
+    if (reload) await applyConfig();
   };
 
   return (
@@ -260,17 +263,17 @@ export default function SettingsPage() {
               <div className="flex flex-wrap gap-2">
                 <Button
                   onClick={() => handleSaveTopLevelConfig(false)}
-                  disabled={isConfigSaving || !isConnected}
+                  disabled={isConfigSaving || isApplying || !isConnected}
                 >
                   保存配置
                 </Button>
                 <Button
                   variant="outline"
                   onClick={() => handleSaveTopLevelConfig(true)}
-                  disabled={isConfigSaving || !isConnected}
+                  disabled={isConfigSaving || isApplying || !isConnected}
                 >
                   <RefreshCw className="h-4 w-4 mr-1.5" />
-                  保存并重载
+                  保存并应用
                 </Button>
               </div>
             </CardContent>

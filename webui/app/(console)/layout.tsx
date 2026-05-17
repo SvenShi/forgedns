@@ -6,6 +6,7 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/shell/app-sidebar";
 import { PluginDetailSheet } from "@/components/plugins/plugin-detail-sheet";
 import { ConfigEditorView } from "@/components/config/config-editor-view";
+import { ConfigHistorySheet } from "@/components/config/config-history-sheet";
 import { useAppStore } from "@/lib/store";
 import { useAuthStore } from "@/lib/auth-store";
 import { AppHeader } from "@/components/shell/app-header";
@@ -18,6 +19,8 @@ export default function ConsoleLayout({
   children: React.ReactNode;
 }) {
   const editorMode = useAppStore((s) => s.editorMode);
+  const historyOpen = useAppStore((s) => s.historyOpen);
+  const setHistoryOpen = useAppStore((s) => s.setHistoryOpen);
   const loadConfig = useAppStore((s) => s.loadConfig);
   const isConnected = useAuthStore((s) => s.isConnected);
   const isAuthHydrated = useAuthStore((s) => s.isHydrated);
@@ -86,6 +89,7 @@ export default function ConsoleLayout({
           )}
         </SidebarInset>
         <PluginDetailSheet />
+        <ConfigHistorySheet open={historyOpen} onOpenChange={setHistoryOpen} />
       </SidebarProvider>
     </TooltipProvider>
   );

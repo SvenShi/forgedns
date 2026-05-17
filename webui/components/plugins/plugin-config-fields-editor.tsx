@@ -97,12 +97,22 @@ function InvertCheckbox({
   );
 }
 
+// Free-text / numeric inputs: their default is shown via the input's
+// placeholder instead of being pre-filled, so an unset field stays absent and
+// is never materialized into the config. switch/select keep their default
+// pre-filled (no placeholder affordance).
+const PLACEHOLDER_INPUT_TYPES = new Set([
+  "text",
+  "number",
+  "textarea",
+  "duration",
+  "string",
+]);
+
 export function createDefaultPluginConfigValues(fields: ConfigField[]) {
   const defaults: Record<string, unknown> = {};
   fields.forEach((field) => {
-    if (field.default !== undefined) {
-      defaults[field.key] = field.default;
-    } else if (field.type === "array") {
+    if (field.type === "array") {
       defaults[field.key] = [];
     } else if (field.type === "object" && field.fields) {
       defaults[field.key] = createDefaultPluginConfigValues(field.fields);
@@ -110,6 +120,11 @@ export function createDefaultPluginConfigValues(fields: ConfigField[]) {
       defaults[field.key] = [];
     } else if (field.type === "json") {
       defaults[field.key] = "";
+    } else if (
+      field.default !== undefined &&
+      !PLACEHOLDER_INPUT_TYPES.has(field.type)
+    ) {
+      defaults[field.key] = field.default;
     }
   });
   return defaults;
@@ -455,13 +470,21 @@ function ConfigFieldControl({
   defaultArrayObjectCollapsed: boolean;
   readOnly: boolean;
 }) {
+  // Unset fields show their schema default as a placeholder (never pre-filled)
+  // so an untouched default is not materialized into the saved config.
+  const defaultPlaceholder =
+    field.placeholder ??
+    (field.default !== undefined && field.default !== ""
+      ? String(field.default)
+      : undefined);
+
   switch (field.type) {
     case "text":
       return (
         <Input
           value={(value as string) || ""}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={field.placeholder}
+          placeholder={defaultPlaceholder}
           className="font-mono text-sm"
           disabled={readOnly}
         />
@@ -474,7 +497,7 @@ function ConfigFieldControl({
           onChange={(e) =>
             onChange(e.target.value ? Number(e.target.value) : "")
           }
-          placeholder={field.placeholder}
+          placeholder={defaultPlaceholder}
           className="font-mono text-sm"
           disabled={readOnly}
         />
@@ -484,7 +507,7 @@ function ConfigFieldControl({
         <Textarea
           value={(value as string) || ""}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={field.placeholder}
+          placeholder={defaultPlaceholder}
           className="min-h-[80px] font-mono text-sm"
           disabled={readOnly}
         />
@@ -517,7 +540,7 @@ function ConfigFieldControl({
         <Input
           value={(value as string) || ""}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={field.placeholder || "3s"}
+          placeholder={defaultPlaceholder || "3s"}
           className="font-mono text-sm"
           disabled={readOnly}
         />
