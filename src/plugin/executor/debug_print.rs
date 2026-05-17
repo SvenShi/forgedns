@@ -6,8 +6,6 @@
 //! This plugin logs request/response objects at info level for debugging.
 //! It mirrors mosdns `debug_print` quick setup semantics in OxiDNS.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -17,7 +15,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 const DEFAULT_MSG: &str = "debug print";
@@ -40,7 +38,7 @@ impl Plugin for DebugPrint {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -72,7 +70,7 @@ impl PluginFactory for DebugPrintFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let msg = parse_msg_from_value(plugin_config.args.clone())
@@ -84,12 +82,7 @@ impl PluginFactory for DebugPrintFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let msg = param
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())

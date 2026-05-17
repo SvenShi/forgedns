@@ -29,7 +29,7 @@ use self::parser::parse_config;
 use crate::config::types::PluginConfig;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::provider::Provider;
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::proto::{Name, Question};
 
@@ -114,7 +114,7 @@ impl Plugin for AdGuardRule {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         self.reload().await
     }
 
@@ -162,7 +162,7 @@ impl PluginFactory for AdGuardRuleFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
@@ -188,7 +188,6 @@ mod tests {
     use crate::core::context::DnsContext;
     use crate::plugin::provider::adguard_rule::model::RuleInput;
     use crate::plugin::provider::adguard_rule::parser::parse_rule;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Message, Name, Question, RecordType};
 
     fn make_context(name: &str, qtype: RecordType) -> DnsContext {
@@ -198,11 +197,7 @@ mod tests {
             qtype,
             DNSClass::IN,
         ));
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     fn make_input(raw: &str) -> RuleInput {

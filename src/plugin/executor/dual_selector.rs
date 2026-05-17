@@ -27,7 +27,7 @@ use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::proto::{Rcode, RecordType};
 use crate::{continue_next, register_plugin_factory};
 
@@ -90,7 +90,7 @@ impl Plugin for DualSelector {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         if !self.cache_enabled {
             return Ok(());
         }
@@ -382,7 +382,7 @@ impl PluginFactory for DualSelectorFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let (cache_enabled, cache_ttl_ms) = parse_dual_selector_config(plugin_config.args.clone())?;
@@ -397,12 +397,7 @@ impl PluginFactory for DualSelectorFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        _param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, _param: Option<String>) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(DualSelector {
             tag: tag.to_string(),
             preferred_type: self.record_type,
@@ -433,11 +428,7 @@ mod tests {
             qtype,
             DNSClass::IN,
         ));
-        DnsContext::new(
-            "127.0.0.1:5533".parse().unwrap(),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new("127.0.0.1:5533".parse().unwrap(), request)
     }
 
     fn make_selector(preferred_type: RecordType) -> DualSelector {
@@ -520,7 +511,7 @@ mod tests {
             "stub_next"
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 

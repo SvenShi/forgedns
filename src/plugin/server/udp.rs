@@ -25,7 +25,7 @@ use crate::network::listen;
 use crate::network::transport::udp_transport::UdpTransport;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::plugin::{Plugin, PluginFactory};
 use crate::plugin_factory;
 
 const UDP_RECV_BUFFER_SIZE: usize = 65_535;
@@ -105,7 +105,7 @@ impl Plugin for UdpServer {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         let (startup_tx, startup_rx) = oneshot::channel();
         self.spawn_server_task(Some(startup_tx))?;
         match startup_rx.await {
@@ -251,7 +251,7 @@ impl PluginFactory for UdpServerFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let udp_config = serde_yaml_ng::from_value::<UdpServerConfig>(
@@ -269,20 +269,13 @@ impl PluginFactory for UdpServerFactory {
         })?;
 
         // Resolve and type-check the entry executor using contextual diagnostics.
-        let entry_executor = registry.get_executor_dependency(
-            &plugin_config.tag,
-            "args.entry",
-            &udp_config.entry,
-        )?;
+        let entry_executor = init_context.executor("args.entry", &udp_config.entry)?;
 
         Ok(crate::plugin::UninitializedPlugin::Server(Box::new(
             UdpServer {
                 tag: plugin_config.tag.clone(),
                 listen,
-                request_handle: Arc::new(RequestHandle {
-                    entry_executor,
-                    registry,
-                }),
+                request_handle: Arc::new(RequestHandle { entry_executor }),
                 shutdown_tx: watch::channel(false).0,
                 task_handle: Mutex::new(None),
             },
@@ -295,17 +288,13 @@ mod tests {
     use std::net::{IpAddr, Ipv6Addr};
 
     use super::*;
-    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use crate::plugin::test_utils::plugin_config;
 
     #[test]
     fn test_udp_factory_requires_args() {
         let factory = UdpServerFactory {};
         let cfg = plugin_config("udp", "udp_server", None);
-        assert!(
-            factory
-                .create(&cfg, test_registry(), &Default::default())
-                .is_err()
-        );
+        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
     }
 
     #[test]

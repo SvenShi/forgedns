@@ -31,7 +31,7 @@ use crate::core::metrics::{
 use crate::core::task_center;
 use crate::core::ttl_cache::{TtlCache, TtlCacheLookup};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::proto::{Message, Rcode};
 use crate::{continue_next, plugin_factory};
 
@@ -815,7 +815,7 @@ impl Plugin for Cache {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         let cache_map = CacheMap::with_capacity(self.cache_size);
 
         let _ = self.cache_map.set(cache_map.clone());
@@ -1071,33 +1071,23 @@ impl PluginFactory for CacheFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cache_config = parse_cache_config(plugin_config.args.clone())?;
         validate_cache_config(&cache_config)?;
-        self.build_cache(plugin_config.tag.clone(), cache_config, registry)
+        self.build_cache(plugin_config.tag.clone(), cache_config)
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let cache_config = parse_cache_quick_setup(param.as_deref().unwrap_or_default())?;
         validate_cache_config(&cache_config)?;
-        self.build_cache(tag.to_string(), cache_config, registry)
+        self.build_cache(tag.to_string(), cache_config)
     }
 }
 
 impl CacheFactory {
-    fn build_cache(
-        &self,
-        tag: String,
-        cache_config: CacheConfig,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn build_cache(&self, tag: String, cache_config: CacheConfig) -> Result<UninitializedPlugin> {
         let metrics = Arc::new(CacheMetrics::new(tag.clone()));
         Ok(UninitializedPlugin::Executor(Box::new(Cache {
             cache_map: OnceCell::new(),
@@ -1172,7 +1162,6 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::plugin::PluginRegistry;
     use crate::plugin::executor::Executor;
     use crate::plugin::executor::sequence::chain::ChainProgram;
     use crate::proto::rdata::SOA;
@@ -1230,11 +1219,7 @@ mod tests {
     }
 
     fn make_context(request: Message) -> DnsContext {
-        DnsContext::new(
-            "127.0.0.1:5300".parse::<SocketAddr>().unwrap(),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new("127.0.0.1:5300".parse::<SocketAddr>().unwrap(), request)
     }
 
     fn make_request_with_query(name: &str, do_bit: bool, cd_bit: bool) -> Message {
@@ -1270,7 +1255,7 @@ mod tests {
             "stub_refresh_executor"
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 
@@ -1474,7 +1459,7 @@ mod tests {
     async fn truncated_response_is_not_cached() {
         AppClock::start();
         let mut cache = test_cache(default_test_config());
-        let _ = cache.init().await;
+        let _ = cache.init_for_test().await;
 
         let mut context = make_context(make_request_with_query("example.com.", false, false));
 
@@ -1500,7 +1485,7 @@ mod tests {
     async fn cache_hit_sets_outbound_message_response() {
         AppClock::start();
         let mut cache = test_cache(default_test_config());
-        let _ = cache.init().await;
+        let _ = cache.init_for_test().await;
 
         let mut request = make_request_with_query("example.com.", false, false);
         request.set_id(7);
@@ -1550,7 +1535,7 @@ mod tests {
         let mut cfg = default_test_config();
         cfg.lazy_cache_ttl = Some(30);
         let mut cache = test_cache(cfg);
-        let _ = cache.init().await;
+        let _ = cache.init_for_test().await;
 
         let mut request = make_request_with_query("example.com.", false, false);
         request.set_id(9);
@@ -1599,7 +1584,7 @@ mod tests {
     async fn cache_metrics_distinguish_miss_and_expired_lookup() {
         AppClock::start();
         let mut cache = test_cache(default_test_config());
-        let _ = cache.init().await;
+        let _ = cache.init_for_test().await;
 
         let mut miss = make_context(make_request_with_query("missing.example.", false, false));
         let miss_lookup = cache
@@ -1638,7 +1623,7 @@ mod tests {
     async fn cache_metrics_record_no_ttl_skip() {
         AppClock::start();
         let mut cache = test_cache(default_test_config());
-        let _ = cache.init().await;
+        let _ = cache.init_for_test().await;
 
         let mut context = make_context(make_request_with_query("servfail.example.", false, false));
         context.set_response({
@@ -1665,7 +1650,7 @@ mod tests {
         let mut cfg = default_test_config();
         cfg.lazy_cache_ttl = Some(30);
         let mut cache = test_cache(cfg);
-        let _ = cache.init().await;
+        let _ = cache.init_for_test().await;
 
         let mut context = make_context(make_request_with_query("example.com.", false, false));
 
@@ -1715,7 +1700,7 @@ mod tests {
         cfg.lazy_cache_ttl = Some(30);
         cfg.short_circuit = Some(true);
         let mut cache = test_cache(cfg);
-        let _ = cache.init().await;
+        let _ = cache.init_for_test().await;
 
         let calls = Arc::new(AtomicUsize::new(0));
         let program =
@@ -1798,7 +1783,7 @@ mod tests {
         cfg.lazy_cache_ttl = Some(30);
         cfg.short_circuit = Some(true);
         let mut cache = test_cache(cfg);
-        let _ = cache.init().await;
+        let _ = cache.init_for_test().await;
 
         let program =
             ChainProgram::single_with_next_executor_for_test(Arc::new(FailingRefreshExecutor));

@@ -34,7 +34,7 @@ use crate::core::metrics::{
     unregister_metric_source,
 };
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::{continue_next, plugin_factory};
 
 const DEFAULT_NAME: &str = "default";
@@ -68,7 +68,7 @@ impl Plugin for MetricsCollector {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         register_metric_source(self.stats.clone())
     }
 
@@ -145,7 +145,7 @@ impl PluginFactory for MetricsCollectorFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let name =
@@ -157,12 +157,7 @@ impl PluginFactory for MetricsCollectorFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let name = param
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())

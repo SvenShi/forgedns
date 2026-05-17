@@ -7,8 +7,6 @@
 //! control API. Triggering it schedules a full configuration reload instead of
 //! rebuilding selected plugin tags in place.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use tracing::info;
 
@@ -16,7 +14,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{self, Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug)]
@@ -30,7 +28,7 @@ impl Plugin for ReloadExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -42,9 +40,9 @@ impl Plugin for ReloadExecutor {
 #[async_trait]
 impl Executor for ReloadExecutor {
     #[hotpath::measure]
-    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+    async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
         info!(plugin = %self.tag, "reload executor triggered full application reload");
-        context.registry.request_app_reload()?;
+        plugin::request_app_reload()?;
         Ok(ExecStep::Next)
     }
 }
@@ -57,7 +55,7 @@ impl PluginFactory for ReloadFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(ReloadExecutor {
@@ -65,12 +63,7 @@ impl PluginFactory for ReloadFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        _param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, _param: Option<String>) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(ReloadExecutor {
             tag: tag.to_string(),
         })))

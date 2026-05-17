@@ -132,7 +132,6 @@ mod tests {
     use std::net::SocketAddr;
 
     use super::*;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Edns, EdnsOption, Message, Name, Question, RecordType};
 
     fn make_context(name: &str) -> DnsContext {
@@ -142,11 +141,7 @@ mod tests {
             RecordType::A,
             DNSClass::IN,
         ));
-        DnsContext::new(
-            SocketAddr::from(([127, 0, 0, 1], 5300)),
-            request,
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from(([127, 0, 0, 1], 5300)), request)
     }
 
     #[test]
@@ -220,11 +215,7 @@ mod tests {
 
     #[test]
     fn test_build_cache_key_returns_none_without_query() {
-        let mut context = DnsContext::new(
-            SocketAddr::from(([127, 0, 0, 1], 5300)),
-            Message::new(),
-            test_registry(),
-        );
+        let mut context = DnsContext::new(SocketAddr::from(([127, 0, 0, 1], 5300)), Message::new());
 
         let cache_key = build_cache_key(&mut context, true);
 

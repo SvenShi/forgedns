@@ -32,7 +32,7 @@ use crate::network::tls_config::load_tls_config;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::http_dispatcher::{DnsGetHandler, DnsPostHandler, HttpDispatcher};
 use crate::plugin::server::{RequestHandle, Server, parse_listen_addr};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::plugin::{Plugin, PluginFactory};
 use crate::plugin_factory;
 
 mod http2_server;
@@ -230,7 +230,7 @@ impl Plugin for HttpServer {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         let (h2_tx, h2_rx) = oneshot::channel();
         let (h3_tx, h3_rx) = if self.enable_http3.unwrap_or(false) {
             let (tx, rx) = oneshot::channel();
@@ -322,7 +322,7 @@ impl PluginFactory for HttpServerFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let http_config = serde_yaml_ng::from_value::<HttpServerConfig>(
@@ -347,13 +347,11 @@ impl PluginFactory for HttpServerFactory {
         for (idx, entry) in http_config.entries.iter().enumerate() {
             let field = format!("args.entries[{}].exec", idx);
             // Resolve and type-check executor with field context.
-            let executor =
-                registry.get_executor_dependency(&plugin_config.tag, &field, &entry.exec)?;
+            let executor = init_context.executor(&field, &entry.exec)?;
 
             // Create request handle that wraps the executor
             let request_handle = Arc::new(RequestHandle {
                 entry_executor: executor,
-                registry: registry.clone(),
             });
 
             // Register GET route (DoH RFC 8484: DNS query in URL parameter)
@@ -482,17 +480,13 @@ mod tests {
     use serde_yaml_ng::from_str;
 
     use super::*;
-    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use crate::plugin::test_utils::plugin_config;
 
     #[test]
     fn test_http_factory_requires_args() {
         let factory = HttpServerFactory {};
         let cfg = plugin_config("http", "http_server", None);
-        assert!(
-            factory
-                .create(&cfg, test_registry(), &Default::default())
-                .is_err()
-        );
+        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
     }
 
     #[test]

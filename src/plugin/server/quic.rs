@@ -32,7 +32,7 @@ use crate::network::transport::quic_transport::{
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::server::http::DEFAULT_SERVER_IDLE_TIMEOUT;
 use crate::plugin::server::{ConnectionGuard, RequestHandle, RequestMeta, Server, udp};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry};
+use crate::plugin::{Plugin, PluginFactory};
 use crate::plugin_factory;
 
 /// QUIC server configuration
@@ -134,7 +134,7 @@ impl Plugin for QuicServer {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         let (startup_tx, startup_rx) = oneshot::channel();
         self.spawn_server_task(Some(startup_tx))?;
         match startup_rx.await {
@@ -377,7 +377,7 @@ impl PluginFactory for QuicServerFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let quic_config = serde_yaml_ng::from_value::<QuicServerConfig>(
@@ -395,11 +395,7 @@ impl PluginFactory for QuicServerFactory {
         })?;
 
         // Resolve and type-check the entry executor using contextual diagnostics.
-        let entry_executor = registry.get_executor_dependency(
-            &plugin_config.tag,
-            "args.entry",
-            &quic_config.entry,
-        )?;
+        let entry_executor = init_context.executor("args.entry", &quic_config.entry)?;
 
         // Load TLS configuration if cert and key are provided
         let server_config =
@@ -417,10 +413,7 @@ impl PluginFactory for QuicServerFactory {
                 listen,
                 server_config,
                 idle_timeout: quic_config.idle_timeout,
-                request_handle: Arc::new(RequestHandle {
-                    entry_executor,
-                    registry,
-                }),
+                request_handle: Arc::new(RequestHandle { entry_executor }),
                 shutdown_tx: watch::channel(false).0,
                 task_handle: Mutex::new(None),
             },
@@ -431,16 +424,12 @@ impl PluginFactory for QuicServerFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use crate::plugin::test_utils::plugin_config;
 
     #[test]
     fn test_quic_factory_requires_args() {
         let factory = QuicServerFactory {};
         let cfg = plugin_config("quic", "quic_server", None);
-        assert!(
-            factory
-                .create(&cfg, test_registry(), &Default::default())
-                .is_err()
-        );
+        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
     }
 }

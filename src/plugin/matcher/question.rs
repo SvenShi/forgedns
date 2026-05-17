@@ -21,7 +21,7 @@ use crate::plugin::matcher::matcher_utils::{
     resolve_provider_tags, split_rule_sources,
 };
 use crate::plugin::provider::Provider;
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ impl PluginFactory for QuestionFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let provider_tags = parse_provider_tags_from_value(plugin_config.args.clone())?;
@@ -54,22 +54,15 @@ impl PluginFactory for QuestionFactory {
             tag: plugin_config.tag.clone(),
             provider_tags,
             providers: Vec::new(),
-            registry,
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let provider_tags = parse_provider_tags(parse_quick_setup_rules(param)?)?;
         Ok(UninitializedPlugin::Matcher(Box::new(QuestionMatcher {
             tag: tag.to_string(),
             provider_tags,
             providers: Vec::new(),
-            registry,
         })))
     }
 }
@@ -79,7 +72,6 @@ struct QuestionMatcher {
     tag: String,
     provider_tags: Vec<String>,
     providers: Vec<Arc<dyn Provider>>,
-    registry: Arc<PluginRegistry>,
 }
 
 #[async_trait]
@@ -88,9 +80,8 @@ impl Plugin for QuestionMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
-        self.providers =
-            resolve_provider_tags(&self.registry, &self.provider_tags, "question", &self.tag)?;
+    async fn init(&mut self, context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
+        self.providers = resolve_provider_tags(context, &self.provider_tags, "question")?;
         Ok(())
     }
 
@@ -136,7 +127,6 @@ mod tests {
 
     use super::*;
     use crate::plugin::matcher::Matcher;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Message, Name, Question, RecordType};
 
     #[derive(Debug)]
@@ -148,7 +138,7 @@ mod tests {
             "stub"
         }
 
-        async fn init(&mut self) -> DnsResult<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
             Ok(())
         }
 
@@ -180,7 +170,6 @@ mod tests {
         crate::core::context::DnsContext::new(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
             request,
-            test_registry(),
         )
     }
 
@@ -190,7 +179,6 @@ mod tests {
             tag: "question".into(),
             provider_tags: vec![],
             providers: vec![Arc::new(StubQuestionProvider)],
-            registry: test_registry(),
         };
         let mut ctx = make_context(&["miss.example.", "match.example."]);
         assert!(matcher.is_match(&mut ctx));
@@ -202,7 +190,6 @@ mod tests {
             tag: "question".into(),
             provider_tags: vec![],
             providers: vec![Arc::new(StubQuestionProvider)],
-            registry: test_registry(),
         };
         let mut ctx = make_context(&["miss.example."]);
         assert!(!matcher.is_match(&mut ctx));

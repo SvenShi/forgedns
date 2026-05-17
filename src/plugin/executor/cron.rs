@@ -34,7 +34,7 @@ use crate::core::system_utils::{parse_simple_duration, system_timezone_name};
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::{
-    Plugin, PluginFactory, PluginHolder, PluginRegistry, UninitializedPlugin,
+    Plugin, PluginFactory, PluginHolder, PluginInitContext, UninitializedPlugin,
     expand_quick_setup_dependency_specs, registered_plugin_kind,
 };
 use crate::plugin_factory;
@@ -110,7 +110,6 @@ struct RuntimeJob {
 #[derive(Debug)]
 struct CronExecutor {
     tag: String,
-    registry: Arc<PluginRegistry>,
     config: CronConfig,
     quick_setup_executors: Vec<Arc<dyn Executor>>,
     stop_tx: Mutex<Option<oneshot::Sender<()>>>,
@@ -123,11 +122,11 @@ impl Plugin for CronExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, context: &PluginInitContext<'_>) -> Result<()> {
         let mut prepared_jobs = Vec::with_capacity(self.config.jobs.len());
         let jobs = self.config.jobs.clone();
         for (job_index, job) in jobs.iter().enumerate() {
-            prepared_jobs.push(self.prepare_job(job, job_index).await?);
+            prepared_jobs.push(self.prepare_job(context, job, job_index).await?);
         }
 
         let mut runtime_jobs = Vec::with_capacity(prepared_jobs.len());
@@ -143,12 +142,7 @@ impl Plugin for CronExecutor {
         }
 
         let (stop_tx, stop_rx) = oneshot::channel();
-        let handle = tokio::spawn(run_scheduler(
-            self.tag.clone(),
-            self.registry.clone(),
-            runtime_jobs,
-            stop_rx,
-        ));
+        let handle = tokio::spawn(run_scheduler(self.tag.clone(), runtime_jobs, stop_rx));
 
         *self.stop_tx.get_mut() = Some(stop_tx);
         *self.scheduler_handle.get_mut() = Some(handle);
@@ -207,14 +201,19 @@ impl Executor for CronExecutor {
 }
 
 impl CronExecutor {
-    async fn prepare_job(&mut self, job: &JobConfig, job_index: usize) -> Result<PreparedJob> {
+    async fn prepare_job(
+        &mut self,
+        context: &PluginInitContext<'_>,
+        job: &JobConfig,
+        job_index: usize,
+    ) -> Result<PreparedJob> {
         let timezone_name = resolve_timezone_name(self.config.timezone.as_deref());
         let trigger = parse_job_trigger_with_timezone(job, &timezone_name)?;
         let mut executors = Vec::with_capacity(job.executors.len());
         for (exec_index, raw) in job.executors.iter().enumerate() {
             let field = format!("args.jobs[{}].executors[{}]", job_index, exec_index);
             executors.push(
-                self.resolve_executor_ref(raw, job_index, exec_index, &field)
+                self.resolve_executor_ref(context, raw, job_index, exec_index, &field)
                     .await?,
             );
         }
@@ -228,6 +227,7 @@ impl CronExecutor {
 
     async fn resolve_executor_ref(
         &mut self,
+        context: &PluginInitContext<'_>,
         raw: &str,
         job_index: usize,
         exec_index: usize,
@@ -241,13 +241,7 @@ impl CronExecutor {
                         self.tag, field
                     )));
                 }
-
-                let plugin = self.registry.get_plugin(&tag).ok_or_else(|| {
-                    DnsError::plugin(format!(
-                        "plugin '{}' field '{}' references missing plugin '{}'",
-                        self.tag, field, tag
-                    ))
-                })?;
+                let plugin = context.plugin(field, &tag)?;
                 if plugin.plugin_type != crate::plugin::PluginType::Executor {
                     return Err(DnsError::plugin(format!(
                         "plugin '{}' field '{}' expects executor plugin, but '{}' is {} (type '{}')",
@@ -275,12 +269,10 @@ impl CronExecutor {
                 }
 
                 let quick_tag = format!("@qs:cron:{}:{}:{}", self.tag, job_index, exec_index);
-                let uninitialized =
-                    self.registry
-                        .clone()
-                        .quick_setup(&plugin_type, &quick_tag, param)?;
-                let executor = uninitialized.init_and_wrap().await?;
-                let executor = match executor {
+                let executor = match context
+                    .init_quick_setup(&plugin_type, &quick_tag, param)
+                    .await?
+                {
                     PluginHolder::Executor(executor) => executor,
                     _ => {
                         return Err(DnsError::plugin(format!(
@@ -334,7 +326,7 @@ impl PluginFactory for CronFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let args = plugin_config
@@ -347,7 +339,6 @@ impl PluginFactory for CronFactory {
 
         Ok(UninitializedPlugin::Executor(Box::new(CronExecutor {
             tag: plugin_config.tag.clone(),
-            registry,
             config,
             quick_setup_executors: Vec::new(),
             stop_tx: Mutex::new(None),
@@ -590,7 +581,6 @@ fn advance_next_run_past_now(job: &mut RuntimeJob, now_ms: i64) -> Result<()> {
 
 async fn run_scheduler(
     plugin_tag: String,
-    registry: Arc<PluginRegistry>,
     mut jobs: Vec<RuntimeJob>,
     mut stop_rx: oneshot::Receiver<()>,
 ) {
@@ -640,7 +630,6 @@ async fn run_scheduler(
                 let run_name = job.name.clone();
                 let trigger_kind = job.trigger.kind_name().to_string();
                 let executors = job.executors.clone();
-                let run_registry = registry.clone();
                 let run_plugin_tag = plugin_tag.clone();
                 job.handle = Some(tokio::spawn(async move {
                     run_job(
@@ -648,7 +637,6 @@ async fn run_scheduler(
                         run_name,
                         trigger_kind,
                         scheduled_at_ms,
-                        run_registry,
                         executors,
                     )
                     .await;
@@ -722,7 +710,6 @@ async fn run_job(
     job_name: String,
     trigger_kind: String,
     scheduled_at_ms: i64,
-    registry: Arc<PluginRegistry>,
     executors: Vec<Arc<dyn Executor>>,
 ) {
     info!(
@@ -733,11 +720,7 @@ async fn run_job(
         "cron job started"
     );
 
-    let mut context = DnsContext::new(
-        SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
-        Message::new(),
-        registry,
-    );
+    let mut context = DnsContext::new(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)), Message::new());
     context.set_attr(ATTR_PLUGIN_TAG, plugin_tag.clone());
     context.set_attr(ATTR_JOB_NAME, job_name.clone());
     context.set_attr(ATTR_SCHEDULED_AT_UNIX_MS, scheduled_at_ms);
@@ -778,7 +761,7 @@ mod tests {
     use super::*;
     use crate::plugin::dependency::DependencySpec;
     use crate::plugin::executor::ExecStep;
-    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use crate::plugin::test_utils::plugin_config;
     use crate::register_plugin_factory;
 
     #[derive(Debug, Clone, Copy)]
@@ -829,7 +812,7 @@ mod tests {
             &self.tag
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 
@@ -880,7 +863,7 @@ mod tests {
         fn create(
             &self,
             plugin_config: &PluginConfig,
-            _registry: Arc<PluginRegistry>,
+            _init_context: &crate::plugin::PluginInitContext<'_>,
             _context: &crate::plugin::PluginCreateContext,
         ) -> Result<UninitializedPlugin> {
             Ok(UninitializedPlugin::Executor(Box::new(StubExecutor::new(
@@ -890,12 +873,7 @@ mod tests {
             ))))
         }
 
-        fn quick_setup(
-            &self,
-            tag: &str,
-            _param: Option<String>,
-            _registry: Arc<PluginRegistry>,
-        ) -> Result<UninitializedPlugin> {
+        fn quick_setup(&self, tag: &str, _param: Option<String>) -> Result<UninitializedPlugin> {
             Ok(UninitializedPlugin::Executor(Box::new(StubExecutor::new(
                 tag,
                 StubBehavior::Next,
@@ -1007,7 +985,6 @@ jobs:
             "job".to_string(),
             "interval".to_string(),
             123,
-            test_registry(),
             executors,
         )
         .await;
@@ -1042,12 +1019,7 @@ jobs:
             handle: None,
         };
         let (stop_tx, stop_rx) = oneshot::channel();
-        let scheduler = tokio::spawn(run_scheduler(
-            "cron".to_string(),
-            test_registry(),
-            vec![job],
-            stop_rx,
-        ));
+        let scheduler = tokio::spawn(run_scheduler("cron".to_string(), vec![job], stop_rx));
 
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(executor.started.load(Ordering::Relaxed), 0);
@@ -1080,12 +1052,7 @@ jobs:
             handle: None,
         };
         let (stop_tx, stop_rx) = oneshot::channel();
-        let scheduler = tokio::spawn(run_scheduler(
-            "cron".to_string(),
-            test_registry(),
-            vec![job],
-            stop_rx,
-        ));
+        let scheduler = tokio::spawn(run_scheduler("cron".to_string(), vec![job], stop_rx));
 
         tokio::time::timeout(Duration::from_secs(1), started.notified())
             .await
@@ -1113,7 +1080,6 @@ jobs:
         let destroyed = quick.destroyed.clone();
         let cron = CronExecutor {
             tag: "cron".to_string(),
-            registry: test_registry(),
             config: CronConfig {
                 timezone: None,
                 jobs: vec![JobConfig {
@@ -1136,11 +1102,7 @@ jobs:
     fn test_factory_create_rejects_invalid_args() {
         let factory = CronFactory;
         let cfg = plugin_config("cron", "cron", Some(Value::String("bad".into())));
-        assert!(
-            factory
-                .create(&cfg, test_registry(), &Default::default())
-                .is_err()
-        );
+        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::context::{DnsContext, ExecutionPathEvent};
 use crate::core::error::DnsError;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::test_utils::{test_context, test_registry};
+use crate::plugin::test_utils::test_context;
 use crate::plugin::{Plugin, PluginFactory};
 use crate::proto::rdata::{A, CNAME};
 use crate::proto::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
@@ -137,12 +137,11 @@ async fn test_query_recorder_execute_enqueues_record() {
     .unwrap();
 
     let mut plugin = QueryRecorder::new("rec".to_string(), config.clone());
-    plugin.init().await.unwrap();
+    plugin.init_for_test().await.unwrap();
 
     let mut ctx = DnsContext::new(
         SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
         Message::new(),
-        test_registry(),
     );
     let step = plugin.execute_with_next(&mut ctx, None).await.unwrap();
     assert_eq!(step, ExecStep::Next);
@@ -189,16 +188,12 @@ async fn test_query_recorder_list_cursor_only_when_more_records_exist() {
     .unwrap();
 
     let mut plugin = QueryRecorder::new("rec".to_string(), config.clone());
-    plugin.init().await.unwrap();
+    plugin.init_for_test().await.unwrap();
 
     for request_id in 1..=3 {
         let mut request = Message::new();
         request.set_id(request_id);
-        let mut ctx = DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        );
+        let mut ctx = DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request);
         plugin.execute_with_next(&mut ctx, None).await.unwrap();
     }
 
@@ -254,7 +249,7 @@ async fn test_query_recorder_list_cursor_only_when_more_records_exist() {
 #[test]
 fn test_factory_rejects_quick_setup() {
     let factory = QueryRecorderFactory;
-    let err = match factory.quick_setup("rec", None, test_registry()) {
+    let err = match factory.quick_setup("rec", None) {
         Ok(_) => panic!("quick setup should be rejected"),
         Err(err) => err,
     };

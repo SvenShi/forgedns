@@ -10,7 +10,6 @@
 //! or quick-setup syntax like `rcode 2`.
 
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use ahash::AHashSet;
 use async_trait::async_trait;
@@ -23,7 +22,7 @@ use crate::plugin::matcher::matcher_utils::{
     parse_quick_setup_rules, parse_rcode, parse_rules_from_value, parse_u16_rules,
     validate_non_empty_rules,
 };
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -34,19 +33,14 @@ impl PluginFactory for RcodeFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
         build_rcode_matcher(plugin_config.tag.clone(), rules)
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let rules = parse_quick_setup_rules(param)?;
         build_rcode_matcher(tag.to_string(), rules)
     }
@@ -73,7 +67,7 @@ impl Plugin for RcodeMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         Ok(())
     }
 
@@ -109,11 +103,7 @@ mod tests {
             crate::proto::DNSClass::IN,
         ));
 
-        DnsContext::new(
-            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new(SocketAddr::new("127.0.0.1".parse().unwrap(), 5353), request)
     }
 
     #[tokio::test]

@@ -8,7 +8,6 @@
 //! require a cron context.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -21,7 +20,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::upgrade::{self, UpgradeConfig};
 
@@ -37,7 +36,7 @@ impl Plugin for UpgradeExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -125,7 +124,7 @@ impl PluginFactory for UpgradeFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let parsed = parse_upgrade_config(plugin_config.args.clone())?;
@@ -136,12 +135,7 @@ impl PluginFactory for UpgradeFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(UpgradeExecutor {
             tag: tag.to_string(),
             config: parse_quick_setup(param)?,
@@ -275,14 +269,14 @@ fn parse_bool_quick_setup(key: &str, value: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use crate::plugin::test_utils::plugin_config;
 
     #[test]
     fn upgrade_factory_accepts_default_apply_config() {
         let factory = UpgradeFactory;
         let cfg = plugin_config("upgrade", "upgrade", None);
         let plugin = factory
-            .create(&cfg, test_registry(), &Default::default())
+            .create_for_test(&cfg, &Default::default())
             .expect("default upgrade config should parse");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }
@@ -344,7 +338,7 @@ mod tests {
     fn upgrade_factory_quick_setup_returns_executor() {
         let factory = UpgradeFactory;
         let plugin = factory
-            .quick_setup("upgrade", Some("force".to_string()), test_registry())
+            .quick_setup("upgrade", Some("force".to_string()))
             .expect("quick setup should parse");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }

@@ -6,7 +6,6 @@
 //! Returns true when context already contains a DNS response.
 
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -14,7 +13,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -25,7 +24,7 @@ impl PluginFactory for HasRespFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         Ok(UninitializedPlugin::Matcher(Box::new(HasRespMatcher {
@@ -33,12 +32,7 @@ impl PluginFactory for HasRespFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         if let Some(param) = param
             && !param.trim().is_empty()
         {
@@ -61,7 +55,7 @@ impl Plugin for HasRespMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         Ok(())
     }
 
@@ -80,14 +74,14 @@ impl Matcher for HasRespMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::test_utils::{test_context, test_registry};
+    use crate::plugin::test_utils::test_context;
 
     #[test]
     fn test_has_resp_quick_setup_rejects_param() {
         let factory = HasRespFactory {};
         assert!(
             factory
-                .quick_setup("has_resp", Some("unexpected".to_string()), test_registry(),)
+                .quick_setup("has_resp", Some("unexpected".to_string()),)
                 .is_err()
         );
     }

@@ -10,15 +10,13 @@
 //! `context.response`/final packet output and keeps request metadata/marks
 //! untouched.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug)]
@@ -32,7 +30,7 @@ impl Plugin for DropResp {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -58,7 +56,7 @@ impl PluginFactory for DropRespFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(DropResp {
@@ -66,12 +64,7 @@ impl PluginFactory for DropRespFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        _param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, _param: Option<String>) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(DropResp {
             tag: tag.to_string(),
         })))

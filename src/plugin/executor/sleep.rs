@@ -10,7 +10,6 @@
 //! `tokio::time::sleep`, so it does not block worker threads, but it does add
 //! end-to-end request latency by design.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -21,7 +20,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -43,7 +42,7 @@ impl Plugin for SleepExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -71,7 +70,7 @@ impl PluginFactory for SleepFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = plugin_config
@@ -88,12 +87,7 @@ impl PluginFactory for SleepFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let raw = param.ok_or_else(|| {
             DnsError::plugin("sleep quick setup requires a duration such as '10', '250ms', or '2s'")
         })?;
@@ -130,38 +124,26 @@ mod tests {
 
     use super::*;
     use crate::plugin::executor::ExecStep;
-    use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+    use crate::plugin::test_utils::{plugin_config, test_context};
 
     #[test]
     fn test_sleep_factory_quick_setup_validation() {
         let factory = SleepFactory;
-        assert!(factory.quick_setup("sleep", None, test_registry()).is_err());
+        assert!(factory.quick_setup("sleep", None).is_err());
         assert!(
             factory
-                .quick_setup("sleep", Some("abc".to_string()), test_registry())
+                .quick_setup("sleep", Some("abc".to_string()))
                 .is_err()
         );
-        assert!(
-            factory
-                .quick_setup("sleep", Some("10".to_string()), test_registry())
-                .is_ok()
-        );
-        assert!(
-            factory
-                .quick_setup("sleep", Some("2s".to_string()), test_registry())
-                .is_ok()
-        );
+        assert!(factory.quick_setup("sleep", Some("10".to_string())).is_ok());
+        assert!(factory.quick_setup("sleep", Some("2s".to_string())).is_ok());
     }
 
     #[test]
     fn test_sleep_factory_create_rejects_invalid_config_type() {
         let factory = SleepFactory;
         let cfg = plugin_config("sleep", "sleep", Some(Value::String("bad".into())));
-        assert!(
-            factory
-                .create(&cfg, test_registry(), &Default::default())
-                .is_err()
-        );
+        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
     }
 
     #[tokio::test]

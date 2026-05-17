@@ -27,7 +27,7 @@ use crate::core::metrics::{
 };
 use crate::network::upstream::{ConnectionInfo, Upstream, UpstreamBuilder, UpstreamConfig};
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::proto::{Message, Rcode};
 
@@ -161,7 +161,7 @@ impl Plugin for SingleDnsForwarder {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         info!("DNS SingleDnsForwarder initialized tag: {}", self.tag);
         register_metric_source(self.metrics.clone())
     }
@@ -234,7 +234,7 @@ impl Plugin for ConcurrentForwarder {
         self.tag.as_str()
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         info!("DNS ConcurrentForwarder initialized tag: {}", self.tag);
         register_metric_source(self.metrics.clone())
     }
@@ -491,7 +491,7 @@ impl PluginFactory for ForwardFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let forward_config = parse_forward_config(plugin_config)?;
@@ -535,12 +535,7 @@ impl PluginFactory for ForwardFactory {
         }
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let (upstream_addrs, short_circuit) = parse_quick_setup_param(param)?;
         let mut upstream_configs = Vec::with_capacity(upstream_addrs.len());
 
@@ -649,11 +644,7 @@ mod tests {
             RecordType::A,
             crate::proto::DNSClass::IN,
         ));
-        DnsContext::new(
-            "127.0.0.1:5533".parse().unwrap(),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new("127.0.0.1:5533".parse().unwrap(), request)
     }
 
     fn make_plugin_config(args: &str) -> PluginConfig {
@@ -699,7 +690,7 @@ mod tests {
     fn validate_rejects_empty_upstreams() {
         let factory = ForwardFactory;
         let cfg = make_plugin_config("upstreams: []");
-        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new()), &Default::default()) {
+        let err = match factory.create_for_test(&cfg, &Default::default()) {
             Ok(_) => panic!("expected create to fail for empty upstreams"),
             Err(err) => err,
         };
@@ -715,7 +706,7 @@ upstreams:
   - addr: "udp://"
 "#,
         );
-        let err = match factory.create(&cfg, Arc::new(PluginRegistry::new()), &Default::default()) {
+        let err = match factory.create_for_test(&cfg, &Default::default()) {
             Ok(_) => panic!("expected create to fail for invalid upstream addr"),
             Err(err) => err,
         };
@@ -725,11 +716,7 @@ upstreams:
     #[test]
     fn quick_setup_rejects_invalid_upstream_addr() {
         let factory = ForwardFactory;
-        let result = factory.quick_setup(
-            "forward-test",
-            Some("udp://".to_string()),
-            Arc::new(PluginRegistry::new()),
-        );
+        let result = factory.quick_setup("forward-test", Some("udp://".to_string()));
         let err = match result {
             Ok(_) => panic!("expected quick_setup to fail for invalid upstream addr"),
             Err(err) => err,
@@ -767,11 +754,7 @@ upstreams:
     #[tokio::test]
     async fn quick_setup_accepts_multiple_upstreams() {
         let factory = ForwardFactory;
-        let result = factory.quick_setup(
-            "forward-test",
-            Some("1.1.1.1 8.8.8.8".to_string()),
-            Arc::new(PluginRegistry::new()),
-        );
+        let result = factory.quick_setup("forward-test", Some("1.1.1.1 8.8.8.8".to_string()));
         match result {
             Ok(UninitializedPlugin::Executor(_)) => {}
             Ok(_) => panic!("expected quick setup forward to return an executor plugin"),

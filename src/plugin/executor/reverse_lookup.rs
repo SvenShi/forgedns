@@ -34,7 +34,7 @@ use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::proto::{Name, PTR, RData, Rcode, Record, RecordType};
 use crate::{continue_next, plugin_factory, register_plugin_api};
 
@@ -75,7 +75,7 @@ impl Plugin for ReverseLookup {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         self.register_api_routes()?;
 
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
@@ -219,7 +219,7 @@ impl PluginFactory for ReverseLookupFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = plugin_config
@@ -319,7 +319,6 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::plugin::executor::ExecStep;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::rdata::A;
     use crate::proto::{Message, Name, Question, RData, Record};
 
@@ -342,11 +341,7 @@ mod tests {
             qtype,
             crate::proto::DNSClass::IN,
         ));
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     #[tokio::test]

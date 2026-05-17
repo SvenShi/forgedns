@@ -7,19 +7,454 @@
 //! enabling better testability and support for multiple server instances.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use dashmap::DashMap;
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, error, info, warn};
 
 use crate::api::control::{AppController, ControlRequestError};
-use crate::config::types::PluginConfig;
+use crate::config::types::{Config, PluginConfig};
 use crate::core::error::{DnsError, Result};
 use crate::plugin::dependency::DependencyKind;
 use crate::plugin::executor::Executor;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::provider::{Provider, register_reload_api_route};
-use crate::plugin::{PluginCreateContext, PluginDependent, PluginFactory, PluginInfo, PluginType};
+use crate::plugin::{
+    FactoryRegistration, PluginCreateContext, PluginDependent, PluginFactory, PluginHolder,
+    PluginInfo, PluginType, dependency_kind_from_module_path,
+};
+
+#[cfg(debug_assertions)]
+#[derive(Debug)]
+struct TestRuntimeGuard {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+#[cfg(debug_assertions)]
+fn test_runtime_lock() -> Arc<AsyncMutex<()>> {
+    static TEST_RUNTIME_LOCK: OnceLock<Arc<AsyncMutex<()>>> = OnceLock::new();
+    TEST_RUNTIME_LOCK
+        .get_or_init(|| Arc::new(AsyncMutex::new(())))
+        .clone()
+}
+
+#[cfg(debug_assertions)]
+static SERIALIZE_RUNTIME_FOR_TESTS: AtomicBool = AtomicBool::new(false);
+
+#[cfg(debug_assertions)]
+pub fn enable_runtime_test_serialization() {
+    SERIALIZE_RUNTIME_FOR_TESTS.store(true, Ordering::Relaxed);
+}
+
+/// Process-wide immutable catalog of plugin factories.
+#[derive(Debug)]
+pub struct PluginCatalog {
+    entries: HashMap<String, PluginCatalogEntry>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PluginCatalogEntry {
+    kind: DependencyKind,
+    constructor: fn() -> Box<dyn PluginFactory>,
+}
+
+impl PluginCatalog {
+    fn from_inventory() -> Result<Self> {
+        let mut entries = HashMap::new();
+        let mut seen_plugin_types = HashSet::new();
+
+        for registration in inventory::iter::<FactoryRegistration> {
+            if !seen_plugin_types.insert(registration.plugin_type) {
+                return Err(DnsError::plugin(format!(
+                    "Duplicate plugin type '{}' registered in inventory",
+                    registration.plugin_type
+                )));
+            }
+            entries.insert(
+                registration.plugin_type.to_string(),
+                PluginCatalogEntry {
+                    kind: dependency_kind_from_module_path(registration.module_path),
+                    constructor: registration.constructor,
+                },
+            );
+        }
+
+        Ok(Self { entries })
+    }
+
+    pub fn factory(&self, plugin_type: &str) -> Option<Box<dyn PluginFactory>> {
+        self.entries
+            .get(plugin_type)
+            .map(|entry| (entry.constructor)())
+    }
+
+    fn iter_factories(
+        &self,
+    ) -> impl Iterator<Item = (&str, DependencyKind, Box<dyn PluginFactory>)> + '_ {
+        self.entries
+            .iter()
+            .map(|(plugin_type, entry)| (plugin_type.as_str(), entry.kind, (entry.constructor)()))
+    }
+}
+
+static GLOBAL_CATALOG: OnceLock<PluginCatalog> = OnceLock::new();
+
+pub fn global_catalog() -> &'static PluginCatalog {
+    GLOBAL_CATALOG.get_or_init(|| {
+        PluginCatalog::from_inventory().expect("plugin catalog inventory should be valid")
+    })
+}
+
+pub type PluginBuildSession = PluginRegistry;
+pub type PluginRuntime = PluginRegistry;
+
+#[derive(Debug)]
+pub struct PluginRuntimeManager {
+    current: RwLock<Option<Arc<PluginRuntime>>>,
+    controller: Mutex<Option<Arc<AppController>>>,
+    lifecycle: AsyncMutex<()>,
+}
+
+impl PluginRuntimeManager {
+    fn new() -> Self {
+        Self {
+            current: RwLock::new(None),
+            controller: Mutex::new(None),
+            lifecycle: AsyncMutex::new(()),
+        }
+    }
+
+    pub fn current_runtime(&self) -> Option<Arc<PluginRuntime>> {
+        self.current.read().ok().and_then(|guard| guard.clone())
+    }
+
+    pub async fn init_runtime(&self, config: Config) -> Result<Arc<PluginRuntime>> {
+        let _guard = self.lifecycle.lock().await;
+        #[cfg(debug_assertions)]
+        let test_guard = if SERIALIZE_RUNTIME_FOR_TESTS.load(Ordering::Relaxed) {
+            Some(test_runtime_lock().lock_owned().await)
+        } else {
+            None
+        };
+        let mut candidate = PluginRegistry::new();
+        #[cfg(debug_assertions)]
+        candidate.set_test_runtime_guard(test_guard);
+        candidate.load_catalog(global_catalog());
+        if let Some(controller) = self.controller() {
+            candidate.set_controller(controller);
+        }
+        let candidate = Arc::new(candidate);
+        if let Err(err) = candidate.clone().init_plugins(config.plugins).await {
+            candidate.destroy().await;
+            return Err(err);
+        }
+
+        let previous = self
+            .current
+            .write()
+            .ok()
+            .and_then(|mut guard| guard.replace(candidate.clone()));
+        if let Some(previous) = previous {
+            previous.destroy().await;
+        }
+        Ok(candidate)
+    }
+
+    pub async fn destroy_runtime(&self) {
+        let _guard = self.lifecycle.lock().await;
+        let previous = self.current.write().ok().and_then(|mut guard| guard.take());
+        if let Some(previous) = previous {
+            previous.destroy().await;
+        }
+    }
+
+    pub fn set_controller(&self, controller: Arc<AppController>) {
+        if let Ok(mut guard) = self.controller.lock() {
+            *guard = Some(controller.clone());
+        }
+        if let Some(runtime) = self.current_runtime() {
+            runtime.set_controller(controller);
+        }
+    }
+
+    pub fn clear_controller(&self) {
+        if let Ok(mut guard) = self.controller.lock() {
+            *guard = None;
+        }
+        if let Some(runtime) = self.current_runtime() {
+            runtime.clear_controller();
+        }
+    }
+
+    fn controller(&self) -> Option<Arc<AppController>> {
+        self.controller.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    pub fn request_app_reload(&self) -> Result<()> {
+        let controller = self.controller().ok_or_else(|| {
+            DnsError::plugin("reload executor requires application control context")
+        })?;
+        controller.request_reload().map_err(|err| match err {
+            ControlRequestError::ReloadBusy => {
+                DnsError::plugin("reload is already pending or in progress")
+            }
+            ControlRequestError::CommandChannelClosed => {
+                DnsError::plugin("application reload command channel is closed")
+            }
+        })
+    }
+
+    pub async fn reload_provider(&self, tag: &str) -> Result<()> {
+        let runtime = self
+            .current_runtime()
+            .ok_or_else(|| DnsError::plugin("provider reload requires an initialized runtime"))?;
+        runtime.reload_provider(tag).await
+    }
+
+    pub fn plugin_count(&self) -> usize {
+        self.current_runtime()
+            .map_or(0, |runtime| runtime.plugin_count())
+    }
+
+    pub fn server_plugin_count(&self) -> usize {
+        self.current_runtime()
+            .map_or(0, |runtime| runtime.server_plugin_count())
+    }
+
+    #[cfg(test)]
+    async fn set_current_runtime_for_test(&self, runtime: Arc<PluginRuntime>) {
+        let _guard = self.lifecycle.lock().await;
+        let previous = self
+            .current
+            .write()
+            .ok()
+            .and_then(|mut guard| guard.replace(runtime));
+        if let Some(previous) = previous {
+            previous.destroy().await;
+        }
+    }
+}
+
+pub trait PluginResolver {
+    fn executor(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+    ) -> Result<Arc<dyn Executor>>;
+    fn executor_of_type(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+        expected_plugin_type: &str,
+    ) -> Result<Arc<dyn Executor>>;
+    fn matcher(&self, source_tag: &str, field: &str, target_tag: &str) -> Result<Arc<dyn Matcher>>;
+    fn provider(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+    ) -> Result<Arc<dyn Provider>>;
+    fn provider_of_type(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+        expected_plugin_type: &str,
+    ) -> Result<Arc<dyn Provider>>;
+}
+
+#[derive(Debug)]
+pub struct PluginInitContext<'a> {
+    registry: Arc<PluginRegistry>,
+    tag: String,
+    create_context: &'a PluginCreateContext,
+}
+
+impl<'a> PluginInitContext<'a> {
+    pub(crate) fn new(
+        registry: Arc<PluginRegistry>,
+        tag: impl Into<String>,
+        create_context: &'a PluginCreateContext,
+    ) -> Self {
+        Self {
+            registry,
+            tag: tag.into(),
+            create_context,
+        }
+    }
+
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    pub fn dependents(&self) -> &[PluginDependent] {
+        &self.create_context.dependents
+    }
+
+    pub fn plugin(&self, field: &str, target_tag: &str) -> Result<Arc<PluginInfo>> {
+        self.registry
+            .get_required_plugin(&self.tag, field, target_tag)
+    }
+
+    pub fn executor(&self, field: &str, target_tag: &str) -> Result<Arc<dyn Executor>> {
+        self.registry
+            .get_executor_dependency(&self.tag, field, target_tag)
+    }
+
+    pub fn executor_of_type(
+        &self,
+        field: &str,
+        target_tag: &str,
+        expected_plugin_type: &str,
+    ) -> Result<Arc<dyn Executor>> {
+        self.registry.get_executor_dependency_of_type(
+            &self.tag,
+            field,
+            target_tag,
+            expected_plugin_type,
+        )
+    }
+
+    pub fn matcher(&self, field: &str, target_tag: &str) -> Result<Arc<dyn Matcher>> {
+        self.registry
+            .get_matcher_dependency(&self.tag, field, target_tag)
+    }
+
+    pub fn provider(&self, field: &str, target_tag: &str) -> Result<Arc<dyn Provider>> {
+        self.registry
+            .get_provider_dependency(&self.tag, field, target_tag)
+    }
+
+    pub fn provider_of_type(
+        &self,
+        field: &str,
+        target_tag: &str,
+        expected_plugin_type: &str,
+    ) -> Result<Arc<dyn Provider>> {
+        self.registry.get_provider_dependency_of_type(
+            &self.tag,
+            field,
+            target_tag,
+            expected_plugin_type,
+        )
+    }
+
+    pub async fn init_quick_setup(
+        &self,
+        plugin_type: &str,
+        tag: &str,
+        param: Option<String>,
+    ) -> Result<PluginHolder> {
+        let uninitialized = self.registry.clone().quick_setup(plugin_type, tag, param)?;
+        let context = PluginCreateContext::default();
+        let init_context = PluginInitContext::new(self.registry.clone(), tag, &context);
+        uninitialized.init_and_wrap(&init_context).await
+    }
+}
+
+impl PluginResolver for PluginRegistry {
+    fn executor(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+    ) -> Result<Arc<dyn Executor>> {
+        self.get_executor_dependency(source_tag, field, target_tag)
+    }
+
+    fn executor_of_type(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+        expected_plugin_type: &str,
+    ) -> Result<Arc<dyn Executor>> {
+        self.get_executor_dependency_of_type(source_tag, field, target_tag, expected_plugin_type)
+    }
+
+    fn matcher(&self, source_tag: &str, field: &str, target_tag: &str) -> Result<Arc<dyn Matcher>> {
+        self.get_matcher_dependency(source_tag, field, target_tag)
+    }
+
+    fn provider(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+    ) -> Result<Arc<dyn Provider>> {
+        self.get_provider_dependency(source_tag, field, target_tag)
+    }
+
+    fn provider_of_type(
+        &self,
+        source_tag: &str,
+        field: &str,
+        target_tag: &str,
+        expected_plugin_type: &str,
+    ) -> Result<Arc<dyn Provider>> {
+        self.get_provider_dependency_of_type(source_tag, field, target_tag, expected_plugin_type)
+    }
+}
+
+static GLOBAL_MANAGER: OnceLock<Arc<PluginRuntimeManager>> = OnceLock::new();
+
+pub fn global_manager() -> Arc<PluginRuntimeManager> {
+    GLOBAL_MANAGER
+        .get_or_init(|| Arc::new(PluginRuntimeManager::new()))
+        .clone()
+}
+
+pub fn current_runtime() -> Option<Arc<PluginRuntime>> {
+    global_manager().current_runtime()
+}
+
+pub async fn init(config: Config) -> Result<Arc<PluginRuntime>> {
+    global_manager().init_runtime(config).await
+}
+
+pub async fn destroy_runtime() {
+    global_manager().destroy_runtime().await;
+}
+
+pub fn set_app_controller(controller: Arc<AppController>) {
+    global_manager().set_controller(controller);
+}
+
+pub fn clear_app_controller() {
+    global_manager().clear_controller();
+}
+
+pub fn request_app_reload() -> Result<()> {
+    global_manager().request_app_reload()
+}
+
+pub async fn reload_provider(tag: &str) -> Result<()> {
+    global_manager().reload_provider(tag).await
+}
+
+pub fn plugin_count() -> usize {
+    global_manager().plugin_count()
+}
+
+pub fn server_plugin_count() -> usize {
+    global_manager().server_plugin_count()
+}
+
+#[cfg(test)]
+pub async fn reset_runtime_for_test() {
+    destroy_runtime().await;
+    clear_app_controller();
+}
+
+#[cfg(test)]
+pub async fn set_current_runtime_for_test(runtime: Arc<PluginRuntime>) {
+    global_manager().set_current_runtime_for_test(runtime).await;
+}
 
 /// Plugin registry that manages plugin factories and instances
 ///
@@ -31,7 +466,7 @@ use crate::plugin::{PluginCreateContext, PluginDependent, PluginFactory, PluginI
 pub struct PluginRegistry {
     /// Optional application controller used by plugins that need to trigger
     /// process-level control actions such as a full configuration reload.
-    controller: OnceLock<Arc<AppController>>,
+    controller: Mutex<Option<Arc<AppController>>>,
 
     /// Map of plugin type names to their factory implementations
     factories: HashMap<String, Box<dyn PluginFactory>>,
@@ -47,6 +482,9 @@ pub struct PluginRegistry {
 
     /// Initialization order of plugins (for deterministic shutdown)
     init_order: Mutex<Vec<String>>,
+
+    #[cfg(debug_assertions)]
+    test_runtime_guard: Mutex<Option<TestRuntimeGuard>>,
 }
 
 #[allow(unused)]
@@ -54,11 +492,22 @@ impl PluginRegistry {
     /// Create a new empty plugin registry
     pub fn new() -> Self {
         Self {
-            controller: OnceLock::new(),
+            controller: Mutex::new(None),
             factories: HashMap::new(),
             factory_kinds: HashMap::new(),
             plugins: DashMap::new(),
             init_order: Mutex::new(Vec::new()),
+            #[cfg(debug_assertions)]
+            test_runtime_guard: Mutex::new(None),
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn set_test_runtime_guard(&mut self, guard: Option<tokio::sync::OwnedMutexGuard<()>>) {
+        if let Some(guard) = guard
+            && let Ok(slot) = self.test_runtime_guard.get_mut()
+        {
+            *slot = Some(TestRuntimeGuard { _guard: guard });
         }
     }
 
@@ -78,6 +527,13 @@ impl PluginRegistry {
         self.factory_kinds.insert(plugin_type.to_string(), kind);
     }
 
+    fn load_catalog(&mut self, catalog: &PluginCatalog) {
+        for (plugin_type, kind, factory) in catalog.iter_factories() {
+            self.factories.insert(plugin_type.to_string(), factory);
+            self.factory_kinds.insert(plugin_type.to_string(), kind);
+        }
+    }
+
     /// Build an uninitialized plugin from quick setup `type [param...]`.
     pub fn quick_setup(
         self: Arc<Self>,
@@ -94,7 +550,7 @@ impl PluginRegistry {
             tag,
             param.as_deref().unwrap_or("none")
         );
-        factory.quick_setup(tag, param, self.clone())
+        factory.quick_setup(tag, param)
     }
 
     /// Initialize all plugins from configuration
@@ -191,7 +647,9 @@ impl PluginRegistry {
                         plugin_config.plugin_type
                     ))
                 })?;
-            factory.prepare_startup(plugin_config, self.clone()).await?;
+            factory
+                .prepare_startup(plugin_config, self.as_ref())
+                .await?;
         }
 
         let create_contexts = build_create_contexts(&runtime_init_plan.report);
@@ -277,10 +735,11 @@ impl PluginRegistry {
         context: &PluginCreateContext,
     ) -> Result<PluginInfo> {
         // Factory creates uninitialized plugin
-        let uninitialized = factory.create(config, self.clone(), context)?;
+        let init_context = PluginInitContext::new(self.clone(), config.tag.clone(), context);
+        let uninitialized = factory.create(config, &init_context, context)?;
 
         // Initialize and wrap into PluginType (with Arc)
-        let plugin_holder = uninitialized.init_and_wrap().await?;
+        let plugin_holder = uninitialized.init_and_wrap(&init_context).await?;
 
         // Initialize and wrap into PluginHolder (with Arc)
         Ok(PluginInfo {
@@ -299,12 +758,20 @@ impl PluginRegistry {
 
     /// Attach the application controller after the registry has been assembled.
     pub fn set_controller(&self, controller: Arc<AppController>) {
-        let _ = self.controller.set(controller);
+        if let Ok(mut guard) = self.controller.lock() {
+            *guard = Some(controller);
+        }
+    }
+
+    pub fn clear_controller(&self) {
+        if let Ok(mut guard) = self.controller.lock() {
+            *guard = None;
+        }
     }
 
     /// Get the application controller if the registry was assembled with one.
     pub fn controller(&self) -> Option<Arc<AppController>> {
-        self.controller.get().cloned()
+        self.controller.lock().ok().and_then(|guard| guard.clone())
     }
 
     /// Request the same full reload flow used by the management control API.
@@ -496,7 +963,7 @@ impl PluginRegistry {
     }
 
     /// Destroy all initialized plugins in reverse init order
-    pub async fn destory(&self) {
+    pub async fn destroy(&self) {
         let order = self
             .init_order
             .lock()
@@ -504,6 +971,8 @@ impl PluginRegistry {
             .unwrap_or_default();
 
         if order.is_empty() {
+            #[cfg(debug_assertions)]
+            self.release_test_runtime_guard();
             return;
         }
 
@@ -522,7 +991,23 @@ impl PluginRegistry {
             }
         }
 
+        if let Ok(mut order) = self.init_order.lock() {
+            order.clear();
+        }
+        #[cfg(debug_assertions)]
+        self.release_test_runtime_guard();
         info!("All plugins destroyed");
+    }
+
+    pub async fn destory(&self) {
+        self.destroy().await;
+    }
+
+    #[cfg(debug_assertions)]
+    fn release_test_runtime_guard(&self) {
+        if let Ok(mut slot) = self.test_runtime_guard.lock() {
+            *slot = None;
+        }
     }
 }
 
@@ -674,7 +1159,7 @@ mod tests {
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
-    use crate::api::{clear_global_api_register, global_api_test_guard};
+    use crate::api::{clear_global_api, global_api_test_guard};
     use crate::config::types::PluginConfig;
     use crate::plugin::dependency::{
         DependencyGraphEdge, DependencyGraphNode, DependencyGraphReport, DependencySpec,
@@ -710,7 +1195,7 @@ mod tests {
             &self.tag
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 
@@ -753,7 +1238,7 @@ mod tests {
         fn create(
             &self,
             plugin_config: &PluginConfig,
-            _registry: Arc<PluginRegistry>,
+            _init_context: &PluginInitContext<'_>,
             context: &PluginCreateContext,
         ) -> Result<UninitializedPlugin> {
             self.captured
@@ -1125,7 +1610,7 @@ mod tests {
             &self.tag
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 
@@ -1163,7 +1648,7 @@ mod tests {
         fn create(
             &self,
             plugin_config: &PluginConfig,
-            _registry: Arc<PluginRegistry>,
+            _init_context: &crate::plugin::PluginInitContext<'_>,
             _context: &PluginCreateContext,
         ) -> Result<UninitializedPlugin> {
             Ok(UninitializedPlugin::Provider(Box::new(
@@ -1178,7 +1663,7 @@ mod tests {
     #[tokio::test]
     async fn test_reload_provider_calls_runtime_provider_reload() {
         let _guard = global_api_test_guard().await;
-        clear_global_api_register();
+        clear_global_api();
         let reload_count = Arc::new(AtomicUsize::new(0));
         let mut registry = PluginRegistry::new();
         registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
@@ -1217,13 +1702,13 @@ mod tests {
         assert_eq!(reload_count.load(Ordering::Relaxed), 1);
 
         registry.destory().await;
-        clear_global_api_register();
+        clear_global_api();
     }
 
     #[tokio::test]
     async fn test_reload_provider_rejects_non_provider_and_missing_tags() {
         let _guard = global_api_test_guard().await;
-        clear_global_api_register();
+        clear_global_api();
         let reload_count = Arc::new(AtomicUsize::new(0));
         let mut registry = PluginRegistry::new();
         registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
@@ -1266,6 +1751,6 @@ mod tests {
         assert!(err.to_string().contains("is not loaded"));
 
         registry.destory().await;
-        clear_global_api_register();
+        clear_global_api();
     }
 }

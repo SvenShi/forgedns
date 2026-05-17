@@ -6,8 +6,6 @@
 //! This executor reloads one or more provider plugins in place using their
 //! existing runtime configuration, without rebuilding the full application.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use serde_yaml_ng::Value;
 use tracing::info;
@@ -20,7 +18,7 @@ use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::matcher_utils::{
     parse_quick_setup_rules, parse_rules_from_value, provider_dependency_specs, split_rule_sources,
 };
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{self, Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug)]
@@ -35,7 +33,7 @@ impl Plugin for ReloadProviderExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -47,14 +45,14 @@ impl Plugin for ReloadProviderExecutor {
 #[async_trait]
 impl Executor for ReloadProviderExecutor {
     #[hotpath::measure]
-    async fn execute(&self, context: &mut DnsContext) -> Result<ExecStep> {
+    async fn execute(&self, _context: &mut DnsContext) -> Result<ExecStep> {
         for provider_tag in &self.provider_tags {
             info!(
                 plugin = %self.tag,
                 provider = %provider_tag,
                 "reload_provider executor reloading provider"
             );
-            context.registry.reload_provider(provider_tag).await?;
+            plugin::reload_provider(provider_tag).await?;
         }
         Ok(ExecStep::Next)
     }
@@ -81,7 +79,7 @@ impl PluginFactory for ReloadProviderFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let provider_tags = parse_provider_tags_from_value(plugin_config.args.clone())?;
@@ -93,12 +91,7 @@ impl PluginFactory for ReloadProviderFactory {
         )))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let provider_tags = parse_provider_tags(parse_quick_setup_rules(param)?)?;
         Ok(UninitializedPlugin::Executor(Box::new(
             ReloadProviderExecutor {

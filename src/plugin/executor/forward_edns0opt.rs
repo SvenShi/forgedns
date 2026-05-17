@@ -17,8 +17,6 @@
 //! - response OPT record is created only when needed.
 //! - when no codes are configured, plugin becomes near no-op.
 
-use std::sync::Arc;
-
 use ahash::AHashSet;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -28,7 +26,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::proto::{EdnsCode, EdnsOption};
 use crate::{continue_next, plugin_factory};
 
@@ -51,7 +49,7 @@ impl Plugin for ForwardEdns0Opt {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -110,7 +108,7 @@ impl PluginFactory for ForwardEdns0OptFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let code_set = parse_codes_from_value(plugin_config.args.clone())?;
@@ -120,12 +118,7 @@ impl PluginFactory for ForwardEdns0OptFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let mut code_set = AHashSet::new();
         let raw = param.unwrap_or_default();
         for token in split_tokens(&raw) {
@@ -217,7 +210,6 @@ mod tests {
 
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{ClientSubnet, DNSClass, Message, Name, Question, RecordType};
 
     #[test]
@@ -236,11 +228,7 @@ mod tests {
             RecordType::A,
             DNSClass::IN,
         ));
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     fn add_ecs(message: &mut Message, ip: Ipv4Addr, mask: u8) {

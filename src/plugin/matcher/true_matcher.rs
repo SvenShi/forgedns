@@ -6,7 +6,6 @@
 //! Always returns true. This mirrors mosdns sequence built-in matcher behavior.
 
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -14,7 +13,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -25,7 +24,7 @@ impl PluginFactory for TrueMatcherFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         Ok(UninitializedPlugin::Matcher(Box::new(TrueMatcher {
@@ -33,12 +32,7 @@ impl PluginFactory for TrueMatcherFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         if let Some(param) = param
             && !param.trim().is_empty()
         {
@@ -61,7 +55,7 @@ impl Plugin for TrueMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         Ok(())
     }
 
@@ -80,12 +74,11 @@ impl Matcher for TrueMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::test_utils::test_registry;
 
     #[test]
     fn test_true_factory_rejects_non_empty_param() {
         let factory = TrueMatcherFactory {};
-        let result = factory.quick_setup("tag", Some("unexpected".to_string()), test_registry());
+        let result = factory.quick_setup("tag", Some("unexpected".to_string()));
         assert!(result.is_err());
     }
 }

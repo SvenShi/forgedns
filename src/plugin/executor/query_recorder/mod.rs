@@ -41,9 +41,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{
-    Plugin, PluginCreateContext, PluginFactory, PluginRegistry, UninitializedPlugin,
-};
+use crate::plugin::{Plugin, PluginCreateContext, PluginFactory, UninitializedPlugin};
 use crate::{continue_next, plugin_factory};
 
 const DEFAULT_QUEUE_SIZE: usize = 8_192;
@@ -68,7 +66,7 @@ impl Plugin for QueryRecorder {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         let backend = RecorderBackend::run(self.tag.clone(), self.config.clone())?;
         api::register(&backend)?;
 
@@ -236,7 +234,7 @@ impl PluginFactory for QueryRecorderFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let config = resolve_config(plugin_config.args.clone())?;

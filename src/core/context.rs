@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use ahash::{AHashMap, AHashSet};
 
-use crate::plugin::PluginRegistry;
 use crate::proto::Message;
 
 /// Typed metadata attached to the request by the inbound server layer.
@@ -217,19 +216,17 @@ pub struct DnsContext {
     pub response: Option<Message>,
     pub execution_path: ExecutionPath,
     pub runtime: RuntimeContext,
-    pub registry: Arc<PluginRegistry>,
 }
 
 impl DnsContext {
     #[inline]
-    pub fn new(peer_addr: SocketAddr, request: Message, registry: Arc<PluginRegistry>) -> Self {
+    pub fn new(peer_addr: SocketAddr, request: Message) -> Self {
         Self {
             ingress: IngressContext::new(peer_addr),
             request,
             response: None,
             execution_path: ExecutionPath::default(),
             runtime: RuntimeContext::default(),
-            registry,
         }
     }
 
@@ -377,7 +374,6 @@ impl DnsContext {
                 marks: self.runtime.marks.clone(),
                 extensions: AHashMap::new(),
             },
-            registry: self.registry.clone(),
         }
     }
 
@@ -406,11 +402,7 @@ mod tests {
             RecordType::A,
             DNSClass::IN,
         ));
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     #[test]

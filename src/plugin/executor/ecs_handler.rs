@@ -16,7 +16,6 @@
 //!   leaking internally generated subnet metadata back to downstream clients.
 
 use std::net::IpAddr;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -26,7 +25,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::proto::{ClientSubnet, DNSClass, Edns, EdnsCode, EdnsOption, Message};
 use crate::{continue_next, plugin_factory};
 
@@ -62,7 +61,7 @@ impl Plugin for EcsHandler {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -150,7 +149,7 @@ impl PluginFactory for EcsHandlerFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let handler =
@@ -158,12 +157,7 @@ impl PluginFactory for EcsHandlerFactory {
         Ok(UninitializedPlugin::Executor(Box::new(handler)))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         // Quick setup syntax: `ecs [ip[/mask]]`.
         let preset = param
             .map(|s| s.trim().to_string())
@@ -258,7 +252,6 @@ mod tests {
 
     use super::*;
     use crate::core::context::DnsContext;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{Message, Name, Question, RecordType};
 
     #[test]
@@ -280,7 +273,6 @@ mod tests {
         DnsContext::new(
             SocketAddr::from((Ipv4Addr::new(10, 1, 1, 9), 5353)),
             request,
-            test_registry(),
         )
     }
 

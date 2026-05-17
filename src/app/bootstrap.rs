@@ -6,15 +6,14 @@
 use std::sync::Arc;
 
 use crate::api::control::AppController;
-use crate::api::{self, ApiHub, ApiRegister, clear_global_api_register, set_global_api_register};
+use crate::api::{self, ApiHub, clear_global_api, install_global_api};
 use crate::config::types::Config;
 use crate::core::error::Result;
-use crate::plugin::{self, PluginRegistry};
+use crate::plugin;
 
 #[derive(Debug)]
 pub struct AppAssembly {
     pub api_hub: Option<Arc<ApiHub>>,
-    pub registry: Arc<PluginRegistry>,
 }
 
 pub async fn assemble(
@@ -23,49 +22,58 @@ pub async fn assemble(
 ) -> Result<AppAssembly> {
     let api_hub = ApiHub::from_config(&config.api)?;
     if let Some(api_hub) = &api_hub {
-        api::register_builtin_routes(api_hub)?;
+        install_global_api(api_hub.clone());
+        api::register_builtin_routes()?;
         if let Some(controller) = &controller {
-            api::register_control_routes(api_hub, controller.clone())?;
+            api::register_control_routes(controller.clone())?;
         }
+    } else {
+        clear_global_api();
     }
 
-    set_global_api_register(api_hub.as_ref().map(|hub| ApiRegister::new(hub.clone())));
-    let registry = match plugin::init(config.clone()).await {
-        Ok(registry) => registry,
+    if let Some(controller) = &controller {
+        plugin::set_app_controller(controller.clone());
+    } else {
+        plugin::clear_app_controller();
+    }
+
+    let runtime = match plugin::init(config.clone()).await {
+        Ok(runtime) => runtime,
         Err(err) => {
-            clear_global_api_register();
+            clear_global_api();
+            plugin::clear_app_controller();
             return Err(err);
         }
     };
-    if let Some(controller) = controller {
-        registry.set_controller(controller);
-    }
 
     if let Some(api_hub) = &api_hub {
-        api_hub.mark_plugins_initialized(registry.plugin_count(), registry.server_plugin_count());
+        api_hub.mark_plugins_initialized(runtime.plugin_count(), runtime.server_plugin_count());
         if let Err(err) = api_hub.start().await {
-            registry.destory().await;
-            clear_global_api_register();
+            plugin::destroy_runtime().await;
+            clear_global_api();
+            plugin::clear_app_controller();
             return Err(err);
         }
     }
 
-    Ok(AppAssembly { api_hub, registry })
+    Ok(AppAssembly { api_hub })
 }
 
 pub async fn stop(assembly: &AppAssembly) {
-    clear_global_api_register();
+    clear_global_api();
     if let Some(api_hub) = &assembly.api_hub {
         api_hub.stop().await;
     }
-    assembly.registry.destory().await;
+    plugin::destroy_runtime().await;
+    plugin::clear_app_controller();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::{
-        ApiHub, ApiRegister, global_api_register, global_api_test_guard, set_global_api_register,
+        ApiHub, ApiRegister, global_api_register, global_api_test_guard,
+        set_global_api_register_for_test,
     };
     use crate::config::types::{ApiConfig, ApiHttpConfig, LogConfig, RuntimeConfig};
     use crate::core::app_clock::AppClock;
@@ -79,7 +87,7 @@ mod tests {
         })
         .expect("stale api config should parse")
         .expect("stale api hub should exist");
-        set_global_api_register(Some(ApiRegister::new(stale_hub)));
+        set_global_api_register_for_test(Some(ApiRegister::new(stale_hub)));
 
         let assembly = assemble(
             &Config {

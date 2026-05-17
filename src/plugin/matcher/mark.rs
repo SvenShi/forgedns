@@ -6,7 +6,6 @@
 //! Matches if current DNS context contains any specified set value.
 
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use ahash::AHashSet;
 use async_trait::async_trait;
@@ -16,7 +15,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{parse_quick_setup_rules, parse_rules_from_value};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -27,19 +26,14 @@ impl PluginFactory for MarkFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let marks = parse_rules_from_value(plugin_config.args.clone())?;
         build_mark_matcher(plugin_config.tag.clone(), marks)
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let marks = parse_quick_setup_rules(param)?;
         build_mark_matcher(tag.to_string(), marks)
     }
@@ -89,7 +83,7 @@ impl Plugin for MarkMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         Ok(())
     }
 

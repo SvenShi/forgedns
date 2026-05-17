@@ -22,7 +22,7 @@ use crate::plugin::provider::Provider;
 use crate::plugin::provider::v2ray_dat::{
     GeoIp, GeoIpList, cidr_to_rule, geoip_code, normalized_selectors,
 };
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,7 +131,7 @@ impl Plugin for GeoIpProvider {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         self.reload().await
     }
 
@@ -179,7 +179,7 @@ impl PluginFactory for GeoIpFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let args = plugin_config

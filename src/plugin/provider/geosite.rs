@@ -22,7 +22,7 @@ use crate::plugin::provider::v2ray_dat::{
     GeoSiteList, geosite_code, geosite_domain_expression, geosite_domain_matches_selectors,
     matched_geosite_selectors, parse_geosite_selectors,
 };
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::proto::{Name, Question};
 
@@ -171,7 +171,7 @@ impl Plugin for GeoSiteProvider {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         self.reload().await
     }
 
@@ -216,7 +216,7 @@ impl PluginFactory for GeoSiteFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let args = plugin_config

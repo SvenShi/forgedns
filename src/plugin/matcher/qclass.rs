@@ -7,7 +7,6 @@
 //! matches DNS question classes in request queries.
 
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use ahash::AHashSet;
 use async_trait::async_trait;
@@ -20,7 +19,7 @@ use crate::plugin::matcher::matcher_utils::{
     parse_class, parse_quick_setup_rules, parse_rules_from_value, parse_u16_rules,
     validate_non_empty_rules,
 };
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -31,19 +30,14 @@ impl PluginFactory for QclassFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
         build_qclass_matcher(plugin_config.tag.clone(), rules)
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let rules = parse_quick_setup_rules(param)?;
         build_qclass_matcher(tag.to_string(), rules)
     }
@@ -70,7 +64,7 @@ impl Plugin for QclassMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         Ok(())
     }
 
@@ -108,11 +102,7 @@ mod tests {
         query.set_qclass(qclass);
         request.add_question(query);
 
-        DnsContext::new(
-            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new(SocketAddr::new("127.0.0.1".parse().unwrap(), 5353), request)
     }
 
     #[test]

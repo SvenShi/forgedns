@@ -41,18 +41,14 @@ fn make_config(plugin: PluginConfig) -> Config {
     }
 }
 
-fn make_context(registry: Arc<PluginRegistry>, name: &str, qtype: RecordType) -> DnsContext {
+fn make_context(_registry: Arc<PluginRegistry>, name: &str, qtype: RecordType) -> DnsContext {
     let mut request = Message::new();
     request.add_question(Question::new(
         Name::from_ascii(name).expect("benchmark qname should parse"),
         qtype,
         DNSClass::IN,
     ));
-    DnsContext::new(
-        SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-        request,
-        registry,
-    )
+    DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
 }
 
 fn load_executor(

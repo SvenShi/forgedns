@@ -16,7 +16,6 @@
 
 use std::borrow::Cow;
 use std::fmt::{Debug, Write as _};
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -26,7 +25,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::plugin::matcher::Matcher;
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -37,7 +36,7 @@ impl PluginFactory for StringExpFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let expression = parse_expression_from_value(plugin_config.args.clone())?;
@@ -49,12 +48,7 @@ impl PluginFactory for StringExpFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let expression =
             param.ok_or_else(|| DnsError::plugin("string_exp requires expression parameter"))?;
         let expression = parse_string_expression(&expression)?;
@@ -138,7 +132,7 @@ impl Plugin for StringExpMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         if let StringSource::Env(key) = &self.expression.source {
             self.env_cache = std::env::var(key).ok();
         }
@@ -358,6 +352,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::Arc;
 
     use super::*;
     use crate::core::context::DnsContext;
@@ -372,11 +367,8 @@ mod tests {
             RecordType::A,
             crate::proto::DNSClass::IN,
         ));
-        let mut context = DnsContext::new(
-            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request,
-            Arc::new(PluginRegistry::new()),
-        );
+        let mut context =
+            DnsContext::new(SocketAddr::new("127.0.0.1".parse().unwrap(), 5353), request);
         context.marks_mut().insert(1);
         context
     }

@@ -19,7 +19,7 @@ use crate::plugin::executor::sequence::chain::{ChainBuilder, ChainProgram};
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::parse_matcher_expr;
 use crate::plugin::{
-    Plugin, PluginFactory, PluginRef, PluginRegistry, UninitializedPlugin,
+    Plugin, PluginFactory, PluginInitContext, PluginRef, UninitializedPlugin,
     expand_quick_setup_dependency_specs,
 };
 use crate::plugin_factory;
@@ -79,7 +79,6 @@ pub struct Sequence {
     tag: String,
     program: OnceCell<Arc<ChainProgram>>,
     rules: Vec<Rule>,
-    registry: Arc<PluginRegistry>,
     quick_setup_executors: Vec<Arc<dyn Executor>>,
     quick_setup_matchers: Vec<Arc<dyn crate::plugin::matcher::Matcher>>,
 }
@@ -90,8 +89,8 @@ impl Plugin for Sequence {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
-        let mut builder = ChainBuilder::new(self.registry.clone(), self.tag.clone());
+    async fn init(&mut self, context: &PluginInitContext<'_>) -> DnsResult<()> {
+        let mut builder = ChainBuilder::new(context, self.tag.clone());
         for rule in &self.rules {
             builder.append_node(rule).await?;
         }
@@ -370,7 +369,7 @@ impl PluginFactory for SequenceFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = serde_yaml_ng::from_value::<Vec<Rule>>(
@@ -398,7 +397,6 @@ impl PluginFactory for SequenceFactory {
             tag: plugin_config.tag.clone(),
             program: OnceCell::new(),
             rules,
-            registry,
             quick_setup_executors: Vec::new(),
             quick_setup_matchers: Vec::new(),
         })))

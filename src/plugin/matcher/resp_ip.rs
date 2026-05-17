@@ -24,7 +24,7 @@ use crate::plugin::matcher::matcher_utils::{
     parse_rules_from_value, provider_dependency_specs, resolve_provider_tags,
     validate_non_empty_ip_rules_or_set_tags,
 };
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -55,29 +55,20 @@ impl PluginFactory for RespIpFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        build_resp_ip_matcher(plugin_config.tag.clone(), rules, registry)
+        build_resp_ip_matcher(plugin_config.tag.clone(), rules)
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let rules = parse_quick_setup_rules(param)?;
-        build_resp_ip_matcher(tag.to_string(), rules, registry)
+        build_resp_ip_matcher(tag.to_string(), rules)
     }
 }
 
-fn build_resp_ip_matcher(
-    tag: String,
-    rules: Vec<String>,
-    registry: Arc<PluginRegistry>,
-) -> DnsResult<UninitializedPlugin> {
+fn build_resp_ip_matcher(tag: String, rules: Vec<String>) -> DnsResult<UninitializedPlugin> {
     let (ip_rules, ip_set_tags) = parse_ip_rules_and_set_tags(rules, "resp_ip")?;
     validate_non_empty_ip_rules_or_set_tags("resp_ip", &ip_rules, &ip_set_tags, "ip_set")?;
 
@@ -86,7 +77,6 @@ fn build_resp_ip_matcher(
         ip_rules,
         ip_set_tags,
         ip_sets: Vec::new(),
-        registry,
     })))
 }
 
@@ -96,7 +86,6 @@ struct RespIpMatcher {
     ip_rules: IpPrefixMatcher,
     ip_set_tags: Vec<String>,
     ip_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
-    registry: Arc<PluginRegistry>,
 }
 
 #[async_trait]
@@ -105,9 +94,8 @@ impl Plugin for RespIpMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
-        self.ip_sets =
-            resolve_provider_tags(&self.registry, &self.ip_set_tags, "resp_ip", &self.tag)?;
+    async fn init(&mut self, context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
+        self.ip_sets = resolve_provider_tags(context, &self.ip_set_tags, "resp_ip")?;
         ensure_ip_capable_providers(&self.ip_sets, "resp_ip", &self.tag, &self.ip_set_tags)?;
         Ok(())
     }
@@ -146,11 +134,7 @@ mod tests {
             crate::proto::DNSClass::IN,
         ));
 
-        DnsContext::new(
-            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new(SocketAddr::new("127.0.0.1".parse().unwrap(), 5353), request)
     }
 
     #[tokio::test]
@@ -160,7 +144,6 @@ mod tests {
             ip_rules: parse_ip_prefix_matcher("resp_ip", &["8.8.8.0/24".into()]).unwrap(),
             ip_set_tags: vec![],
             ip_sets: vec![],
-            registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut ctx = make_context();
@@ -182,7 +165,6 @@ mod tests {
             ip_rules: parse_ip_prefix_matcher("resp_ip", &["8.8.8.0/24".into()]).unwrap(),
             ip_set_tags: vec![],
             ip_sets: vec![],
-            registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut ctx = make_context();
@@ -204,7 +186,6 @@ mod tests {
             ip_rules: parse_ip_prefix_matcher("resp_ip", &["8.8.8.0/24".into()]).unwrap(),
             ip_set_tags: vec![],
             ip_sets: vec![],
-            registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut no_response_ctx = make_context();

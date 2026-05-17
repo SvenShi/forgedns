@@ -24,7 +24,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::proto::{DNSClass, Name, Rcode, Record, RecordType};
 
@@ -72,7 +72,7 @@ impl Plugin for Arbitrary {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -121,7 +121,7 @@ impl PluginFactory for ArbitraryFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
@@ -222,7 +222,6 @@ mod tests {
 
     use super::*;
     use crate::plugin::executor::{ExecStep, Executor};
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::rdata::A;
     use crate::proto::{Message, Question, RData};
 
@@ -235,11 +234,7 @@ mod tests {
                 *qclass,
             ));
         }
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     fn build_plugin(cfg: &ArbitraryConfig) -> Arbitrary {
@@ -481,7 +476,6 @@ short_circuit: true
         let err = match ArbitraryFactory.quick_setup(
             "arbitrary_qs",
             Some("example.com. 60 IN A 1.1.1.1".to_string()),
-            Arc::new(PluginRegistry::new()),
         ) {
             Ok(_) => panic!("quick setup should be rejected"),
             Err(err) => err,

@@ -27,7 +27,7 @@ use serde::Serialize;
 
 use crate::api::{ApiHandler, json_error, json_ok};
 use crate::core::error::{DnsError, Result as DnsResult};
-use crate::plugin::{Plugin, PluginRegistry};
+use crate::plugin::{self, Plugin};
 use crate::proto::{Name, Question};
 use crate::register_plugin_api;
 
@@ -93,13 +93,12 @@ struct ProviderReloadResponse {
 #[derive(Debug)]
 struct ProviderReloadHandler {
     tag: String,
-    registry: Arc<PluginRegistry>,
 }
 
 #[async_trait]
 impl ApiHandler for ProviderReloadHandler {
     async fn handle(&self, _request: Request<Bytes>) -> crate::api::ApiResponse {
-        match self.registry.reload_provider(&self.tag).await {
+        match plugin::reload_provider(&self.tag).await {
             Ok(()) => json_ok(
                 StatusCode::OK,
                 &ProviderReloadResponse {
@@ -118,12 +117,14 @@ impl ApiHandler for ProviderReloadHandler {
     }
 }
 
-pub(crate) fn register_reload_api_route(registry: Arc<PluginRegistry>, tag: &str) -> DnsResult<()> {
+pub(crate) fn register_reload_api_route(
+    _registry: Arc<plugin::PluginRegistry>,
+    tag: &str,
+) -> DnsResult<()> {
     register_plugin_api!(
         tag,
         POST "/reload" => ProviderReloadHandler {
             tag: tag.to_string(),
-            registry,
         },
     )
 }
@@ -141,15 +142,12 @@ mod tests {
     use hyper_util::rt::TokioExecutor;
 
     use super::*;
-    use crate::api::{
-        ApiHub, ApiRegister, clear_global_api_register, global_api_test_guard,
-        set_global_api_register,
-    };
+    use crate::api::{ApiHub, clear_global_api, global_api_test_guard, install_global_api};
     use crate::config::types::{ApiConfig, ApiHttpConfig, PluginConfig};
     use crate::core::app_clock::AppClock;
     use crate::plugin::dependency::DependencyKind;
     use crate::plugin::matcher::qname::QnameFactory;
-    use crate::plugin::{PluginFactory, UninitializedPlugin};
+    use crate::plugin::{self, PluginFactory, PluginRegistry, UninitializedPlugin};
 
     fn reserve_local_addr() -> SocketAddr {
         let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind test listener");
@@ -170,7 +168,7 @@ mod tests {
             &self.tag
         }
 
-        async fn init(&mut self) -> DnsResult<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
             Ok(())
         }
 
@@ -208,7 +206,7 @@ mod tests {
         fn create(
             &self,
             plugin_config: &PluginConfig,
-            _registry: Arc<PluginRegistry>,
+            _init_context: &crate::plugin::PluginInitContext<'_>,
             _context: &crate::plugin::PluginCreateContext,
         ) -> DnsResult<UninitializedPlugin> {
             Ok(UninitializedPlugin::Provider(Box::new(
@@ -223,7 +221,8 @@ mod tests {
     #[tokio::test]
     async fn provider_reload_api_calls_targeted_reload() -> DnsResult<()> {
         let _guard = global_api_test_guard().await;
-        clear_global_api_register();
+        clear_global_api();
+        plugin::reset_runtime_for_test().await;
         AppClock::start();
         let listen = reserve_local_addr();
         let hub = ApiHub::from_config(&ApiConfig {
@@ -232,7 +231,7 @@ mod tests {
         .expect("api hub should be created");
         let reload_count = Arc::new(AtomicUsize::new(0));
 
-        set_global_api_register(Some(ApiRegister::new(hub.clone())));
+        install_global_api(hub.clone());
         let mut registry = PluginRegistry::new();
         registry.register_factory("qname", DependencyKind::Matcher, Box::new(QnameFactory {}));
         registry.register_factory(
@@ -262,6 +261,7 @@ mod tests {
             .init_plugins(configs)
             .await
             .expect("plugin init should succeed");
+        plugin::set_current_runtime_for_test(registry.clone()).await;
         hub.start().await.expect("api hub should start");
 
         let client: Client<HttpConnector, Empty<bytes::Bytes>> =
@@ -295,8 +295,8 @@ mod tests {
         assert_eq!(payload["provider"], "reloadable");
 
         hub.stop().await;
-        registry.destory().await;
-        clear_global_api_register();
+        plugin::reset_runtime_for_test().await;
+        clear_global_api();
         Ok(())
     }
 }

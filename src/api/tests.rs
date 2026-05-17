@@ -85,7 +85,10 @@ fn test_api_hub_with_options(
     let hub = ApiHub::from_config(&config)
         .expect("api hub config should be valid")
         .expect("api hub should be enabled");
-    register_builtin_routes(&hub).expect("builtin routes should register");
+    let register = ApiRegister::new(hub.clone());
+    health::register_builtin_routes(&register, hub.health_state())
+        .expect("health routes should register");
+    metrics::register_builtin_routes(&register).expect("metrics routes should register");
     hub
 }
 
@@ -352,7 +355,7 @@ fn test_register_helper_methods_register_without_error() {
 #[tokio::test]
 async fn test_global_api_route_macros_noop_when_api_is_disabled() {
     let _guard = global_api_test_guard().await;
-    clear_global_api_register();
+    clear_global_api();
 
     register_api_route!(GET "/macro-noop" => TestEchoHandler).expect("global route no-op");
     register_plugin_api!(
@@ -366,11 +369,11 @@ async fn test_global_api_route_macros_noop_when_api_is_disabled() {
 #[tokio::test]
 async fn test_global_api_route_macros_register_routes_and_clear() {
     let _guard = global_api_test_guard().await;
-    clear_global_api_register();
+    clear_global_api();
     AppClock::start();
     let addr = reserve_local_addr();
     let hub = test_api_hub(addr, None);
-    set_global_api_register(Some(ApiRegister::new(hub.clone())));
+    install_global_api(hub.clone());
 
     register_api_route!(GET "/macro-global" => TestEchoHandler).expect("register global route");
     register_plugin_api!(
@@ -407,7 +410,7 @@ async fn test_global_api_route_macros_register_routes_and_clear() {
         .expect("delete response");
     assert_eq!(response.status(), StatusCode::OK);
 
-    clear_global_api_register();
+    clear_global_api();
     assert!(global_api_register().is_none());
     hub.stop().await;
 }

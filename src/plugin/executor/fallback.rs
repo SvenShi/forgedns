@@ -36,7 +36,7 @@ use crate::core::metrics::{
 };
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,7 +139,7 @@ impl Plugin for FallbackExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         register_metric_source(self.metrics.clone())
     }
 
@@ -329,7 +329,7 @@ impl PluginFactory for FallbackFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg: FallbackConfig = serde_yaml_ng::from_value(
@@ -340,16 +340,8 @@ impl PluginFactory for FallbackFactory {
         )
         .map_err(|e| DnsError::plugin(format!("failed to parse fallback config: {}", e)))?;
 
-        let primary = registry.get_executor_dependency(
-            &plugin_config.tag,
-            "args.primary",
-            cfg.primary.as_str(),
-        )?;
-        let secondary = registry.get_executor_dependency(
-            &plugin_config.tag,
-            "args.secondary",
-            cfg.secondary.as_str(),
-        )?;
+        let primary = init_context.executor("args.primary", cfg.primary.as_str())?;
+        let secondary = init_context.executor("args.secondary", cfg.secondary.as_str())?;
 
         Ok(UninitializedPlugin::Executor(Box::new(FallbackExecutor {
             tag: plugin_config.tag.clone(),
@@ -400,17 +392,13 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+    use crate::plugin::test_utils::{plugin_config, test_context};
 
     #[test]
     fn test_fallback_factory_requires_args() {
         let factory = FallbackFactory;
         let cfg = plugin_config("fb", "fallback", None);
-        assert!(
-            factory
-                .create(&cfg, test_registry(), &Default::default())
-                .is_err()
-        );
+        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
     }
 
     #[derive(Debug)]
@@ -427,7 +415,7 @@ mod tests {
             &self.tag
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 

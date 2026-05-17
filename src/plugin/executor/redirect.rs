@@ -17,7 +17,6 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::sync::Arc;
 
 use ahash::AHashMap;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
@@ -30,7 +29,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::proto::{CNAME, DNSClass, Name, Question, RData, Record};
 use crate::{continue_next, plugin_factory};
 
@@ -81,7 +80,7 @@ impl Plugin for RedirectExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -170,7 +169,7 @@ impl PluginFactory for RedirectFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
@@ -409,7 +408,6 @@ mod tests {
     use super::*;
     use crate::core::context::DnsContext;
     use crate::core::error::DnsError;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::rdata::A;
     use crate::proto::{Message, RData, RecordType};
 
@@ -426,11 +424,7 @@ mod tests {
             RecordType::A,
             DNSClass::IN,
         ));
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     #[tokio::test]

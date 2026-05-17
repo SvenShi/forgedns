@@ -27,8 +27,8 @@ use tracing::{Level, debug, event_enabled, warn};
 
 use crate::core::context::DnsContext;
 pub(crate) use crate::network::listen::parse_listen_addr;
+use crate::plugin::Plugin;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginRegistry};
 use crate::proto::{Message, Rcode};
 
 pub mod http;
@@ -79,7 +79,6 @@ impl Drop for ConnectionGuard {
 #[derive(Debug)]
 pub struct RequestHandle {
     pub entry_executor: Arc<dyn Executor>,
-    pub registry: Arc<PluginRegistry>,
 }
 pub use crate::core::context::RequestMeta;
 
@@ -106,7 +105,7 @@ impl RequestHandle {
         src_addr: SocketAddr,
         meta: RequestMeta,
     ) -> RequestResult {
-        let mut context = DnsContext::new(src_addr, msg, self.registry.clone());
+        let mut context = DnsContext::new(src_addr, msg);
         self.apply_request_meta(&mut context, meta);
 
         // Log request details only when debug logging is enabled
@@ -203,7 +202,6 @@ mod tests {
     use super::*;
     use crate::continue_next;
     use crate::core::error::Result;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{Name, Question, RecordType};
 
     #[test]
@@ -234,7 +232,6 @@ mod tests {
     fn make_request_handle(executor: Arc<dyn Executor>) -> RequestHandle {
         RequestHandle {
             entry_executor: executor,
-            registry: test_registry(),
         }
     }
 
@@ -255,7 +252,7 @@ mod tests {
             "capture_meta"
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 
@@ -288,7 +285,7 @@ mod tests {
             "post_response"
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 

@@ -30,7 +30,7 @@ use crate::core::metrics::{
     unregister_metric_source,
 };
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::proto::{A, AAAA, RData, RecordType};
 
@@ -96,7 +96,7 @@ impl Plugin for BlackHole {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         register_metric_source(self.metrics.clone())
     }
 
@@ -141,7 +141,7 @@ impl PluginFactory for BlackHoleFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let (ips, short_circuit) = parse_ip_tokens_from_value(plugin_config.args.clone())?;
@@ -156,12 +156,7 @@ impl PluginFactory for BlackHoleFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let raw = param.unwrap_or_default();
         let (raw, short_circuit) = strip_short_circuit_suffix(&raw)?;
         let ips = parse_ip_tokens(split_tokens(&raw).into_iter().map(str::to_string).collect())?;
@@ -288,7 +283,6 @@ mod tests {
     use super::*;
     use crate::plugin::UninitializedPlugin;
     use crate::plugin::executor::ExecStep;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Message, Name, Question};
 
     fn make_context(qtype: RecordType) -> DnsContext {
@@ -299,11 +293,7 @@ mod tests {
             DNSClass::IN,
         ));
 
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     fn test_metrics() -> Arc<BlackHoleMetrics> {
@@ -320,11 +310,7 @@ mod tests {
     #[tokio::test]
     async fn test_black_hole_quick_setup_supports_short_circuit() {
         let plugin = BlackHoleFactory
-            .quick_setup(
-                "bh_quick",
-                Some("0.0.0.0 short_circuit=true".to_string()),
-                test_registry(),
-            )
+            .quick_setup("bh_quick", Some("0.0.0.0 short_circuit=true".to_string()))
             .expect("quick setup should succeed");
 
         let UninitializedPlugin::Executor(plugin) = plugin else {

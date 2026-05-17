@@ -39,7 +39,7 @@ use crate::core::metrics::{
     unregister_metric_source,
 };
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::proto::{
     A, AAAA, DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType, SOA,
@@ -213,7 +213,7 @@ impl Plugin for HostsExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         register_metric_source(self.metrics.clone())
     }
 
@@ -270,7 +270,7 @@ impl PluginFactory for HostsFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
@@ -684,7 +684,6 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{DNSClass, Name, Question};
 
     #[test]
@@ -701,11 +700,7 @@ mod tests {
             qtype,
             DNSClass::IN,
         ));
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     fn build_plugin(cfg: HostsConfig) -> HostsExecutor {
@@ -932,11 +927,7 @@ mod tests {
             RecordType::A,
             DNSClass::IN,
         ));
-        let mut ctx = DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            test_registry(),
-        );
+        let mut ctx = DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request);
 
         let step = plugin.execute(&mut ctx).await.expect("execute should work");
         assert!(matches!(step, ExecStep::Next));

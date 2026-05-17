@@ -50,7 +50,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::proto::Rcode;
 use crate::{continue_next, plugin_factory};
 
@@ -224,7 +224,7 @@ impl Plugin for MikrotikExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         // `init()` may be called more than once by the plugin framework.
         // Keep it idempotent and only build the runtime once.
         if self.manager.is_none() || self.command_tx.is_some() {
@@ -378,7 +378,7 @@ impl PluginFactory for MikrotikFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         // Plugin tag is reused inside RouterOS comment ownership metadata.
@@ -697,7 +697,6 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     use super::*;
-    use crate::plugin::PluginRegistry;
     use crate::plugin::executor::ros_address_list::api::RouterListEntry;
     use crate::plugin::executor::ros_address_list::manager::{
         OwnedCommentKind, decode_owned_comment, encode_comment,
@@ -885,11 +884,7 @@ mod tests {
             RecordType::A,
             DNSClass::IN,
         ));
-        DnsContext::new(
-            "127.0.0.1:5353".parse::<SocketAddr>().unwrap(),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new("127.0.0.1:5353".parse::<SocketAddr>().unwrap(), request)
     }
 
     fn response_with_records(records: Vec<Record>) -> Message {
@@ -1433,7 +1428,7 @@ persistent:
         let api = Arc::new(MockMikrotikApi::default()) as Arc<dyn MikrotikApi>;
         let mut executor =
             build_executor_for_test("mk", true, false, Some("oxidns_ipv4"), None, api);
-        let _ = executor.init().await;
+        let _ = executor.init_for_test().await;
         let mut ctx = make_context();
         let step = executor.execute(&mut ctx).await.unwrap();
         assert!(matches!(step, ExecStep::Next));
@@ -1451,7 +1446,7 @@ persistent:
             Some("oxidns_ipv6"),
             api.clone() as Arc<dyn MikrotikApi>,
         );
-        let _ = executor.init().await;
+        let _ = executor.init_for_test().await;
         let mut ctx = make_context();
         ctx.set_response(response_with_records(vec![
             a_record(Ipv4Addr::new(1, 1, 1, 1), 300),
@@ -1486,7 +1481,7 @@ persistent:
             None,
             api as Arc<dyn MikrotikApi>,
         );
-        let _ = executor.init().await;
+        let _ = executor.init_for_test().await;
 
         let mut ctx = make_context();
         ctx.set_response(response_with_records(vec![a_record(
@@ -1509,7 +1504,7 @@ persistent:
             None,
             api.clone() as Arc<dyn MikrotikApi>,
         );
-        let _ = executor.init().await;
+        let _ = executor.init_for_test().await;
         let mut ctx = make_context();
         ctx.set_response(response_with_records(vec![a_record(
             Ipv4Addr::new(6, 6, 6, 6),
@@ -1560,7 +1555,7 @@ persistent:
             None,
             api.clone() as Arc<dyn MikrotikApi>,
         );
-        let _ = executor.init().await;
+        let _ = executor.init_for_test().await;
         let _ = executor.destroy().await;
 
         let state = api.state.lock().unwrap();

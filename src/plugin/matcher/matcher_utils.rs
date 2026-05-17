@@ -13,7 +13,7 @@ use serde_yaml_ng::Value;
 
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
-use crate::plugin::PluginRegistry;
+use crate::plugin::PluginInitContext;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
 use crate::proto::{DNSClass, Rcode, RecordType};
@@ -254,15 +254,14 @@ pub(crate) fn load_rules_from_files(files: &[String], field: &str) -> DnsResult<
 }
 
 pub(crate) fn resolve_provider_tags(
-    registry: &PluginRegistry,
+    context: &PluginInitContext<'_>,
     tags: &[String],
     matcher_name: &str,
-    matcher_tag: &str,
 ) -> DnsResult<Vec<Arc<dyn Provider>>> {
     let mut providers = Vec::with_capacity(tags.len());
     for (idx, tag) in tags.iter().enumerate() {
         let field = format!("{}.provider_tags[{}]", matcher_name, idx);
-        let provider = registry.get_provider_dependency(matcher_tag, &field, tag)?;
+        let provider = context.provider(&field, tag)?;
         providers.push(provider);
     }
     Ok(providers)

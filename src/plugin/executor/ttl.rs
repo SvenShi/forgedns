@@ -17,8 +17,6 @@
 //! - answers and authority records are always rewritten.
 //! - additional records are rewritten except EDNS OPT pseudo-records.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -27,7 +25,7 @@ use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -76,7 +74,7 @@ impl Plugin for TtlExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -115,7 +113,7 @@ impl PluginFactory for TtlFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let policy = parse_policy_from_config(plugin_config.args.clone())?;
@@ -126,12 +124,7 @@ impl PluginFactory for TtlFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let raw = param.ok_or_else(|| DnsError::plugin("ttl quick setup requires parameter"))?;
         let policy = parse_policy_from_expr(raw.trim())?;
 
@@ -209,7 +202,7 @@ fn parse_policy_from_expr(raw: &str) -> Result<TtlPolicy> {
 mod tests {
     use super::*;
     use crate::plugin::executor::ExecStep;
-    use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+    use crate::plugin::test_utils::{plugin_config, test_context};
     use crate::proto::rdata::{A, Edns};
     use crate::proto::{Name, RData, Record};
 
@@ -307,7 +300,7 @@ mod tests {
     fn test_factory_create_rejects_empty_args() {
         let factory = TtlFactory;
         let cfg = plugin_config("ttl", "ttl", None);
-        let result = factory.create(&cfg, test_registry(), &Default::default());
+        let result = factory.create_for_test(&cfg, &Default::default());
         assert!(result.is_err());
     }
 }

@@ -35,6 +35,10 @@ impl ApiRegister {
         Self { hub }
     }
 
+    pub(crate) fn health_state(&self) -> Arc<HealthState> {
+        self.hub.health_state()
+    }
+
     /// Register one handler under an absolute API path.
     pub fn register_route(
         &self,

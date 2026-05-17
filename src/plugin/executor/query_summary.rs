@@ -13,8 +13,6 @@
 //! It does not change request routing or response content, so it can be placed
 //! anywhere in a sequence for tracing and latency attribution.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -25,7 +23,7 @@ use crate::core::app_clock::AppClock;
 use crate::core::context::DnsContext;
 use crate::core::error::Result;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::{continue_next, plugin_factory};
 
 const DEFAULT_MSG: &str = "query summary";
@@ -48,7 +46,7 @@ impl Plugin for QuerySummary {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -123,7 +121,7 @@ impl PluginFactory for QuerySummaryFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let msg = parse_msg(plugin_config.args.clone()).unwrap_or_else(|| DEFAULT_MSG.to_string());
@@ -134,12 +132,7 @@ impl PluginFactory for QuerySummaryFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let msg = param
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())

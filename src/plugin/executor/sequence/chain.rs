@@ -13,7 +13,7 @@ use crate::plugin::executor::sequence::{
 };
 use crate::plugin::executor::{ExecStep, Executor};
 use crate::plugin::matcher::{Matcher, MatcherRef};
-use crate::plugin::{PluginHolder, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{PluginHolder, PluginInitContext};
 use crate::proto::Rcode;
 
 #[derive(Debug)]
@@ -348,11 +348,11 @@ impl ChainProgram {
 }
 
 /// Builder that converts sequence rules into an executable instruction program.
-pub struct ChainBuilder {
+pub struct ChainBuilder<'a> {
     /// Program being built in rule order.
     instructions: Vec<Instruction>,
-    /// Shared plugin registry for resolving executor/matcher references.
-    registry: Arc<PluginRegistry>,
+    /// Plugin initialization context for resolving executor/matcher references.
+    context: &'a PluginInitContext<'a>,
     /// Current sequence tag (used for generated quick-setup tags).
     sequence_tag: String,
     /// Current rule index in this sequence.
@@ -369,11 +369,11 @@ type BuildArtifacts = (
     Vec<Arc<dyn Matcher>>,
 );
 
-impl ChainBuilder {
-    pub fn new(registry: Arc<PluginRegistry>, sequence_tag: impl Into<String>) -> Self {
+impl<'a> ChainBuilder<'a> {
+    pub fn new(context: &'a PluginInitContext<'a>, sequence_tag: impl Into<String>) -> Self {
         ChainBuilder {
             instructions: Vec::new(),
-            registry,
+            context,
             sequence_tag: sequence_tag.into(),
             node_index: 0,
             quick_setup_executors: Vec::new(),
@@ -483,8 +483,7 @@ impl ChainBuilder {
         let tag = parse_control_flow_sequence_tag(op, raw)?;
 
         let field = format!("args[{}].exec", node_index);
-        self.registry
-            .get_executor_dependency_of_type(&self.sequence_tag, &field, &tag, "sequence")
+        self.context.executor_of_type(&field, &tag, "sequence")
     }
 
     async fn resolve_executor_ref(
@@ -495,20 +494,18 @@ impl ChainBuilder {
         match PluginRef::from_str(expr)? {
             PluginRef::PluginTag(tag) => {
                 let field = format!("args[{}].exec", node_index);
-                self.registry
-                    .get_executor_dependency(&self.sequence_tag, &field, &tag)
+                self.context.executor(&field, &tag)
             }
             PluginRef::QuickSetup { plugin_type, param } => {
                 let quick_tag = format!(
                     "@qs:exec:{}:{}:{}",
                     self.sequence_tag, node_index, plugin_type
                 );
-                let uninitialized =
-                    self.registry
-                        .clone()
-                        .quick_setup(&plugin_type, &quick_tag, param)?;
-                let executor = uninitialized.init_and_wrap().await?;
-                let executor = match executor {
+                let holder = self
+                    .context
+                    .init_quick_setup(&plugin_type, &quick_tag, param)
+                    .await?;
+                let executor = match holder {
                     PluginHolder::Executor(executor) => executor,
                     _ => {
                         return Err(DnsError::plugin(format!(
@@ -531,22 +528,18 @@ impl ChainBuilder {
         field: &str,
     ) -> Result<Arc<dyn Matcher>> {
         match PluginRef::from_str(expr)? {
-            PluginRef::PluginTag(tag) => {
-                self.registry
-                    .get_matcher_dependency(&self.sequence_tag, field, &tag)
-            }
+            PluginRef::PluginTag(tag) => self.context.matcher(field, &tag),
             PluginRef::QuickSetup { plugin_type, param } => {
                 // Generate deterministic synthetic runtime tag for quick-setup matcher.
                 let quick_tag = format!(
                     "@qs:match:{}:{}:{}:{}",
                     self.sequence_tag, node_index, match_index, plugin_type
                 );
-                let uninitialized: UninitializedPlugin =
-                    self.registry
-                        .clone()
-                        .quick_setup(&plugin_type, &quick_tag, param)?;
-                let matcher = uninitialized.init_and_wrap().await?;
-                let matcher = match matcher {
+                let holder = self
+                    .context
+                    .init_quick_setup(&plugin_type, &quick_tag, param)
+                    .await?;
+                let matcher = match holder {
                     PluginHolder::Matcher(matcher) => matcher,
                     _ => {
                         return Err(DnsError::plugin(format!(
@@ -601,7 +594,7 @@ mod tests {
 
     use super::*;
     use crate::continue_next;
-    use crate::plugin::Plugin;
+    use crate::plugin::{Plugin, PluginCreateContext, PluginInitContext};
     use crate::proto::{Message, Name, Question, RecordType};
 
     #[derive(Debug, Clone, Copy)]
@@ -645,7 +638,7 @@ mod tests {
             self.tag
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 
@@ -710,11 +703,7 @@ mod tests {
             crate::proto::DNSClass::IN,
         ));
 
-        DnsContext::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
     }
 
     fn executor_instruction(executor: Arc<dyn Executor>) -> Instruction {
@@ -879,7 +868,9 @@ mod tests {
     #[tokio::test]
     async fn test_parse_builtin_reject_defaults_to_refused() {
         let registry = crate::plugin::test_utils::test_registry();
-        let mut builder = ChainBuilder::new(registry, "seq".to_string());
+        let create_context = PluginCreateContext::default();
+        let init_context = PluginInitContext::new(registry, "seq", &create_context);
+        let mut builder = ChainBuilder::new(&init_context, "seq".to_string());
 
         let op = builder
             .parse_builtin("reject", 0)

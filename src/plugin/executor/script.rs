@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -31,7 +30,7 @@ use crate::core::error::{DnsError, Result};
 use crate::core::system_utils::parse_simple_duration;
 use crate::plugin::executor::template::Template;
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -101,7 +100,7 @@ impl Plugin for ScriptExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -335,7 +334,7 @@ impl PluginFactory for ScriptFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let args = plugin_config
@@ -409,7 +408,7 @@ mod tests {
     use super::*;
     use crate::plugin::executor::ExecStep;
     use crate::plugin::executor::template::resolve_builtin;
-    use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+    use crate::plugin::test_utils::{plugin_config, test_context};
     use crate::proto::rdata::A;
     use crate::proto::{DNSClass, Message, Name, Question, RData, Rcode, Record, RecordType};
 
@@ -493,7 +492,7 @@ args:
                 .unwrap(),
             ),
         );
-        let err = match ScriptFactory.create(&cfg, test_registry(), &Default::default()) {
+        let err = match ScriptFactory.create_for_test(&cfg, &Default::default()) {
             Ok(_) => panic!("invalid placeholder should fail"),
             Err(err) => err,
         };
@@ -515,7 +514,7 @@ max_output_bytes: 0
                 .unwrap(),
             ),
         );
-        let err = match ScriptFactory.create(&cfg, test_registry(), &Default::default()) {
+        let err = match ScriptFactory.create_for_test(&cfg, &Default::default()) {
             Ok(_) => panic!("zero output limit should fail"),
             Err(err) => err,
         };

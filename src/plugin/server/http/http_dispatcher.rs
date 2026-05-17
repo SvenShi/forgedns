@@ -344,7 +344,6 @@ mod tests {
     use crate::core::error::Result;
     use crate::plugin::Plugin;
     use crate::plugin::executor::{ExecStep, Executor};
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{Name, Question, Rcode, RecordType};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,7 +366,7 @@ mod tests {
             "recording_executor"
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 
@@ -412,7 +411,6 @@ mod tests {
         (
             Arc::new(RequestHandle {
                 entry_executor: executor,
-                registry: test_registry(),
             }),
             observed,
         )

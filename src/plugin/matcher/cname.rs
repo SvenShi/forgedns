@@ -22,7 +22,7 @@ use crate::plugin::matcher::matcher_utils::{
     parse_rules_from_value, provider_dependency_specs, resolve_provider_tags,
     validate_non_empty_domain_rules_or_set_tags,
 };
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone)]
@@ -53,29 +53,20 @@ impl PluginFactory for CnameFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        build_cname_matcher(plugin_config.tag.clone(), rules, registry)
+        build_cname_matcher(plugin_config.tag.clone(), rules)
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let rules = parse_quick_setup_rules(param)?;
-        build_cname_matcher(tag.to_string(), rules, registry)
+        build_cname_matcher(tag.to_string(), rules)
     }
 }
 
-fn build_cname_matcher(
-    tag: String,
-    rules: Vec<String>,
-    registry: Arc<PluginRegistry>,
-) -> DnsResult<UninitializedPlugin> {
+fn build_cname_matcher(tag: String, rules: Vec<String>) -> DnsResult<UninitializedPlugin> {
     let (cname_rules, domain_set_tags) = parse_domain_rules_and_set_tags(rules, "cname")?;
     validate_non_empty_domain_rules_or_set_tags(
         "cname",
@@ -89,7 +80,6 @@ fn build_cname_matcher(
         cname_rules,
         domain_set_tags,
         domain_sets: Vec::new(),
-        registry,
     })))
 }
 
@@ -99,7 +89,6 @@ struct CnameMatcher {
     cname_rules: DomainRuleMatcher,
     domain_set_tags: Vec<String>,
     domain_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
-    registry: Arc<PluginRegistry>,
 }
 
 #[async_trait]
@@ -108,9 +97,8 @@ impl Plugin for CnameMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
-        self.domain_sets =
-            resolve_provider_tags(&self.registry, &self.domain_set_tags, "cname", &self.tag)?;
+    async fn init(&mut self, context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
+        self.domain_sets = resolve_provider_tags(context, &self.domain_set_tags, "cname")?;
         ensure_domain_capable_providers(
             &self.domain_sets,
             "cname",
@@ -157,11 +145,7 @@ mod tests {
             crate::proto::DNSClass::IN,
         ));
 
-        DnsContext::new(
-            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request,
-            Arc::new(PluginRegistry::new()),
-        )
+        DnsContext::new(SocketAddr::new("127.0.0.1".parse().unwrap(), 5353), request)
     }
 
     #[tokio::test]
@@ -176,7 +160,6 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut ctx = make_context();
@@ -209,7 +192,6 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut ctx = make_context();
@@ -235,7 +217,6 @@ mod tests {
             },
             domain_set_tags: vec![],
             domain_sets: vec![],
-            registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut no_response = make_context();

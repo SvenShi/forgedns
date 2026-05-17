@@ -14,7 +14,6 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -32,7 +31,7 @@ use crate::core::system_utils::deserialize_duration_option;
 use crate::network::http_client::{HttpClient, HttpClientOptions, HttpRequestOptions};
 use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
 use crate::plugin::executor::{ExecStep, Executor};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -80,7 +79,7 @@ impl Plugin for DownloadExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -164,7 +163,7 @@ impl PluginFactory for DownloadFactory {
     fn prepare_startup<'a>(
         &'a self,
         plugin_config: &'a PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _context: &'a crate::plugin::PluginBuildSession,
     ) -> BoxFuture<'a, Result<()>> {
         let plugin_tag = plugin_config.tag.clone();
         Box::pin(async move {
@@ -240,7 +239,7 @@ impl PluginFactory for DownloadFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let runtime = build_download_runtime_config(plugin_config)?;
@@ -255,12 +254,7 @@ impl PluginFactory for DownloadFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> Result<UninitializedPlugin> {
         let raw = param.ok_or_else(|| {
             DnsError::plugin("download quick setup requires '<url> <dir>' arguments")
         })?;
@@ -436,7 +430,7 @@ mod tests {
 
     use super::*;
     use crate::plugin::executor::ExecStep;
-    use crate::plugin::test_utils::{plugin_config, test_context, test_registry};
+    use crate::plugin::test_utils::{plugin_config, test_context};
 
     #[test]
     fn test_parse_quick_setup_requires_url_and_dir() {
@@ -500,11 +494,7 @@ mod tests {
     fn test_download_factory_create_rejects_invalid_config() {
         let factory = DownloadFactory;
         let cfg = plugin_config("download", "download", Some(Value::String("bad".into())));
-        assert!(
-            factory
-                .create(&cfg, test_registry(), &Default::default())
-                .is_err()
-        );
+        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
     }
 
     #[test]

@@ -12,7 +12,6 @@
 //! - negated matcher expressions via `!`, e.g. `!$has_resp`.
 
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_yaml_ng::Value;
@@ -24,7 +23,7 @@ use crate::plugin::dependency::DependencySpec;
 use crate::plugin::matcher::matcher_utils::validate_non_empty_rules;
 use crate::plugin::matcher::{Matcher, MatcherRef, parse_matcher_expr};
 use crate::plugin::{
-    Plugin, PluginFactory, PluginHolder, PluginRef, PluginRegistry, UninitializedPlugin,
+    Plugin, PluginFactory, PluginHolder, PluginRef, UninitializedPlugin,
     expand_quick_setup_dependency_specs,
 };
 use crate::plugin_factory;
@@ -65,11 +64,11 @@ impl PluginFactory for AnyMatchFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let matchers = parse_matcher_exprs_from_value(plugin_config.args.clone())?;
-        build_any_match(plugin_config.tag.clone(), matchers, registry)
+        build_any_match(plugin_config.tag.clone(), matchers)
     }
 }
 
@@ -113,17 +112,12 @@ fn parse_matcher_exprs_from_value(args: Option<Value>) -> DnsResult<Vec<String>>
     Ok(expressions)
 }
 
-fn build_any_match(
-    tag: String,
-    matchers: Vec<String>,
-    registry: Arc<PluginRegistry>,
-) -> DnsResult<UninitializedPlugin> {
+fn build_any_match(tag: String, matchers: Vec<String>) -> DnsResult<UninitializedPlugin> {
     validate_non_empty_rules("any_match", &matchers)?;
     Ok(UninitializedPlugin::Matcher(Box::new(AnyMatchMatcher {
         tag,
         matcher_refs: matchers,
         matchers: None,
-        registry,
     })))
 }
 
@@ -134,7 +128,6 @@ struct AnyMatchMatcher {
     matcher_refs: Vec<String>,
     /// Resolved matcher instances, initialized once in plugin `init`.
     matchers: Option<Vec<MatcherRef>>,
-    registry: Arc<PluginRegistry>,
 }
 
 #[async_trait]
@@ -143,7 +136,7 @@ impl Plugin for AnyMatchMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         let mut result = Vec::with_capacity(self.matcher_refs.len());
 
         for (idx, matcher_ref) in self.matcher_refs.iter().enumerate() {
@@ -153,21 +146,17 @@ impl Plugin for AnyMatchMatcher {
             let plugin_ref = PluginRef::from_str(matcher_expr)?;
 
             let matchers = match plugin_ref {
-                PluginRef::PluginTag(matcher_tag) => self.registry.get_matcher_dependency(
-                    &self.tag,
-                    &format!("args.matchers[{idx}]"),
-                    &matcher_tag,
-                )?,
+                PluginRef::PluginTag(matcher_tag) => {
+                    context.matcher(&format!("args.matchers[{idx}]"), &matcher_tag)?
+                }
 
                 PluginRef::QuickSetup { plugin_type, param } => {
                     let quick_tag = format!("@qs:match:{}:{}:{}", self.tag, idx, plugin_type);
 
-                    let uninitialized: UninitializedPlugin =
-                        self.registry
-                            .clone()
-                            .quick_setup(&plugin_type, &quick_tag, param)?;
-
-                    match uninitialized.init_and_wrap().await? {
+                    match context
+                        .init_quick_setup(&plugin_type, &quick_tag, param)
+                        .await?
+                    {
                         PluginHolder::Matcher(matcher) => matcher,
                         _ => {
                             return Err(DnsError::plugin(format!(
@@ -206,6 +195,7 @@ mod tests {
 
     use super::*;
     use crate::config::types::PluginConfig;
+    use crate::plugin::PluginRegistry;
     use crate::plugin::dependency::{DependencyKind, DependencySpec};
     use crate::plugin::matcher::false_matcher::FalseMatcherFactory;
     use crate::plugin::matcher::qtype::QtypeFactory;
@@ -248,14 +238,7 @@ mod tests {
 
     #[test]
     fn test_build_any_match_rejects_empty_rules() {
-        assert!(
-            build_any_match(
-                "any".to_string(),
-                Vec::new(),
-                Arc::new(PluginRegistry::new())
-            )
-            .is_err()
-        );
+        assert!(build_any_match("any".to_string(), Vec::new()).is_err());
     }
 
     #[tokio::test]

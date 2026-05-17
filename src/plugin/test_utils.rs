@@ -34,6 +34,5 @@ pub(crate) fn test_context() -> DnsContext {
     DnsContext::new(
         SocketAddr::from((Ipv4Addr::LOCALHOST, 5353)),
         Message::new(),
-        test_registry(),
     )
 }

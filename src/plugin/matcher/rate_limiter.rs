@@ -39,7 +39,7 @@ use crate::core::metrics::{
 use crate::core::task_center;
 use crate::core::ttl_cache::TtlCache;
 use crate::plugin::matcher::Matcher;
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 const DEFAULT_QPS: f64 = 20.0;
@@ -131,7 +131,7 @@ impl PluginFactory for RateLimiterFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
@@ -150,12 +150,7 @@ impl PluginFactory for RateLimiterFactory {
         })))
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let cfg = parse_quick_setup(param)?;
         validate_cfg(&cfg)?;
 
@@ -179,7 +174,7 @@ impl Plugin for RateLimiter {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         register_metric_source(self.metrics.clone())?;
         if self.cleanup_started.swap(true, Ordering::Relaxed) {
             return Ok(());
@@ -383,15 +378,10 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     use super::*;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::Message;
 
     fn make_context(ip: Ipv4Addr) -> DnsContext {
-        DnsContext::new(
-            SocketAddr::from((ip, 5300)),
-            Message::new(),
-            test_registry(),
-        )
+        DnsContext::new(SocketAddr::from((ip, 5300)), Message::new())
     }
 
     #[test]

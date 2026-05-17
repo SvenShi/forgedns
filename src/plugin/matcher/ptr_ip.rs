@@ -24,7 +24,7 @@ use crate::plugin::matcher::matcher_utils::{
     parse_rules_from_value, provider_dependency_specs, resolve_provider_tags,
     validate_non_empty_ip_rules_or_set_tags,
 };
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::proto::RecordType;
 
@@ -56,29 +56,20 @@ impl PluginFactory for PtrIpFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
-        build_ptr_ip_matcher(plugin_config.tag.clone(), rules, registry)
+        build_ptr_ip_matcher(plugin_config.tag.clone(), rules)
     }
 
-    fn quick_setup(
-        &self,
-        tag: &str,
-        param: Option<String>,
-        registry: Arc<PluginRegistry>,
-    ) -> DnsResult<UninitializedPlugin> {
+    fn quick_setup(&self, tag: &str, param: Option<String>) -> DnsResult<UninitializedPlugin> {
         let rules = parse_quick_setup_rules(param)?;
-        build_ptr_ip_matcher(tag.to_string(), rules, registry)
+        build_ptr_ip_matcher(tag.to_string(), rules)
     }
 }
 
-fn build_ptr_ip_matcher(
-    tag: String,
-    rules: Vec<String>,
-    registry: Arc<PluginRegistry>,
-) -> DnsResult<UninitializedPlugin> {
+fn build_ptr_ip_matcher(tag: String, rules: Vec<String>) -> DnsResult<UninitializedPlugin> {
     let (ip_rules, ip_set_tags) = parse_ip_rules_and_set_tags(rules, "ptr_ip")?;
     validate_non_empty_ip_rules_or_set_tags("ptr_ip", &ip_rules, &ip_set_tags, "ip_set")?;
 
@@ -87,7 +78,6 @@ fn build_ptr_ip_matcher(
         ip_rules,
         ip_set_tags,
         ip_sets: Vec::new(),
-        registry,
     })))
 }
 
@@ -97,7 +87,6 @@ struct PtrIpMatcher {
     ip_rules: IpPrefixMatcher,
     ip_set_tags: Vec<String>,
     ip_sets: Vec<Arc<dyn crate::plugin::provider::Provider>>,
-    registry: Arc<PluginRegistry>,
 }
 
 #[async_trait]
@@ -106,9 +95,8 @@ impl Plugin for PtrIpMatcher {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
-        self.ip_sets =
-            resolve_provider_tags(&self.registry, &self.ip_set_tags, "ptr_ip", &self.tag)?;
+    async fn init(&mut self, context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
+        self.ip_sets = resolve_provider_tags(context, &self.ip_set_tags, "ptr_ip")?;
         ensure_ip_capable_providers(&self.ip_sets, "ptr_ip", &self.tag, &self.ip_set_tags)?;
         Ok(())
     }
@@ -166,18 +154,13 @@ mod tests {
             RecordType::PTR,
             crate::proto::DNSClass::IN,
         ));
-        let mut ctx = DnsContext::new(
-            SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
-            request,
-            Arc::new(PluginRegistry::new()),
-        );
+        let mut ctx = DnsContext::new(SocketAddr::new("127.0.0.1".parse().unwrap(), 5353), request);
 
         let matcher = PtrIpMatcher {
             tag: "ptr_ip".into(),
             ip_rules: parse_ip_prefix_matcher("ptr_ip", &["192.168.0.0/16".into()]).unwrap(),
             ip_set_tags: vec![],
             ip_sets: vec![],
-            registry: Arc::new(PluginRegistry::new()),
         };
 
         assert!(matcher.is_match(&mut ctx));
@@ -190,7 +173,6 @@ mod tests {
             ip_rules: parse_ip_prefix_matcher("ptr_ip", &["192.168.0.0/16".into()]).unwrap(),
             ip_set_tags: vec![],
             ip_sets: vec![],
-            registry: Arc::new(PluginRegistry::new()),
         };
 
         let mut non_ptr_request = Message::new();
@@ -202,7 +184,6 @@ mod tests {
         let mut non_ptr_ctx = DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             non_ptr_request,
-            Arc::new(PluginRegistry::new()),
         );
         assert!(!matcher.is_match(&mut non_ptr_ctx));
 
@@ -215,7 +196,6 @@ mod tests {
         let mut invalid_ptr_ctx = DnsContext::new(
             SocketAddr::new("127.0.0.1".parse().unwrap(), 5353),
             invalid_ptr_request,
-            Arc::new(PluginRegistry::new()),
         );
         assert!(!matcher.is_match(&mut invalid_ptr_ctx));
     }

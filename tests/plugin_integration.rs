@@ -33,6 +33,8 @@ use tokio::time::{Duration, timeout};
 
 fn parse_config(yaml: &str) -> Result<Config> {
     AppClock::start();
+    #[cfg(debug_assertions)]
+    plugin::enable_runtime_test_serialization();
     let config: Config = serde_yaml_ng::from_str(yaml)?;
     config.validate()?;
     Ok(config)
@@ -43,7 +45,7 @@ fn make_context(registry: Arc<PluginRegistry>, qname: &str) -> DnsContext {
 }
 
 fn make_context_with_qtype(
-    registry: Arc<PluginRegistry>,
+    _registry: Arc<PluginRegistry>,
     qname: &str,
     qtype: RecordType,
 ) -> DnsContext {
@@ -54,11 +56,7 @@ fn make_context_with_qtype(
         DNSClass::IN,
     ));
 
-    DnsContext::new(
-        SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-        request,
-        registry,
-    )
+    DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request)
 }
 
 fn test_rule_path(relative_name: &str) -> String {
@@ -2688,11 +2686,7 @@ plugins:
         RecordType::AAAA,
         DNSClass::IN,
     ));
-    let mut ctx = DnsContext::new(
-        SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)),
-        request,
-        registry.clone(),
-    );
+    let mut ctx = DnsContext::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 5300)), request);
 
     assert!(matcher.is_match(&mut ctx));
 

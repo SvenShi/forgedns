@@ -24,7 +24,7 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::IpPrefixMatcher;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -52,7 +52,6 @@ struct IpSetSnapshot {
 pub struct IpSet {
     tag: String,
     args: IpSetArgs,
-    registry: Arc<PluginRegistry>,
     referenced_sets: Vec<Arc<dyn Provider>>,
     snapshot: ArcSwap<IpSetSnapshot>,
 }
@@ -101,7 +100,7 @@ impl Plugin for IpSet {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         let mut providers = Vec::with_capacity(self.args.sets.len());
         for (set_idx, set_tag) in self.args.sets.iter().enumerate() {
             let field = format!("args.sets[{}]", set_idx);
@@ -110,9 +109,7 @@ impl Plugin for IpSet {
                 referenced_set = %set_tag,
                 "resolving referenced ip provider"
             );
-            let provider =
-                self.registry
-                    .get_provider_dependency(&self.tag, &field, set_tag.as_str())?;
+            let provider = context.provider(&field, set_tag.as_str())?;
             if !provider.supports_ip_matching() {
                 return Err(DnsError::plugin(format!(
                     "plugin '{}' field '{}' expects provider '{}' to support IP matching",
@@ -186,7 +183,7 @@ impl PluginFactory for IpSetFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let args = plugin_config
@@ -207,7 +204,6 @@ impl PluginFactory for IpSetFactory {
         Ok(UninitializedPlugin::Provider(Box::new(IpSet {
             tag: plugin_config.tag.clone(),
             args,
-            registry,
             referenced_sets: Vec::new(),
             snapshot: ArcSwap::from_pointee(IpSetSnapshot::default()),
         })))

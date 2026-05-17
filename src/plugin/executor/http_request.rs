@@ -12,7 +12,7 @@
 //! - does not write HTTP responses back into DNS context in v1.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -35,7 +35,7 @@ use crate::network::http_client::{HttpClient, HttpClientOptions, HttpRequestOpti
 use crate::network::upstream::{Socks5Opt, parse_socks5_opt};
 use crate::plugin::executor::template::{JsonTemplateValue, Template};
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::{continue_next, plugin_factory};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -156,7 +156,7 @@ impl Plugin for HttpRequestExecutor {
         &self.tag
     }
 
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
         if !self.config.async_mode || self.async_tx.is_some() {
             return Ok(());
         }
@@ -427,7 +427,7 @@ impl PluginFactory for HttpRequestFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let config = build_http_request_runtime_config(plugin_config)?;
@@ -763,7 +763,7 @@ mod tests {
     use serde_yaml_ng::{Value, from_str};
 
     use super::*;
-    use crate::plugin::test_utils::{plugin_config, test_registry};
+    use crate::plugin::test_utils::plugin_config;
 
     fn make_config(yaml: &str) -> PluginConfig {
         plugin_config(
@@ -787,7 +787,7 @@ query_params:
         );
 
         let plugin = HttpRequestFactory
-            .create(&config, test_registry(), &Default::default())
+            .create_for_test(&config, &Default::default())
             .expect("valid get config should build");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }
@@ -806,7 +806,7 @@ json:
         );
 
         let plugin = HttpRequestFactory
-            .create(&config, test_registry(), &Default::default())
+            .create_for_test(&config, &Default::default())
             .expect("valid json config should build");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }
@@ -820,7 +820,7 @@ url: "https://example.com/hook"
 "#,
         );
 
-        let err = match HttpRequestFactory.create(&config, test_registry(), &Default::default()) {
+        let err = match HttpRequestFactory.create_for_test(&config, &Default::default()) {
             Ok(_) => panic!("invalid method should fail"),
             Err(err) => err,
         };
@@ -837,7 +837,7 @@ timeout: "xyz"
 "#,
         );
 
-        let err = match HttpRequestFactory.create(&config, test_registry(), &Default::default()) {
+        let err = match HttpRequestFactory.create_for_test(&config, &Default::default()) {
             Ok(_) => panic!("invalid timeout should fail"),
             Err(err) => err,
         };
@@ -856,7 +856,7 @@ json:
 "#,
         );
 
-        let err = match HttpRequestFactory.create(&config, test_registry(), &Default::default()) {
+        let err = match HttpRequestFactory.create_for_test(&config, &Default::default()) {
             Ok(_) => panic!("conflicting body config should fail"),
             Err(err) => err,
         };
@@ -873,7 +873,7 @@ queue_size: 0
 "#,
         );
 
-        let err = match HttpRequestFactory.create(&config, test_registry(), &Default::default()) {
+        let err = match HttpRequestFactory.create_for_test(&config, &Default::default()) {
             Ok(_) => panic!("zero queue size should fail"),
             Err(err) => err,
         };

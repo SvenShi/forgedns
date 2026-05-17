@@ -40,7 +40,9 @@ use std::sync::Arc;
 pub(super) use auth::is_authorized;
 #[cfg(test)]
 pub(crate) use global::global_api_test_guard;
-pub use global::{clear_global_api_register, global_api_register, set_global_api_register};
+#[cfg(test)]
+pub(crate) use global::set_global_api_register_for_test;
+pub use global::{clear_global_api, global_api_register, install_global_api};
 pub use handler::{ApiBody, ApiHandler, ApiResponse};
 pub use hub::{ApiHub, ApiRegister, PluginApiRegister};
 #[cfg(test)]
@@ -57,20 +59,19 @@ use crate::core::error::Result;
 /// Plugin-scoped routes are still registered by each plugin under
 /// `/plugins/<tag>/...`; this function is only for global API surfaces such as
 /// health and metrics.
-pub fn register_builtin_routes(hub: &Arc<ApiHub>) -> Result<()> {
-    let register = ApiRegister::new(hub.clone());
-    health::register_builtin_routes(&register, hub.health_state())?;
-    metrics::register_builtin_routes(&register)?;
+pub fn register_builtin_routes() -> Result<()> {
+    if let Some(register) = global_api_register() {
+        health::register_builtin_routes(&register, register.health_state())?;
+        metrics::register_builtin_routes(&register)?;
+    }
     Ok(())
 }
 
 /// Register process-wide control routes that need the application controller.
-pub fn register_control_routes(
-    hub: &Arc<ApiHub>,
-    controller: Arc<control::AppController>,
-) -> Result<()> {
-    let register = ApiRegister::new(hub.clone());
-    control::register_builtin_routes(&register, controller)?;
+pub fn register_control_routes(controller: Arc<control::AppController>) -> Result<()> {
+    if let Some(register) = global_api_register() {
+        control::register_builtin_routes(&register, controller)?;
+    }
     Ok(())
 }
 

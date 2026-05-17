@@ -389,7 +389,6 @@ mod tests {
     use crate::plugin::executor::{ExecStep, Executor};
     use crate::plugin::server::RequestHandle;
     use crate::plugin::server::http::http_dispatcher::DnsPostHandler;
-    use crate::plugin::test_utils::test_registry;
     use crate::proto::{Message, Name, Question, Rcode, RecordType};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,7 +409,7 @@ mod tests {
             "capture_and_respond"
         }
 
-        async fn init(&mut self) -> Result<()> {
+        async fn init(&mut self, _context: &crate::plugin::PluginInitContext<'_>) -> Result<()> {
             Ok(())
         }
 
@@ -438,7 +437,6 @@ mod tests {
     fn make_request_handle(observed: Arc<Mutex<Option<ObservedRequest>>>) -> Arc<RequestHandle> {
         Arc::new(RequestHandle {
             entry_executor: Arc::new(CaptureAndRespondExecutor { observed }),
-            registry: test_registry(),
         })
     }
 

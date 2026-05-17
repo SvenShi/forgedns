@@ -29,14 +29,22 @@
 //! while preserving a single request pipeline centered on
 //! [`crate::core::context::DnsContext`].
 
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 pub use dependency::DependencyGraphReport;
 use futures::future::BoxFuture;
-pub use registry::PluginRegistry;
+#[cfg(debug_assertions)]
+pub use registry::enable_runtime_test_serialization;
+pub use registry::{
+    PluginBuildSession, PluginCatalog, PluginInitContext, PluginRegistry, PluginResolver,
+    PluginRuntime, PluginRuntimeManager, clear_app_controller, current_runtime, destroy_runtime,
+    global_catalog, global_manager, init, plugin_count, reload_provider, request_app_reload,
+    server_plugin_count, set_app_controller,
+};
+#[cfg(test)]
+pub use registry::{reset_runtime_for_test, set_current_runtime_for_test};
 use serde_yaml_ng::Value;
 
 use crate::config::types::{Config, PluginConfig};
@@ -73,55 +81,26 @@ pub enum UninitializedPlugin {
 
 impl UninitializedPlugin {
     /// Initialize the plugin and convert to PluginType (Arc-wrapped)
-    pub async fn init_and_wrap(self) -> Result<PluginHolder> {
+    pub async fn init_and_wrap(self, context: &PluginInitContext<'_>) -> Result<PluginHolder> {
         match self {
             UninitializedPlugin::Server(mut server) => {
-                server.as_mut().init().await?;
+                server.as_mut().init(context).await?;
                 Ok(PluginHolder::Server(server.into()))
             }
             UninitializedPlugin::Executor(mut executor) => {
-                executor.as_mut().init().await?;
+                executor.as_mut().init(context).await?;
                 Ok(PluginHolder::Executor(executor.into()))
             }
             UninitializedPlugin::Matcher(mut matcher) => {
-                matcher.as_mut().init().await?;
+                matcher.as_mut().init(context).await?;
                 Ok(PluginHolder::Matcher(matcher.into()))
             }
             UninitializedPlugin::Provider(mut provider) => {
-                provider.as_mut().init().await?;
+                provider.as_mut().init(context).await?;
                 Ok(PluginHolder::Provider(provider.into()))
             }
         }
     }
-}
-
-/// Initialize all configured plugins
-///
-/// Creates a registry, registers all built-in factories, and initializes
-/// plugins in dependency order. Returns the initialized registry.
-///
-/// # Arguments
-/// * `config` - Server configuration containing plugin definitions
-///
-/// # Returns
-/// * `Ok(Arc<PluginRegistry>)` - Initialized plugin registry
-/// * `Err(DnsError)` - Error message if initialization fails
-pub async fn init(config: Config) -> Result<Arc<PluginRegistry>> {
-    let mut registry = PluginRegistry::new();
-
-    // Register all built-in plugin factories from inventory
-    register_factories_from_inventory(&mut registry)?;
-
-    // Wrap in Arc for sharing
-    let registry = Arc::new(registry);
-
-    // Initialize all plugins (clone Arc to keep a reference)
-    if let Err(err) = registry.clone().init_plugins(config.plugins).await {
-        registry.destory().await;
-        return Err(err);
-    }
-
-    Ok(registry)
 }
 
 pub fn validate_configuration(config: &Config) -> Result<()> {
@@ -208,27 +187,6 @@ macro_rules! register_plugin_factory {
     };
 }
 
-fn register_factories_from_inventory(registry: &mut PluginRegistry) -> Result<()> {
-    let mut seen_plugin_types = HashSet::new();
-
-    for registration in inventory::iter::<FactoryRegistration> {
-        if !seen_plugin_types.insert(registration.plugin_type) {
-            return Err(DnsError::plugin(format!(
-                "Duplicate plugin type '{}' registered in inventory",
-                registration.plugin_type
-            )));
-        }
-
-        registry.register_factory(
-            registration.plugin_type,
-            dependency_kind_from_module_path(registration.module_path),
-            (registration.constructor)(),
-        );
-    }
-
-    Ok(())
-}
-
 fn dependency_kind_from_module_path(module_path: &str) -> dependency::DependencyKind {
     if module_path.contains("::plugin::server::") {
         return dependency::DependencyKind::Server;
@@ -265,18 +223,12 @@ pub struct PluginDependent {
     pub field: String,
 }
 
-fn factory_from_inventory(plugin_type: &str) -> Option<Box<dyn PluginFactory>> {
-    inventory::iter::<FactoryRegistration>
-        .into_iter()
-        .find(|registration| registration.plugin_type == plugin_type)
-        .map(|registration| (registration.constructor)())
-}
-
 pub(crate) fn quick_setup_dependency_specs(
     plugin_type: &str,
     param: Option<&str>,
 ) -> Vec<dependency::DependencySpec> {
-    factory_from_inventory(plugin_type)
+    global_catalog()
+        .factory(plugin_type)
         .map(|factory| factory.get_quick_setup_dependency_specs(param))
         .unwrap_or_default()
 }
@@ -382,8 +334,17 @@ pub trait Plugin: Debug + Send + Sync + 'static {
     fn tag(&self) -> &str;
 
     /// Initialize the plugin (called once during server startup)
-    async fn init(&mut self) -> Result<()> {
+    async fn init(&mut self, _context: &PluginInitContext<'_>) -> Result<()> {
         Ok(())
+    }
+
+    #[cfg(test)]
+    async fn init_for_test(&mut self) -> Result<()> {
+        let registry = std::sync::Arc::new(PluginRegistry::new());
+        let create_context = PluginCreateContext::default();
+        let init_context =
+            PluginInitContext::new(registry, self.tag().to_string(), &create_context);
+        self.init(&init_context).await
     }
 
     /// Clean up plugin resources (called during shutdown)
@@ -422,7 +383,7 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
     fn prepare_startup<'a>(
         &'a self,
         _plugin_config: &'a PluginConfig,
-        _registry: Arc<PluginRegistry>,
+        _context: &'a PluginBuildSession,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
@@ -440,19 +401,25 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        init_context: &PluginInitContext<'_>,
         _context: &PluginCreateContext,
     ) -> Result<UninitializedPlugin>;
+
+    #[cfg(test)]
+    fn create_for_test(
+        &self,
+        plugin_config: &PluginConfig,
+        context: &PluginCreateContext,
+    ) -> Result<UninitializedPlugin> {
+        let registry = std::sync::Arc::new(PluginRegistry::new());
+        let init_context = PluginInitContext::new(registry, plugin_config.tag.clone(), context);
+        self.create(plugin_config, &init_context, context)
+    }
 
     /// Create a plugin from sequence quick setup syntax: `type [param...]`.
     ///
     /// `tag` is a synthetic runtime-only identifier generated by sequence.
-    fn quick_setup(
-        &self,
-        _tag: &str,
-        _param: Option<String>,
-        _registry: Arc<PluginRegistry>,
-    ) -> Result<UninitializedPlugin> {
+    fn quick_setup(&self, _tag: &str, _param: Option<String>) -> Result<UninitializedPlugin> {
         Err(DnsError::plugin("quick setup is not supported"))
     }
 }

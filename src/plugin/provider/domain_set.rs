@@ -29,7 +29,7 @@ use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::DomainRuleMatcher;
 use crate::plugin::dependency::DependencySpec;
 use crate::plugin::provider::Provider;
-use crate::plugin::{Plugin, PluginFactory, PluginRegistry, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::plugin_factory;
 use crate::proto::{Name, Question};
 
@@ -55,7 +55,6 @@ struct DomainSetSnapshot {
 pub struct DomainSet {
     tag: String,
     args: DomainSetArgs,
-    registry: Arc<PluginRegistry>,
     referenced_sets: Vec<Arc<dyn Provider>>,
     snapshot: ArcSwap<DomainSetSnapshot>,
 }
@@ -102,7 +101,7 @@ impl Plugin for DomainSet {
         &self.tag
     }
 
-    async fn init(&mut self) -> DnsResult<()> {
+    async fn init(&mut self, context: &crate::plugin::PluginInitContext<'_>) -> DnsResult<()> {
         let mut providers = Vec::with_capacity(self.args.sets.len());
         for (set_idx, set_tag) in self.args.sets.iter().enumerate() {
             let field = format!("args.sets[{}]", set_idx);
@@ -111,9 +110,7 @@ impl Plugin for DomainSet {
                 referenced_set = %set_tag,
                 "resolving referenced domain provider"
             );
-            let provider =
-                self.registry
-                    .get_provider_dependency(&self.tag, &field, set_tag.as_str())?;
+            let provider = context.provider(&field, set_tag.as_str())?;
             if !provider.supports_domain_matching() {
                 return Err(DnsError::plugin(format!(
                     "plugin '{}' field '{}' expects provider '{}' to support domain matching",
@@ -194,7 +191,7 @@ impl PluginFactory for DomainSetFactory {
     fn create(
         &self,
         plugin_config: &PluginConfig,
-        registry: Arc<PluginRegistry>,
+        _init_context: &crate::plugin::PluginInitContext<'_>,
         _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let args = plugin_config
@@ -215,7 +212,6 @@ impl PluginFactory for DomainSetFactory {
         Ok(UninitializedPlugin::Provider(Box::new(DomainSet {
             tag: plugin_config.tag.clone(),
             args,
-            registry,
             referenced_sets: Vec::new(),
             snapshot: ArcSwap::from_pointee(DomainSetSnapshot::default()),
         })))
@@ -325,7 +321,10 @@ mod tests {
             "static-provider"
         }
 
-        async fn init(&mut self) -> crate::core::error::Result<()> {
+        async fn init(
+            &mut self,
+            _context: &crate::plugin::PluginInitContext<'_>,
+        ) -> crate::core::error::Result<()> {
             Ok(())
         }
 
@@ -362,7 +361,6 @@ mod tests {
         let ds = DomainSet {
             tag: "test".to_string(),
             args: DomainSetArgs::default(),
-            registry: Arc::new(PluginRegistry::new()),
             referenced_sets: vec![shared.clone()],
             snapshot: ArcSwap::from_pointee(DomainSetSnapshot { matcher: local }),
         };
