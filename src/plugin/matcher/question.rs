@@ -46,7 +46,6 @@ impl PluginFactory for QuestionFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let provider_tags = parse_provider_tags_from_value(plugin_config.args.clone())?;
 

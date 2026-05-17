@@ -125,7 +125,6 @@ impl PluginFactory for UpgradeFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let parsed = parse_upgrade_config(plugin_config.args.clone())?;
         let config = parsed.into_upgrade_config()?;
@@ -275,8 +274,7 @@ mod tests {
     fn upgrade_factory_accepts_default_apply_config() {
         let factory = UpgradeFactory;
         let cfg = plugin_config("upgrade", "upgrade", None);
-        let plugin = factory
-            .create_for_test(&cfg, &Default::default())
+        let plugin = crate::plugin::test_utils::create_plugin_for_test(&factory, &cfg)
             .expect("default upgrade config should parse");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }

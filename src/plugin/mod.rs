@@ -393,8 +393,8 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
     ///
     /// # Arguments
     /// * `plugin_info` - Plugin configuration from the config file
-    /// * `registry` - Shared reference to the plugin registry for accessing
-    ///   other plugins
+    /// * `init_context` - Build-session scoped dependency resolver and
+    ///   create-time metadata for this plugin
     ///
     /// Returns an uninitialized plugin that will be initialized by the
     /// registry.
@@ -402,19 +402,7 @@ pub trait PluginFactory: Debug + Send + Sync + 'static {
         &self,
         plugin_config: &PluginConfig,
         init_context: &PluginInitContext<'_>,
-        _context: &PluginCreateContext,
     ) -> Result<UninitializedPlugin>;
-
-    #[cfg(test)]
-    fn create_for_test(
-        &self,
-        plugin_config: &PluginConfig,
-        context: &PluginCreateContext,
-    ) -> Result<UninitializedPlugin> {
-        let registry = std::sync::Arc::new(PluginRegistry::new());
-        let init_context = PluginInitContext::new(registry, plugin_config.tag.clone(), context);
-        self.create(plugin_config, &init_context, context)
-    }
 
     /// Create a plugin from sequence quick setup syntax: `type [param...]`.
     ///

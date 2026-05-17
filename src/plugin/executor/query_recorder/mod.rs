@@ -41,7 +41,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::{DnsError, Result};
 use crate::core::task_center;
 use crate::plugin::executor::{ExecStep, Executor, ExecutorNext};
-use crate::plugin::{Plugin, PluginCreateContext, PluginFactory, UninitializedPlugin};
+use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
 use crate::{continue_next, plugin_factory};
 
 const DEFAULT_QUEUE_SIZE: usize = 8_192;
@@ -235,7 +235,6 @@ impl PluginFactory for QueryRecorderFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let config = resolve_config(plugin_config.args.clone())?;
         Ok(UninitializedPlugin::Executor(Box::new(QueryRecorder::new(

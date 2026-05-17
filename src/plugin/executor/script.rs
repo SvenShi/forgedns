@@ -335,7 +335,6 @@ impl PluginFactory for ScriptFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let args = plugin_config
             .args
@@ -492,7 +491,7 @@ args:
                 .unwrap(),
             ),
         );
-        let err = match ScriptFactory.create_for_test(&cfg, &Default::default()) {
+        let err = match crate::plugin::test_utils::create_plugin_for_test(&ScriptFactory, &cfg) {
             Ok(_) => panic!("invalid placeholder should fail"),
             Err(err) => err,
         };
@@ -514,7 +513,7 @@ max_output_bytes: 0
                 .unwrap(),
             ),
         );
-        let err = match ScriptFactory.create_for_test(&cfg, &Default::default()) {
+        let err = match crate::plugin::test_utils::create_plugin_for_test(&ScriptFactory, &cfg) {
             Ok(_) => panic!("zero output limit should fail"),
             Err(err) => err,
         };

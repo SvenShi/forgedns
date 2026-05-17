@@ -150,7 +150,6 @@ impl PluginFactory for EcsHandlerFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let handler =
             parse_handler_from_value(plugin_config.tag.as_str(), plugin_config.args.clone())?;

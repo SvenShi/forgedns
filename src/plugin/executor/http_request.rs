@@ -428,7 +428,6 @@ impl PluginFactory for HttpRequestFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let config = build_http_request_runtime_config(plugin_config)?;
         Ok(UninitializedPlugin::Executor(Box::new(
@@ -786,9 +785,9 @@ query_params:
 "#,
         );
 
-        let plugin = HttpRequestFactory
-            .create_for_test(&config, &Default::default())
-            .expect("valid get config should build");
+        let plugin =
+            crate::plugin::test_utils::create_plugin_for_test(&HttpRequestFactory, &config)
+                .expect("valid get config should build");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }
 
@@ -805,9 +804,9 @@ json:
 "#,
         );
 
-        let plugin = HttpRequestFactory
-            .create_for_test(&config, &Default::default())
-            .expect("valid json config should build");
+        let plugin =
+            crate::plugin::test_utils::create_plugin_for_test(&HttpRequestFactory, &config)
+                .expect("valid json config should build");
         assert!(matches!(plugin, UninitializedPlugin::Executor(_)));
     }
 
@@ -820,10 +819,11 @@ url: "https://example.com/hook"
 "#,
         );
 
-        let err = match HttpRequestFactory.create_for_test(&config, &Default::default()) {
-            Ok(_) => panic!("invalid method should fail"),
-            Err(err) => err,
-        };
+        let err =
+            match crate::plugin::test_utils::create_plugin_for_test(&HttpRequestFactory, &config) {
+                Ok(_) => panic!("invalid method should fail"),
+                Err(err) => err,
+            };
         assert!(err.to_string().contains("args.method"));
     }
 
@@ -837,10 +837,11 @@ timeout: "xyz"
 "#,
         );
 
-        let err = match HttpRequestFactory.create_for_test(&config, &Default::default()) {
-            Ok(_) => panic!("invalid timeout should fail"),
-            Err(err) => err,
-        };
+        let err =
+            match crate::plugin::test_utils::create_plugin_for_test(&HttpRequestFactory, &config) {
+                Ok(_) => panic!("invalid timeout should fail"),
+                Err(err) => err,
+            };
         assert!(err.to_string().contains("args.timeout"));
     }
 
@@ -856,10 +857,11 @@ json:
 "#,
         );
 
-        let err = match HttpRequestFactory.create_for_test(&config, &Default::default()) {
-            Ok(_) => panic!("conflicting body config should fail"),
-            Err(err) => err,
-        };
+        let err =
+            match crate::plugin::test_utils::create_plugin_for_test(&HttpRequestFactory, &config) {
+                Ok(_) => panic!("conflicting body config should fail"),
+                Err(err) => err,
+            };
         assert!(err.to_string().contains("mutually exclusive"));
     }
 
@@ -873,10 +875,11 @@ queue_size: 0
 "#,
         );
 
-        let err = match HttpRequestFactory.create_for_test(&config, &Default::default()) {
-            Ok(_) => panic!("zero queue size should fail"),
-            Err(err) => err,
-        };
+        let err =
+            match crate::plugin::test_utils::create_plugin_for_test(&HttpRequestFactory, &config) {
+                Ok(_) => panic!("zero queue size should fail"),
+                Err(err) => err,
+            };
         assert!(err.to_string().contains("queue_size"));
     }
 }

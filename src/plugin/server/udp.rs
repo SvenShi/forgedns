@@ -252,7 +252,6 @@ impl PluginFactory for UdpServerFactory {
         &self,
         plugin_config: &PluginConfig,
         init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let udp_config = serde_yaml_ng::from_value::<UdpServerConfig>(
             plugin_config
@@ -294,7 +293,7 @@ mod tests {
     fn test_udp_factory_requires_args() {
         let factory = UdpServerFactory {};
         let cfg = plugin_config("udp", "udp_server", None);
-        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
+        assert!(crate::plugin::test_utils::create_plugin_for_test(&factory, &cfg).is_err());
     }
 
     #[test]

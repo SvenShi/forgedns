@@ -170,7 +170,6 @@ impl PluginFactory for RedirectFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
         let (rules, index) = build_rules(&cfg)?;

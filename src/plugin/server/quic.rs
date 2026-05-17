@@ -378,7 +378,6 @@ impl PluginFactory for QuicServerFactory {
         &self,
         plugin_config: &PluginConfig,
         init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<crate::plugin::UninitializedPlugin> {
         let quic_config = serde_yaml_ng::from_value::<QuicServerConfig>(
             plugin_config
@@ -430,6 +429,6 @@ mod tests {
     fn test_quic_factory_requires_args() {
         let factory = QuicServerFactory {};
         let cfg = plugin_config("quic", "quic_server", None);
-        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
+        assert!(crate::plugin::test_utils::create_plugin_for_test(&factory, &cfg).is_err());
     }
 }

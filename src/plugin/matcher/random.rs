@@ -31,7 +31,6 @@ impl PluginFactory for RandomFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let args = parse_rules_from_value(plugin_config.args.clone())?;
         let probability = parse_probability(args)?;

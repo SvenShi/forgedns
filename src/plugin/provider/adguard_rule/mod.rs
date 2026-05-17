@@ -163,7 +163,6 @@ impl PluginFactory for AdGuardRuleFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let cfg = parse_config(plugin_config.args.clone())?;
 

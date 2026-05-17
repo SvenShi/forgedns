@@ -56,7 +56,6 @@ impl PluginFactory for RespIpFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = parse_rules_from_value(plugin_config.args.clone())?;
         build_resp_ip_matcher(plugin_config.tag.clone(), rules)

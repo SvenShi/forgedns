@@ -65,7 +65,6 @@ impl PluginFactory for AnyMatchFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let matchers = parse_matcher_exprs_from_value(plugin_config.args.clone())?;
         build_any_match(plugin_config.tag.clone(), matchers)

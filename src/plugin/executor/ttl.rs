@@ -114,7 +114,6 @@ impl PluginFactory for TtlFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let policy = parse_policy_from_config(plugin_config.args.clone())?;
 
@@ -300,7 +299,7 @@ mod tests {
     fn test_factory_create_rejects_empty_args() {
         let factory = TtlFactory;
         let cfg = plugin_config("ttl", "ttl", None);
-        let result = factory.create_for_test(&cfg, &Default::default());
+        let result = crate::plugin::test_utils::create_plugin_for_test(&factory, &cfg);
         assert!(result.is_err());
     }
 }

@@ -26,7 +26,6 @@ impl PluginFactory for FalseMatcherFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         Ok(UninitializedPlugin::Matcher(Box::new(FalseMatcher {
             tag: plugin_config.tag.clone(),

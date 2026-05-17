@@ -370,7 +370,6 @@ impl PluginFactory for SequenceFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> DnsResult<UninitializedPlugin> {
         let rules = serde_yaml_ng::from_value::<Vec<Rule>>(
             plugin_config

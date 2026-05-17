@@ -327,7 +327,6 @@ impl PluginFactory for CronFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let args = plugin_config
             .args
@@ -864,7 +863,6 @@ mod tests {
             &self,
             plugin_config: &PluginConfig,
             _init_context: &crate::plugin::PluginInitContext<'_>,
-            _context: &crate::plugin::PluginCreateContext,
         ) -> Result<UninitializedPlugin> {
             Ok(UninitializedPlugin::Executor(Box::new(StubExecutor::new(
                 &plugin_config.tag,
@@ -1102,7 +1100,7 @@ jobs:
     fn test_factory_create_rejects_invalid_args() {
         let factory = CronFactory;
         let cfg = plugin_config("cron", "cron", Some(Value::String("bad".into())));
-        assert!(factory.create_for_test(&cfg, &Default::default()).is_err());
+        assert!(crate::plugin::test_utils::create_plugin_for_test(&factory, &cfg).is_err());
     }
 
     #[test]

@@ -379,7 +379,6 @@ impl PluginFactory for MikrotikFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         // Plugin tag is reused inside RouterOS comment ownership metadata.
         validate_comment_token("plugin tag", plugin_config.tag.as_str())?;

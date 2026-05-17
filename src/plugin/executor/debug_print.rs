@@ -71,7 +71,6 @@ impl PluginFactory for DebugPrintFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let msg = parse_msg_from_value(plugin_config.args.clone())
             .unwrap_or_else(|| DEFAULT_MSG.to_string());

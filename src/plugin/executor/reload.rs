@@ -56,7 +56,6 @@ impl PluginFactory for ReloadFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         Ok(UninitializedPlugin::Executor(Box::new(ReloadExecutor {
             tag: plugin_config.tag.clone(),

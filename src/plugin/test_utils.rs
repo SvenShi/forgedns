@@ -11,7 +11,10 @@ use serde_yaml_ng::Value;
 
 use crate::config::types::PluginConfig;
 use crate::core::context::DnsContext;
-use crate::plugin::PluginRegistry;
+use crate::core::error::Result;
+use crate::plugin::{
+    PluginCreateContext, PluginFactory, PluginInitContext, PluginRegistry, UninitializedPlugin,
+};
 use crate::proto::Message;
 
 pub(crate) fn test_registry() -> Arc<PluginRegistry> {
@@ -28,6 +31,16 @@ pub(crate) fn plugin_config(
         plugin_type: plugin_type.into(),
         args,
     }
+}
+
+pub(crate) fn create_plugin_for_test(
+    factory: &dyn PluginFactory,
+    plugin_config: &PluginConfig,
+) -> Result<UninitializedPlugin> {
+    let create_context = PluginCreateContext::default();
+    let init_context =
+        PluginInitContext::new(test_registry(), plugin_config.tag.clone(), &create_context);
+    factory.create(plugin_config, &init_context)
 }
 
 pub(crate) fn test_context() -> DnsContext {

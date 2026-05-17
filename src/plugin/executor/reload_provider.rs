@@ -80,7 +80,6 @@ impl PluginFactory for ReloadProviderFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let provider_tags = parse_provider_tags_from_value(plugin_config.args.clone())?;
         Ok(UninitializedPlugin::Executor(Box::new(

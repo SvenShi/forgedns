@@ -492,7 +492,6 @@ impl PluginFactory for ForwardFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let forward_config = parse_forward_config(plugin_config)?;
         let short_circuit = forward_config.short_circuit;
@@ -690,7 +689,7 @@ mod tests {
     fn validate_rejects_empty_upstreams() {
         let factory = ForwardFactory;
         let cfg = make_plugin_config("upstreams: []");
-        let err = match factory.create_for_test(&cfg, &Default::default()) {
+        let err = match crate::plugin::test_utils::create_plugin_for_test(&factory, &cfg) {
             Ok(_) => panic!("expected create to fail for empty upstreams"),
             Err(err) => err,
         };
@@ -706,7 +705,7 @@ upstreams:
   - addr: "udp://"
 "#,
         );
-        let err = match factory.create_for_test(&cfg, &Default::default()) {
+        let err = match crate::plugin::test_utils::create_plugin_for_test(&factory, &cfg) {
             Ok(_) => panic!("expected create to fail for invalid upstream addr"),
             Err(err) => err,
         };

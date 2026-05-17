@@ -146,7 +146,6 @@ impl PluginFactory for MetricsCollectorFactory {
         &self,
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
-        _context: &crate::plugin::PluginCreateContext,
     ) -> Result<UninitializedPlugin> {
         let name =
             parse_name(plugin_config.args.clone()).unwrap_or_else(|| DEFAULT_NAME.to_string());

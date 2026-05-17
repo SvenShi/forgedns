@@ -736,7 +736,7 @@ impl PluginRegistry {
     ) -> Result<PluginInfo> {
         // Factory creates uninitialized plugin
         let init_context = PluginInitContext::new(self.clone(), config.tag.clone(), context);
-        let uninitialized = factory.create(config, &init_context, context)?;
+        let uninitialized = factory.create(config, &init_context)?;
 
         // Initialize and wrap into PluginType (with Arc)
         let plugin_holder = uninitialized.init_and_wrap(&init_context).await?;
@@ -1238,13 +1238,17 @@ mod tests {
         fn create(
             &self,
             plugin_config: &PluginConfig,
-            _init_context: &PluginInitContext<'_>,
-            context: &PluginCreateContext,
+            init_context: &PluginInitContext<'_>,
         ) -> Result<UninitializedPlugin> {
             self.captured
                 .lock()
                 .expect("context mutex poisoned")
-                .insert(plugin_config.tag.clone(), context.clone());
+                .insert(
+                    plugin_config.tag.clone(),
+                    PluginCreateContext {
+                        dependents: init_context.dependents().to_vec(),
+                    },
+                );
             self.created_tags
                 .lock()
                 .expect("created tags mutex poisoned")
@@ -1649,7 +1653,6 @@ mod tests {
             &self,
             plugin_config: &PluginConfig,
             _init_context: &crate::plugin::PluginInitContext<'_>,
-            _context: &PluginCreateContext,
         ) -> Result<UninitializedPlugin> {
             Ok(UninitializedPlugin::Provider(Box::new(
                 ReloadableProvider {
