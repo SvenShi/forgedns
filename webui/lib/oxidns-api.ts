@@ -394,6 +394,17 @@ export async function fetchQueryRecordDetail(
   return readJsonResponse<QueryRecordDetailResponse>(response);
 }
 
+export async function fetchPrometheusMetrics(): Promise<string> {
+  const response = await fetch(apiUrl("/metrics"), {
+    method: "GET",
+    headers: { ...apiHeaders(), Accept: "text/plain" },
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.text();
+}
+
 export function apiUrl(path: string) {
   const baseUrl = useAuthStore.getState().serverConfig.url.trim();
   return `${baseUrl.replace(/\/$/, "")}${path}`;

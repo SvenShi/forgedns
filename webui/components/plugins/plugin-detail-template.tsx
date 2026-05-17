@@ -34,6 +34,7 @@ import type { PluginDetailTemplateProps, PluginSummaryItem } from "./types";
 import { pluginTypeColors, pluginTypeIcons } from "./display";
 import { getPluginCatalogItem, renderPluginKindIcon } from "./catalog";
 import { PluginConfigModeEditor } from "./plugin-config-mode-editor";
+import { PluginMetricsPanel } from "./plugin-metrics-panel";
 
 export function PluginDetailTemplate({
   plugin,
@@ -53,6 +54,9 @@ export function PluginDetailTemplate({
     plugins,
     dependencyGraph,
   } = useAppStore();
+  const hasMetricSeries = useAppStore(
+    (s) => (s.pluginMetrics[plugin.name]?.length ?? 0) > 0,
+  );
   const definition = getPluginCatalogItem(plugin.pluginKind);
   const resolvedIcon =
     icon ??
@@ -290,7 +294,9 @@ export function PluginDetailTemplate({
         </TabsContent>
 
         <TabsContent value="metrics" className="mt-4 space-y-4">
-          {metricsContent ?? (
+          {metricsContent}
+          <PluginMetricsPanel tag={plugin.name} />
+          {!metricsContent && !hasMetricSeries && (
             <Card>
               <CardContent className="p-6 text-sm text-muted-foreground">
                 此插件没有可展示的统计信息。

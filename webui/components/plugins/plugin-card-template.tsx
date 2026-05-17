@@ -3,11 +3,7 @@
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Pin,
-  PinOff,
-  Trash2,
-} from "lucide-react";
+import { Pin, PinOff, Trash2 } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -15,6 +11,7 @@ import {
 } from "@/components/ui/tooltip";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
+import { selectCardMetrics } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
 import type { PluginCardTemplateProps } from "./types";
 import { pluginTypeColors, pluginTypeIcons } from "./display";
@@ -27,12 +24,11 @@ export function PluginCardTemplate({
   primaryMetric,
   children,
 }: PluginCardTemplateProps) {
-  const {
-    setSelectedPlugin,
-    setDetailOpen,
-    togglePluginPin,
-    deletePlugin,
-  } = useAppStore();
+  const { setSelectedPlugin, setDetailOpen, togglePluginPin, deletePlugin } =
+    useAppStore();
+  const series = useAppStore((s) => s.pluginMetrics[plugin.name]);
+  const cardMetrics = selectCardMetrics(series, plugin.pluginKind, 4);
+  const showFallbackContent = cardMetrics.length === 0 && Boolean(children);
   const definition = getPluginCatalogItem(plugin.pluginKind);
   const resolvedIcon =
     icon ??
@@ -140,7 +136,26 @@ export function PluginCardTemplate({
           </Tooltip>
         </div>
       </CardHeader>
-      {children && (
+      {cardMetrics.length > 0 && (
+        <CardContent className="px-3 pb-1 pt-0">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 rounded-md bg-muted/25 px-2.5 py-2">
+            {cardMetrics.map((metric) => (
+              <div
+                key={metric.label}
+                className="flex min-w-0 items-baseline justify-between gap-2"
+              >
+                <span className="truncate text-[10px] text-muted-foreground">
+                  {metric.label}
+                </span>
+                <span className="shrink-0 font-mono text-xs font-medium tabular-nums">
+                  {metric.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      )}
+      {showFallbackContent && (
         <CardContent className="px-3 pb-1 pt-0">
           <div className="min-h-[4.75rem] rounded-md bg-muted/25 px-2.5 py-2">
             {children}

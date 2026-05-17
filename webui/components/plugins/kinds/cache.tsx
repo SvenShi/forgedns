@@ -27,13 +27,15 @@ import type {
 import { PluginCardTemplate } from "../plugin-card-template";
 import { PluginDetailTemplate } from "../plugin-detail-template";
 
-function CachePluginCard({ plugin, compact = false }: PluginCardComponentProps) {
+function CachePluginCard({
+  plugin,
+  compact = false,
+}: PluginCardComponentProps) {
   return (
     <PluginCardTemplate
       plugin={plugin}
       compact={compact}
       icon={<DatabaseZap className="h-4 w-4 text-primary" />}
-      primaryMetric={{ label: "API", value: "cache" }}
     >
       <div className="space-y-2 text-xs text-muted-foreground">
         <div>缓存项、清空、dump/load 通过插件 API 管理。</div>
@@ -75,22 +77,25 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (cursor?: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetchCacheEntries(tag, { limit: 100, cursor });
-      setEntries((current) =>
-        cursor ? [...current, ...response.entries] : response.entries,
-      );
-      setNextCursor(response.next_cursor);
-      setTotal(response.total_entries);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "读取缓存项失败");
-    } finally {
-      setLoading(false);
-    }
-  }, [tag]);
+  const load = useCallback(
+    async (cursor?: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetchCacheEntries(tag, { limit: 100, cursor });
+        setEntries((current) =>
+          cursor ? [...current, ...response.entries] : response.entries,
+        );
+        setNextCursor(response.next_cursor);
+        setTotal(response.total_entries);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "读取缓存项失败");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [tag],
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -161,7 +166,9 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
                     <TableCell className="max-w-[14rem] truncate font-mono">
                       {entry.domain}
                     </TableCell>
-                    <TableCell className="font-mono">{entry.record_type}</TableCell>
+                    <TableCell className="font-mono">
+                      {entry.record_type}
+                    </TableCell>
                     <TableCell className="font-mono">{entry.rcode}</TableCell>
                     <TableCell>{entry.answer_count}</TableCell>
                     <TableCell className="font-mono">
@@ -169,7 +176,11 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
                     </TableCell>
                     <TableCell>
                       <Badge variant={entry.fresh ? "secondary" : "outline"}>
-                        {entry.fresh ? "fresh" : entry.stale ? "stale" : "expired"}
+                        {entry.fresh
+                          ? "fresh"
+                          : entry.stale
+                            ? "stale"
+                            : "expired"}
                       </Badge>
                     </TableCell>
                     <TableCell className="font-mono text-xs">

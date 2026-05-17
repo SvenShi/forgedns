@@ -22,6 +22,7 @@ export default function ConsoleLayout({
   const historyOpen = useAppStore((s) => s.historyOpen);
   const setHistoryOpen = useAppStore((s) => s.setHistoryOpen);
   const loadConfig = useAppStore((s) => s.loadConfig);
+  const refreshMetrics = useAppStore((s) => s.refreshMetrics);
   const isConnected = useAuthStore((s) => s.isConnected);
   const isAuthHydrated = useAuthStore((s) => s.isHydrated);
   const pathname = usePathname();
@@ -34,6 +35,16 @@ export default function ConsoleLayout({
   useEffect(() => {
     if (isConnected) void loadConfig();
   }, [isConnected, loadConfig]);
+
+  // Keep plugin metrics live across the whole console (cards + detail sheet),
+  // not just on the dashboard's runtime-state poll.
+  useEffect(() => {
+    if (!isConnected) return;
+    const id = setInterval(() => {
+      void refreshMetrics();
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [isConnected, refreshMetrics]);
 
   useEffect(() => {
     const el = document.documentElement;

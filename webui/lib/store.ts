@@ -15,6 +15,7 @@ import {
   fetchControl,
   fetchConfigFile,
   fetchHealth,
+  fetchPrometheusMetrics,
   fetchReloadStatus,
   fetchSystem,
   requestReload,
@@ -28,6 +29,10 @@ import {
   type ReloadSnapshot,
   type SystemResponse,
 } from "./oxidns-api";
+import {
+  parsePrometheusMetrics,
+  type PluginMetricsMap,
+} from "./metrics";
 import {
   annotateApply,
   clearSnapshots,
@@ -48,6 +53,7 @@ interface AppState {
   control: ControlResponse | null;
   system: SystemResponse | null;
   reloadStatus: ReloadSnapshot | null;
+  pluginMetrics: PluginMetricsMap;
   dependencyGraph: DependencyGraphReport | null;
   configDiagnostics: string[];
   configHistory: ConfigSnapshot[];
@@ -74,6 +80,7 @@ interface AppState {
   setYamlConfig: (config: string) => void;
   loadConfig: () => Promise<void>;
   refreshRuntimeState: () => Promise<void>;
+  refreshMetrics: () => Promise<void>;
   validateCurrentConfig: () => Promise<void>;
   saveConfig: () => Promise<void>;
   applyConfig: () => Promise<void>;
@@ -100,6 +107,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   control: null,
   system: null,
   reloadStatus: null,
+  pluginMetrics: {},
   dependencyGraph: null,
   configDiagnostics: [],
   configHistory: [],
@@ -201,6 +209,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         ? { runningVersion: nextReload.running_version }
         : {}),
     });
+    await get().refreshMetrics();
+  },
+
+  refreshMetrics: async () => {
+    try {
+      const text = await fetchPrometheusMetrics();
+      set({ pluginMetrics: parsePrometheusMetrics(text).byTag });
+    } catch {
+      // Metrics are best-effort observability; keep the last snapshot on
+      // transient errors (e.g. API hub torn down during reload).
+    }
   },
 
   validateCurrentConfig: async () => {
