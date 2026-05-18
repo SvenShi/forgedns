@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -63,8 +64,11 @@ interface DnsRecordDetailDialogProps {
   questions?: DnsQuestionView[];
   sections?: DnsRecordSection[];
   steps?: DnsRecordStepView[];
+  leadingBlocks?: DnsDetailBlock[];
   blocks?: DnsDetailBlock[];
+  bottomBlocks?: DnsDetailBlock[];
   error?: string | null;
+  wide?: boolean;
 }
 
 export function DnsRecordDetailDialog({
@@ -77,16 +81,27 @@ export function DnsRecordDetailDialog({
   questions = [],
   sections = [],
   steps = [],
+  leadingBlocks = [],
   blocks = [],
+  bottomBlocks = [],
   error,
+  wide = false,
 }: DnsRecordDetailDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader className="pr-8">
+      <DialogContent
+        className={cn(
+          "flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0",
+          wide ? "sm:max-w-6xl xl:max-w-7xl" : "sm:max-w-4xl",
+        )}
+      >
+        <DialogHeader className="px-4 pt-4 pr-12 pb-3">
           <div className="flex min-w-0 items-start justify-between gap-3">
             <div className="min-w-0">
               <DialogTitle className="truncate">{title}</DialogTitle>
+              <DialogDescription className="sr-only">
+                {subtitle ? `${title}，${subtitle}` : title}
+              </DialogDescription>
               {subtitle && (
                 <div className="mt-1 truncate text-xs text-muted-foreground">
                   {subtitle}
@@ -97,103 +112,117 @@ export function DnsRecordDetailDialog({
           </div>
         </DialogHeader>
 
-        <div className="space-y-4 text-sm">
-          {summaryItems.length > 0 && (
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              {summaryItems.map((item) => (
-                <DetailItem key={item.label} item={item} />
-              ))}
-            </div>
-          )}
-
-          {questions.length > 0 && (
-            <DetailBlock title="Question">
-              <div className="space-y-2">
-                {questions.map((question, index) => (
-                  <div
-                    key={`${question.name}-${question.qtype}-${index}`}
-                    className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border bg-muted/20 px-3 py-2"
-                  >
-                    <span
-                      className="min-w-0 flex-1 truncate font-mono"
-                      title={question.name}
-                    >
-                      {question.name}
-                    </span>
-                    <Badge variant="outline" className="font-mono">
-                      {question.qclass}
-                    </Badge>
-                    <Badge variant="secondary" className="font-mono">
-                      {question.qtype}
-                    </Badge>
-                  </div>
+        <div className="oxidns-dialog-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-4 pr-2">
+          <div className="space-y-4 pr-2 text-sm">
+            {summaryItems.length > 0 && (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {summaryItems.map((item) => (
+                  <DetailItem key={item.label} item={item} />
                 ))}
               </div>
-            </DetailBlock>
-          )}
+            )}
 
-          {sections.map((section) => (
-            <DetailBlock key={section.title} title={section.title}>
-              {section.records.length ? (
+            {questions.length > 0 && (
+              <DetailBlock title="Question">
                 <div className="space-y-2">
-                  {section.records.map((record, index) => (
-                    <DnsPayloadRow
-                      key={`${record.name}-${record.rr_type}-${index}`}
-                      record={record}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <span className="text-muted-foreground">
-                  {section.emptyLabel ?? "无记录"}
-                </span>
-              )}
-            </DetailBlock>
-          ))}
-
-          {steps.length > 0 && (
-            <DetailBlock title="Sequence Steps">
-              <div className="space-y-2">
-                {steps.map((step) => (
-                  <div
-                    key={step.event_index}
-                    className="grid gap-2 rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs sm:grid-cols-[4rem_1fr_auto]"
-                  >
-                    <span className="text-muted-foreground">
-                      #{step.event_index}
-                    </span>
-                    <span className="min-w-0 truncate">
-                      {step.sequence_tag}
-                      {typeof step.node_index === "number"
-                        ? ` / ${step.node_index}`
-                        : ""}
-                    </span>
-                    <span className="flex flex-wrap items-center gap-1">
+                  {questions.map((question, index) => (
+                    <div
+                      key={`${question.name}-${question.qtype}-${index}`}
+                      className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border bg-muted/20 px-3 py-2"
+                    >
+                      <span
+                        className="min-w-0 flex-1 truncate font-mono"
+                        title={question.name}
+                      >
+                        {question.name}
+                      </span>
                       <Badge variant="outline" className="font-mono">
-                        {step.kind}
-                        {step.tag ? `:${step.tag}` : ""}
+                        {question.qclass}
                       </Badge>
                       <Badge variant="secondary" className="font-mono">
-                        {step.outcome}
+                        {question.qtype}
                       </Badge>
-                    </span>
+                    </div>
+                  ))}
+                </div>
+              </DetailBlock>
+            )}
+
+            {leadingBlocks.map((block) => (
+              <DetailBlock key={block.title} title={block.title}>
+                {block.children}
+              </DetailBlock>
+            ))}
+
+            {sections.map((section) => (
+              <DetailBlock key={section.title} title={section.title}>
+                {section.records.length ? (
+                  <div className="space-y-2">
+                    {section.records.map((record, index) => (
+                      <DnsPayloadRow
+                        key={`${record.name}-${record.rr_type}-${index}`}
+                        record={record}
+                      />
+                    ))}
                   </div>
-                ))}
-              </div>
-            </DetailBlock>
-          )}
+                ) : (
+                  <span className="text-muted-foreground">
+                    {section.emptyLabel ?? "无记录"}
+                  </span>
+                )}
+              </DetailBlock>
+            ))}
 
-          {blocks.map((block) => (
-            <DetailBlock key={block.title} title={block.title}>
-              {block.children}
-            </DetailBlock>
-          ))}
+            {steps.length > 0 && (
+              <DetailBlock title="Sequence Steps">
+                <div className="space-y-2">
+                  {steps.map((step) => (
+                    <div
+                      key={step.event_index}
+                      className="grid gap-2 rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs sm:grid-cols-[4rem_1fr_auto]"
+                    >
+                      <span className="text-muted-foreground">
+                        #{step.event_index}
+                      </span>
+                      <span className="min-w-0 truncate">
+                        {step.sequence_tag}
+                        {typeof step.node_index === "number"
+                          ? ` / ${step.node_index}`
+                          : ""}
+                      </span>
+                      <span className="flex flex-wrap items-center gap-1">
+                        <Badge variant="outline" className="font-mono">
+                          {step.kind}
+                          {step.tag ? `:${step.tag}` : ""}
+                        </Badge>
+                        <Badge variant="secondary" className="font-mono">
+                          {step.outcome}
+                        </Badge>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </DetailBlock>
+            )}
 
-          {error && (
-            <DetailBlock title="Error">
-              <span className="text-destructive">{error}</span>
-            </DetailBlock>
-          )}
+            {blocks.map((block) => (
+              <DetailBlock key={block.title} title={block.title}>
+                {block.children}
+              </DetailBlock>
+            ))}
+
+            {error && (
+              <DetailBlock title="Error">
+                <span className="text-destructive">{error}</span>
+              </DetailBlock>
+            )}
+
+            {bottomBlocks.map((block) => (
+              <DetailBlock key={block.title} title={block.title}>
+                {block.children}
+              </DetailBlock>
+            ))}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

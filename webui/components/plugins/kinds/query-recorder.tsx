@@ -21,12 +21,14 @@ import {
   type QueryRecordDetail,
   type QueryRecordRow,
 } from "@/lib/oxidns-api";
+import { useAppStore } from "@/lib/store";
 import type {
   PluginComponentDefinition,
   PluginDetailComponentProps,
 } from "../types";
 import { PluginDetailTemplate } from "../plugin-detail-template";
 import { DnsRecordDetailDialog } from "../dns-record-detail-dialog";
+import { QueryRecordFlowCanvas } from "../query-record-flow";
 
 function QueryRecorderDetail(props: PluginDetailComponentProps) {
   return (
@@ -288,6 +290,9 @@ function RecordDetailDialog({
   record: QueryRecordDetail | null;
   onClose: () => void;
 }) {
+  const dependencyGraph = useAppStore((state) => state.dependencyGraph);
+  const plugins = useAppStore((state) => state.plugins);
+
   return (
     <DnsRecordDetailDialog
       open={Boolean(record)}
@@ -356,8 +361,24 @@ function RecordDetailDialog({
             ]
           : []
       }
-      steps={record?.steps}
       error={record?.error ?? null}
+      bottomBlocks={
+        record
+          ? [
+              {
+                title: "执行流程",
+                children: (
+                  <QueryRecordFlowCanvas
+                    record={record}
+                    dependencyGraph={dependencyGraph}
+                    plugins={plugins}
+                  />
+                ),
+              },
+            ]
+          : []
+      }
+      wide
     />
   );
 }
