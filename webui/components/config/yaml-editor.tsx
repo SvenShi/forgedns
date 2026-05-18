@@ -37,6 +37,8 @@ interface YamlEditorProps {
   currentPluginName?: string;
   /** Bound to Cmd+S (macOS) / Ctrl+S (Windows/Linux) via Monaco. */
   onSave?: () => void;
+  /** Run the backend /config/validate pass. Disable in offline mode. */
+  backendValidation?: boolean;
 }
 
 export const YamlEditor = forwardRef<YamlEditorHandle, YamlEditorProps>(
@@ -52,6 +54,7 @@ export const YamlEditor = forwardRef<YamlEditorHandle, YamlEditorProps>(
     fields,
     currentPluginName,
     onSave,
+    backendValidation = true,
   }, ref) {
   const { resolvedTheme } = useTheme();
   const editorRef = useRef<MonacoEditor | null>(null);
@@ -127,12 +130,14 @@ export const YamlEditor = forwardRef<YamlEditorHandle, YamlEditorProps>(
       monaco,
       model,
       context,
-      variant === "config" && !readOnly ? backendDiagnostics : [],
+      variant === "config" && !readOnly && backendValidation
+        ? backendDiagnostics
+        : [],
     );
-  }, [backendDiagnostics, context, readOnly, value, variant]);
+  }, [backendValidation, backendDiagnostics, context, readOnly, value, variant]);
 
   useEffect(() => {
-    if (variant !== "config" || readOnly) {
+    if (variant !== "config" || readOnly || !backendValidation) {
       return;
     }
 
@@ -160,7 +165,7 @@ export const YamlEditor = forwardRef<YamlEditorHandle, YamlEditorProps>(
     }, 800);
 
     return () => window.clearTimeout(timer);
-  }, [readOnly, value, variant]);
+  }, [backendValidation, readOnly, value, variant]);
 
   useEffect(() => {
     const model = modelRef.current;

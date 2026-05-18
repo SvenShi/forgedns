@@ -18,6 +18,10 @@ import {
   FileCode2,
   CheckCircle2,
   AlertCircle,
+  Download,
+  Copy,
+  ClipboardCheck,
+  LogOut,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/spinner";
@@ -32,12 +36,16 @@ export function ConfigEditorView() {
   const configPath = useAppStore((s) => s.configPath);
   const configVersion = useAppStore((s) => s.configVersion);
   const plugins = useAppStore((s) => s.plugins);
+  const isOfflineMode = useAppStore((s) => s.isOfflineMode);
+  const offlineFileName = useAppStore((s) => s.offlineFileName);
+  const exitOfflineMode = useAppStore((s) => s.exitOfflineMode);
 
   const yamlEditorRef = useRef<YamlEditorHandle>(null);
   const [originalConfig, setOriginalConfig] = useState(yamlConfig);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">(
     "idle",
   );
+  const [copied, setCopied] = useState(false);
   const [isMac, setIsMac] = useState(false);
 
   const hasChanges = yamlConfig !== originalConfig;
@@ -86,6 +94,32 @@ export function ConfigEditorView() {
     setSaveStatus("idle");
   };
 
+  const handleDownload = () => {
+    if (!yamlConfig) return;
+    const raw = (offlineFileName ?? "config.yaml").trim() || "config.yaml";
+    const name = /\.(ya?ml)$/i.test(raw) ? raw : `${raw}.yaml`;
+    const url = URL.createObjectURL(
+      new Blob([yamlConfig], { type: "text/yaml" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const handleCopy = () => {
+    void navigator.clipboard
+      .writeText(yamlConfig)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {
+        setSaveStatus("error");
+      });
+  };
+
   const busy = isConfigSaving;
 
   return (
@@ -97,6 +131,23 @@ export function ConfigEditorView() {
             <h2 className="text-lg font-semibold">配置文件编辑器</h2>
             <p className="text-sm text-muted-foreground">{configPath}</p>
           </div>
+          {isOfflineMode && (
+            <Badge
+              variant="outline"
+              className="bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/30"
+            >
+              离线模式
+            </Badge>
+          )}
+          {copied && (
+            <Badge
+              variant="outline"
+              className="bg-primary/10 text-primary border-primary/30"
+            >
+              <ClipboardCheck className="h-3 w-3 mr-1" />
+              已复制
+            </Badge>
+          )}
           {hasChanges && (
             <Badge
               variant="outline"
@@ -137,19 +188,46 @@ export function ConfigEditorView() {
             <RotateCcw className="h-4 w-4 mr-1.5" />
             重置
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSave}
-            disabled={!hasChanges || busy || Boolean(configError)}
-          >
-            {isConfigSaving ? (
-              <Spinner className="h-4 w-4 mr-1.5" />
-            ) : (
-              <Save className="h-4 w-4 mr-1.5" />
-            )}
-            保存
-          </Button>
+          {isOfflineMode ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDownload}
+                disabled={!yamlConfig}
+              >
+                <Download className="h-4 w-4 mr-1.5" />
+                下载
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCopy}
+                disabled={!yamlConfig}
+              >
+                <Copy className="h-4 w-4 mr-1.5" />
+                复制
+              </Button>
+              <Button variant="ghost" size="sm" onClick={exitOfflineMode}>
+                <LogOut className="h-4 w-4 mr-1.5" />
+                退出离线
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSave}
+              disabled={!hasChanges || busy || Boolean(configError)}
+            >
+              {isConfigSaving ? (
+                <Spinner className="h-4 w-4 mr-1.5" />
+              ) : (
+                <Save className="h-4 w-4 mr-1.5" />
+              )}
+              保存
+            </Button>
+          )}
         </div>
       </div>
 
@@ -161,11 +239,16 @@ export function ConfigEditorView() {
               value={yamlConfig}
               onChange={setYamlConfig}
               onSave={() => {
+                if (isOfflineMode) {
+                  handleDownload();
+                  return;
+                }
                 if (hasChanges && !busy && !configError) void handleSave();
               }}
               className="h-full"
               readOnly={isConfigLoading}
               variant="config"
+              backendValidation={!isOfflineMode}
               plugins={plugins}
             />
           </div>

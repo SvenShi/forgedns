@@ -6,6 +6,7 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/shell/app-sidebar";
 import { PluginDetailSheet } from "@/components/plugins/plugin-detail-sheet";
 import { ConfigEditorView } from "@/components/config/config-editor-view";
+import { OfflineConfigImport } from "@/components/config/offline-config-import";
 import { ConfigHistorySheet } from "@/components/config/config-history-sheet";
 import { useAppStore } from "@/lib/store";
 import { useAuthStore } from "@/lib/auth-store";
@@ -23,6 +24,8 @@ export default function ConsoleLayout({
   const setHistoryOpen = useAppStore((s) => s.setHistoryOpen);
   const loadConfig = useAppStore((s) => s.loadConfig);
   const refreshMetrics = useAppStore((s) => s.refreshMetrics);
+  const isOfflineMode = useAppStore((s) => s.isOfflineMode);
+  const exitOfflineMode = useAppStore((s) => s.exitOfflineMode);
   const isConnected = useAuthStore((s) => s.isConnected);
   const isAuthHydrated = useAuthStore((s) => s.isHydrated);
   const pathname = usePathname();
@@ -35,6 +38,11 @@ export default function ConsoleLayout({
   useEffect(() => {
     if (isConnected) void loadConfig();
   }, [isConnected, loadConfig]);
+
+  // On reconnect, drop offline mode so loadConfig's authoritative state wins.
+  useEffect(() => {
+    if (isConnected && isOfflineMode) exitOfflineMode();
+  }, [isConnected, isOfflineMode, exitOfflineMode]);
 
   // Keep plugin metrics live across the whole console (cards + detail sheet),
   // not just on the dashboard's runtime-state poll.
@@ -84,10 +92,10 @@ export default function ConsoleLayout({
           {editorMode ? (
             <div className="h-svh flex flex-col overflow-hidden">
               <AppHeader title="配置编辑器" />
-              {!isAuthHydrated || isConnected ? (
+              {!isAuthHydrated || isConnected || isOfflineMode ? (
                 <ConfigEditorView />
               ) : (
-                <ConnectionRequired />
+                <OfflineConfigImport />
               )}
             </div>
           ) : canUseBackendPages ? (

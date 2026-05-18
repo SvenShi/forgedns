@@ -72,12 +72,18 @@ interface AppState {
   configPath: string;
   configError: string | null;
   yamlConfig: string;
+  /** Editing a pasted/uploaded config with no backend connection. */
+  isOfflineMode: boolean;
+  /** Name of the uploaded file, used as the export download name. */
+  offlineFileName: string | null;
 
   setSelectedPlugin: (plugin: PluginInstance | null) => void;
   setDetailOpen: (open: boolean) => void;
   setEditorMode: (mode: boolean) => void;
   setHistoryOpen: (open: boolean) => void;
   setYamlConfig: (config: string) => void;
+  enterOfflineConfig: (text: string, fileName?: string) => void;
+  exitOfflineMode: () => void;
   loadConfig: () => Promise<void>;
   refreshRuntimeState: () => Promise<void>;
   refreshMetrics: () => Promise<void>;
@@ -125,6 +131,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   configPath: "/etc/oxidns/config.yaml",
   configError: null,
   yamlConfig: initialConfigText,
+  isOfflineMode: false,
+  offlineFileName: null,
 
   setSelectedPlugin: (plugin) => set({ selectedPlugin: plugin }),
   setDetailOpen: (open) => set({ detailOpen: open }),
@@ -153,6 +161,34 @@ export const useAppStore = create<AppState>((set, get) => ({
       configDiagnostics: parsed.diagnostics,
     });
   },
+
+  // Import a pasted/uploaded config for editing without a backend. Resets
+  // every backend-derived field first so stale dependency graphs, history,
+  // and (critically) configVersion can't leak in — a stale configVersion
+  // would corrupt the editor's dirty/reset baseline. setYamlConfig runs the
+  // existing client-side parse path; its set() payload omits the offline
+  // keys so the flags below survive.
+  enterOfflineConfig: (text, fileName) => {
+    set({
+      isOfflineMode: true,
+      offlineFileName: fileName ?? null,
+      configPath: fileName ?? "未命名配置（离线）",
+      configVersion: null,
+      runningVersion: null,
+      dependencyGraph: null,
+      configHistory: [],
+      reloadStatus: null,
+      health: null,
+      control: null,
+      system: null,
+    });
+    get().setYamlConfig(text);
+  },
+
+  // Leave offline mode. When still disconnected this returns the user to the
+  // import screen; on reconnect the layout's loadConfig() authoritatively
+  // repopulates config state, so no manual backend restore is needed here.
+  exitOfflineMode: () => set({ isOfflineMode: false, offlineFileName: null }),
 
   loadConfig: async () => {
     set({ isConfigLoading: true, configError: null });
