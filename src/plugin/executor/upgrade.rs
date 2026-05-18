@@ -54,6 +54,8 @@ impl Executor for UpgradeExecutor {
             asset = %self.config.asset,
             cache_dir = %self.config.cache_dir.display(),
             backup_dir = %self.config.backup_dir.display(),
+            webui_dir = %self.config.webui_dir.display(),
+            skip_webui = self.config.skip_webui,
             restart = ?self.config.restart,
             force = self.config.force,
             cleanup = self.config.cleanup_after_apply,
@@ -98,6 +100,11 @@ impl Executor for UpgradeExecutor {
                     force = self.config.force,
                     version = %outcome.installed_version,
                     backup = %outcome.backup_path.display(),
+                    webui = ?outcome.webui_path.as_ref().map(|p| p.display().to_string()),
+                    webui_backup = ?outcome
+                        .webui_backup_path
+                        .as_ref()
+                        .map(|p| p.display().to_string()),
                     "upgrade apply completed"
                 );
             }
@@ -149,6 +156,8 @@ struct UpgradePluginConfig {
     asset: Option<String>,
     cache_dir: Option<PathBuf>,
     backup_dir: Option<PathBuf>,
+    webui_dir: Option<PathBuf>,
+    skip_webui: Option<bool>,
     restart: Option<RestartMode>,
     allow_prerelease: Option<bool>,
     force: Option<bool>,
@@ -172,6 +181,12 @@ impl UpgradePluginConfig {
         }
         if let Some(value) = self.backup_dir {
             config.backup_dir = value;
+        }
+        if let Some(value) = self.webui_dir {
+            config.webui_dir = value;
+        }
+        if let Some(value) = self.skip_webui {
+            config.skip_webui = value;
         }
         if let Some(value) = self.restart {
             config.restart = value;
@@ -301,6 +316,37 @@ mod tests {
         let parsed = parse_upgrade_config(Some(value)).unwrap();
         let config = parsed.into_upgrade_config().unwrap();
         assert!(!config.cleanup_after_apply);
+    }
+
+    #[test]
+    fn parse_upgrade_config_defaults_webui() {
+        let parsed = parse_upgrade_config(None).unwrap();
+        let config = parsed.into_upgrade_config().unwrap();
+        assert_eq!(config.webui_dir, PathBuf::from("./webui"));
+        assert!(!config.skip_webui);
+    }
+
+    #[test]
+    fn parse_upgrade_config_accepts_webui_dir() {
+        let value = serde_yaml_ng::from_str::<Value>("webui_dir: /srv/ui").unwrap();
+        let parsed = parse_upgrade_config(Some(value)).unwrap();
+        let config = parsed.into_upgrade_config().unwrap();
+        assert_eq!(config.webui_dir, PathBuf::from("/srv/ui"));
+    }
+
+    #[test]
+    fn parse_upgrade_config_accepts_skip_webui() {
+        let value = serde_yaml_ng::from_str::<Value>("skip_webui: true").unwrap();
+        let parsed = parse_upgrade_config(Some(value)).unwrap();
+        let config = parsed.into_upgrade_config().unwrap();
+        assert!(config.skip_webui);
+    }
+
+    #[test]
+    fn parse_upgrade_config_rejects_unknown_webui_typo() {
+        let value = serde_yaml_ng::from_str::<Value>("webuidir: /srv/ui").unwrap();
+        let err = parse_upgrade_config(Some(value)).unwrap_err();
+        assert!(err.to_string().contains("unknown field `webuidir`"));
     }
 
     #[test]

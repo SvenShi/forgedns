@@ -295,6 +295,11 @@ sudo oxidns upgrade apply --restart service
 - `--backup-dir <DIR>`
   - `apply` 替换前的二进制备份目录。
   - 默认值：`./upgrade/backups`
+- `--webui-dir <DIR>`
+  - `apply` 时安装 WebUI 静态资源的目录，应与 `api.http.webui.root` 一致。
+  - 默认值：`./webui`
+- `--skip-webui`
+  - `apply` 时跳过 WebUI 目录升级，仅替换二进制文件。
 - `--restart <none|service>`
   - `apply` 成功后的重启策略。
   - 默认值：`none`
@@ -316,6 +321,7 @@ sudo oxidns upgrade apply --restart service
 - 不写子命令时默认执行 `apply`。
 - `apply` 默认只有检测到新版本才会更新；`--force` 会强制更新。
 - `apply` 在 Unix 平台会解包 `.tar.gz`、备份当前二进制并替换；Windows 当前只支持 `check` 和 `download`。
+- `apply` 默认在替换二进制后，将 archive 中的 `webui/` 目录备份并安装到 `--webui-dir`；`--skip-webui` 可跳过；archive 不含 `webui/` 时跳过且不影响二进制升级。
 - `apply` 成功后会询问是否清理缓存目录和备份目录，默认选择 `Y`。
 
 ## 页面范围

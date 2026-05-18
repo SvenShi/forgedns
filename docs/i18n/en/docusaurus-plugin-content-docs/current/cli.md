@@ -295,6 +295,11 @@ Common arguments:
 - `--backup-dir <DIR>`
   - Directory for binary backups before `apply`.
   - Default: `./upgrade/backups`
+- `--webui-dir <DIR>`
+  - Directory where the WebUI static assets are installed during `apply`; keep it aligned with `api.http.webui.root`.
+  - Default: `./webui`
+- `--skip-webui`
+  - For `apply`, skip the WebUI directory upgrade and replace only the binary.
 - `--restart <none|service>`
   - Restart strategy after a successful `apply`.
   - Default: `none`
@@ -316,6 +321,7 @@ Behavior:
 - Omitting the subcommand defaults to `apply`.
 - `apply` updates only when a newer version is available by default. `--force` forces the update.
 - On Unix, `apply` unpacks the `.tar.gz`, backs up the current binary, and replaces it. Windows currently supports only `check` and `download`.
+- By default, after replacing the binary `apply` backs up and installs the archive's `webui/` directory into `--webui-dir`; `--skip-webui` skips it, and an archive without `webui/` is skipped without affecting the binary upgrade.
 - After a successful `apply`, the CLI asks whether to clean the cache and backup directories. The default answer is `Y`.
 
 ## Page Scope

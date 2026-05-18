@@ -142,6 +142,14 @@ pub struct UpgradeOptions {
     )]
     pub backup_dir: PathBuf,
 
+    /// Directory where the served WebUI assets are installed.
+    #[arg(long = "webui-dir", default_value = "./webui", global = true)]
+    pub webui_dir: PathBuf,
+
+    /// Skip upgrading the WebUI directory during apply.
+    #[arg(long = "skip-webui", default_value_t = false, global = true)]
+    pub skip_webui: bool,
+
     /// Restart strategy after a successful apply.
     #[arg(long = "restart", value_enum, default_value_t = RestartMode::None, global = true)]
     pub restart: RestartMode,
@@ -352,6 +360,8 @@ mod tests {
                 asset: "oxidns-x86_64-unknown-linux-gnu.tar.gz".to_string(),
                 cache_dir: PathBuf::from("./cache"),
                 backup_dir: PathBuf::from("./backups"),
+                webui_dir: PathBuf::from("./webui"),
+                skip_webui: false,
                 restart: RestartMode::Service,
                 allow_prerelease: true,
                 force: false,
@@ -376,6 +386,8 @@ mod tests {
                 asset: "auto".to_string(),
                 cache_dir: PathBuf::from("./upgrade-cache"),
                 backup_dir: PathBuf::from("./upgrade-backups"),
+                webui_dir: PathBuf::from("./webui"),
+                skip_webui: false,
                 restart: RestartMode::None,
                 allow_prerelease: false,
                 force: true,

@@ -2195,6 +2195,8 @@ sidebar_position: 3
       asset: auto
       cache_dir: ./upgrade/cache
       backup_dir: ./upgrade/backups
+      webui_dir: ./webui
+      skip_webui: false
       restart: service
       force: false
       cleanup: true
@@ -2219,6 +2221,14 @@ sidebar_position: 3
     - Release asset 名称；`auto` 会按当前平台选择 archive。
 - `cache_dir` / `backup_dir`
     - 下载缓存目录和替换前备份目录。
+- `webui_dir`
+    - 类型：`path`
+    - 默认值：`./webui`
+    - 升级时安装 WebUI 静态资源的目录，应与 `api.http.webui.root` 一致。
+- `skip_webui`
+    - 类型：`bool`
+    - 默认值：`false`
+    - 设为 `true` 时只替换二进制文件，跳过 WebUI 目录升级。
 - `restart`
     - 可选值为 `none` 或 `service`。设置为 `service` 时，升级成功替换二进制文件后，应用会主动退出并返回错误码，以便 systemd 自动重启。因此，对应的 service 必须将 `Restart` 设置为 `always` 或 `on-failure`。
 - `timeout`、`socks5`、`insecure_skip_verify`
@@ -2232,6 +2242,7 @@ sidebar_position: 3
 - 默认升级成功后会清理缓存和备份；如需保留回滚文件，设置 `cleanup: false`。
 - 升级时会下载 archive，并使用 GitHub release asset 的 `digest` 字段校验 SHA256。
 - Unix 平台解包 `.tar.gz`、备份当前二进制并替换；Windows 当前不支持插件升级。
+- 默认在替换二进制后，将 archive 中的 `webui/` 目录备份并安装到 `webui_dir`；`skip_webui: true` 可跳过。archive 不含 `webui/`（旧版本 release）时会跳过 WebUI 升级且不影响二进制升级结果。
 
 ### quick setup
 

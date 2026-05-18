@@ -29,6 +29,7 @@ const DEFAULT_REPOSITORY: &str = "svenshi/oxidns";
 const DEFAULT_TARGET: &str = "latest";
 const DEFAULT_CACHE_DIR: &str = "./upgrade-cache";
 const DEFAULT_BACKUP_DIR: &str = "./upgrade-backups";
+const DEFAULT_WEBUI_DIR: &str = "./webui";
 
 const EXIT_RESTART_REQUIRED: i32 = 75;
 const GITHUB_USER_AGENT: &str = "OxiDNS";
@@ -40,6 +41,8 @@ pub struct UpgradeConfig {
     pub asset: String,
     pub cache_dir: PathBuf,
     pub backup_dir: PathBuf,
+    pub webui_dir: PathBuf,
+    pub skip_webui: bool,
     pub restart: RestartMode,
     pub allow_prerelease: bool,
     pub force: bool,
@@ -57,6 +60,8 @@ impl Default for UpgradeConfig {
             asset: "auto".to_string(),
             cache_dir: PathBuf::from(DEFAULT_CACHE_DIR),
             backup_dir: PathBuf::from(DEFAULT_BACKUP_DIR),
+            webui_dir: PathBuf::from(DEFAULT_WEBUI_DIR),
+            skip_webui: false,
             restart: RestartMode::None,
             allow_prerelease: false,
             force: false,
@@ -76,6 +81,8 @@ impl UpgradeConfig {
             asset: options.asset.clone(),
             cache_dir: options.cache_dir.clone(),
             backup_dir: options.backup_dir.clone(),
+            webui_dir: options.webui_dir.clone(),
+            skip_webui: options.skip_webui,
             restart: options.restart,
             allow_prerelease: options.allow_prerelease,
             force: options.force,
@@ -110,6 +117,12 @@ pub struct ApplyOutcome {
     pub asset_name: String,
     pub backup_path: PathBuf,
     pub binary_path: PathBuf,
+    /// `Some` when the WebUI directory was installed; `None` when skipped or
+    /// when the archive did not contain a `webui/` directory.
+    pub webui_path: Option<PathBuf>,
+    /// `Some` when an existing WebUI directory was backed up before the swap;
+    /// `None` on a fresh install where there was nothing to back up.
+    pub webui_backup_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,6 +196,13 @@ pub fn run_cli(action: UpgradeAction, config: UpgradeConfig) -> Result<()> {
                         );
                         println!("Binary: {}", outcome.binary_path.display());
                         println!("Backup: {}", outcome.backup_path.display());
+                        match &outcome.webui_path {
+                            Some(path) => println!("WebUI: {}", path.display()),
+                            None => println!("WebUI: not upgraded"),
+                        }
+                        if let Some(path) = &outcome.webui_backup_path {
+                            println!("WebUI backup: {}", path.display());
+                        }
                         if prompt_cleanup_after_apply()? {
                             match cleanup_upgrade_artifacts(&config) {
                                 Ok(cleaned) => {
@@ -225,6 +245,13 @@ fn print_cli_plan(action: &str, config: &UpgradeConfig) {
         println!("Backup: {}", config.backup_dir.display());
         println!("Restart: {:?}", config.restart);
         println!("Force: {}", config.force);
+    }
+    if action == "apply" || action == "check" {
+        if config.skip_webui {
+            println!("WebUI: skipped (--skip-webui)");
+        } else {
+            println!("WebUI: {}", config.webui_dir.display());
+        }
     }
     println!("Timeout: {:?}", config.timeout);
     if let Some(socks5) = config.socks5.as_deref() {
@@ -442,6 +469,35 @@ async fn apply_unchecked(
         }
         print_cli_apply_step(restart_context, "Binary replacement completed.");
 
+        let (webui_path, webui_backup_path) = if config.skip_webui {
+            print_cli_apply_step(restart_context, "Skipping WebUI upgrade (--skip-webui).");
+            (None, None)
+        } else {
+            match find_extracted_webui(&unpack_dir) {
+                None => {
+                    print_cli_apply_step(
+                        restart_context,
+                        "Archive contains no webui directory; skipping WebUI upgrade.",
+                    );
+                    (None, None)
+                }
+                Some(src) => {
+                    print_cli_apply_step(
+                        restart_context,
+                        format!("Installing WebUI into {}...", config.webui_dir.display()),
+                    );
+                    let (path, backup) = replace_webui(
+                        &src,
+                        &config.webui_dir,
+                        &config.backup_dir,
+                        &downloaded.version,
+                    )?;
+                    print_cli_apply_step(restart_context, "WebUI upgrade completed.");
+                    (Some(path), backup)
+                }
+            }
+        };
+
         if config.cleanup_after_apply {
             let _ = cleanup_upgrade_artifacts(config);
         }
@@ -456,6 +512,8 @@ async fn apply_unchecked(
             asset_name: downloaded.asset_name,
             backup_path,
             binary_path: current_exe,
+            webui_path,
+            webui_backup_path,
         })
     }
 }
@@ -839,6 +897,136 @@ fn replace_binary(source: &Path, target: &Path) -> Result<()> {
     })
 }
 
+#[cfg(not(windows))]
+fn find_extracted_webui(unpack_dir: &Path) -> Option<PathBuf> {
+    let candidate = unpack_dir.join("webui");
+    candidate.is_dir().then_some(candidate)
+}
+
+/// Recursively copies a directory tree using std only. The Next.js static
+/// export contains no symlinks, so files are copied by content; `fs::copy`
+/// preserves Unix permission bits.
+#[cfg(not(windows))]
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Moves a directory, falling back to a recursive copy when the source and
+/// destination live on different filesystems.
+#[cfg(not(windows))]
+fn move_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    match fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {
+            copy_dir_all(from, to)?;
+            fs::remove_dir_all(from)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Installs the unpacked `webui/` tree into `target`, keeping the served
+/// directory crash-safe.
+///
+/// The new tree is fully staged into a sibling of `target` first, so `target`
+/// keeps serving the old UI untouched until the final swap. The final swap is a
+/// same-filesystem rename (staging is a sibling), so it is atomic and cannot
+/// leave a half-written served directory. The only window where `target` is
+/// absent is between renaming the old tree to the backup and renaming the new
+/// tree in: two single-parent renames, during which the old tree is fully
+/// recoverable at the backup path.
+///
+/// Returns `(installed_path, backup_path)`; `backup_path` is `None` on a fresh
+/// install where `target` did not previously exist.
+#[cfg(not(windows))]
+fn replace_webui(
+    unpacked_webui: &Path,
+    target: &Path,
+    backup_dir: &Path,
+    version: &str,
+) -> Result<(PathBuf, Option<PathBuf>)> {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|err| {
+        DnsError::runtime(format!(
+            "failed to create WebUI parent directory '{}': {}",
+            parent.display(),
+            err
+        ))
+    })?;
+
+    let staging = target.with_extension("webui-upgrade-new");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|err| {
+            DnsError::runtime(format!(
+                "failed to clear stale WebUI staging '{}': {}",
+                staging.display(),
+                err
+            ))
+        })?;
+    }
+    move_dir(unpacked_webui, &staging).map_err(|err| {
+        DnsError::runtime(format!(
+            "failed to stage WebUI into '{}': {}",
+            staging.display(),
+            err
+        ))
+    })?;
+
+    let backup_path = if target.exists() {
+        fs::create_dir_all(backup_dir).map_err(|err| {
+            DnsError::runtime(format!(
+                "failed to create WebUI backup directory '{}': {}",
+                backup_dir.display(),
+                err
+            ))
+        })?;
+        let path = backup_dir.join(format!(
+            "webui-{}-{}",
+            version,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        ));
+        if let Err(err) = move_dir(target, &path) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(DnsError::runtime(format!(
+                "failed to back up existing WebUI '{}': {}",
+                target.display(),
+                err
+            )));
+        }
+        Some(path)
+    } else {
+        None
+    };
+
+    if let Err(err) = fs::rename(&staging, target) {
+        if let Some(ref backup) = backup_path {
+            let _ = move_dir(backup, target);
+        }
+        let _ = fs::remove_dir_all(&staging);
+        return Err(DnsError::runtime(format!(
+            "failed to install WebUI into '{}': {}",
+            target.display(),
+            err
+        )));
+    }
+
+    Ok((target.to_path_buf(), backup_path))
+}
+
 fn is_newer_version(candidate: &str, current: &str) -> bool {
     match (parse_version(candidate), parse_version(current)) {
         (Ok(candidate), Ok(current)) => candidate > current,
@@ -896,5 +1084,107 @@ mod tests {
     fn version_compare_handles_v_prefix() {
         assert!(is_newer_version("v0.4.2", "0.4.1"));
         assert!(!is_newer_version("v0.4.1", "0.4.1"));
+    }
+
+    #[test]
+    fn config_default_has_webui_defaults() {
+        let config = UpgradeConfig::default();
+        assert_eq!(config.webui_dir, PathBuf::from("./webui"));
+        assert!(!config.skip_webui);
+    }
+
+    #[test]
+    fn from_cli_maps_webui_fields() {
+        use clap::Parser;
+
+        use crate::app::cli::{Cli, Command};
+
+        let cli = Cli::parse_from([
+            "oxidns",
+            "upgrade",
+            "apply",
+            "--webui-dir",
+            "/tmp/oxidns-webui",
+            "--skip-webui",
+        ]);
+        let Command::Upgrade(opts) = cli.command else {
+            panic!("expected upgrade command");
+        };
+        let config = UpgradeConfig::from_cli(&opts);
+        assert_eq!(config.webui_dir, PathBuf::from("/tmp/oxidns-webui"));
+        assert!(config.skip_webui);
+    }
+
+    #[cfg(not(windows))]
+    fn write_file(path: &Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn copy_dir_all_copies_nested_tree() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        write_file(&src.join("index.html"), b"index");
+        write_file(&src.join("_next/static/a.js"), b"chunk");
+        fs::create_dir_all(src.join("empty")).unwrap();
+
+        copy_dir_all(&src, &dst).unwrap();
+
+        assert_eq!(fs::read(dst.join("index.html")).unwrap(), b"index");
+        assert_eq!(fs::read(dst.join("_next/static/a.js")).unwrap(), b"chunk");
+        assert!(dst.join("empty").is_dir());
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn find_extracted_webui_detects_directory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(find_extracted_webui(tmp.path()).is_none());
+        write_file(&tmp.path().join("webui").join("index.html"), b"x");
+        assert_eq!(
+            find_extracted_webui(tmp.path()),
+            Some(tmp.path().join("webui"))
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn replace_webui_fresh_install_no_backup() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let unpacked = tmp.path().join(".unpack/webui");
+        write_file(&unpacked.join("index.html"), b"new");
+        let target = tmp.path().join("nested/served/webui");
+        let backup_dir = tmp.path().join("backups");
+
+        let (installed, backup) = replace_webui(&unpacked, &target, &backup_dir, "0.6.0").unwrap();
+
+        assert_eq!(installed, target);
+        assert!(backup.is_none());
+        assert_eq!(fs::read(target.join("index.html")).unwrap(), b"new");
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn replace_webui_backs_up_and_swaps() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let unpacked = tmp.path().join(".unpack/webui");
+        write_file(&unpacked.join("index.html"), b"new-content");
+        let target = tmp.path().join("webui");
+        write_file(&target.join("marker.txt"), b"old-marker");
+        let backup_dir = tmp.path().join("backups");
+
+        let (installed, backup) = replace_webui(&unpacked, &target, &backup_dir, "0.6.0").unwrap();
+
+        assert_eq!(installed, target);
+        assert_eq!(fs::read(target.join("index.html")).unwrap(), b"new-content");
+        assert!(!target.join("marker.txt").exists());
+        let backup = backup.expect("existing webui must be backed up");
+        assert!(backup.starts_with(&backup_dir));
+        assert_eq!(fs::read(backup.join("marker.txt")).unwrap(), b"old-marker");
     }
 }

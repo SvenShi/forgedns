@@ -2071,6 +2071,8 @@ Runs the OxiDNS upgrade flow from the executor pipeline. It is suitable for main
       asset: auto
       cache_dir: ./upgrade/cache
       backup_dir: ./upgrade/backups
+      webui_dir: ./webui
+      skip_webui: false
       restart: service
       force: false
       cleanup: true
@@ -2093,6 +2095,12 @@ Runs the OxiDNS upgrade flow from the executor pipeline. It is suitable for main
     - Release asset name. `auto` selects the current platform archive.
 - `cache_dir` / `backup_dir`
     - Download cache and pre-replacement backup directories.
+- `webui_dir`
+    - Path. Default: `./webui`.
+    - Directory where the WebUI static assets are installed during an upgrade; keep it aligned with `api.http.webui.root`.
+- `skip_webui`
+    - Boolean. Default: `false`.
+    - When `true`, only the binary is replaced and the WebUI directory upgrade is skipped.
 - `restart`
     - Supported values are `none` and `service`. When set to `service`, the application exits with a non-zero status code after the binary is successfully replaced, allowing systemd to restart it automatically. Therefore, the corresponding service must set `Restart` to `always` or `on-failure`.
 - `timeout`, `socks5`, `insecure_skip_verify`
@@ -2106,6 +2114,7 @@ Runs the OxiDNS upgrade flow from the executor pipeline. It is suitable for main
 - By default it cleans cache and backup files after a successful upgrade. Set `cleanup: false` to keep rollback files.
 - The upgrade downloads the archive and verifies SHA256 with the GitHub release asset `digest` field.
 - On Unix it unpacks `.tar.gz`, backs up the current binary, and replaces it. Windows currently does not support plugin upgrades.
+- By default, after replacing the binary it backs up and installs the archive's `webui/` directory into `webui_dir`; set `skip_webui: true` to skip it. If the archive has no `webui/` (older releases), the WebUI upgrade is skipped without affecting the binary upgrade result.
 
 ### quick setup
 
