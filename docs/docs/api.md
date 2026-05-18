@@ -518,7 +518,7 @@ GET /api/plugins/reverse_lookup_main?ip=8.8.8.8
 
 * `kind`
 * `tag`
-* `evaluated`
+* `checked`
 * `matched`
 * `executed`
 * `query_total`

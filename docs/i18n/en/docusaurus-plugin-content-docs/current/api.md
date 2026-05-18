@@ -518,7 +518,7 @@ Response fields:
 
 * `kind`
 * `tag`
-* `evaluated`
+* `checked`
 * `matched`
 * `executed`
 * `query_total`

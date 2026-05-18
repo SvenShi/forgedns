@@ -1252,6 +1252,20 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         placeholder: "./upgrade/backups",
       },
       {
+        key: "webui_dir",
+        description: "升级时安装 WebUI 静态资源的目录。",
+        label: "WebUI 目录",
+        type: "text",
+        placeholder: "./webui",
+      },
+      {
+        key: "skip_webui",
+        description: "apply 时跳过 WebUI 目录升级，仅替换二进制文件。",
+        label: "跳过 WebUI 升级",
+        type: "switch",
+        default: false,
+      },
+      {
         key: "restart",
         description:
           "设置为 service 时，升级成功替换二进制文件后应用会主动退出并返回错误码，以便 systemd 自动重启。",

@@ -15,8 +15,8 @@ use tokio::sync::broadcast;
 
 use super::backend::RecorderBackend;
 use super::model::{
-    ListCursor, ListQuery, PluginStatsKind, PluginStatsRow, PluginsStatsQuery, RecordDetail,
-    RecordRow, StatsQuery,
+    ListCursor, ListQuery, PluginStatsKind, PluginStatsRow, PluginsStatsQuery, QueryRecordFilter,
+    QueryRecordStatus, RecordDetail, RecordRow, StatsQuery,
 };
 use super::store::{load_plugin_stats, load_record_detail, load_stats_overview, query_records};
 use crate::api::{ApiHandler, json_error, json_ok, simple_response, streaming_response};
@@ -307,11 +307,12 @@ struct SseState {
     heartbeat: tokio::time::Interval,
 }
 
-fn parse_list_query(query: Option<&str>) -> std::result::Result<ListQuery, String> {
+pub(super) fn parse_list_query(query: Option<&str>) -> std::result::Result<ListQuery, String> {
     let mut cursor = None;
     let mut limit = DEFAULT_LIST_LIMIT;
     let mut since_ms = None;
     let mut until_ms = None;
+    let mut filter = QueryRecordFilter::default();
 
     for (key, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
@@ -319,6 +320,15 @@ fn parse_list_query(query: Option<&str>) -> std::result::Result<ListQuery, Strin
             "limit" => limit = parse_limit(value.as_ref())?,
             "since_ms" => since_ms = Some(parse_u64_query("since_ms", value.as_ref())?),
             "until_ms" => until_ms = Some(parse_u64_query("until_ms", value.as_ref())?),
+            "qname" => filter.qname = optional_text(value.as_ref()),
+            "qtype" => filter.qtype = optional_upper_text(value.as_ref()),
+            "client_ip" => filter.client_ip = optional_text(value.as_ref()),
+            "rcode" => filter.rcode = optional_upper_text(value.as_ref()),
+            "status" => {
+                if let Some(value) = optional_text(value.as_ref()) {
+                    filter.status = QueryRecordStatus::parse(value.as_str())?;
+                }
+            }
             _ => {}
         }
     }
@@ -328,33 +338,58 @@ fn parse_list_query(query: Option<&str>) -> std::result::Result<ListQuery, Strin
         limit,
         since_ms,
         until_ms,
+        filter,
     })
 }
 
-fn parse_stats_query(query: Option<&str>) -> std::result::Result<StatsQuery, String> {
+pub(super) fn parse_stats_query(query: Option<&str>) -> std::result::Result<StatsQuery, String> {
     let mut since_ms = None;
     let mut until_ms = None;
+    let mut filter = QueryRecordFilter::default();
     for (key, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
             "since_ms" => since_ms = Some(parse_u64_query("since_ms", value.as_ref())?),
             "until_ms" => until_ms = Some(parse_u64_query("until_ms", value.as_ref())?),
+            "qname" => filter.qname = optional_text(value.as_ref()),
+            "qtype" => filter.qtype = optional_upper_text(value.as_ref()),
+            "client_ip" => filter.client_ip = optional_text(value.as_ref()),
+            "rcode" => filter.rcode = optional_upper_text(value.as_ref()),
+            "status" => {
+                if let Some(value) = optional_text(value.as_ref()) {
+                    filter.status = QueryRecordStatus::parse(value.as_str())?;
+                }
+            }
             _ => {}
         }
     }
-    Ok(StatsQuery { since_ms, until_ms })
+    Ok(StatsQuery {
+        since_ms,
+        until_ms,
+        filter,
+    })
 }
 
-fn parse_plugins_stats_query(
+pub(super) fn parse_plugins_stats_query(
     query: Option<&str>,
 ) -> std::result::Result<PluginsStatsQuery, String> {
     let mut since_ms = None;
     let mut until_ms = None;
     let mut kind = PluginStatsKind::All;
+    let mut filter = QueryRecordFilter::default();
     for (key, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
             "since_ms" => since_ms = Some(parse_u64_query("since_ms", value.as_ref())?),
             "until_ms" => until_ms = Some(parse_u64_query("until_ms", value.as_ref())?),
             "kind" => kind = PluginStatsKind::parse(value.as_ref())?,
+            "qname" => filter.qname = optional_text(value.as_ref()),
+            "qtype" => filter.qtype = optional_upper_text(value.as_ref()),
+            "client_ip" => filter.client_ip = optional_text(value.as_ref()),
+            "rcode" => filter.rcode = optional_upper_text(value.as_ref()),
+            "status" => {
+                if let Some(value) = optional_text(value.as_ref()) {
+                    filter.status = QueryRecordStatus::parse(value.as_str())?;
+                }
+            }
             _ => {}
         }
     }
@@ -362,6 +397,7 @@ fn parse_plugins_stats_query(
         since_ms,
         until_ms,
         kind,
+        filter,
     })
 }
 
@@ -407,6 +443,15 @@ fn parse_u64_query(field: &str, raw: &str) -> std::result::Result<u64, String> {
         .map_err(|err| format!("invalid {field} query parameter: {err}"))
 }
 
+fn optional_text(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn optional_upper_text(raw: &str) -> Option<String> {
+    optional_text(raw).map(|value| value.to_ascii_uppercase())
+}
+
 impl PluginStatsKind {
     fn parse(raw: &str) -> std::result::Result<Self, String> {
         match raw {
@@ -415,6 +460,18 @@ impl PluginStatsKind {
             "builtin" => Ok(Self::Builtin),
             "all" => Ok(Self::All),
             _ => Err("kind must be one of matcher, executor, builtin, all".to_string()),
+        }
+    }
+}
+
+impl QueryRecordStatus {
+    fn parse(raw: &str) -> std::result::Result<Self, String> {
+        match raw {
+            "all" => Ok(Self::All),
+            "error" => Ok(Self::Error),
+            "has_response" => Ok(Self::HasResponse),
+            "no_response" => Ok(Self::NoResponse),
+            _ => Err("status must be one of all, error, has_response, no_response".to_string()),
         }
     }
 }

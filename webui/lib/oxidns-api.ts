@@ -259,6 +259,44 @@ export interface QueryRecordDetailResponse {
   record: QueryRecordDetail;
 }
 
+export type QueryRecordStatusFilter =
+  | "all"
+  | "error"
+  | "has_response"
+  | "no_response";
+
+export interface QueryRecordFilters {
+  sinceMs?: number;
+  untilMs?: number;
+  qname?: string;
+  qtype?: string;
+  clientIp?: string;
+  rcode?: string;
+  status?: QueryRecordStatusFilter;
+}
+
+export type QueryRecorderPluginStatsKind =
+  | "all"
+  | "matcher"
+  | "executor"
+  | "builtin";
+
+export interface QueryRecorderPluginStatsRow {
+  kind: string;
+  tag?: string;
+  checked: number;
+  matched: number;
+  executed: number;
+  query_total: number;
+  query_share: number;
+}
+
+export interface QueryRecorderPluginStatsResponse {
+  ok: boolean;
+  query_total: number;
+  stats: QueryRecorderPluginStatsRow[];
+}
+
 export async function fetchConfigFile(): Promise<ConfigFileResponse> {
   const response = await fetch(apiUrl("/config"), {
     method: "GET",
@@ -382,24 +420,38 @@ export async function flushCache(tag: string): Promise<void> {
 
 export async function fetchQueryRecords(
   tag: string,
-  options: {
+  options: QueryRecordFilters & {
     limit?: number;
     cursor?: string;
-    sinceMs?: number;
-    untilMs?: number;
   } = {},
 ): Promise<QueryRecordsResponse> {
   const params = new URLSearchParams();
   if (options.limit) params.set("limit", String(options.limit));
   if (options.cursor) params.set("cursor", options.cursor);
-  if (options.sinceMs) params.set("since_ms", String(options.sinceMs));
-  if (options.untilMs) params.set("until_ms", String(options.untilMs));
+  appendQueryRecordFilters(params, options);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   const response = await fetch(
     apiUrl(`/plugins/${encodeURIComponent(tag)}/records${suffix}`),
     { method: "GET", headers: apiHeaders() },
   );
   return readJsonResponse<QueryRecordsResponse>(response);
+}
+
+export async function fetchQueryRecorderPluginStats(
+  tag: string,
+  options: QueryRecordFilters & {
+    kind?: QueryRecorderPluginStatsKind;
+  } = {},
+): Promise<QueryRecorderPluginStatsResponse> {
+  const params = new URLSearchParams();
+  params.set("kind", options.kind ?? "all");
+  appendQueryRecordFilters(params, options);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(
+    apiUrl(`/plugins/${encodeURIComponent(tag)}/stats/plugins${suffix}`),
+    { method: "GET", headers: apiHeaders() },
+  );
+  return readJsonResponse<QueryRecorderPluginStatsResponse>(response);
 }
 
 export async function fetchQueryRecordDetail(
@@ -427,6 +479,25 @@ export async function fetchPrometheusMetrics(): Promise<string> {
 export function apiUrl(path: string) {
   const baseUrl = useAuthStore.getState().serverConfig.url.trim();
   return `${baseUrl.replace(/\/$/, "")}${path}`;
+}
+
+function appendQueryRecordFilters(
+  params: URLSearchParams,
+  options: QueryRecordFilters,
+) {
+  if (options.sinceMs !== undefined) {
+    params.set("since_ms", String(options.sinceMs));
+  }
+  if (options.untilMs !== undefined) {
+    params.set("until_ms", String(options.untilMs));
+  }
+  if (options.qname) params.set("qname", options.qname);
+  if (options.qtype) params.set("qtype", options.qtype);
+  if (options.clientIp) params.set("client_ip", options.clientIp);
+  if (options.rcode) params.set("rcode", options.rcode);
+  if (options.status && options.status !== "all") {
+    params.set("status", options.status);
+  }
 }
 
 export function apiHeaders() {

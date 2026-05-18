@@ -45,7 +45,7 @@ import {
   pluginTypeAccentHex,
 } from "@/components/plugins/display";
 
-type MatchStatus = "matched" | "not_matched" | "unevaluated";
+type MatchStatus = "matched" | "not_matched" | "unchecked";
 type ActionStatus =
   | "not_executed"
   | "entered"
@@ -166,7 +166,7 @@ export function QueryRecordFlowCanvas({
           未命中
         </span>
         <span className="rounded-full border bg-muted/30 px-2 py-0.5">
-          未评估
+          未检查
         </span>
       </div>
 
@@ -851,7 +851,7 @@ function getMatchStatus(
       ? "matched"
       : last?.outcome === "not_matched"
         ? "not_matched"
-        : "unevaluated";
+        : "unchecked";
   return { status, events, runtimeTag };
 }
 
@@ -1028,7 +1028,7 @@ function actionStatusIcon(status: ActionStatus) {
 function matchStatusLabel(status: MatchStatus) {
   if (status === "matched") return "命中";
   if (status === "not_matched") return "未命中";
-  return "未评估";
+  return "未检查";
 }
 
 function actionStatusLabel(status: ActionStatus) {

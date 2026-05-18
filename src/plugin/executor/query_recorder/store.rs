@@ -7,7 +7,8 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::types::Value;
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::broadcast;
@@ -15,12 +16,14 @@ use tokio::sync::broadcast;
 use super::backend::{RecorderBackend, WriterCommand, WriterThreadContext};
 use super::model::{
     ListCursor, ListQuery, PendingRecord, PluginStatsKind, PluginStatsRow, PluginsStatsQuery,
-    RecordDetail, RecordRow, StatsOverview, StatsQuery, StepJson, TableNames,
+    QueryRecordFilter, QueryRecordStatus, RecordDetail, RecordRow, StatsOverview, StatsQuery,
+    StepJson, TableNames,
 };
 use crate::core::error::{DnsError, Result};
 
 const SCHEMA_VERSION: &str = "v1";
 const CLEANUP_BATCH_SIZE: usize = 1_000;
+const PLUGIN_STATS_SAMPLE_LIMIT: usize = 10_000;
 
 pub(super) fn open_database(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
@@ -379,54 +382,55 @@ pub(super) fn query_records(
     query: ListQuery,
 ) -> std::result::Result<(Vec<RecordRow>, Option<String>), DnsError> {
     let conn = open_database(&backend.path)?;
+    let (mut clauses, mut params) =
+        record_filter_clauses("r", query.since_ms, query.until_ms, &query.filter)?;
+    if let Some(cursor) = query.cursor {
+        clauses.push("(r.created_at_ms < ? OR (r.created_at_ms = ? AND r.id < ?))".to_string());
+        params.push(Value::Integer(cursor.created_at_ms));
+        params.push(Value::Integer(cursor.created_at_ms));
+        params.push(Value::Integer(cursor.id));
+    }
+    let where_sql = join_clauses(&clauses);
+    params.push(Value::Integer(query.limit.saturating_add(1) as i64));
+
     let sql = format!(
         "SELECT
-            id,
-            created_at_ms,
-            elapsed_ms,
-            request_id,
-            client_ip,
-            questions_json,
-            req_rd,
-            req_cd,
-            req_ad,
-            req_opcode,
-            req_edns_json,
-            error,
-            has_response,
-            rcode,
-            resp_aa,
-            resp_tc,
-            resp_ra,
-            resp_ad,
-            resp_cd,
-            answer_count,
-            authority_count,
-            additional_count,
-            answers_json,
-            authorities_json,
-            additionals_json,
-            signature_json,
-            resp_edns_json
-         FROM {records}
-         WHERE (?1 IS NULL OR created_at_ms >= ?1)
-           AND (?2 IS NULL OR created_at_ms <= ?2)
-           AND (?3 IS NULL
-                OR created_at_ms < ?3
-                OR (created_at_ms = ?3 AND id < ?4))
-         ORDER BY created_at_ms DESC, id DESC
-         LIMIT ?5",
+            r.id,
+            r.created_at_ms,
+            r.elapsed_ms,
+            r.request_id,
+            r.client_ip,
+            r.questions_json,
+            r.req_rd,
+            r.req_cd,
+            r.req_ad,
+            r.req_opcode,
+            r.req_edns_json,
+            r.error,
+            r.has_response,
+            r.rcode,
+            r.resp_aa,
+            r.resp_tc,
+            r.resp_ra,
+            r.resp_ad,
+            r.resp_cd,
+            r.answer_count,
+            r.authority_count,
+            r.additional_count,
+            r.answers_json,
+            r.authorities_json,
+            r.additionals_json,
+            r.signature_json,
+            r.resp_edns_json
+         FROM {records} r
+         WHERE {where_sql}
+         ORDER BY r.created_at_ms DESC, r.id DESC
+         LIMIT ?",
         records = backend.tables.records
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![
-        query.since_ms.map(as_i64).transpose()?,
-        query.until_ms.map(as_i64).transpose()?,
-        query.cursor.map(|cursor| cursor.created_at_ms),
-        query.cursor.map(|cursor| cursor.id),
-        query.limit.saturating_add(1) as i64,
-    ])?;
+    let mut rows = stmt.query(params_from_iter(params))?;
 
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {
@@ -541,31 +545,27 @@ pub(super) fn load_stats_overview(
     query: StatsQuery,
 ) -> std::result::Result<StatsOverview, DnsError> {
     let conn = open_database(&backend.path)?;
+    let (clauses, params) =
+        record_filter_clauses("r", query.since_ms, query.until_ms, &query.filter)?;
+    let where_sql = join_clauses(&clauses);
     let sql = format!(
         "SELECT
             COUNT(*) AS query_total,
-            COALESCE(SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END), 0) AS error_total,
-            AVG(elapsed_ms) AS avg_elapsed_ms
-         FROM {records}
-         WHERE (?1 IS NULL OR created_at_ms >= ?1)
-           AND (?2 IS NULL OR created_at_ms <= ?2)",
+            COALESCE(SUM(CASE WHEN r.error IS NOT NULL THEN 1 ELSE 0 END), 0) AS error_total,
+            AVG(r.elapsed_ms) AS avg_elapsed_ms
+         FROM {records} r
+         WHERE {where_sql}",
         records = backend.tables.records
     );
 
     conn.prepare(&sql)?
-        .query_row(
-            params![
-                query.since_ms.map(as_i64).transpose()?,
-                query.until_ms.map(as_i64).transpose()?,
-            ],
-            |row| {
-                Ok(StatsOverview {
-                    query_total: row.get::<_, i64>(0).and_then(non_negative_u64)?,
-                    error_total: row.get::<_, i64>(1).and_then(non_negative_u64)?,
-                    avg_elapsed_ms: row.get(2)?,
-                })
-            },
-        )
+        .query_row(params_from_iter(params), |row| {
+            Ok(StatsOverview {
+                query_total: row.get::<_, i64>(0).and_then(non_negative_u64)?,
+                error_total: row.get::<_, i64>(1).and_then(non_negative_u64)?,
+                avg_elapsed_ms: row.get(2)?,
+            })
+        })
         .map_err(|err| DnsError::plugin(format!("failed to load overview stats: {err}")))
 }
 
@@ -574,16 +574,37 @@ pub(super) fn load_plugin_stats(
     query: PluginsStatsQuery,
 ) -> std::result::Result<(u64, Vec<PluginStatsRow>), DnsError> {
     let conn = open_database(&backend.path)?;
-    let total_records = count_records(&conn, &backend.tables, query.since_ms, query.until_ms)?;
-    let kind_filter = query.kind.sql_value();
+    let (clauses, mut params) =
+        record_filter_clauses("r", query.since_ms, query.until_ms, &query.filter)?;
+    let where_sql = join_clauses(&clauses);
+    let kind_join_filter = if query.kind == PluginStatsKind::All {
+        String::new()
+    } else {
+        " AND s.kind = ?".to_string()
+    };
+    params.push(Value::Integer(PLUGIN_STATS_SAMPLE_LIMIT as i64));
+    if query.kind != PluginStatsKind::All {
+        params.push(Value::Text(query.kind.sql_value().to_string()));
+    }
     let sql = format!(
-        "SELECT
+        "WITH sample_records AS (
+            SELECT r.id
+            FROM {records} r
+            WHERE {where_sql}
+            ORDER BY r.created_at_ms DESC, r.id DESC
+            LIMIT ?
+         ),
+         sample_count AS (
+            SELECT COUNT(*) AS total_records FROM sample_records
+         )
+         SELECT
+            sample_count.total_records,
             s.kind,
             s.tag,
             COALESCE(SUM(CASE
                 WHEN s.kind = 'matcher' AND s.outcome IN ('matched', 'not_matched') THEN 1
                 ELSE 0
-            END), 0) AS evaluated,
+            END), 0) AS checked,
             COALESCE(SUM(CASE
                 WHEN s.kind = 'matcher' AND s.outcome = 'matched' THEN 1
                 ELSE 0
@@ -594,38 +615,36 @@ pub(super) fn load_plugin_stats(
                 ELSE 0
             END), 0) AS executed,
             COUNT(DISTINCT s.record_id) AS query_hits
-         FROM {steps} s
-         JOIN {records} r ON r.id = s.record_id
-         WHERE (?1 IS NULL OR r.created_at_ms >= ?1)
-           AND (?2 IS NULL OR r.created_at_ms <= ?2)
-           AND (?3 = 'all' OR s.kind = ?3)
-         GROUP BY s.kind, s.tag
+         FROM sample_count
+         LEFT JOIN sample_records r ON 1 = 1
+         LEFT JOIN {steps} s ON s.record_id = r.id{kind_join_filter}
+         GROUP BY sample_count.total_records, s.kind, s.tag
          ORDER BY s.kind ASC, query_hits DESC, s.tag ASC",
         steps = backend.tables.steps,
-        records = backend.tables.records
+        records = backend.tables.records,
+        kind_join_filter = kind_join_filter
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![
-        query.since_ms.map(as_i64).transpose()?,
-        query.until_ms.map(as_i64).transpose()?,
-        kind_filter,
-    ])?;
+    let mut rows = stmt.query(params_from_iter(params))?;
 
+    let mut total_records = 0;
     let mut stats = Vec::new();
     while let Some(row) = rows.next()? {
-        let query_hits = row.get::<_, i64>(5).and_then(non_negative_u64)?;
+        total_records = row.get::<_, i64>(0).and_then(non_negative_u64)?;
+        let Some(kind) = row.get::<_, Option<String>>(1)? else {
+            continue;
+        };
+        let query_hits = row.get::<_, i64>(6).and_then(non_negative_u64)?;
         stats.push(PluginStatsRow {
-            kind: row.get(0)?,
-            tag: row.get(1)?,
-            evaluated: row
-                .get::<_, i64>(2)
+            kind,
+            tag: row.get(2)?,
+            checked: row
+                .get::<_, i64>(3)
                 .and_then(non_negative_u64)
-                .map_err(|err| {
-                    DnsError::plugin(format!("invalid plugin stats evaluated: {err}"))
-                })?,
-            matched: row.get::<_, i64>(3).and_then(non_negative_u64)?,
-            executed: row.get::<_, i64>(4).and_then(non_negative_u64)?,
+                .map_err(|err| DnsError::plugin(format!("invalid plugin stats checked: {err}")))?,
+            matched: row.get::<_, i64>(4).and_then(non_negative_u64)?,
+            executed: row.get::<_, i64>(5).and_then(non_negative_u64)?,
             query_total: query_hits,
             query_share: if total_records == 0 {
                 0.0
@@ -637,27 +656,84 @@ pub(super) fn load_plugin_stats(
     Ok((total_records, stats))
 }
 
-fn count_records(
-    conn: &Connection,
-    tables: &TableNames,
+fn record_filter_clauses(
+    alias: &str,
     since_ms: Option<u64>,
     until_ms: Option<u64>,
-) -> std::result::Result<u64, DnsError> {
-    let sql = format!(
-        "SELECT COUNT(*) FROM {records}
-         WHERE (?1 IS NULL OR created_at_ms >= ?1)
-           AND (?2 IS NULL OR created_at_ms <= ?2)",
-        records = tables.records
-    );
-    conn.prepare(&sql)?
-        .query_row(
-            params![
-                since_ms.map(as_i64).transpose()?,
-                until_ms.map(as_i64).transpose()?,
-            ],
-            |row| row.get::<_, i64>(0).and_then(non_negative_u64),
-        )
-        .map_err(|err| DnsError::plugin(format!("failed to count records: {err}")))
+    filter: &QueryRecordFilter,
+) -> std::result::Result<(Vec<String>, Vec<Value>), DnsError> {
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+
+    if let Some(since_ms) = since_ms {
+        clauses.push(format!("{alias}.created_at_ms >= ?"));
+        params.push(Value::Integer(as_i64(since_ms)?));
+    }
+    if let Some(until_ms) = until_ms {
+        clauses.push(format!("{alias}.created_at_ms <= ?"));
+        params.push(Value::Integer(as_i64(until_ms)?));
+    }
+    if let Some(qname) = filter.qname.as_deref() {
+        clauses.push(format!(
+            "EXISTS (
+                SELECT 1
+                FROM json_each({alias}.questions_json) AS question
+                WHERE LOWER(json_extract(question.value, '$.name')) LIKE LOWER(?) ESCAPE '\\'
+            )"
+        ));
+        params.push(Value::Text(like_pattern(qname)));
+    }
+    if let Some(qtype) = filter.qtype.as_deref() {
+        clauses.push(format!(
+            "EXISTS (
+                SELECT 1
+                FROM json_each({alias}.questions_json) AS question
+                WHERE UPPER(json_extract(question.value, '$.qtype')) = UPPER(?)
+            )"
+        ));
+        params.push(Value::Text(qtype.to_string()));
+    }
+    if let Some(client_ip) = filter.client_ip.as_deref() {
+        clauses.push(format!("{alias}.client_ip = ?"));
+        params.push(Value::Text(client_ip.to_string()));
+    }
+    if let Some(rcode) = filter.rcode.as_deref() {
+        clauses.push(format!(
+            "{alias}.rcode IS NOT NULL AND UPPER({alias}.rcode) = UPPER(?)"
+        ));
+        params.push(Value::Text(rcode.to_string()));
+    }
+    match filter.status {
+        QueryRecordStatus::All => {}
+        QueryRecordStatus::Error => clauses.push(format!("{alias}.error IS NOT NULL")),
+        QueryRecordStatus::HasResponse => clauses.push(format!("{alias}.has_response = 1")),
+        QueryRecordStatus::NoResponse => clauses.push(format!(
+            "{alias}.error IS NULL AND {alias}.has_response = 0"
+        )),
+    }
+
+    Ok((clauses, params))
+}
+
+fn join_clauses(clauses: &[String]) -> String {
+    if clauses.is_empty() {
+        "1 = 1".to_string()
+    } else {
+        clauses.join(" AND ")
+    }
+}
+
+fn like_pattern(raw: &str) -> String {
+    let mut pattern = String::with_capacity(raw.len() + 2);
+    pattern.push('%');
+    for ch in raw.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    pattern.push('%');
+    pattern
 }
 
 fn encode_cursor(cursor: ListCursor) -> String {

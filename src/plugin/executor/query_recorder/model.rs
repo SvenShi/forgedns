@@ -137,32 +137,53 @@ pub(super) struct PendingRecord {
 pub(super) struct PluginStatsRow {
     pub(super) kind: String,
     pub(super) tag: Option<String>,
-    pub(super) evaluated: u64,
+    pub(super) checked: u64,
     pub(super) matched: u64,
     pub(super) executed: u64,
     pub(super) query_total: u64,
     pub(super) query_share: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct ListQuery {
     pub(super) cursor: Option<ListCursor>,
     pub(super) limit: usize,
     pub(super) since_ms: Option<u64>,
     pub(super) until_ms: Option<u64>,
+    pub(super) filter: QueryRecordFilter,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct StatsQuery {
     pub(super) since_ms: Option<u64>,
     pub(super) until_ms: Option<u64>,
+    pub(super) filter: QueryRecordFilter,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct PluginsStatsQuery {
     pub(super) since_ms: Option<u64>,
     pub(super) until_ms: Option<u64>,
     pub(super) kind: PluginStatsKind,
+    pub(super) filter: QueryRecordFilter,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct QueryRecordFilter {
+    pub(super) qname: Option<String>,
+    pub(super) qtype: Option<String>,
+    pub(super) client_ip: Option<String>,
+    pub(super) rcode: Option<String>,
+    pub(super) status: QueryRecordStatus,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum QueryRecordStatus {
+    #[default]
+    All,
+    Error,
+    HasResponse,
+    NoResponse,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
