@@ -19,30 +19,45 @@ where
         Self { stream }
     }
 
-    pub fn into_split(self) -> (TcpTransportReader<S>, TcpTransportWriter<S>) {
+    /// Split into framed reader/writer halves using `tokio::io::split`.
+    ///
+    /// `tokio::io::split` guards the underlying stream with a shared lock that
+    /// reader and writer contend on for every I/O operation. That is only
+    /// acceptable for streams that cannot be split into independent owned
+    /// halves (e.g. TLS). Plain `TcpStream` callers should instead use
+    /// `TcpStream::into_split()` together with `TcpTransportReader::new` /
+    /// `TcpTransportWriter::new` to get lock-free owned halves.
+    pub fn into_split(
+        self,
+    ) -> (
+        TcpTransportReader<ReadHalf<S>>,
+        TcpTransportWriter<WriteHalf<S>>,
+    ) {
         let (reader, writer) = split(self.stream);
         (
-            TcpTransportReader {
-                reader,
-                buf: BytesMut::with_capacity(8192),
-            },
-            TcpTransportWriter {
-                writer,
-                write_buf: Vec::with_capacity(1234),
-            },
+            TcpTransportReader::new(reader),
+            TcpTransportWriter::new(writer),
         )
     }
 }
 
-pub struct TcpTransportWriter<S> {
-    writer: WriteHalf<S>,
+pub struct TcpTransportWriter<W> {
+    writer: W,
     write_buf: Vec<u8>,
 }
 
-impl<S> TcpTransportWriter<S>
+impl<W> TcpTransportWriter<W>
 where
-    S: AsyncWrite,
+    W: AsyncWrite + Unpin,
 {
+    #[inline]
+    pub fn new(writer: W) -> Self {
+        Self {
+            writer,
+            write_buf: Vec::with_capacity(1234),
+        }
+    }
+
     #[inline]
     #[hotpath::measure]
     pub async fn write_message(&mut self, msg: &Message) -> Result<()> {
@@ -85,15 +100,23 @@ where
     }
 }
 
-pub struct TcpTransportReader<S> {
-    reader: ReadHalf<S>,
+pub struct TcpTransportReader<R> {
+    reader: R,
     buf: BytesMut,
 }
 
-impl<S> TcpTransportReader<S>
+impl<R> TcpTransportReader<R>
 where
-    S: AsyncRead,
+    R: AsyncRead + Unpin,
 {
+    #[inline]
+    pub fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buf: BytesMut::with_capacity(8192),
+        }
+    }
+
     #[inline]
     #[hotpath::measure]
     pub async fn read_message(&mut self) -> Result<Message> {

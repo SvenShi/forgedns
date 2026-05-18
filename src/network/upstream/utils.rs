@@ -400,6 +400,12 @@ async fn connect_tcp_socket(socket: Socket, socket_addr: SocketAddr) -> Result<T
     let std_stream: std::net::TcpStream = socket.into();
     let stream = TcpStream::from_std(std_stream)?;
 
+    // Disable Nagle's algorithm. DNS-over-TCP exchanges tiny request/response
+    // frames; with Nagle enabled the kernel coalesces them and interacts badly
+    // with the peer's delayed ACK, adding tens of milliseconds per query. This
+    // is applied here so both direct and SOCKS5-proxy TCP paths are covered.
+    let _ = stream.set_nodelay(true);
+
     // Ensure the async connect has completed before the stream is used by SOCKS/TLS
     // layers.
     stream.writable().await?;

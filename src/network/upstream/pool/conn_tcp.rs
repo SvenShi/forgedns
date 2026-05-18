@@ -415,8 +415,13 @@ impl ConnectionBuilder<TcpConnection> for TcpConnectionBuilder {
                 receiver,
             ));
         } else {
-            let transport = TcpTransport::new(stream);
-            let (reader, writer) = transport.into_split();
+            // Plain TCP can be split into independent owned halves, avoiding
+            // the shared lock that `tokio::io::split` (used for TLS) imposes on
+            // every read/write. The reader and writer tasks then run fully
+            // concurrently without contending on the connection.
+            let (read_half, write_half) = stream.into_split();
+            let reader = TcpTransportReader::new(read_half);
+            let writer = TcpTransportWriter::new(write_half);
             tokio::spawn(TcpConnection::listen_dns_response(arc.clone(), reader));
             tokio::spawn(TcpConnection::send_dns_request(
                 arc.clone(),
