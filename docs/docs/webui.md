@@ -165,6 +165,35 @@ http://192.168.1.10:9199/api
 - 监听具体 IP 时，会允许同一 host 的任意 WebUI 端口。
 - 显式配置 `api.http.cors.allowed_origins` 后，按浏览器 `Origin` 精确匹配。
 
+## 使用在线 Console 直连本地服务
+
+也可以打开 `https://console.oxidns.org`，在 WebUI 设置页把后端地址改成本机或局域网中的 OxiDNS 管理 API：
+
+```text
+http://127.0.0.1:9199/api
+```
+
+如果浏览器和 OxiDNS 不在同一台机器上，请改成实际可访问的地址，例如：
+
+```text
+http://192.168.1.10:9199/api
+```
+
+这种方式不作为推荐部署方式。在线 Console 页面和本地 API 不同源，浏览器会执行 CORS 检查；同时你需要让管理 API 可以被当前浏览器访问。更推荐使用“后端同端口托管 WebUI”或 nginx/caddy 反向代理，让 WebUI 和 `/api/*` 保持同源。
+
+如果确实要临时使用在线 Console，请至少显式允许 Console 的 origin：
+
+```yaml
+api:
+  http:
+    listen: "127.0.0.1:9199"
+    cors:
+      allowed_origins:
+        - "https://console.oxidns.org"
+```
+
+当需要从其它设备访问 OxiDNS 管理 API 时，还必须把 `listen` 改成局域网 IP 或 `0.0.0.0:9199`，并结合防火墙、反向代理认证或网络访问控制限制来源。不要把未受保护的管理 API 直接暴露到公网。
+
 ## 常见检查
 
 - 打开 `http://服务器:9199/` 或 nginx 域名能看到 WebUI。

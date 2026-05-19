@@ -165,6 +165,35 @@ Absolute URLs trigger browser CORS rules, so the backend must allow the WebUI or
 - Listening on a specific IP allows any WebUI port on the same host.
 - When `api.http.cors.allowed_origins` is configured explicitly, entries are matched exactly against the browser `Origin`.
 
+## Use The Online Console With A Local Service
+
+You can also open `https://console.oxidns.org` and set the backend URL in the WebUI settings page to the OxiDNS management API on your machine or LAN:
+
+```text
+http://127.0.0.1:9199/api
+```
+
+If the browser and OxiDNS are not on the same machine, use the reachable address instead, for example:
+
+```text
+http://192.168.1.10:9199/api
+```
+
+This is not the recommended deployment mode. The online Console page and the local API are different origins, so the browser enforces CORS; the management API must also be reachable from the browser. Prefer backend-hosted WebUI or an nginx/caddy reverse proxy so the WebUI and `/api/*` stay same-origin.
+
+If you still need the online Console for temporary use, explicitly allow the Console origin:
+
+```yaml
+api:
+  http:
+    listen: "127.0.0.1:9199"
+    cors:
+      allowed_origins:
+        - "https://console.oxidns.org"
+```
+
+When accessing the OxiDNS management API from another device, also change `listen` to a LAN IP or `0.0.0.0:9199`, and restrict access with a firewall, reverse-proxy authentication, or network policy. Do not expose an unprotected management API directly to the public internet.
+
 ## Common Checks
 
 - Opening `http://server:9199/` or the nginx domain shows the WebUI.
