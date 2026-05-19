@@ -1,10 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DatabaseZap, Download, RefreshCw, Trash2, Upload } from "lucide-react";
+import {
+  DatabaseZap,
+  Download,
+  RefreshCw,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -78,15 +87,21 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<CacheEntryRow | null>(null);
+  const [qnameInput, setQnameInput] = useState("");
+  const [appliedQname, setAppliedQname] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(
-    async (cursor?: string) => {
+    async (cursor?: string, qname = "") => {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetchCacheEntries(tag, { limit: 100, cursor });
+        const response = await fetchCacheEntries(tag, {
+          limit: 100,
+          cursor,
+          qname: qname || undefined,
+        });
         setEntries((current) =>
           cursor ? [...current, ...response.entries] : response.entries,
         );
@@ -123,6 +138,18 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
     setNextCursor(undefined);
   };
 
+  const applyQnameFilter = () => {
+    const nextQname = qnameInput.trim();
+    setAppliedQname(nextQname);
+    void load(undefined, nextQname);
+  };
+
+  const clearQnameFilter = () => {
+    setQnameInput("");
+    setAppliedQname("");
+    void load(undefined, "");
+  };
+
   return (
     <div className="space-y-4">
       <Card>
@@ -131,7 +158,7 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
             <CardTitle className="text-sm">缓存项</CardTitle>
             <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span className="rounded-full border bg-muted/30 px-2 py-0.5">
-                共 {total} 项
+                {appliedQname ? "匹配" : "共"} {total} 项
               </span>
               <span className="rounded-full border bg-muted/30 px-2 py-0.5">
                 已载入 {entries.length} 项
@@ -149,7 +176,7 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
               variant="outline"
               size="sm"
               disabled={loading}
-              onClick={() => load()}
+              onClick={() => load(undefined, appliedQname)}
             >
               <RefreshCw className="h-4 w-4" />
               刷新
@@ -166,6 +193,46 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
               {error}
             </div>
           )}
+          <form
+            className="mb-3 flex flex-col gap-2 rounded-md border bg-muted/20 p-3 sm:flex-row sm:items-end"
+            onSubmit={(event) => {
+              event.preventDefault();
+              applyQnameFilter();
+            }}
+          >
+            <label className="grid min-w-0 flex-1 gap-1 text-xs text-muted-foreground">
+              QNAME 包含
+              <Input
+                value={qnameInput}
+                onChange={(event) => setQnameInput(event.target.value)}
+                placeholder="example.com"
+                className="h-8 font-mono text-sm"
+              />
+            </label>
+            <div className="flex gap-2">
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                disabled={loading}
+              >
+                <Search className="h-4 w-4" />
+                筛选
+              </Button>
+              {appliedQname && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={loading}
+                  onClick={clearQnameFilter}
+                >
+                  <X className="h-4 w-4" />
+                  清除
+                </Button>
+              )}
+            </div>
+          </form>
           <div className="overflow-hidden rounded-md border">
             <Table className="min-w-[820px]">
               <TableHeader>
@@ -282,7 +349,7 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
               size="sm"
               className="mt-3"
               disabled={loading}
-              onClick={() => load(nextCursor)}
+              onClick={() => load(nextCursor, appliedQname)}
             >
               加载更多
             </Button>

@@ -384,11 +384,12 @@ export async function requestReload(): Promise<void> {
 
 export async function fetchCacheEntries(
   tag: string,
-  options: { limit?: number; cursor?: string } = {},
+  options: { limit?: number; cursor?: string; qname?: string } = {},
 ): Promise<CacheEntriesResponse> {
   const params = new URLSearchParams();
   if (options.limit) params.set("limit", String(options.limit));
   if (options.cursor) params.set("cursor", options.cursor);
+  if (options.qname) params.set("qname", options.qname);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   const response = await fetch(
     apiUrl(`/plugins/${encodeURIComponent(tag)}/entries${suffix}`),

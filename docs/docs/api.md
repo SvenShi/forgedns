@@ -350,6 +350,16 @@ API 路由分成三类：
 
 ### cache
 
+#### `GET /api/plugins/<cache_tag>/entries`
+
+分页读取缓存项。
+
+查询参数：
+
+* `limit`：每页数量，默认 `100`，最大 `500`。
+* `cursor`：分页游标。
+* `qname`：按缓存键中的查询域名做大小写不敏感的包含筛选。
+
 #### `GET /api/plugins/<cache_tag>/flush`
 
 清空缓存。

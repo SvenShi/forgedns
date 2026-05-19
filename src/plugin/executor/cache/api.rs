@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
-use super::key::{CacheKey, EcsScopeDigest};
+use super::key::{CacheKey, EcsScopeDigest, normalize_domain_key};
 use super::persistence::{dump_cache_to_bytes, load_cache_from_bytes};
 use super::{CacheItem, CacheMap};
 use crate::api::{ApiHandler, json_error, json_ok, simple_response};
@@ -253,6 +253,7 @@ impl ApiHandler for CacheEntriesListHandler {
             .iter_entries_cloned()
             .into_iter()
             .filter(|(_, entry)| entry.expire_at_ms > now)
+            .filter(|(key, _)| cache_entry_matches_query(key, &query))
             .collect::<Vec<_>>();
         entries.sort_by(|(left_key, left_entry), (right_key, right_entry)| {
             right_entry
@@ -326,10 +327,11 @@ impl ApiHandler for CacheEntryDeleteHandler {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct CacheEntriesQuery {
     limit: usize,
     cursor: usize,
+    qname: Option<String>,
 }
 
 fn parse_cache_entries_query(
@@ -337,6 +339,7 @@ fn parse_cache_entries_query(
 ) -> std::result::Result<CacheEntriesQuery, String> {
     let mut limit = 100usize;
     let mut cursor = 0usize;
+    let mut qname = None;
     for (key, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
             "limit" => {
@@ -350,10 +353,34 @@ fn parse_cache_entries_query(
                     .parse::<usize>()
                     .map_err(|_| "cursor must be a non-negative integer".to_string())?;
             }
+            "qname" => {
+                qname = optional_cache_query_text(value.as_ref())
+                    .map(|value| normalize_domain_key(value.as_str()));
+            }
             _ => {}
         }
     }
-    Ok(CacheEntriesQuery { limit, cursor })
+    Ok(CacheEntriesQuery {
+        limit,
+        cursor,
+        qname,
+    })
+}
+
+fn optional_cache_query_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn cache_entry_matches_query(key: &CacheKey, query: &CacheEntriesQuery) -> bool {
+    query
+        .qname
+        .as_deref()
+        .is_none_or(|qname| key.domain.to_ascii_lowercase().contains(qname))
 }
 
 fn cache_entry_row(
@@ -619,4 +646,55 @@ fn decode_cache_entry_id(raw: &str) -> std::result::Result<CacheKey, String> {
             network: ecs.network,
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cache_key(domain: &str) -> CacheKey {
+        CacheKey {
+            domain: domain.to_string(),
+            record_type: RecordType::A,
+            dns_class: DNSClass::IN,
+            do_bit: false,
+            cd_bit: false,
+            ecs_scope: None,
+        }
+    }
+
+    #[test]
+    fn parse_cache_entries_query_accepts_qname_filter() {
+        let query = parse_cache_entries_query(Some("limit=20&cursor=5&qname=%20EXAMPLE.COM.%20"))
+            .expect("query should parse");
+
+        assert_eq!(query.limit, 20);
+        assert_eq!(query.cursor, 5);
+        assert_eq!(query.qname.as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn parse_cache_entries_query_ignores_empty_qname_filter() {
+        let query = parse_cache_entries_query(Some("qname=%20%20")).expect("query should parse");
+
+        assert_eq!(query.qname, None);
+    }
+
+    #[test]
+    fn cache_entry_matches_query_filters_qname_case_insensitively() {
+        let query = CacheEntriesQuery {
+            limit: 100,
+            cursor: 0,
+            qname: Some("example.com".to_string()),
+        };
+
+        assert!(cache_entry_matches_query(
+            &test_cache_key("www.Example.COM"),
+            &query
+        ));
+        assert!(!cache_entry_matches_query(
+            &test_cache_key("www.example.net"),
+            &query
+        ));
+    }
 }

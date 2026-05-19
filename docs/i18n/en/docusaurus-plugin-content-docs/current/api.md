@@ -350,6 +350,16 @@ Notes:
 
 ### cache
 
+#### `GET /api/plugins/<cache_tag>/entries`
+
+Reads cache entries with pagination.
+
+Query parameters:
+
+* `limit`: Page size. Defaults to `100`, maximum `500`.
+* `cursor`: Pagination cursor.
+* `qname`: Case-insensitive substring filter for the query domain in the cache key.
+
 #### `GET /api/plugins/<cache_tag>/flush`
 
 Clears the cache.

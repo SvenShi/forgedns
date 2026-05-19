@@ -523,6 +523,8 @@ sidebar_position: 3
 
 ### 插件 API
 
+- `GET /plugins/<tag>/entries`
+  - 分页读取缓存项；支持 `limit`、`cursor` 和 `qname` 查询参数，其中 `qname` 按缓存键域名做大小写不敏感的包含筛选。
 - `GET /plugins/<tag>/flush`
   - 清空缓存。
 - `GET /plugins/<tag>/dump`

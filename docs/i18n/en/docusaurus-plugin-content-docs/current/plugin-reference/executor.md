@@ -459,6 +459,8 @@ Provides TTL-aware response caching with negative cache support and persistence.
 
 ### Plugin API
 
+- `GET /plugins/<cache_tag>/entries`
+  - Reads cache entries with pagination. Supports `limit`, `cursor`, and `qname`; `qname` is a case-insensitive substring filter over the cache-key domain.
 - `GET /plugins/<cache_tag>/flush`
 - `GET /plugins/<cache_tag>/dump`
 - `POST /plugins/<cache_tag>/load_dump`
