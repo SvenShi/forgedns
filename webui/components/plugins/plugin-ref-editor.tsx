@@ -115,6 +115,7 @@ export function QuickSetupRow({
             referenceTypes={paramRefTypes}
             disabled={readOnly}
             placeholder={paramPlaceholder}
+            className="h-8 min-h-8 py-0"
             allowCreate
             onChange={(tag) =>
               onChange(formatQuickSetupValue(pluginType, `$${tag}`))

@@ -95,6 +95,10 @@ function SequenceDetail({
               readOnly={!editing}
               currentSequenceName={plugin.name}
               heightMode="detail"
+              isSaving={isConfigSaving}
+              onRequestEdit={() => setEditing(true)}
+              onCancelEdit={handleCancel}
+              onSaveEdit={handleSave}
             />
           </CardContent>
         </Card>

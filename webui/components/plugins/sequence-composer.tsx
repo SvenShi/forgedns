@@ -6,7 +6,6 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import {
   Background,
   Controls,
@@ -24,7 +23,9 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  Pencil,
   Plus,
+  Save,
   Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -114,6 +115,10 @@ interface SequenceComposerProps {
   readOnly?: boolean;
   currentSequenceName?: string;
   heightMode?: SequenceCanvasHeightMode;
+  isSaving?: boolean;
+  onRequestEdit?: () => void;
+  onCancelEdit?: () => void;
+  onSaveEdit?: () => void | Promise<void>;
 }
 
 interface SequenceCanvasProps {
@@ -176,6 +181,10 @@ export function SequenceComposer({
   readOnly = false,
   currentSequenceName,
   heightMode = "inline",
+  isSaving = false,
+  onRequestEdit,
+  onCancelEdit,
+  onSaveEdit,
 }: SequenceComposerProps) {
   const [view, setView] = useState<"visual" | "yaml">("visual");
   const [expanded, setExpanded] = useState(false);
@@ -327,24 +336,24 @@ export function SequenceComposer({
             onMoveRule={moveRule}
             onDeleteRule={deleteRule}
           />
-          {expanded &&
-            typeof document !== "undefined" &&
-            createPortal(
-              <SequenceExpandedCanvas
-                rules={rules}
-                plugins={plugins}
-                sequenceTags={sequenceTags}
-                readOnly={readOnly}
-                currentSequenceName={currentSequenceName}
-                onClose={() => setExpanded(false)}
-                onAddRule={addRule}
-                onUpdateRule={updateRule}
-                onMoveRule={moveRule}
-                onDeleteRule={deleteRule}
-              />
-              ,
-              document.body,
-            )}
+          {expanded && (
+            <SequenceExpandedCanvas
+              rules={rules}
+              plugins={plugins}
+              sequenceTags={sequenceTags}
+              readOnly={readOnly}
+              currentSequenceName={currentSequenceName}
+              onClose={() => setExpanded(false)}
+              isSaving={isSaving}
+              onRequestEdit={onRequestEdit}
+              onCancelEdit={onCancelEdit}
+              onSaveEdit={onSaveEdit}
+              onAddRule={addRule}
+              onUpdateRule={updateRule}
+              onMoveRule={moveRule}
+              onDeleteRule={deleteRule}
+            />
+          )}
         </>
       )}
 
@@ -371,6 +380,10 @@ function SequenceExpandedCanvas({
   readOnly,
   currentSequenceName,
   onClose,
+  isSaving,
+  onRequestEdit,
+  onCancelEdit,
+  onSaveEdit,
   onAddRule,
   onUpdateRule,
   onMoveRule,
@@ -382,6 +395,10 @@ function SequenceExpandedCanvas({
   readOnly: boolean;
   currentSequenceName?: string;
   onClose: () => void;
+  isSaving: boolean;
+  onRequestEdit?: () => void;
+  onCancelEdit?: () => void;
+  onSaveEdit?: () => void | Promise<void>;
   onAddRule: () => void;
   onUpdateRule: (ruleId: string, patch: Partial<SequenceRule>) => void;
   onMoveRule: (index: number, offset: number) => void;
@@ -391,8 +408,8 @@ function SequenceExpandedCanvas({
     <div
       data-sequence-fullscreen="true"
       className="pointer-events-auto fixed inset-0 z-[1000] flex h-dvh w-screen flex-col overflow-hidden bg-background"
-      onPointerDownCapture={(event) => event.stopPropagation()}
-      onKeyDownCapture={(event) => {
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
           onClose();
@@ -409,15 +426,42 @@ function SequenceExpandedCanvas({
             </Badge>
           </div>
           <div className="mt-0.5 text-xs text-muted-foreground">
-            全屏编辑只影响视图，保存仍使用当前插件配置按钮。
+            {readOnly
+              ? "查看模式，进入编辑后可直接保存当前 sequence 配置。"
+              : "编辑模式，保存后写入当前插件配置。"}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!readOnly && (
-            <Button type="button" size="sm" onClick={onAddRule}>
-              <Plus className="h-4 w-4" />
-              新增规则
-            </Button>
+          {readOnly ? (
+            onRequestEdit && (
+              <Button type="button" size="sm" onClick={onRequestEdit}>
+                <Pencil className="h-4 w-4" />
+                编辑模式
+              </Button>
+            )
+          ) : (
+            <>
+              <Button type="button" variant="outline" size="sm" onClick={onAddRule}>
+                <Plus className="h-4 w-4" />
+                新增规则
+              </Button>
+              {onCancelEdit && (
+                <Button type="button" variant="outline" size="sm" onClick={onCancelEdit}>
+                  取消
+                </Button>
+              )}
+              {onSaveEdit && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void onSaveEdit()}
+                  disabled={isSaving}
+                >
+                  <Save className="h-4 w-4" />
+                  {isSaving ? "保存中" : "保存配置"}
+                </Button>
+              )}
+            </>
           )}
           <Button type="button" variant="outline" size="sm" onClick={onClose}>
             <Minimize2 className="h-4 w-4" />
@@ -510,6 +554,12 @@ function SequenceCanvas({
         nodesFocusable={false}
         edgesFocusable={false}
         elementsSelectable={false}
+        deleteKeyCode={null}
+        selectionKeyCode={null}
+        multiSelectionKeyCode={null}
+        panActivationKeyCode={null}
+        zoomActivationKeyCode={null}
+        disableKeyboardA11y
         noDragClassName="sequence-flow-interactive"
         noPanClassName="sequence-flow-interactive"
         noWheelClassName="sequence-flow-interactive"
@@ -703,7 +753,19 @@ function SequencePreviewFlowNode({
 }
 
 function InteractiveNodeFrame({ children }: { children: ReactNode }) {
-  return <div className={sequenceNodeInteractionClass}>{children}</div>;
+  return (
+    <div
+      className={sequenceNodeInteractionClass}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+      onKeyUp={(event) => event.stopPropagation()}
+    >
+      {children}
+    </div>
+  );
 }
 
 function SequenceRuleNode({
@@ -804,9 +866,9 @@ function SequenceRuleNode({
             </div>
           )}
         </CardHeader>
-        <CardContent className="grid gap-4 p-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <CardContent className="grid items-stretch gap-4 p-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex h-6 items-center justify-between gap-2">
               <div className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
                 IF · 匹配条件
               </div>
@@ -843,15 +905,20 @@ function SequenceRuleNode({
           </div>
 
           <div
-            className="hidden items-center px-1 lg:flex"
+            className="hidden h-full flex-col justify-center px-1 lg:flex"
             style={{ color: pluginTypeAccentHex.executor }}
           >
-            <ArrowRight className="h-5 w-5" />
+            <div className="h-6" />
+            <div className="mt-2 flex min-h-12 items-center">
+              <ArrowRight className="h-5 w-5" />
+            </div>
           </div>
 
-          <div className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
-              THEN · 执行动作
+          <div className="flex h-full flex-col justify-center space-y-2">
+            <div className="flex h-6 items-center">
+              <div className="text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
+                THEN · 执行动作
+              </div>
             </div>
             <ActionEditor
               action={rule.action}
@@ -930,6 +997,7 @@ function ConditionEditor({
               referenceTypes={["matcher"]}
               disabled={readOnly}
               placeholder="选择 matcher"
+              className="h-8 min-h-8 py-0"
               allowCreate
               onChange={(tag) => onChange({ value: `$${tag}` })}
             />
@@ -1138,7 +1206,7 @@ function ActionEditor({
 
   return (
     <div className="w-full rounded-md border border-sky-200/80 bg-sky-50/40 p-2 dark:border-sky-800/40 dark:bg-sky-950/20">
-      <div className="grid min-w-0 gap-2 sm:grid-cols-[8rem_8rem_minmax(8rem,1fr)]">
+      <div className="grid min-w-0 items-center gap-2 sm:grid-cols-[8rem_8rem_minmax(8rem,1fr)]">
         <InlineSelect
           value={action.mode}
           onChange={(mode) => updateMode(mode as ActionMode)}
@@ -1158,6 +1226,7 @@ function ActionEditor({
               referenceTypes={["executor"]}
               disabled={readOnly}
               placeholder="选择 executor"
+              className="h-8 min-h-8 py-0"
               allowCreate
               onChange={(tag) =>
                 onChange({ mode: "reference", value: `$${tag}`, control: action.control })

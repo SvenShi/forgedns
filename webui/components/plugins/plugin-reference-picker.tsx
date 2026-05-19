@@ -40,6 +40,7 @@ interface PluginReferencePickerProps {
   referencePlugins?: string[];
   disabled?: boolean;
   placeholder?: string;
+  className?: string;
   allowCreate?: boolean;
   createDescription?: string;
   onChange: (value: string) => void;
@@ -52,6 +53,7 @@ export function PluginReferencePicker({
   referencePlugins,
   disabled = false,
   placeholder = "选择插件引用",
+  className,
   allowCreate = false,
   createDescription,
   onChange,
@@ -106,6 +108,7 @@ export function PluginReferencePicker({
             variant="outline"
             className={cn(
               "h-auto min-h-9 w-full min-w-0 flex-1 justify-between gap-2 bg-background px-2 py-1 font-normal text-foreground",
+              className,
               selectedPlugin && "hover:bg-background/80",
             )}
             disabled={disabled}
