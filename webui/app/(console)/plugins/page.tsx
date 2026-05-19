@@ -18,7 +18,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, LayoutGrid, List, Pin, PinOff, Trash2, GitBranch } from "lucide-react";
+import {
+  Search,
+  LayoutGrid,
+  List,
+  Pin,
+  PinOff,
+  Trash2,
+  GitBranch,
+} from "lucide-react";
 import type { PluginType } from "@/lib/types";
 import { PLUGIN_TYPE_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -58,7 +66,8 @@ function PluginsPageContent() {
 
   const plugins = useAppStore((s) => s.plugins);
   const dependencyGraph = useAppStore((s) => s.dependencyGraph);
-  const { setSelectedPlugin, setDetailOpen, togglePluginPin, deletePlugin } = useAppStore();
+  const { setSelectedPlugin, setDetailOpen, togglePluginPin, deletePlugin } =
+    useAppStore();
 
   const filteredPlugins = plugins.filter((p) => {
     const definition = getPluginCatalogItem(p.pluginKind);
@@ -86,59 +95,61 @@ function PluginsPageContent() {
   };
 
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <AppHeader title="插件中心" />
-      <main className="flex-1 overflow-auto p-6">
-        <div className="space-y-6">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-3 flex-1 min-w-[200px] max-w-md">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="搜索插件名称或类型..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9"
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as PluginType | "all")}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          {/* Fixed toolbar + tab headers */}
+          <div className="shrink-0 space-y-4 border-b px-6 pt-5 pb-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3 flex-1 min-w-[200px] max-w-md">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="搜索插件名称或类型..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center border rounded-md">
+                  <Button
+                    variant={viewMode === "grid" ? "secondary" : "ghost"}
+                    size="sm"
+                    className="rounded-r-none"
+                    onClick={() => setViewMode("grid")}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant={viewMode === "table" ? "secondary" : "ghost"}
+                    size="sm"
+                    className="rounded-l-none rounded-r-none"
+                    onClick={() => setViewMode("table")}
+                  >
+                    <List className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant={viewMode === "topology" ? "secondary" : "ghost"}
+                    size="sm"
+                    className="rounded-l-none"
+                    onClick={() => setViewMode("topology")}
+                  >
+                    <GitBranch className="h-4 w-4" />
+                  </Button>
+                </div>
+                <CreatePluginDialog
+                  defaultType={activeTab !== "all" ? activeTab : undefined}
                 />
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center border rounded-md">
-                <Button
-                  variant={viewMode === "grid" ? "secondary" : "ghost"}
-                  size="sm"
-                  className="rounded-r-none"
-                  onClick={() => setViewMode("grid")}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "table" ? "secondary" : "ghost"}
-                  size="sm"
-                  className="rounded-l-none"
-                  onClick={() => setViewMode("table")}
-                >
-                  <List className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "topology" ? "secondary" : "ghost"}
-                  size="sm"
-                  className="rounded-l-none"
-                  onClick={() => setViewMode("topology")}
-                >
-                  <GitBranch className="h-4 w-4" />
-                </Button>
-              </div>
-              <CreatePluginDialog
-                defaultType={activeTab !== "all" ? activeTab : undefined}
-              />
-            </div>
-          </div>
 
-          <Tabs
-            value={activeTab}
-            onValueChange={(v) => setActiveTab(v as PluginType | "all")}
-          >
             {viewMode !== "topology" && (
               <TabsList>
                 <TabsTrigger value="all">
@@ -158,11 +169,11 @@ function PluginsPageContent() {
                 ))}
               </TabsList>
             )}
+          </div>
 
-            <TabsContent
-              value={activeTab}
-              className={viewMode === "topology" ? "mt-0" : "mt-6"}
-            >
+          {/* Scrollable content area */}
+          <div className="oxidns-dialog-scrollbar min-h-0 flex-1 overflow-auto">
+            <TabsContent value={activeTab} className="m-0 p-6">
               {viewMode === "grid" ? (
                 <div className="grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                   {filteredPlugins.map((plugin) => (
@@ -251,7 +262,9 @@ function PluginsPageContent() {
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent side="bottom">删除</TooltipContent>
+                                <TooltipContent side="bottom">
+                                  删除
+                                </TooltipContent>
                               </Tooltip>
                             </div>
                           </TableCell>
@@ -285,24 +298,23 @@ function PluginsPageContent() {
                 </div>
               )}
             </TabsContent>
-          </Tabs>
-        </div>
-      </main>
-    </>
+          </div>
+        </Tabs>
+      </div>
+    </div>
   );
 }
 
-
 function PluginsPageFallback() {
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <AppHeader title="插件中心" />
-      <main className="flex-1 overflow-auto p-6">
+      <main className="oxidns-dialog-scrollbar min-h-0 flex-1 overflow-auto p-6">
         <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
           正在加载插件中心...
         </div>
       </main>
-    </>
+    </div>
   );
 }
 

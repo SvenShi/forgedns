@@ -32,7 +32,7 @@ export function OfflineConfigImport() {
   };
 
   return (
-    <main className="flex-1 overflow-auto p-6">
+    <main className="oxidns-dialog-scrollbar min-h-0 flex-1 overflow-auto p-6">
       <Card className="max-w-2xl">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">

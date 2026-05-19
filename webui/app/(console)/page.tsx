@@ -24,7 +24,7 @@ export default function DashboardPage() {
   return (
     <>
       <AppHeader title="仪表盘" />
-      <main className="flex-1 overflow-auto p-6">
+      <main className="oxidns-dialog-scrollbar min-h-0 flex-1 overflow-auto p-6">
         <div className="space-y-8">
           <section>
             <h2 className="text-lg font-semibold mb-4">系统概览</h2>

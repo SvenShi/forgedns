@@ -61,7 +61,9 @@ export default function ConsoleLayout({
     } else {
       el.style.overflow = "";
     }
-    return () => { el.style.overflow = ""; };
+    return () => {
+      el.style.overflow = "";
+    };
   }, [editorMode]);
 
   useEffect(() => {
@@ -80,6 +82,7 @@ export default function ConsoleLayout({
   return (
     <TooltipProvider>
       <SidebarProvider
+        className="h-svh overflow-hidden"
         open={editorMode ? false : sidebarOpen}
         onOpenChange={(open) => {
           if (!editorMode) {
@@ -88,9 +91,9 @@ export default function ConsoleLayout({
         }}
       >
         <AppSidebar />
-        <SidebarInset className={`flex flex-col${editorMode ? " overflow-hidden" : ""}`}>
+        <SidebarInset className="h-svh min-h-0 overflow-hidden md:h-[calc(100svh-1rem)]">
           {editorMode ? (
-            <div className="h-svh flex flex-col overflow-hidden">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden">
               <AppHeader title="配置编辑器" />
               {!isAuthHydrated || isConnected || isOfflineMode ? (
                 <ConfigEditorView />

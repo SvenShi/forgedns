@@ -108,7 +108,16 @@ pub(super) async fn run_api_server(
                 let context = context.clone();
                 tokio::spawn(async move {
                     if let Err(err) = handle_connection(stream, remote_addr, context).await {
-                        warn!(remote = %remote_addr, error = %err, "API connection failed");
+                        let msg = err.to_string();
+                        if msg.contains("connection closed")
+                            || msg.contains("broken pipe")
+                            || msg.contains("reset by peer")
+                            || msg.contains("Connection reset")
+                        {
+                            debug!(remote = %remote_addr, error = %err, "API connection closed");
+                        } else {
+                            warn!(remote = %remote_addr, error = %err, "API connection failed");
+                        }
                     }
                 });
             }

@@ -18,6 +18,7 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
+use crate::api::logs::{LogBuffer, LogLayer, install_global_log_buffer};
 use crate::config::types::{LogConfig, LogRotation};
 use crate::core::app_clock::AppClock;
 
@@ -47,7 +48,14 @@ pub fn start_logging(log: LogConfig) -> WorkerGuard {
         Err(_) => (EnvFilter::new("info"), true),
     };
 
-    let subscriber = Registry::default().with(filter).with(console_layer);
+    let log_buffer = LogBuffer::new();
+    install_global_log_buffer(log_buffer.clone());
+    let log_layer = LogLayer::new(log_buffer);
+
+    let subscriber = Registry::default()
+        .with(filter)
+        .with(log_layer)
+        .with(console_layer);
     if let Some(file_layer) = file_layer {
         subscriber.with(file_layer).init();
     } else {

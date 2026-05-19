@@ -27,6 +27,7 @@ mod global;
 mod handler;
 pub mod health;
 mod hub;
+pub mod logs;
 mod metrics;
 mod request;
 mod response;
@@ -63,6 +64,7 @@ pub fn register_builtin_routes() -> Result<()> {
     if let Some(register) = global_api_register() {
         health::register_builtin_routes(&register, register.health_state())?;
         metrics::register_builtin_routes(&register)?;
+        logs::register_log_routes(&register)?;
     }
     Ok(())
 }

@@ -18,6 +18,7 @@ import {
 import {
   LayoutDashboard,
   Puzzle,
+  ScrollText,
   Settings,
   BookOpen,
   GitBranch,
@@ -33,6 +34,11 @@ const navItems = [
     title: "插件中心",
     href: "/plugins",
     icon: Puzzle,
+  },
+  {
+    title: "运行日志",
+    href: "/logs",
+    icon: ScrollText,
   },
   {
     title: "系统配置",

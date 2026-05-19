@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
-import { Cpu, FileCode2, HardDrive, HeartPulse } from "lucide-react";
+import { Cpu, HardDrive, HeartPulse, Puzzle } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 
 // Ticks locally every second; re-calibrates whenever backendUptimeMs changes.
@@ -187,11 +187,11 @@ export function SystemMetrics() {
         </CardContent>
       </Card>
 
-      {/* 配置文件 */}
+      {/* 插件总数 */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">配置文件</CardTitle>
-          <FileCode2 className="h-4 w-4 text-muted-foreground" />
+          <CardTitle className="text-sm font-medium">插件总数</CardTitle>
+          <Puzzle className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent className="space-y-2">
           <div>
