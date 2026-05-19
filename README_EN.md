@@ -12,7 +12,7 @@
 
 OxiDNS is a modern DNS engine built with Rust. It is inspired by [mosdns](https://github.com/IrineSistiana/mosdns), but it is not merely another rule-based DNS forwarder.
 
-It focuses on the full lifecycle of DNS queries in real-world network environments: ingress, matching, caching, forwarding, fallback, rewriting, local answers, and system integrations, while gradually improving metrics, logging, and debugging capabilities.
+It focuses on the full lifecycle of DNS queries in real-world network environments: ingress, matching, caching, forwarding, fallback, rewriting, local answers, and system integrations, with built-in query recording, Prometheus metrics collection, and real-time logging.
 
 The core idea of OxiDNS is not to expose more switches. It is to provide a clear, composable, and debuggable policy pipeline that lets you describe complex DNS behavior through declarative configuration.
 
@@ -54,7 +54,7 @@ Each component has a focused responsibility, and complete policies are built by 
 
 Once DNS policies become complex, the most important question is not just “does it run”, but “why did it behave this way”.
 
-OxiDNS is gradually improving its debugging capabilities around query records, real-time logs, metrics collection, and configuration validation. The current focus is helping users understand which matchers were hit, which executors ran, which upstream was selected, and why a fallback path was taken.
+OxiDNS provides query recording (`query_recorder`), query summary statistics (`query_summary`), Prometheus plugin metrics (`metrics_collector`), real-time structured logging, and configuration validation. Users can clearly understand which matchers were evaluated, which executors ran, which upstream was selected, and why a fallback path was taken for any given query.
 
 ### Evolvable
 
@@ -193,8 +193,6 @@ For the full installation flow, see [Quick Start](https://oxidns.org/en/quicksta
 OxiDNS is under active development.
 
 The current version is suitable for advanced users, testing environments, and self-hosted network setups. For production use, make sure you understand the configuration, logs, and fallback behavior before deploying it.
-
-Observability is still being improved. The current version focuses on basic logs, query records, health checks, and operations APIs. Future versions will continue to improve policy-path tracing, metrics dashboards, and troubleshooting capabilities.
 
 Issues, real-world feedback, documentation improvements, and plugin contributions are welcome.
 
