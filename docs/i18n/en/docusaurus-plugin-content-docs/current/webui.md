@@ -38,11 +38,11 @@ pnpm build
 After building, publish `out/` to a server directory, for example:
 
 ```bash
-sudo mkdir -p /opt/oxidns/webui
-sudo rsync -a --delete out/ /opt/oxidns/webui/
+sudo mkdir -p /etc/oxidns/webui
+sudo rsync -a --delete out/ /etc/oxidns/webui/
 ```
 
-The examples below use `/opt/oxidns/webui` as the static directory.
+The examples below use `/etc/oxidns/webui` as the static directory.
 
 ## Mode 1: Backend-Hosted WebUI
 
@@ -57,7 +57,7 @@ api:
       username: "admin"
       password: "secret"
     webui:
-      root: "/opt/oxidns/webui"
+      root: "/etc/oxidns/webui"
       index: "index.html"
 ```
 
@@ -108,7 +108,7 @@ server {
     listen 80;
     server_name oxidns.example.com;
 
-    root /opt/oxidns/webui;
+    root /etc/oxidns/webui;
     index index.html;
 
     location = /api {

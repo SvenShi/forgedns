@@ -1329,14 +1329,14 @@ Persists the entry request, the post-`next` response, and `sequence` execution-p
     - `limit=<n>`, default `100`, max `500`
     - `since_ms=<unix_ms>`
     - `until_ms=<unix_ms>`
+    - `qname=<text>`, substring match against request question names
+    - `client_ip=<text>`, substring match against the client IP string
+    - `qtype=<type>` / `rcode=<rcode>` / `status=all|error|has_response|no_response`
 - `GET /plugins/<tag>/records/<id>`
   - Returns one full record plus `steps`.
-- `GET /plugins/<tag>/stats/overview`
-  - Returns totals, error count, dropped count, and average latency.
-  - Supports `since_ms` and `until_ms`.
 - `GET /plugins/<tag>/stats/plugins`
   - Returns hit stats grouped by `matcher / executor / builtin`.
-  - Supports `since_ms`, `until_ms`, and `kind=matcher|executor|builtin|all`.
+  - Supports `since_ms`, `until_ms`, `kind=matcher|executor|builtin|all`, and the record filters.
 - `GET /plugins/<tag>/stream`
   - Streams newly written records over SSE.
   - Supports `tail=<n>` to replay the in-memory tail.
@@ -1639,7 +1639,7 @@ Runs an explicitly configured external command and injects a stable subset of th
   args:
     command: "bash"
     args:
-      - "/opt/oxidns/notify.sh"
+      - "/etc/oxidns/notify.sh"
       - "${qname}"
       - "${client_ip}"
     env:

@@ -1425,14 +1425,14 @@ sidebar_position: 3
     - `limit=<n>`，默认 `100`，最大 `500`
     - `since_ms=<unix_ms>`
     - `until_ms=<unix_ms>`
+    - `qname=<text>`，按请求问题名包含匹配
+    - `client_ip=<text>`，按客户端 IP 字符串包含匹配
+    - `qtype=<type>` / `rcode=<rcode>` / `status=all|error|has_response|no_response`
 - `GET /plugins/<tag>/records/<id>`
   - 返回单条完整记录，并附带 `steps`。
-- `GET /plugins/<tag>/stats/overview`
-  - 返回总量、错误量、丢弃量、平均耗时。
-  - 支持 `since_ms`、`until_ms` 过滤。
 - `GET /plugins/<tag>/stats/plugins`
   - 返回按 `matcher / executor / builtin` 聚合的命中统计。
-  - 支持 `since_ms`、`until_ms`、`kind=matcher|executor|builtin|all`。
+  - 支持 `since_ms`、`until_ms`、`kind=matcher|executor|builtin|all` 和 records 的过滤参数。
 - `GET /plugins/<tag>/stream`
   - 以 SSE 实时推送新写入记录。
   - 支持 `tail=<n>` 回放最近 `n` 条内存 tail。
@@ -1747,7 +1747,7 @@ sidebar_position: 3
   args:
     command: "bash"
     args:
-      - "/opt/oxidns/notify.sh"
+      - "/etc/oxidns/notify.sh"
       - "${qname}"
       - "${client_ip}"
     env:

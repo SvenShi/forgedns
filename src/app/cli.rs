@@ -420,7 +420,7 @@ mod tests {
             "service",
             "install",
             "-d",
-            "/opt/oxidns",
+            "/etc/oxidns",
             "-c",
             "/etc/oxidns/config.yaml",
         ];
@@ -430,7 +430,7 @@ mod tests {
             cli.command,
             Command::Service(ServiceOptions {
                 command: ServiceCommand::Install(ServiceInstallOptions {
-                    working_dir: PathBuf::from("/opt/oxidns"),
+                    working_dir: PathBuf::from("/etc/oxidns"),
                     config: PathBuf::from("/etc/oxidns/config.yaml"),
                 }),
             })

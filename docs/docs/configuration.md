@@ -154,7 +154,7 @@ api:
       username: "admin"
       password: "secret"
     webui:
-      root: "/opt/oxidns/webui"
+      root: "/etc/oxidns/webui"
       index: "index.html"
 ```
 

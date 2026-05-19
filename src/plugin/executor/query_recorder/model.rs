@@ -154,13 +154,6 @@ pub(super) struct ListQuery {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct StatsQuery {
-    pub(super) since_ms: Option<u64>,
-    pub(super) until_ms: Option<u64>,
-    pub(super) filter: QueryRecordFilter,
-}
-
-#[derive(Debug, Clone)]
 pub(super) struct PluginsStatsQuery {
     pub(super) since_ms: Option<u64>,
     pub(super) until_ms: Option<u64>,
@@ -198,11 +191,4 @@ pub(super) enum PluginStatsKind {
     Executor,
     Builtin,
     All,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct StatsOverview {
-    pub(super) query_total: u64,
-    pub(super) error_total: u64,
-    pub(super) avg_elapsed_ms: Option<f64>,
 }

@@ -40,7 +40,7 @@ api:
       username: "admin"
       password: "secret"
     webui:
-      root: "/opt/oxidns/webui"
+      root: "/etc/oxidns/webui"
       index: "index.html"
 ```
 
@@ -111,7 +111,7 @@ api:
   http:
     listen: "0.0.0.0:9199"
     webui:
-      root: "/opt/oxidns/webui"
+      root: "/etc/oxidns/webui"
       index: "index.html"
 ```
 
@@ -421,6 +421,16 @@ Query parameters:
   * Only return rows at or after this timestamp.
 * `until_ms=<unix_ms>`
   * Only return rows at or before this timestamp.
+* `qname=<text>`
+  * Case-insensitive substring match against request question names.
+* `client_ip=<text>`
+  * Case-insensitive substring match against the client IP string; IPv4/IPv6 fragments are accepted.
+* `qtype=<type>`
+  * Exact match against request question type.
+* `rcode=<rcode>`
+  * Exact match against response code.
+* `status=all|error|has_response|no_response`
+  * Filter by recorder row status.
 
 Responses:
 
@@ -488,22 +498,6 @@ Responses:
 * `404 Not Found`
   * The record does not exist.
 
-#### `GET /api/plugins/<tag>/stats/overview`
-
-Returns recorder overview statistics.
-
-Query parameters:
-
-* `since_ms=<unix_ms>`
-* `until_ms=<unix_ms>`
-
-Response fields:
-
-* `query_total`
-* `error_total`
-* `dropped_total`
-* `avg_elapsed_ms`
-
 #### `GET /api/plugins/<tag>/stats/plugins`
 
 Aggregates plugin hit information from recorded path events.
@@ -513,6 +507,7 @@ Query parameters:
 * `since_ms=<unix_ms>`
 * `until_ms=<unix_ms>`
 * `kind=matcher|executor|builtin|all`
+* Same as `/records`, supports `qname`, `client_ip`, `qtype`, `rcode`, and `status` filters.
 
 Response fields:
 

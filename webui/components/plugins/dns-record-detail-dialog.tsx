@@ -123,7 +123,7 @@ export function DnsRecordDetailDialog({
             )}
 
             {questions.length > 0 && (
-              <DetailBlock title="Question">
+              <DetailBlock title="查询问题">
                 <div className="space-y-2">
                   {questions.map((question, index) => (
                     <div
@@ -174,7 +174,7 @@ export function DnsRecordDetailDialog({
             ))}
 
             {steps.length > 0 && (
-              <DetailBlock title="Sequence Steps">
+              <DetailBlock title="执行步骤">
                 <div className="space-y-2">
                   {steps.map((step) => (
                     <div
@@ -212,7 +212,7 @@ export function DnsRecordDetailDialog({
             ))}
 
             {error && (
-              <DetailBlock title="Error">
+              <DetailBlock title="错误">
                 <span className="text-destructive">{error}</span>
               </DetailBlock>
             )}

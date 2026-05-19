@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { DatabaseZap, RefreshCw, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { DatabaseZap, Download, RefreshCw, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,8 +15,10 @@ import {
 } from "@/components/ui/table";
 import {
   deleteCacheEntry,
+  fetchCacheDump,
   fetchCacheEntries,
   flushCache,
+  loadCacheDump,
   type CacheEntryRow,
 } from "@/lib/oxidns-api";
 import type {
@@ -39,7 +41,7 @@ function CachePluginCard({
       icon={<DatabaseZap className="h-4 w-4 text-primary" />}
     >
       <div className="space-y-2 text-xs text-muted-foreground">
-        <div>缓存项、清空、dump/load 通过插件 API 管理。</div>
+        <div>查看缓存项，按需清空、导出或导入缓存数据。</div>
         {!compact && (
           <div className="font-mono text-foreground">
             size={String(plugin.config.size ?? "default")}
@@ -62,7 +64,7 @@ function CachePluginDetail(props: PluginDetailComponentProps) {
           value: props.plugin.config.cache_negative === false ? "关闭" : "开启",
         },
         {
-          label: "ECS Key",
+          label: "ECS 键",
           value: props.plugin.config.ecs_in_key ? "开启" : "关闭",
         },
       ]}
@@ -135,10 +137,10 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
                 已载入 {entries.length} 项
               </span>
               <span className="rounded-full border bg-muted/30 px-2 py-0.5">
-                fresh {entries.filter((entry) => entry.fresh).length}
+                新鲜 {entries.filter((entry) => entry.fresh).length}
               </span>
               <span className="rounded-full border bg-muted/30 px-2 py-0.5">
-                stale {entries.filter((entry) => entry.stale).length}
+                过期可用 {entries.filter((entry) => entry.stale).length}
               </span>
             </div>
           </div>
@@ -292,15 +294,110 @@ function CacheEntriesPanel({ tag }: { tag: string }) {
         />
       </Card>
 
-      <Card>
-        <CardHeader className="p-4 pb-2">
-          <CardTitle className="text-sm">维护</CardTitle>
-        </CardHeader>
-        <CardContent className="p-4 pt-0 text-sm text-muted-foreground">
-          dump 与 load_dump API 已保留；文件上传/下载入口后续可按需要补到这里。
-        </CardContent>
-      </Card>
+      <CacheMaintenancePanel tag={tag} />
     </div>
+  );
+}
+
+function CacheMaintenancePanel({ tag }: { tag: string }) {
+  const [dumpLoading, setDumpLoading] = useState(false);
+  const [loadLoading, setLoadLoading] = useState(false);
+  const [loadResult, setLoadResult] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDump = async () => {
+    setDumpLoading(true);
+    setError(null);
+    try {
+      const blob = await fetchCacheDump(tag);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${tag}.dump`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导出失败");
+    } finally {
+      setDumpLoading(false);
+    }
+  };
+
+  const handleLoadDump = async (file: File) => {
+    setLoadLoading(true);
+    setError(null);
+    setLoadResult(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      const result = await loadCacheDump(tag, buffer);
+      setLoadResult(result.loaded_entries);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入失败");
+    } finally {
+      setLoadLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="p-4 pb-2">
+        <CardTitle className="text-sm">维护</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 p-4 pt-0">
+        {error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+        {loadResult !== null && (
+          <div className="rounded-md border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-600 dark:text-green-400">
+            已载入 {loadResult} 项缓存
+          </div>
+        )}
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={dumpLoading}
+            onClick={() => void handleDump()}
+          >
+            <Download className="h-4 w-4" />
+            导出 dump
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {dumpLoading ? "正在导出..." : "下载当前缓存快照"}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={loadLoading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload className="h-4 w-4" />
+            导入 dump
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {loadLoading ? "正在导入..." : "选择 .dump 文件载入缓存"}
+          </span>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".dump,application/octet-stream"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleLoadDump(file);
+            }}
+          />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -326,14 +423,14 @@ function CacheEntryDetailDialog({
         entry
           ? [
               {
-                label: "Domain",
+                label: "域名",
                 value: entry.domain,
                 title: entry.domain,
                 mono: true,
                 wide: true,
               },
-              { label: "Type", value: entry.record_type, mono: true },
-              { label: "Class", value: entry.dns_class, mono: true },
+              { label: "记录类型", value: entry.record_type, mono: true },
+              { label: "记录类", value: entry.dns_class, mono: true },
               { label: "RCODE", value: entry.rcode, mono: true },
               { label: "TTL", value: `${entry.ttl}s`, mono: true },
               {
@@ -400,22 +497,22 @@ function CacheEntryDetailDialog({
         entry
           ? [
               {
-                title: "Answers",
+                title: "应答记录",
                 records: entry.answers_json ?? [],
                 emptyLabel: "无 answer",
               },
               {
-                title: "Authorities",
+                title: "权威记录",
                 records: entry.authorities_json ?? [],
                 emptyLabel: "无 authority",
               },
               {
-                title: "Additionals",
+                title: "附加记录",
                 records: entry.additionals_json ?? [],
                 emptyLabel: "无 additional",
               },
               {
-                title: "Signatures",
+                title: "签名记录",
                 records: entry.signature_json ?? [],
                 emptyLabel: "无 signature",
               },
@@ -426,7 +523,7 @@ function CacheEntryDetailDialog({
         entry
           ? [
               {
-                title: "Cache Key",
+                title: "缓存键",
                 children: (
                   <div className="break-all font-mono text-xs text-muted-foreground">
                     {entry.id}
@@ -436,7 +533,7 @@ function CacheEntryDetailDialog({
               ...(entry.ecs_scope
                 ? [
                     {
-                      title: "ECS Scope",
+                      title: "ECS 范围",
                       children: (
                         <div className="grid gap-2 font-mono text-xs text-muted-foreground sm:grid-cols-2">
                           <span>family={entry.ecs_scope.family}</span>
@@ -458,9 +555,9 @@ function CacheEntryDetailDialog({
 }
 
 function cacheStatusBadge(entry: CacheEntryRow) {
-  if (entry.fresh) return <Badge variant="secondary">fresh</Badge>;
-  if (entry.stale) return <Badge variant="outline">stale</Badge>;
-  return <Badge variant="destructive">expired</Badge>;
+  if (entry.fresh) return <Badge variant="secondary">新鲜</Badge>;
+  if (entry.stale) return <Badge variant="outline">过期可用</Badge>;
+  return <Badge variant="destructive">已过期</Badge>;
 }
 
 function formatCacheShortTime(ms?: number, runtimeMs?: number) {

@@ -343,7 +343,7 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
             }}
           >
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-              <FilterField label="QNAME">
+              <FilterField label="QNAME 包含">
                 <Input
                   value={filterForm.qname}
                   onChange={(event) =>
@@ -376,7 +376,7 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
                   </SelectContent>
                 </Select>
               </FilterField>
-              <FilterField label="客户端 IP">
+              <FilterField label="客户端 IP 包含">
                 <Input
                   value={filterForm.clientIp}
                   onChange={(event) =>
@@ -385,7 +385,7 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
                       clientIp: event.target.value,
                     }))
                   }
-                  placeholder="192.168.1.10"
+                  placeholder="192.168 或 ::1"
                   className="h-8 font-mono"
                 />
               </FilterField>
@@ -836,7 +836,10 @@ function recordMatchesFilters(
       return false;
     }
   }
-  if (filters.clientIp && record.client_ip !== filters.clientIp) {
+  if (
+    filters.clientIp &&
+    !record.client_ip.toLowerCase().includes(filters.clientIp.toLowerCase())
+  ) {
     return false;
   }
   if (

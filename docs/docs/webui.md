@@ -38,11 +38,11 @@ pnpm build
 构建完成后，将 `out/` 目录发布到服务器上的某个目录，例如：
 
 ```bash
-sudo mkdir -p /opt/oxidns/webui
-sudo rsync -a --delete out/ /opt/oxidns/webui/
+sudo mkdir -p /etc/oxidns/webui
+sudo rsync -a --delete out/ /etc/oxidns/webui/
 ```
 
-后续文档都以 `/opt/oxidns/webui` 作为示例静态目录。
+后续文档都以 `/etc/oxidns/webui` 作为示例静态目录。
 
 ## 方式一：后端同端口托管
 
@@ -57,7 +57,7 @@ api:
       username: "admin"
       password: "secret"
     webui:
-      root: "/opt/oxidns/webui"
+      root: "/etc/oxidns/webui"
       index: "index.html"
 ```
 
@@ -108,7 +108,7 @@ server {
     listen 80;
     server_name oxidns.example.com;
 
-    root /opt/oxidns/webui;
+    root /etc/oxidns/webui;
     index index.html;
 
     location = /api {

@@ -3,7 +3,6 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -16,9 +15,9 @@ use tokio::sync::broadcast;
 use super::backend::RecorderBackend;
 use super::model::{
     ListCursor, ListQuery, PluginStatsKind, PluginStatsRow, PluginsStatsQuery, QueryRecordFilter,
-    QueryRecordStatus, RecordDetail, RecordRow, StatsQuery,
+    QueryRecordStatus, RecordDetail, RecordRow,
 };
-use super::store::{load_plugin_stats, load_record_detail, load_stats_overview, query_records};
+use super::store::{load_plugin_stats, load_record_detail, query_records};
 use crate::api::{ApiHandler, json_error, json_ok, simple_response, streaming_response};
 use crate::core::error::Result;
 use crate::register_plugin_api;
@@ -41,15 +40,6 @@ struct RecordDetailResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct StatsOverviewResponse {
-    ok: bool,
-    query_total: u64,
-    error_total: u64,
-    dropped_total: u64,
-    avg_elapsed_ms: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct PluginStatsResponse {
     ok: bool,
     query_total: u64,
@@ -65,11 +55,6 @@ struct RecordsListHandler {
 struct RecordDetailHandler {
     backend: Arc<RecorderBackend>,
     path_prefix: String,
-}
-
-#[derive(Debug)]
-struct StatsOverviewHandler {
-    backend: Arc<RecorderBackend>,
 }
 
 #[derive(Debug)]
@@ -156,39 +141,6 @@ impl ApiHandler for RecordDetailHandler {
             Err(err) => json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "query_recorder_record_failed",
-                format!("blocking task failed: {err}"),
-            ),
-        }
-    }
-}
-
-#[async_trait]
-impl ApiHandler for StatsOverviewHandler {
-    async fn handle(&self, request: Request<Bytes>) -> crate::api::ApiResponse {
-        let query = match parse_stats_query(request.uri().query()) {
-            Ok(query) => query,
-            Err(err) => return json_error(StatusCode::BAD_REQUEST, "invalid_query", err),
-        };
-        let backend = self.backend.clone();
-        match tokio::task::spawn_blocking(move || load_stats_overview(backend, query)).await {
-            Ok(Ok(overview)) => json_ok(
-                StatusCode::OK,
-                &StatsOverviewResponse {
-                    ok: true,
-                    query_total: overview.query_total,
-                    error_total: overview.error_total,
-                    dropped_total: self.backend.dropped_total.load(Ordering::Relaxed),
-                    avg_elapsed_ms: overview.avg_elapsed_ms,
-                },
-            ),
-            Ok(Err(err)) => json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "query_recorder_stats_failed",
-                err.to_string(),
-            ),
-            Err(err) => json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "query_recorder_stats_failed",
                 format!("blocking task failed: {err}"),
             ),
         }
@@ -342,33 +294,6 @@ pub(super) fn parse_list_query(query: Option<&str>) -> std::result::Result<ListQ
     })
 }
 
-pub(super) fn parse_stats_query(query: Option<&str>) -> std::result::Result<StatsQuery, String> {
-    let mut since_ms = None;
-    let mut until_ms = None;
-    let mut filter = QueryRecordFilter::default();
-    for (key, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
-        match key.as_ref() {
-            "since_ms" => since_ms = Some(parse_u64_query("since_ms", value.as_ref())?),
-            "until_ms" => until_ms = Some(parse_u64_query("until_ms", value.as_ref())?),
-            "qname" => filter.qname = optional_text(value.as_ref()),
-            "qtype" => filter.qtype = optional_upper_text(value.as_ref()),
-            "client_ip" => filter.client_ip = optional_text(value.as_ref()),
-            "rcode" => filter.rcode = optional_upper_text(value.as_ref()),
-            "status" => {
-                if let Some(value) = optional_text(value.as_ref()) {
-                    filter.status = QueryRecordStatus::parse(value.as_str())?;
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(StatsQuery {
-        since_ms,
-        until_ms,
-        filter,
-    })
-}
-
 pub(super) fn parse_plugins_stats_query(
     query: Option<&str>,
 ) -> std::result::Result<PluginsStatsQuery, String> {
@@ -502,9 +427,6 @@ pub(super) fn register(backend: &Arc<RecorderBackend>) -> Result<()> {
         GET_PREFIX "/records/" => RecordDetailHandler {
             backend: backend.clone(),
             path_prefix: plugin_api.path("/records/")?,
-        },
-        GET "/stats/overview" => StatsOverviewHandler {
-            backend: backend.clone(),
         },
         GET "/stats/plugins" => StatsPluginsHandler {
             backend: backend.clone(),

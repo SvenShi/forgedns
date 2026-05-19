@@ -40,7 +40,7 @@ api:
       username: "admin"
       password: "secret"
     webui:
-      root: "/opt/oxidns/webui"
+      root: "/etc/oxidns/webui"
       index: "index.html"
 ```
 
@@ -111,7 +111,7 @@ api:
   http:
     listen: "0.0.0.0:9199"
     webui:
-      root: "/opt/oxidns/webui"
+      root: "/etc/oxidns/webui"
       index: "index.html"
 ```
 
@@ -421,6 +421,16 @@ GET /api/plugins/reverse_lookup_main?ip=8.8.8.8
   * 仅返回大于等于该时间的记录。
 * `until_ms=<unix_ms>`
   * 仅返回小于等于该时间的记录。
+* `qname=<text>`
+  * 按请求问题名做大小写不敏感的包含匹配。
+* `client_ip=<text>`
+  * 按客户端 IP 字符串做大小写不敏感的包含匹配，可输入 IPv4/IPv6 片段。
+* `qtype=<type>`
+  * 按请求问题类型精确匹配。
+* `rcode=<rcode>`
+  * 按响应码精确匹配。
+* `status=all|error|has_response|no_response`
+  * 按记录状态过滤。
 
 返回：
 
@@ -488,22 +498,6 @@ GET /api/plugins/reverse_lookup_main?ip=8.8.8.8
 * `404 Not Found`
   * 记录不存在。
 
-#### `GET /api/plugins/<tag>/stats/overview`
-
-返回 recorder 概览统计。
-
-查询参数：
-
-* `since_ms=<unix_ms>`
-* `until_ms=<unix_ms>`
-
-返回字段：
-
-* `query_total`
-* `error_total`
-* `dropped_total`
-* `avg_elapsed_ms`
-
 #### `GET /api/plugins/<tag>/stats/plugins`
 
 按路径事件聚合插件命中情况。
@@ -513,6 +507,7 @@ GET /api/plugins/reverse_lookup_main?ip=8.8.8.8
 * `since_ms=<unix_ms>`
 * `until_ms=<unix_ms>`
 * `kind=matcher|executor|builtin|all`
+* 同 `/records` 支持 `qname`、`client_ip`、`qtype`、`rcode`、`status` 过滤。
 
 返回字段：
 

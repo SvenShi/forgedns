@@ -16,8 +16,7 @@ use tokio::sync::broadcast;
 use super::backend::{RecorderBackend, WriterCommand, WriterThreadContext};
 use super::model::{
     ListCursor, ListQuery, PendingRecord, PluginStatsKind, PluginStatsRow, PluginsStatsQuery,
-    QueryRecordFilter, QueryRecordStatus, RecordDetail, RecordRow, StatsOverview, StatsQuery,
-    StepJson, TableNames,
+    QueryRecordFilter, QueryRecordStatus, RecordDetail, RecordRow, StepJson, TableNames,
 };
 use crate::core::error::{DnsError, Result};
 
@@ -540,35 +539,6 @@ fn load_steps(
     Ok(steps)
 }
 
-pub(super) fn load_stats_overview(
-    backend: Arc<RecorderBackend>,
-    query: StatsQuery,
-) -> std::result::Result<StatsOverview, DnsError> {
-    let conn = open_database(&backend.path)?;
-    let (clauses, params) =
-        record_filter_clauses("r", query.since_ms, query.until_ms, &query.filter)?;
-    let where_sql = join_clauses(&clauses);
-    let sql = format!(
-        "SELECT
-            COUNT(*) AS query_total,
-            COALESCE(SUM(CASE WHEN r.error IS NOT NULL THEN 1 ELSE 0 END), 0) AS error_total,
-            AVG(r.elapsed_ms) AS avg_elapsed_ms
-         FROM {records} r
-         WHERE {where_sql}",
-        records = backend.tables.records
-    );
-
-    conn.prepare(&sql)?
-        .query_row(params_from_iter(params), |row| {
-            Ok(StatsOverview {
-                query_total: row.get::<_, i64>(0).and_then(non_negative_u64)?,
-                error_total: row.get::<_, i64>(1).and_then(non_negative_u64)?,
-                avg_elapsed_ms: row.get(2)?,
-            })
-        })
-        .map_err(|err| DnsError::plugin(format!("failed to load overview stats: {err}")))
-}
-
 pub(super) fn load_plugin_stats(
     backend: Arc<RecorderBackend>,
     query: PluginsStatsQuery,
@@ -694,8 +664,10 @@ fn record_filter_clauses(
         params.push(Value::Text(qtype.to_string()));
     }
     if let Some(client_ip) = filter.client_ip.as_deref() {
-        clauses.push(format!("{alias}.client_ip = ?"));
-        params.push(Value::Text(client_ip.to_string()));
+        clauses.push(format!(
+            "LOWER({alias}.client_ip) LIKE LOWER(?) ESCAPE '\\'"
+        ));
+        params.push(Value::Text(like_pattern(client_ip)));
     }
     if let Some(rcode) = filter.rcode.as_deref() {
         clauses.push(format!(

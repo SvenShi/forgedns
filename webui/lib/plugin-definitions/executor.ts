@@ -1078,7 +1078,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
       stringArrayField(
         "args",
         "命令参数",
-        "/opt/oxidns/notify.sh\n${qname}",
+        "/etc/oxidns/notify.sh\n${qname}",
         false,
         "传给命令的参数数组。",
       ),
@@ -1095,7 +1095,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         description: "指定脚本运行时的工作目录。",
         label: "工作目录",
         type: "text",
-        placeholder: "/opt/oxidns",
+        placeholder: "/etc/oxidns",
       },
       {
         key: "timeout",

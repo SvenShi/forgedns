@@ -418,6 +418,46 @@ export async function flushCache(tag: string): Promise<void> {
   await readJsonResponse<unknown>(response);
 }
 
+export async function fetchCacheDump(tag: string): Promise<Blob> {
+  const { serverConfig } = useAuthStore.getState();
+  const headers: Record<string, string> = {};
+  if (serverConfig.requiresAuth && serverConfig.username) {
+    headers.Authorization = `Basic ${btoa(`${serverConfig.username}:${serverConfig.password}`)}`;
+  }
+  const response = await fetch(
+    apiUrl(`/plugins/${encodeURIComponent(tag)}/dump`),
+    { method: "GET", headers },
+  );
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.blob();
+}
+
+export interface CacheLoadDumpResponse {
+  ok: boolean;
+  loaded_entries: number;
+}
+
+export async function loadCacheDump(
+  tag: string,
+  data: ArrayBuffer,
+): Promise<CacheLoadDumpResponse> {
+  const { serverConfig } = useAuthStore.getState();
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/octet-stream",
+  };
+  if (serverConfig.requiresAuth && serverConfig.username) {
+    headers.Authorization = `Basic ${btoa(`${serverConfig.username}:${serverConfig.password}`)}`;
+  }
+  const response = await fetch(
+    apiUrl(`/plugins/${encodeURIComponent(tag)}/load_dump`),
+    { method: "POST", headers, body: data },
+  );
+  return readJsonResponse<CacheLoadDumpResponse>(response);
+}
+
 export async function fetchQueryRecords(
   tag: string,
   options: QueryRecordFilters & {
@@ -463,6 +503,79 @@ export async function fetchQueryRecordDetail(
     { method: "GET", headers: apiHeaders() },
   );
   return readJsonResponse<QueryRecordDetailResponse>(response);
+}
+
+// --- Log API ---
+
+export interface LogEntry {
+  id: number;
+  timestamp: string;
+  elapsed_ms: number;
+  level: "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE";
+  target: string;
+  message: string;
+}
+
+export interface LogsResponse {
+  ok: boolean;
+  total: number;
+  entries: LogEntry[];
+}
+
+export async function fetchRecentLogs(params?: {
+  level?: string;
+  limit?: number;
+}): Promise<LogsResponse> {
+  const query = new URLSearchParams();
+  if (params?.level) query.set("level", params.level);
+  if (params?.limit) query.set("limit", String(params.limit));
+  const suffix = query.size > 0 ? `?${query}` : "";
+  const response = await fetch(apiUrl(`/logs${suffix}`), {
+    method: "GET",
+    headers: apiHeaders(),
+  });
+  return readJsonResponse<LogsResponse>(response);
+}
+
+export async function streamLogs(
+  params: { level?: string; tail?: number },
+  onEntry: (entry: LogEntry) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const query = new URLSearchParams();
+  if (params.level) query.set("level", params.level);
+  if (params.tail !== undefined) query.set("tail", String(params.tail));
+  const suffix = query.size > 0 ? `?${query}` : "";
+  const response = await fetch(apiUrl(`/logs/stream${suffix}`), {
+    method: "GET",
+    headers: { ...apiHeaders(), Accept: "text/event-stream" },
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const blocks = buf.split("\n\n");
+    buf = blocks.pop() ?? "";
+    for (const block of blocks) {
+      if (!block.trim()) continue;
+      for (const line of block.split("\n")) {
+        if (line.startsWith("data: ")) {
+          try {
+            onEntry(JSON.parse(line.slice(6)) as LogEntry);
+          } catch {
+            // ignore malformed frames
+          }
+        }
+      }
+    }
+  }
 }
 
 export async function fetchPrometheusMetrics(): Promise<string> {

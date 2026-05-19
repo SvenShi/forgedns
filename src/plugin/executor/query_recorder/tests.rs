@@ -429,7 +429,7 @@ async fn test_query_recorder_query_records_support_common_filters() {
         filtered_record_ids(
             backend.clone(),
             list_query(QueryRecordFilter {
-                client_ip: Some("192.0.2.3".to_string()),
+                client_ip: Some("0.2.3".to_string()),
                 ..QueryRecordFilter::default()
             }),
         ),
