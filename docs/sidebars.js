@@ -5,6 +5,7 @@ const sidebars = {
     'cli',
     'configuration',
     'releases',
+    'webui',
     {
       type: 'category',
       label: '插件参考',
