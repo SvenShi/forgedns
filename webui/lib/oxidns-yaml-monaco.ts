@@ -556,7 +556,7 @@ function quickSetupSuggestions(
         ? `${definition.kind} `
         : definition.kind,
       range,
-      detail: `quick setup · ${PLUGIN_TYPE_LABELS[definition.type]}`,
+      detail: `快捷表达式 · ${PLUGIN_TYPE_LABELS[definition.type]}`,
       documentation:
         definition.quickSetup?.paramPlaceholder ?? definition.description,
       sortText: `2-${definition.type}-${definition.kind}`,

@@ -11,6 +11,15 @@ const serverMetrics: PluginMetricsDef = {
     server_latency_count: "延迟样本",
     server_latency_sum_ms: "延迟累计(ms)",
   },
+  metricHelp: {
+    server_request_total: "服务器接收并处理的入站 DNS 请求总数。",
+    server_completed_total: "执行器链正常执行完毕的请求总数。",
+    server_controlled_total: "执行器主动停止（stop/return）而提前结束的请求总数。",
+    server_failed_total: "因入口执行器失败而返回 SERVFAIL 的请求总数。",
+    server_inflight: "当前服务器正在处理中的请求数量。",
+    server_latency_count: "纳入服务器延迟统计的已完成请求数。",
+    server_latency_sum_ms: "所有已完成请求的总处理延迟（毫秒）。",
+  },
   cardPriority: ["server_request_total", "server_inflight", "server_failed_total"],
   derivedCard: [
     { kind: "latency", prefix: "server", label: "平均延迟" },

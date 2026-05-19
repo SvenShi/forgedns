@@ -51,7 +51,7 @@ function QueryRecorderDetail(props: PluginDetailComponentProps) {
       summaryItems={[
         { label: "SQLite", value: String(props.plugin.config.path ?? "-") },
         {
-          label: "Tail",
+          label: "内存 Tail",
           value: String(props.plugin.config.memory_tail ?? "默认"),
         },
         {
@@ -376,7 +376,7 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
                   </SelectContent>
                 </Select>
               </FilterField>
-              <FilterField label="Client">
+              <FilterField label="客户端 IP">
                 <Input
                   value={filterForm.clientIp}
                   onChange={(event) =>
@@ -483,7 +483,7 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
             <Table className="min-w-[760px]">
               <TableHeader>
                 <TableRow className="bg-muted/30 hover:bg-muted/30">
-                  <TableHead>Query</TableHead>
+                  <TableHead>查询</TableHead>
                   <TableHead>客户端</TableHead>
                   <TableHead>时间</TableHead>
                   <TableHead>结果</TableHead>
@@ -693,13 +693,13 @@ function RecordDetailDialog({
       summaryItems={
         record
           ? [
-              { label: "Client", value: record.client_ip, mono: true },
+              { label: "客户端", value: record.client_ip, mono: true },
               {
-                label: "Request ID",
+                label: "请求 ID",
                 value: String(record.request_id),
                 mono: true,
               },
-              { label: "Elapsed", value: `${record.elapsed_ms}ms`, mono: true },
+              { label: "耗时", value: `${record.elapsed_ms}ms`, mono: true },
               { label: "RCODE", value: record.rcode ?? "-", mono: true },
               {
                 label: "响应记录",
@@ -729,22 +729,22 @@ function RecordDetailDialog({
         record
           ? [
               {
-                title: "Answers",
+                title: "应答记录",
                 records: record.answers_json,
                 emptyLabel: "无 answer",
               },
               {
-                title: "Authorities",
+                title: "权威记录",
                 records: record.authorities_json,
                 emptyLabel: "无 authority",
               },
               {
-                title: "Additionals",
+                title: "附加记录",
                 records: record.additionals_json,
                 emptyLabel: "无 additional",
               },
               {
-                title: "Signatures",
+                title: "签名记录",
                 records: record.signature_json,
                 emptyLabel: "无 signature",
               },

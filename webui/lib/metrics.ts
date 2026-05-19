@@ -136,6 +136,13 @@ const METRIC_LABELS: Record<string, string> = Object.fromEntries(
   ),
 );
 
+/** Frontend-defined Chinese help text keyed by raw metric name — overrides backend HELP strings. */
+const METRIC_HELP: Record<string, string> = Object.fromEntries(
+  pluginKindDefinitions.flatMap((def) =>
+    Object.entries(def.metrics?.metricHelp ?? {}),
+  ),
+);
+
 /**
  * Global ordered list of high-value metric names, derived by concatenating each
  * plugin's `cardPriority` list in definition order (first occurrence wins).
@@ -418,7 +425,7 @@ export function groupMetricRows(series: MetricSeries[]): MetricRow[] {
     rows.push({
       name,
       kind: list[0]?.kind,
-      help: list[0]?.help,
+      help: METRIC_HELP[name] ?? list[0]?.help,
       label: metricLabel(name),
       highValue: HIGH_VALUE_METRICS.has(name),
       total,

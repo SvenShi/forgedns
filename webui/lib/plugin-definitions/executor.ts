@@ -84,6 +84,20 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         forward_upstream_latency_count: "上游延迟样本",
         forward_upstream_latency_sum_ms: "上游延迟累计(ms)",
       },
+      metricHelp: {
+        forward_query_total: "转发执行器发起的查询总数。",
+        forward_success_total: "成功获得上游响应的查询总数。",
+        forward_error_total: "上游返回错误或无法获得响应的查询总数。",
+        forward_timeout_total: "因超时未得到上游响应的查询总数。",
+        forward_latency_count: "纳入延迟统计的已完成查询数。",
+        forward_latency_sum_ms: "所有已完成转发查询的总延迟（毫秒）。",
+        forward_upstream_query_total: "向该上游发起的请求总数。",
+        forward_upstream_success_total: "该上游返回成功响应的次数。",
+        forward_upstream_error_total: "该上游请求失败的次数。",
+        forward_upstream_timeout_total: "该上游请求超时的次数。",
+        forward_upstream_latency_count: "纳入该上游延迟统计的请求数。",
+        forward_upstream_latency_sum_ms: "该上游所有请求的总延迟（毫秒）。",
+      },
       cardPriority: ["forward_query_total", "forward_timeout_total", "forward_error_total"],
       derivedCard: [
         { kind: "percent", numerator: "forward_success_total", denominator: "forward_query_total", label: "成功率" },
@@ -250,6 +264,16 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         cache_lazy_refresh_total: "懒刷新",
         cache_entry_count: "条目数",
       },
+      metricHelp: {
+        cache_lookup_total: "带有可缓存请求键的缓存查询总数。",
+        cache_hit_total: "按新鲜度分类的缓存命中总数（fresh = 直接命中，stale = 过期可用）。",
+        cache_miss_total: "缓存未命中的查询总数。",
+        cache_expired_total: "查找时发现并移除过期条目的次数。",
+        cache_insert_total: "缓存条目插入或更新的总次数。",
+        cache_skip_total: "因写入策略（截断响应、无 TTL）而跳过缓存的响应总数。",
+        cache_lazy_refresh_total: "Lazy Cache 后台刷新尝试总数（按结果：started / success / failed）。",
+        cache_entry_count: "当前缓存中的条目数量。",
+      },
       cardPriority: ["cache_entry_count", "cache_lookup_total", "cache_miss_total", "cache_expired_total"],
       derivedCard: [
         { kind: "percent", numerator: "cache_hit_total", denominator: "cache_lookup_total", label: "命中率" },
@@ -339,6 +363,11 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         fallback_primary_error_total: "主链失败",
         fallback_secondary_total: "降级",
       },
+      metricHelp: {
+        fallback_primary_total: "主执行器被调用的总次数。",
+        fallback_primary_error_total: "主执行器未能产生响应的总次数。",
+        fallback_secondary_total: "备用执行器被调用的总次数。",
+      },
       cardPriority: ["fallback_secondary_total", "fallback_primary_error_total", "fallback_primary_total"],
       derivedCard: [
         { kind: "percent", numerator: "fallback_secondary_total", denominator: "fallback_primary_total", label: "降级率" },
@@ -387,6 +416,10 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
       metricLabels: {
         hosts_hit_total: "命中",
         hosts_miss_total: "未命中",
+      },
+      metricHelp: {
+        hosts_hit_total: "命中 hosts 规则并生成本地响应的总次数。",
+        hosts_miss_total: "未命中任何 hosts 规则的查询总次数。",
       },
       cardPriority: ["hosts_hit_total", "hosts_miss_total"],
       derivedCard: [
@@ -622,6 +655,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     icon: "Ban",
     metrics: {
       metricLabels: { blackhole_block_total: "拦截" },
+      metricHelp: { blackhole_block_total: "black_hole 合成本地响应的总次数。" },
       cardPriority: ["blackhole_block_total"],
     } satisfies PluginMetricsDef,
     configSchema: [
@@ -665,6 +699,12 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         reverse_lookup_ptr_miss_total: "PTR 未命中",
         reverse_lookup_cache_insert_total: "缓存写入",
         reverse_lookup_cache_entries: "缓存条目",
+      },
+      metricHelp: {
+        reverse_lookup_ptr_hit_total: "从反查缓存成功响应 PTR 查询的总次数。",
+        reverse_lookup_ptr_miss_total: "PTR 查询未命中反查缓存的总次数。",
+        reverse_lookup_cache_insert_total: "写入 IP → 域名映射条目的总次数。",
+        reverse_lookup_cache_entries: "当前反查缓存中的条目数量。",
       },
       cardPriority: ["reverse_lookup_cache_entries", "reverse_lookup_ptr_hit_total", "reverse_lookup_ptr_miss_total"],
     } satisfies PluginMetricsDef,
@@ -785,6 +825,13 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         query_latency_count: "延迟样本",
         query_latency_sum_ms: "延迟累计(ms)",
       },
+      metricHelp: {
+        query_total: "metrics_collector 观测到的 DNS 查询总数。",
+        query_error_total: "未产生响应的查询总数（错误或无响应）。",
+        query_inflight: "当前正在处理中的 DNS 查询数量。",
+        query_latency_count: "纳入延迟统计的已完成查询数。",
+        query_latency_sum_ms: "所有已完成查询的总延迟（毫秒）。",
+      },
       cardPriority: ["query_total", "query_error_total", "query_inflight"],
       derivedCard: [
         { kind: "latency", prefix: "query", label: "平均延迟" },
@@ -808,7 +855,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     kind: "debug_print",
     type: "executor",
     name: "Debug Print",
-    description: "打印请求与响应对象，便于调试",
+    description: "打印请求与响应对象，便于排查问题",
     icon: "FileText",
     configSchema: [
       {
@@ -827,7 +874,7 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     kind: "sleep",
     type: "executor",
     name: "Sleep",
-    description: "异步延迟，用于测试和策略实验",
+    description: "为策略链加入可控异步延迟",
     icon: "Clock",
     configSchema: [
       {
@@ -853,6 +900,11 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         http_request_dispatch_total: "请求发起",
         http_request_error_total: "请求失败",
         http_request_dropped_total: "队列丢弃",
+      },
+      metricHelp: {
+        http_request_dispatch_total: "http_request 执行器发起 HTTP 请求的总次数。",
+        http_request_error_total: "HTTP 请求失败的总次数（渲染失败、发送失败或异步投递失败）。",
+        http_request_dropped_total: "因异步队列已满或已关闭而丢弃的 HTTP 请求总数。",
       },
       cardPriority: ["http_request_dispatch_total", "http_request_error_total", "http_request_dropped_total"],
     } satisfies PluginMetricsDef,
@@ -1006,6 +1058,12 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         script_error_total: "失败",
         script_timeout_total: "超时",
       },
+      metricHelp: {
+        script_run_total: "脚本执行器启动的外部命令总次数。",
+        script_success_total: "外部命令正常退出（exit code 0）的总次数。",
+        script_error_total: "外部命令执行失败（非零退出或运行时错误）的总次数。",
+        script_timeout_total: "外部命令因超时被终止的总次数。",
+      },
       cardPriority: ["script_run_total", "script_error_total", "script_timeout_total"],
     } satisfies PluginMetricsDef,
     configSchema: [
@@ -1080,6 +1138,12 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         ipset_write_total: "写入条目",
         ipset_write_error_total: "写入失败",
       },
+      metricHelp: {
+        ipset_entries_total: "排队等待写入 ipset 的 IP 条目总数。",
+        ipset_dropped_total: "因写入队列已满而丢弃的批次总数。",
+        ipset_write_total: "通过 netlink 成功写入 ipset 的 IP 条目总数。",
+        ipset_write_error_total: "ipset netlink 写入失败的总次数。",
+      },
       cardPriority: ["ipset_write_total", "ipset_write_error_total"],
     } satisfies PluginMetricsDef,
     configSchema: [
@@ -1126,6 +1190,12 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         nftset_dropped_total: "丢弃批次",
         nftset_write_total: "写入前缀",
         nftset_write_error_total: "写入失败",
+      },
+      metricHelp: {
+        nftset_entries_total: "排队等待写入 nftset 的 IP 前缀总数。",
+        nftset_dropped_total: "因写入队列已满而丢弃的批次总数。",
+        nftset_write_total: "通过 netlink 成功写入 nftables 的 IP 前缀总数。",
+        nftset_write_error_total: "nftset netlink 写入失败的总次数。",
       },
       cardPriority: ["nftset_write_total", "nftset_write_error_total"],
     } satisfies PluginMetricsDef,
@@ -1217,6 +1287,12 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         ros_address_list_dropped_total: "异步丢弃",
         ros_address_list_sync_error_total: "同步失败",
         ros_address_list_sync_timeout_total: "同步超时",
+      },
+      metricHelp: {
+        ros_address_list_observe_total: "提交给 RouterOS address-list 管理器的域名观测总数。",
+        ros_address_list_dropped_total: "异步模式下因队列已满或通道关闭而丢弃的观测总数。",
+        ros_address_list_sync_error_total: "同步模式下在 RouterOS 管理器侧失败的观测总数。",
+        ros_address_list_sync_timeout_total: "同步模式下入队或等待超时的观测总数。",
       },
       cardPriority: ["ros_address_list_observe_total", "ros_address_list_sync_error_total"],
     } satisfies PluginMetricsDef,
@@ -1407,21 +1483,21 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
       },
       {
         key: "timeout",
-        description: "与 CLI upgrade 参数含义一致。",
+        description: "限制升级过程的总等待时间。",
         label: "超时",
         type: "duration",
         default: "30s",
       },
       {
         key: "socks5",
-        description: "与 CLI upgrade 参数含义一致。",
+        description: "升级下载时使用的 SOCKS5 代理。",
         label: "SOCKS5 代理",
         type: "text",
         placeholder: "127.0.0.1:1080",
       },
       {
         key: "insecure_skip_verify",
-        description: "与 CLI upgrade 参数含义一致。",
+        description: "升级下载时跳过 HTTPS 证书校验。",
         label: "跳过 HTTPS 证书校验",
         type: "switch",
         default: false,
@@ -1442,6 +1518,11 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         download_success_total: "下载成功",
         download_failure_total: "下载失败",
         download_timeout_total: "下载超时",
+      },
+      metricHelp: {
+        download_success_total: "成功完成的文件下载总次数。",
+        download_failure_total: "下载失败的总次数（不含超时）。",
+        download_timeout_total: "因超时中断的文件下载总次数。",
       },
       cardPriority: ["download_success_total", "download_failure_total", "download_timeout_total"],
     } satisfies PluginMetricsDef,
@@ -1523,6 +1604,10 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         reload_provider_reload_total: "数据源重载",
         reload_provider_reload_error_total: "重载失败",
       },
+      metricHelp: {
+        reload_provider_reload_total: "该执行器触发的 provider 重载尝试总次数。",
+        reload_provider_reload_error_total: "provider 重载失败的总次数。",
+      },
       cardPriority: ["reload_provider_reload_total", "reload_provider_reload_error_total"],
     } satisfies PluginMetricsDef,
     configSchema: [
@@ -1556,6 +1641,10 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         reload_trigger_total: "重载触发",
         reload_error_total: "重载失败",
       },
+      metricHelp: {
+        reload_trigger_total: "该执行器请求应用级全量 reload 的总次数。",
+        reload_error_total: "重载请求调度失败的总次数。",
+      },
       cardPriority: ["reload_trigger_total", "reload_error_total"],
     } satisfies PluginMetricsDef,
     configSchema: [],
@@ -1572,6 +1661,11 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
         cron_job_run_total: "任务运行",
         cron_job_skipped_total: "重叠跳过",
         cron_executor_error_total: "执行器失败",
+      },
+      metricHelp: {
+        cron_job_run_total: "Cron 任务被启动的总次数。",
+        cron_job_skipped_total: "因上次运行尚未结束而跳过本次触发的总次数。",
+        cron_executor_error_total: "Cron 任务运行中各执行器失败的总次数。",
       },
       cardPriority: ["cron_job_run_total", "cron_job_skipped_total", "cron_executor_error_total"],
     } satisfies PluginMetricsDef,

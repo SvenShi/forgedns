@@ -19,6 +19,8 @@ export type DerivedMetricSpec =
 export interface PluginMetricsDef {
   /** Prometheus metric name → Chinese display label for this plugin's metrics. */
   metricLabels?: Record<string, string>;
+  /** Prometheus metric name → Chinese description shown in the detail panel (overrides backend HELP). */
+  metricHelp?: Record<string, string>;
   /** Ordered metric names surfaced on the plugin card (first 4 shown). */
   cardPriority?: string[];
   /** Derived metrics prepended to card display before raw metric values. */
@@ -150,7 +152,7 @@ export const executorRef = (
   description,
 });
 export const matcherListField = (
-  description = "每行一个 matcher 表达式，支持 $tag、quick setup 和 ! 取反",
+  description = "每行一个 matcher 表达式，支持 $tag、快捷表达式和 ! 取反",
 ): ConfigField => ({
   key: "args",
   label: "匹配表达式",

@@ -44,7 +44,7 @@ export const pluginFieldDocs = {
     "args[].matches":
       "- 类型：`string` 或 `array`\n- 必填：否\n- 默认值：无\n- 作用：定义当前规则的匹配条件。\n- 支持形式：\n  - 单个 matcher 字符串\n  - 多个 matcher 组成的列表\n- 运行影响：\n  - 多个条件之间为逻辑与关系。\n  - 未配置时表示无前置匹配条件。",
     "args[].exec":
-      "- 类型：`string`；必填：否；默认值：无\n- 作用：定义规则命中后要执行的动作。\n- 支持内容：\n  - 插件引用\n  - quick setup 表达式\n  - 内建控制流\n- 运行影响：\n  - 直接决定当前规则的执行行为。",
+      "- 类型：`string`；必填：否；默认值：无\n- 作用：定义规则命中后要执行的动作。\n- 支持内容：\n  - 插件引用\n  - 快捷表达式\n  - 内建控制流\n- 运行影响：\n  - 直接决定当前规则的执行行为。",
   },
   forward: {
     concurrent:
@@ -70,9 +70,9 @@ export const pluginFieldDocs = {
     "upstreams[].idle_timeout":
       "- 类型：`integer`；必填：否；默认值：无\n- 单位：秒\n- 作用：定义连接池空闲连接保留时间。",
     "upstreams[].max_conns":
-      "- 类型：`integer`；必填：否；默认值：实现默认值\n- 作用：定义连接池连接上限。",
+      "- 类型：`integer`；必填：否；默认值：自动\n- 作用：定义连接池连接上限。",
     "upstreams[].insecure_skip_verify":
-      "- 类型：`boolean`；必填：否；默认值：`false`\n- 作用：控制是否跳过 TLS 证书校验。\n- 注意事项：仅适用于测试、自签证书或受控环境。",
+      "- 类型：`boolean`；必填：否；默认值：`false`\n- 作用：控制是否跳过 TLS 证书校验。\n- 注意事项：仅适用于自签证书或受控环境。",
     "upstreams[].timeout":
       "- 类型：`duration`；必填：否；默认值：`5s`\n- 作用：定义单次上游查询超时。",
     "upstreams[].enable_pipeline":
@@ -93,9 +93,9 @@ export const pluginFieldDocs = {
     dump_interval:
       "- 类型：`integer`；必填：否；默认值：`600`\n- 单位：秒\n- 作用：定义缓存定期落盘周期。",
     short_circuit:
-      "- 类型：`boolean`；必填：否；默认值：实现默认行为\n- 作用：控制缓存命中后是否立即结束后续执行。\n- 说明：\n  - 设为 `false` 时，即使 cache 已经写入 response，后续执行链仍会继续。\n  - 如需避免后续 `forward` 再次发起查询，应在 `sequence` 中配合 `has_resp`、`accept` 等控制流使用。",
+      "- 类型：`boolean`；必填：否；默认值：自动\n- 作用：控制缓存命中后是否立即结束后续执行。\n- 说明：\n  - 设为 `false` 时，即使 cache 已经写入 response，后续执行链仍会继续。\n  - 如需避免后续 `forward` 再次发起查询，应在 `sequence` 中配合 `has_resp`、`accept` 等控制流使用。",
     cache_negative:
-      "- 类型：`boolean`；必填：否；默认值：实现默认行为\n- 作用：控制是否缓存 NXDOMAIN 与 NODATA。",
+      "- 类型：`boolean`；必填：否；默认值：自动\n- 作用：控制是否缓存 NXDOMAIN 与 NODATA。",
     max_negative_ttl:
       "- 类型：`integer`；必填：否；默认值：`300`\n- 单位：秒\n- 作用：定义负缓存 TTL 上限。",
     negative_ttl_without_soa:
@@ -316,7 +316,7 @@ export const pluginFieldDocs = {
       "- 类型：`bool`；必填：否；默认值：`true`\n- 作用：控制插件退出时是否清理由其管理的条目。启用后，插件在正常关闭阶段会删除自身写入并可识别归属的 RouterOS 地址项。\n- 影响：关闭该选项后，已写入条目会继续保留在 RouterOS 中，适合要求策略状态跨进程重启保留的场景。",
   },
   upgrade: {
-    args: "- `force`\n    - 类型：`bool`\n    - 默认值：`false`\n    - 即使目标 release 不比当前版本更新，也继续下载、校验并替换。\n- `cleanup`\n    - 类型：`bool`\n    - 默认值：`true`\n    - 升级成功后清理 `cache_dir` 和 `backup_dir`。\n- `repository`\n    - GitHub 仓库，默认 `svenshi/oxidns`。\n- `asset`\n    - Release asset 名称；`auto` 会按当前平台选择 archive。\n- `cache_dir` / `backup_dir`\n    - 下载缓存目录和替换前备份目录。\n- `restart`\n    - 可选值为 `none` 或 `service`。设置为 `service` 时，升级成功替换二进制文件后，应用会主动退出并返回错误码，以便 systemd 自动重启。因此，对应的 service 必须将 `Restart` 设置为 `always` 或 `on-failure`。\n- `timeout`、`socks5`、`insecure_skip_verify`\n    - 与 CLI `upgrade` 参数含义一致。",
+    args: "- `force`\n    - 类型：`bool`\n    - 默认值：`false`\n    - 即使目标 release 不比当前版本更新，也继续下载、校验并替换。\n- `cleanup`\n    - 类型：`bool`\n    - 默认值：`true`\n    - 升级成功后清理 `cache_dir` 和 `backup_dir`。\n- `repository`\n    - GitHub 仓库，默认 `svenshi/oxidns`。\n- `asset`\n    - Release asset 名称；`auto` 会按当前平台选择 archive。\n- `cache_dir` / `backup_dir`\n    - 下载缓存目录和替换前备份目录。\n- `restart`\n    - 可选值为 `none` 或 `service`。设置为 `service` 时，升级成功替换二进制文件后，应用会主动退出并返回错误码，以便 systemd 自动重启。因此，对应的 service 必须将 `Restart` 设置为 `always` 或 `on-failure`。\n- `timeout`\n    - 限制升级过程的总等待时间。\n- `socks5`\n    - 升级下载时使用的 SOCKS5 代理。\n- `insecure_skip_verify`\n    - 升级下载时跳过 HTTPS 证书校验。",
   },
   cron: {
     jobs: "- 类型：`array`；必填：是；默认值：无\n- 作用：定义一个或多个后台任务。\n- 运行影响：\n  - 数组不能为空。\n  - 每个任务独立维护自己的调度状态和重叠保护。",
@@ -329,10 +329,10 @@ export const pluginFieldDocs = {
     "jobs[].interval":
       "- 类型：`string`；必填：与 `schedule` 二选一；默认值：无\n- 作用：用简单固定间隔调度任务。\n- 支持格式：\n  - `5m`\n  - `1h`\n  - `1d`\n- 运行影响：\n  - 最小粒度为 `1m`。\n  - 启动后会等待一个完整间隔再首次触发。",
     "jobs[].executors":
-      "- 类型：`array`；必填：是；默认值：无\n- 作用：定义任务触发时顺序执行的 executor 列表。\n- 支持形式：\n  - `$tag`：显式引用已存在 executor\n  - `tag`：裸 tag 引用\n  - quick setup 表达式，例如 `debug_print cron refresh`\n- 运行影响：\n  - 数组不能为空。\n  - 即使某个 executor 返回 `Stop`、设置了响应、或执行报错，后续 executor 仍会继续执行。",
+      "- 类型：`array`；必填：是；默认值：无\n- 作用：定义任务触发时顺序执行的 executor 列表。\n- 支持形式：\n  - `$tag`：显式引用已存在 executor\n  - `tag`：裸 tag 引用\n  - 快捷表达式，例如 `debug_print cron refresh`\n- 运行影响：\n  - 数组不能为空。\n  - 即使某个 executor 返回 `Stop`、设置了响应、或执行报错，后续 executor 仍会继续执行。",
   },
   any_match: {
-    args: '`any_match` 的 `args` 为 matcher 表达式列表。\n\n- 类型：`array[string]`；必填：是；默认值：无\n- 支持元素：\n  - matcher tag 引用（如 `"$match_tag"`）\n  - quick setup matcher 表达式（如 `"qname domain:example.com"`）\n  - 取反 matcher 表达式（如 `"!$has_resp"`）\n- 运行影响：\n  - 按配置顺序依次判断，命中任意一个后立即短路返回 `true`。\n  - 全部不命中时返回 `false`。',
+    args: '`any_match` 的 `args` 为 matcher 表达式列表。\n\n- 类型：`array[string]`；必填：是；默认值：无\n- 支持元素：\n  - matcher tag 引用（如 `"$match_tag"`）\n  - 快捷 matcher 表达式（如 `"qname domain:example.com"`）\n  - 取反 matcher 表达式（如 `"!$has_resp"`）\n- 运行影响：\n  - 按配置顺序依次判断，命中任意一个后立即短路返回 `true`。\n  - 全部不命中时返回 `false`。',
   },
   qname: {
     args: "`qname` 的 `args` 采用规则列表形式，列表中的每个元素均独立生效。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义域名匹配规则来源。\n- 支持元素：\n  - 域名表达式\n  - 具备域名匹配能力的 provider 引用，例如 `domain_set`、`geosite`\n  - 文件引用\n- 运行影响：\n  - 当前请求中的任意问题域名命中任一规则时，matcher 返回 `true`。",

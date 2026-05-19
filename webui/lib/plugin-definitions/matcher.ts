@@ -304,6 +304,10 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
         ratelimit_allowed_total: "放行",
         ratelimit_rejected_total: "限流拒绝",
       },
+      metricHelp: {
+        ratelimit_allowed_total: "通过限流检查（令牌充足）的匹配总次数。",
+        ratelimit_rejected_total: "因令牌耗尽而被限流拒绝的匹配总次数。",
+      },
       cardPriority: ["ratelimit_allowed_total", "ratelimit_rejected_total"],
       derivedCard: [
         { kind: "percent_of_sum", numerator: "ratelimit_rejected_total", terms: ["ratelimit_rejected_total", "ratelimit_allowed_total"], label: "拒绝率" },
