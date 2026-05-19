@@ -96,6 +96,8 @@ docs/build/
 docs/node_modules/
 cmake-build-*/
 out/
+.history
+
 
 # Crash/report files
 core

@@ -1,4 +1,4 @@
-import type { PluginKindDefinition } from "./shared";
+import type { PluginKindDefinition, PluginMetricsDef } from "./shared";
 import {
   executorRef,
   executorReferenceArrayItem,
@@ -69,6 +69,27 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Forward",
     description: "向一个或多个上游 DNS 发起查询",
     icon: "ArrowUpRight",
+    metrics: {
+      metricLabels: {
+        forward_query_total: "转发查询",
+        forward_success_total: "成功",
+        forward_error_total: "失败",
+        forward_timeout_total: "超时",
+        forward_latency_count: "延迟样本",
+        forward_latency_sum_ms: "延迟累计(ms)",
+        forward_upstream_query_total: "上游查询",
+        forward_upstream_success_total: "上游成功",
+        forward_upstream_error_total: "上游失败",
+        forward_upstream_timeout_total: "上游超时",
+        forward_upstream_latency_count: "上游延迟样本",
+        forward_upstream_latency_sum_ms: "上游延迟累计(ms)",
+      },
+      cardPriority: ["forward_query_total", "forward_timeout_total", "forward_error_total"],
+      derivedCard: [
+        { kind: "percent", numerator: "forward_success_total", denominator: "forward_query_total", label: "成功率" },
+        { kind: "latency", prefix: "forward", label: "平均延迟" },
+      ],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "concurrent",
@@ -218,6 +239,22 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Cache",
     description: "TTL 感知缓存，支持负缓存、lazy cache 与持久化",
     icon: "Database",
+    metrics: {
+      metricLabels: {
+        cache_lookup_total: "缓存查询",
+        cache_hit_total: "命中",
+        cache_miss_total: "未命中",
+        cache_expired_total: "过期",
+        cache_insert_total: "写入",
+        cache_skip_total: "跳过",
+        cache_lazy_refresh_total: "懒刷新",
+        cache_entry_count: "条目数",
+      },
+      cardPriority: ["cache_entry_count", "cache_lookup_total", "cache_miss_total", "cache_expired_total"],
+      derivedCard: [
+        { kind: "percent", numerator: "cache_hit_total", denominator: "cache_lookup_total", label: "命中率" },
+      ],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "size",
@@ -296,6 +333,17 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Fallback",
     description: "主路径失败或过慢时切换到备用执行器",
     icon: "GitBranch",
+    metrics: {
+      metricLabels: {
+        fallback_primary_total: "主链",
+        fallback_primary_error_total: "主链失败",
+        fallback_secondary_total: "降级",
+      },
+      cardPriority: ["fallback_secondary_total", "fallback_primary_error_total", "fallback_primary_total"],
+      derivedCard: [
+        { kind: "percent", numerator: "fallback_secondary_total", denominator: "fallback_primary_total", label: "降级率" },
+      ],
+    } satisfies PluginMetricsDef,
     configSchema: [
       executorRef("primary", "主执行器", true, undefined, "指定主执行器。"),
       executorRef(
@@ -335,6 +383,16 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Hosts",
     description: "按域名规则直接返回静态 A / AAAA",
     icon: "FileText",
+    metrics: {
+      metricLabels: {
+        hosts_hit_total: "命中",
+        hosts_miss_total: "未命中",
+      },
+      cardPriority: ["hosts_hit_total", "hosts_miss_total"],
+      derivedCard: [
+        { kind: "percent_of_sum", numerator: "hosts_hit_total", terms: ["hosts_hit_total", "hosts_miss_total"], label: "命中率" },
+      ],
+    } satisfies PluginMetricsDef,
     configSchema: [
       stringArrayField(
         "entries",
@@ -562,6 +620,10 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Black Hole",
     description: "对命中的 A / AAAA 请求直接返回预设地址",
     icon: "Ban",
+    metrics: {
+      metricLabels: { blackhole_block_total: "拦截" },
+      cardPriority: ["blackhole_block_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       stringArrayField(
         "ips",
@@ -597,6 +659,15 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Reverse Lookup",
     description: "缓存 IP 到域名关系，并可选直接处理 PTR 查询",
     icon: "Database",
+    metrics: {
+      metricLabels: {
+        reverse_lookup_ptr_hit_total: "PTR 命中",
+        reverse_lookup_ptr_miss_total: "PTR 未命中",
+        reverse_lookup_cache_insert_total: "缓存写入",
+        reverse_lookup_cache_entries: "缓存条目",
+      },
+      cardPriority: ["reverse_lookup_cache_entries", "reverse_lookup_ptr_hit_total", "reverse_lookup_ptr_miss_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "size",
@@ -706,6 +777,20 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Metrics Collector",
     description: "收集轻量级请求计数与延时指标并导出 Prometheus 格式",
     icon: "Gauge",
+    metrics: {
+      metricLabels: {
+        query_total: "总查询",
+        query_error_total: "查询错误",
+        query_inflight: "处理中",
+        query_latency_count: "延迟样本",
+        query_latency_sum_ms: "延迟累计(ms)",
+      },
+      cardPriority: ["query_total", "query_error_total", "query_inflight"],
+      derivedCard: [
+        { kind: "latency", prefix: "query", label: "平均延迟" },
+        { kind: "percent", numerator: "query_error_total", denominator: "query_total", label: "错误率" },
+      ],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "name",
@@ -763,6 +848,14 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "HTTP Request",
     description: "向外部 HTTP/HTTPS 服务发送 webhook、审计或联动请求",
     icon: "Globe",
+    metrics: {
+      metricLabels: {
+        http_request_dispatch_total: "请求发起",
+        http_request_error_total: "请求失败",
+        http_request_dropped_total: "队列丢弃",
+      },
+      cardPriority: ["http_request_dispatch_total", "http_request_error_total", "http_request_dropped_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "method",
@@ -906,6 +999,15 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Script",
     description: "执行外部命令，并注入 DnsContext 中的稳定字段",
     icon: "Settings",
+    metrics: {
+      metricLabels: {
+        script_run_total: "执行",
+        script_success_total: "成功",
+        script_error_total: "失败",
+        script_timeout_total: "超时",
+      },
+      cardPriority: ["script_run_total", "script_error_total", "script_timeout_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "command",
@@ -971,6 +1073,15 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "IPSet",
     description: "把响应中的 IP 写入 Linux ipset",
     icon: "MapPin",
+    metrics: {
+      metricLabels: {
+        ipset_entries_total: "入队条目",
+        ipset_dropped_total: "丢弃批次",
+        ipset_write_total: "写入条目",
+        ipset_write_error_total: "写入失败",
+      },
+      cardPriority: ["ipset_write_total", "ipset_write_error_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "set_name4",
@@ -1009,6 +1120,15 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "NFTSet",
     description: "把响应 IP 写入 Linux nftables set",
     icon: "MapPin",
+    metrics: {
+      metricLabels: {
+        nftset_entries_total: "入队前缀",
+        nftset_dropped_total: "丢弃批次",
+        nftset_write_total: "写入前缀",
+        nftset_write_error_total: "写入失败",
+      },
+      cardPriority: ["nftset_write_total", "nftset_write_error_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "ipv4",
@@ -1091,6 +1211,15 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "RouterOS Address List",
     description: "把应答 IP 同步到 RouterOS address-list",
     icon: "Network",
+    metrics: {
+      metricLabels: {
+        ros_address_list_observe_total: "观测域名",
+        ros_address_list_dropped_total: "异步丢弃",
+        ros_address_list_sync_error_total: "同步失败",
+        ros_address_list_sync_timeout_total: "同步超时",
+      },
+      cardPriority: ["ros_address_list_observe_total", "ros_address_list_sync_error_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "address",
@@ -1308,6 +1437,14 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Download",
     description: "下载 HTTP/HTTPS 文件到本地目录并原子覆盖",
     icon: "File",
+    metrics: {
+      metricLabels: {
+        download_success_total: "下载成功",
+        download_failure_total: "下载失败",
+        download_timeout_total: "下载超时",
+      },
+      cardPriority: ["download_success_total", "download_failure_total", "download_timeout_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "downloads",
@@ -1381,6 +1518,13 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Reload Provider",
     description: "按 tag 定向刷新一个或多个 provider",
     icon: "RefreshCw",
+    metrics: {
+      metricLabels: {
+        reload_provider_reload_total: "数据源重载",
+        reload_provider_reload_error_total: "重载失败",
+      },
+      cardPriority: ["reload_provider_reload_total", "reload_provider_reload_error_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       stringArrayField(
         "args",
@@ -1407,6 +1551,13 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Reload",
     description: "触发一次应用级全量 reload",
     icon: "RefreshCw",
+    metrics: {
+      metricLabels: {
+        reload_trigger_total: "重载触发",
+        reload_error_total: "重载失败",
+      },
+      cardPriority: ["reload_trigger_total", "reload_error_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [],
     quickSetup: {},
   },
@@ -1416,6 +1567,14 @@ export const executorPluginDefinitions: PluginKindDefinition[] = [
     name: "Cron",
     description: "后台按 cron 或固定间隔调度一组 executor",
     icon: "Clock",
+    metrics: {
+      metricLabels: {
+        cron_job_run_total: "任务运行",
+        cron_job_skipped_total: "重叠跳过",
+        cron_executor_error_total: "执行器失败",
+      },
+      cardPriority: ["cron_job_run_total", "cron_job_skipped_total", "cron_executor_error_total"],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "jobs",

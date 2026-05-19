@@ -1,4 +1,4 @@
-import type { PluginKindDefinition } from "./shared";
+import type { PluginKindDefinition, PluginMetricsDef } from "./shared";
 import {
   inputArrayItem,
   matcherListField,
@@ -299,6 +299,16 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     name: "Rate Limiter",
     description: "基于客户端 IP 的令牌桶限流",
     icon: "Gauge",
+    metrics: {
+      metricLabels: {
+        ratelimit_allowed_total: "放行",
+        ratelimit_rejected_total: "限流拒绝",
+      },
+      cardPriority: ["ratelimit_allowed_total", "ratelimit_rejected_total"],
+      derivedCard: [
+        { kind: "percent_of_sum", numerator: "ratelimit_rejected_total", terms: ["ratelimit_rejected_total", "ratelimit_allowed_total"], label: "拒绝率" },
+      ],
+    } satisfies PluginMetricsDef,
     configSchema: [
       {
         key: "qps",

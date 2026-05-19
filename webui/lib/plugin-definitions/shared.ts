@@ -1,4 +1,30 @@
 import type { PluginType } from "../types";
+
+/**
+ * Declarative spec for a derived metric shown on the plugin card.
+ * - latency: averages `{prefix}_latency_sum_ms / {prefix}_latency_count`
+ * - percent: shows `numerator / denominator` as a percentage
+ * - percent_of_sum: shows `numerator / sum(terms)` as a percentage
+ */
+export type DerivedMetricSpec =
+  | { kind: "latency"; prefix: string; label: string }
+  | { kind: "percent"; numerator: string; denominator: string; label: string }
+  | {
+      kind: "percent_of_sum";
+      numerator: string;
+      terms: [string, ...string[]];
+      label: string;
+    };
+
+export interface PluginMetricsDef {
+  /** Prometheus metric name → Chinese display label for this plugin's metrics. */
+  metricLabels?: Record<string, string>;
+  /** Ordered metric names surfaced on the plugin card (first 4 shown). */
+  cardPriority?: string[];
+  /** Derived metrics prepended to card display before raw metric values. */
+  derivedCard?: DerivedMetricSpec[];
+}
+
 // Add new plugin kinds here first. The web UI catalog, create dialog, cards, and
 // detail drawer all resolve their display metadata from these definitions.
 export interface PluginKindDefinition {
@@ -8,6 +34,8 @@ export interface PluginKindDefinition {
   description: string;
   icon: string;
   configSchema: ConfigField[];
+  /** Metrics emitted by this plugin kind: labels, card priority, and derived metrics. */
+  metrics?: PluginMetricsDef;
   /**
    * Marks this plugin kind as usable inline inside a sequence rule via
    * `quick_setup` syntax. Drives the "快捷" mode in the sequence canvas

@@ -3,6 +3,13 @@
 // The backend exposes a single Prometheus endpoint (`/metrics`). Every plugin
 // series carries a `plugin_tag` label, so metrics are grouped by that tag and
 // associated with the matching `PluginInstance` (whose `name` is the tag).
+//
+// Metric labels, card-priority lists, and derived metric specs are defined
+// alongside each plugin kind in `lib/plugin-definitions/` — this file derives
+// its runtime data structures from those definitions rather than duplicating them.
+
+import { pluginKindDefinitions } from "./plugin-definitions";
+import type { DerivedMetricSpec } from "./plugin-definitions/shared";
 
 export interface MetricSeries {
   name: string;
@@ -119,207 +126,41 @@ function normalizeMetricKind(raw: string): MetricKind {
 }
 
 // ---------------------------------------------------------------------------
-// Curation: friendly labels + which metrics are worth surfacing on cards.
+// Derived constants from plugin definitions.
 // ---------------------------------------------------------------------------
 
-/** Friendly Chinese labels keyed by raw metric name. */
-const METRIC_LABELS: Record<string, string> = {
-  // global query (query_recorder / metrics_collector)
-  query_total: "总查询",
-  query_error_total: "查询错误",
-  query_inflight: "处理中",
-  query_latency_count: "延迟样本",
-  query_latency_sum_ms: "延迟累计(ms)",
-  // cache
-  cache_lookup_total: "缓存查询",
-  cache_hit_total: "命中",
-  cache_miss_total: "未命中",
-  cache_expired_total: "过期",
-  cache_insert_total: "写入",
-  cache_skip_total: "跳过",
-  cache_lazy_refresh_total: "懒刷新",
-  cache_entry_count: "条目数",
-  // forward
-  forward_query_total: "转发查询",
-  forward_success_total: "成功",
-  forward_error_total: "失败",
-  forward_timeout_total: "超时",
-  forward_latency_count: "延迟样本",
-  forward_latency_sum_ms: "延迟累计(ms)",
-  forward_upstream_query_total: "上游查询",
-  forward_upstream_success_total: "上游成功",
-  forward_upstream_error_total: "上游失败",
-  forward_upstream_timeout_total: "上游超时",
-  forward_upstream_latency_count: "上游延迟样本",
-  forward_upstream_latency_sum_ms: "上游延迟累计(ms)",
-  // fallback
-  fallback_primary_total: "主链",
-  fallback_primary_error_total: "主链失败",
-  fallback_secondary_total: "降级",
-  // misc executors
-  blackhole_block_total: "拦截",
-  hosts_hit_total: "命中",
-  hosts_miss_total: "未命中",
-  ratelimit_allowed_total: "放行",
-  ratelimit_rejected_total: "限流拒绝",
-  // server
-  server_request_total: "请求总数",
-  server_completed_total: "完成",
-  server_controlled_total: "提前结束",
-  server_failed_total: "失败(SERVFAIL)",
-  server_inflight: "处理中",
-  server_latency_count: "延迟样本",
-  server_latency_sum_ms: "延迟累计(ms)",
-  // ipset / nftset
-  ipset_entries_total: "入队条目",
-  ipset_dropped_total: "丢弃批次",
-  ipset_write_total: "写入条目",
-  ipset_write_error_total: "写入失败",
-  nftset_entries_total: "入队前缀",
-  nftset_dropped_total: "丢弃批次",
-  nftset_write_total: "写入前缀",
-  nftset_write_error_total: "写入失败",
-  // ros_address_list
-  ros_address_list_observe_total: "观测域名",
-  ros_address_list_dropped_total: "异步丢弃",
-  ros_address_list_sync_error_total: "同步失败",
-  ros_address_list_sync_timeout_total: "同步超时",
-  // reverse_lookup
-  reverse_lookup_ptr_hit_total: "PTR 命中",
-  reverse_lookup_ptr_miss_total: "PTR 未命中",
-  reverse_lookup_cache_insert_total: "缓存写入",
-  reverse_lookup_cache_entries: "缓存条目",
-  // download
-  download_success_total: "下载成功",
-  download_failure_total: "下载失败",
-  download_timeout_total: "下载超时",
-  // http_request
-  http_request_dispatch_total: "请求发起",
-  http_request_error_total: "请求失败",
-  http_request_dropped_total: "队列丢弃",
-  // script
-  script_run_total: "执行",
-  script_success_total: "成功",
-  script_error_total: "失败",
-  script_timeout_total: "超时",
-  // reload / reload_provider
-  reload_trigger_total: "重载触发",
-  reload_error_total: "重载失败",
-  reload_provider_reload_total: "数据源重载",
-  reload_provider_reload_error_total: "重载失败",
-  // cron
-  cron_job_run_total: "任务运行",
-  cron_job_skipped_total: "重叠跳过",
-  cron_executor_error_total: "执行器失败",
-};
+/** Friendly Chinese labels keyed by raw metric name — merged from all plugin definitions. */
+const METRIC_LABELS: Record<string, string> = Object.fromEntries(
+  pluginKindDefinitions.flatMap((def) =>
+    Object.entries(def.metrics?.metricLabels ?? {}),
+  ),
+);
 
-/** Metrics prominent enough to surface directly on a plugin card. */
-const HIGH_VALUE_METRICS = new Set<string>([
-  "query_total",
-  "query_inflight",
-  "query_error_total",
-  "cache_lookup_total",
-  "cache_hit_total",
-  "cache_miss_total",
-  "cache_expired_total",
-  "cache_entry_count",
-  "forward_query_total",
-  "forward_success_total",
-  "forward_error_total",
-  "forward_timeout_total",
-  "fallback_secondary_total",
-  "fallback_primary_error_total",
-  "blackhole_block_total",
-  "hosts_hit_total",
-  "hosts_miss_total",
-  "ratelimit_allowed_total",
-  "ratelimit_rejected_total",
-  "server_request_total",
-  "server_failed_total",
-  "server_inflight",
-  "ipset_write_total",
-  "ipset_write_error_total",
-  "nftset_write_total",
-  "nftset_write_error_total",
-  "ros_address_list_observe_total",
-  "ros_address_list_sync_error_total",
-  "reverse_lookup_ptr_hit_total",
-  "reverse_lookup_cache_entries",
-  "download_success_total",
-  "download_failure_total",
-  "http_request_dispatch_total",
-  "http_request_error_total",
-  "script_run_total",
-  "script_error_total",
-  "reload_trigger_total",
-  "reload_provider_reload_total",
-  "cron_job_run_total",
-  "cron_executor_error_total",
-]);
+/**
+ * Global ordered list of high-value metric names, derived by concatenating each
+ * plugin's `cardPriority` list in definition order (first occurrence wins).
+ * Used for fallback ordering and sorting in the detail view.
+ */
+const HIGH_VALUE_ORDER: string[] = (() => {
+  const seen = new Set<string>();
+  const order: string[] = [];
+  for (const def of pluginKindDefinitions) {
+    for (const name of def.metrics?.cardPriority ?? []) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        order.push(name);
+      }
+    }
+  }
+  return order;
+})();
 
-const HIGH_VALUE_ORDER = Array.from(HIGH_VALUE_METRICS);
+/** Set of high-value metric names for O(1) lookup. */
+const HIGH_VALUE_METRICS = new Set(HIGH_VALUE_ORDER);
 
-const SERVER_PLUGIN_KINDS = new Set([
-  "udp_server",
-  "tcp_server",
-  "http_server",
-  "quic_server",
-]);
-
-const CARD_METRIC_PRIORITY: Record<string, string[]> = {
-  metrics_collector: ["query_total", "query_error_total", "query_inflight"],
-  cache: [
-    "cache_entry_count",
-    "cache_lookup_total",
-    "cache_miss_total",
-    "cache_expired_total",
-  ],
-  forward: [
-    "forward_query_total",
-    "forward_timeout_total",
-    "forward_error_total",
-  ],
-  fallback: [
-    "fallback_secondary_total",
-    "fallback_primary_error_total",
-    "fallback_primary_total",
-  ],
-  black_hole: ["blackhole_block_total"],
-  hosts: ["hosts_hit_total", "hosts_miss_total"],
-  rate_limiter: ["ratelimit_rejected_total", "ratelimit_allowed_total"],
-  ipset: ["ipset_write_total", "ipset_write_error_total"],
-  nftset: ["nftset_write_total", "nftset_write_error_total"],
-  ros_address_list: [
-    "ros_address_list_observe_total",
-    "ros_address_list_sync_error_total",
-  ],
-  reverse_lookup: [
-    "reverse_lookup_cache_entries",
-    "reverse_lookup_ptr_hit_total",
-    "reverse_lookup_ptr_miss_total",
-  ],
-  download: [
-    "download_success_total",
-    "download_failure_total",
-    "download_timeout_total",
-  ],
-  http_request: [
-    "http_request_dispatch_total",
-    "http_request_error_total",
-    "http_request_dropped_total",
-  ],
-  script: ["script_run_total", "script_error_total", "script_timeout_total"],
-  reload: ["reload_trigger_total", "reload_error_total"],
-  reload_provider: [
-    "reload_provider_reload_total",
-    "reload_provider_reload_error_total",
-  ],
-  cron: [
-    "cron_job_run_total",
-    "cron_job_skipped_total",
-    "cron_executor_error_total",
-  ],
-};
+// ---------------------------------------------------------------------------
+// Curation: friendly labels + which metrics are worth surfacing on cards.
+// ---------------------------------------------------------------------------
 
 export function metricLabel(name: string): string {
   if (METRIC_LABELS[name]) return METRIC_LABELS[name];
@@ -428,6 +269,39 @@ function derivedLatency(totals: Map<string, number>): DisplayMetric[] {
   return out;
 }
 
+function applyDerivedSpec(
+  spec: DerivedMetricSpec,
+  totals: Map<string, number>,
+  out: DisplayMetric[],
+  seen: Set<string>,
+  limit: number,
+) {
+  switch (spec.kind) {
+    case "latency": {
+      const latency = averageLatencyForPrefix(totals, spec.prefix);
+      if (latency !== undefined) {
+        pushDisplayMetric(out, seen, spec.label, `${latency.toFixed(1)} ms`, limit);
+      }
+      break;
+    }
+    case "percent": {
+      const ratio = metricRatio(totals, spec.numerator, spec.denominator);
+      if (ratio !== undefined) {
+        pushDisplayMetric(out, seen, spec.label, formatPercent(ratio), limit);
+      }
+      break;
+    }
+    case "percent_of_sum": {
+      const numerator = totals.get(spec.numerator);
+      const total = spec.terms.reduce((acc, t) => acc + (totals.get(t) ?? 0), 0);
+      if (numerator !== undefined && total > 0) {
+        pushDisplayMetric(out, seen, spec.label, formatPercent(numerator / total), limit);
+      }
+      break;
+    }
+  }
+}
+
 function pushDerivedCardMetrics(
   out: DisplayMetric[],
   seen: Set<string>,
@@ -436,146 +310,17 @@ function pushDerivedCardMetrics(
   limit: number,
 ) {
   if (!pluginKind) return;
-
-  if (SERVER_PLUGIN_KINDS.has(pluginKind)) {
-    const failedRate = metricRatio(
-      totals,
-      "server_failed_total",
-      "server_request_total",
-    );
-    const latency = averageLatencyForPrefix(totals, "server");
-    if (latency !== undefined) {
-      pushDisplayMetric(
-        out,
-        seen,
-        "平均延迟",
-        `${latency.toFixed(1)} ms`,
-        limit,
-      );
-    }
-    if (failedRate !== undefined) {
-      pushDisplayMetric(out, seen, "失败率", formatPercent(failedRate), limit);
-    }
-    return;
-  }
-
-  switch (pluginKind) {
-    case "metrics_collector": {
-      const latency = averageLatencyForPrefix(totals, "query");
-      const errorRate = metricRatio(totals, "query_error_total", "query_total");
-      if (latency !== undefined) {
-        pushDisplayMetric(
-          out,
-          seen,
-          "平均延迟",
-          `${latency.toFixed(1)} ms`,
-          limit,
-        );
-      }
-      if (errorRate !== undefined) {
-        pushDisplayMetric(out, seen, "错误率", formatPercent(errorRate), limit);
-      }
-      break;
-    }
-    case "cache": {
-      const lookup = totals.get("cache_lookup_total");
-      const hit = totals.get("cache_hit_total");
-      if (hit !== undefined && lookup && lookup > 0) {
-        pushDisplayMetric(
-          out,
-          seen,
-          "命中率",
-          formatPercent(hit / lookup),
-          limit,
-        );
-      }
-      break;
-    }
-    case "forward": {
-      const successRate = metricRatio(
-        totals,
-        "forward_success_total",
-        "forward_query_total",
-      );
-      const latency = averageLatencyForPrefix(totals, "forward");
-      if (successRate !== undefined) {
-        pushDisplayMetric(
-          out,
-          seen,
-          "成功率",
-          formatPercent(successRate),
-          limit,
-        );
-      }
-      if (latency !== undefined) {
-        pushDisplayMetric(
-          out,
-          seen,
-          "平均延迟",
-          `${latency.toFixed(1)} ms`,
-          limit,
-        );
-      }
-      break;
-    }
-    case "hosts": {
-      const hit = totals.get("hosts_hit_total");
-      const miss = totals.get("hosts_miss_total");
-      const total = (hit ?? 0) + (miss ?? 0);
-      if (hit !== undefined && total > 0) {
-        pushDisplayMetric(
-          out,
-          seen,
-          "命中率",
-          formatPercent(hit / total),
-          limit,
-        );
-      }
-      break;
-    }
-    case "rate_limiter": {
-      const allowed = totals.get("ratelimit_allowed_total");
-      const rejected = totals.get("ratelimit_rejected_total");
-      const total = (allowed ?? 0) + (rejected ?? 0);
-      if (rejected !== undefined && total > 0) {
-        pushDisplayMetric(
-          out,
-          seen,
-          "拒绝率",
-          formatPercent(rejected / total),
-          limit,
-        );
-      }
-      break;
-    }
-    case "fallback": {
-      const fallbackRate = metricRatio(
-        totals,
-        "fallback_secondary_total",
-        "fallback_primary_total",
-      );
-      if (fallbackRate !== undefined) {
-        pushDisplayMetric(
-          out,
-          seen,
-          "降级率",
-          formatPercent(fallbackRate),
-          limit,
-        );
-      }
-      break;
-    }
+  const def = pluginKindDefinitions.find((d) => d.kind === pluginKind);
+  for (const spec of def?.metrics?.derivedCard ?? []) {
+    if (out.length >= limit) break;
+    applyDerivedSpec(spec, totals, out, seen, limit);
   }
 }
 
 function cardMetricPriority(pluginKind: string | undefined): string[] {
-  if (pluginKind && SERVER_PLUGIN_KINDS.has(pluginKind)) {
-    return ["server_request_total", "server_inflight", "server_failed_total"];
-  }
-  if (pluginKind && CARD_METRIC_PRIORITY[pluginKind]) {
-    return CARD_METRIC_PRIORITY[pluginKind];
-  }
-  return HIGH_VALUE_ORDER;
+  if (!pluginKind) return HIGH_VALUE_ORDER;
+  const def = pluginKindDefinitions.find((d) => d.kind === pluginKind);
+  return def?.metrics?.cardPriority ?? HIGH_VALUE_ORDER;
 }
 
 /** Up to `limit` high-value metrics for compact card display. */

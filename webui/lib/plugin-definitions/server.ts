@@ -1,5 +1,22 @@
-import type { PluginKindDefinition } from "./shared";
+import type { PluginKindDefinition, PluginMetricsDef } from "./shared";
 import { executorRef } from "./shared";
+
+const serverMetrics: PluginMetricsDef = {
+  metricLabels: {
+    server_request_total: "请求总数",
+    server_completed_total: "完成",
+    server_controlled_total: "提前结束",
+    server_failed_total: "失败(SERVFAIL)",
+    server_inflight: "处理中",
+    server_latency_count: "延迟样本",
+    server_latency_sum_ms: "延迟累计(ms)",
+  },
+  cardPriority: ["server_request_total", "server_inflight", "server_failed_total"],
+  derivedCard: [
+    { kind: "latency", prefix: "server", label: "平均延迟" },
+    { kind: "percent", numerator: "server_failed_total", denominator: "server_request_total", label: "失败率" },
+  ],
+};
 
 export const serverPluginDefinitions: PluginKindDefinition[] = [
   {
@@ -8,6 +25,7 @@ export const serverPluginDefinitions: PluginKindDefinition[] = [
     name: "UDP Server",
     description: "标准 DNS UDP 入口，把请求交给指定执行器",
     icon: "Wifi",
+    metrics: serverMetrics,
     configSchema: [
       executorRef(
         "entry",
@@ -32,6 +50,7 @@ export const serverPluginDefinitions: PluginKindDefinition[] = [
     name: "TCP / DoT Server",
     description: "DNS over TCP；配置证书后作为 DoT 入口",
     icon: "Network",
+    metrics: serverMetrics,
     configSchema: [
       executorRef(
         "entry",
@@ -77,6 +96,7 @@ export const serverPluginDefinitions: PluginKindDefinition[] = [
     name: "HTTP / DoH Server",
     description: "DNS over HTTPS，支持路径到执行器的多入口映射",
     icon: "Lock",
+    metrics: serverMetrics,
     configSchema: [
       {
         key: "entries",
@@ -162,6 +182,7 @@ export const serverPluginDefinitions: PluginKindDefinition[] = [
     name: "QUIC / DoQ Server",
     description: "DNS over QUIC 入口",
     icon: "Shield",
+    metrics: serverMetrics,
     configSchema: [
       executorRef(
         "entry",
