@@ -10,7 +10,48 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-05
 
 <div className="release-stack">
-  <ReleaseCard version="v0.5.2" badge="Patch Release" date="2026-05-04" defaultOpen>
+  <ReleaseCard version="v1.0.0" badge="Major Release" date="2026-05-19" defaultOpen>
+      **版本定位**
+
+      - Major Release，标志 OxiDNS 从实验性插件化 DNS 引擎进入 1.0 稳定阶段。`v1.0.0` 正式内置 WebUI 管理控制台，并包含 `v0.5.2` 以来的管理 API、插件运行时、观测能力、发布打包和性能稳定性改进。
+
+      **重要升级提醒**
+
+      - `v1.0.0` 完成项目名迁移，项目正式更名为 OxiDNS，GitHub 仓库、release asset、二进制文件名、包元数据、服务文件、README、文档站、logo 与启动 banner 均已切换到 `oxidns`。
+      - 由于旧版本的自动更新逻辑仍指向更名前的项目与旧 release 资产，无法直接更新到 `v1.0.0`。从旧版本升级到 `v1.0.0` 时，必须手动下载对应平台的 OxiDNS release 包，替换二进制文件，并同步部署包内 WebUI 静态资源。
+      - 完成这次手动迁移后，后续版本应使用新的 `svenshi/oxidns` 仓库和 `oxidns-*` release 资产进行升级。
+
+      **WebUI 能力**
+
+      - OxiDNS WebUI 将运行状态、配置、插件、指标、日志、查询审计和缓存管理集中到一个控制台中，日常运维不再依赖分散的命令行、日志文件和手写 API 调用。
+      - 配置管理更适合生产环境：YAML 编辑、在线校验、配置历史、diff、应用与回滚集中在同一流程内，复杂策略调整可以先确认再生效，降低误改配置后的恢复成本。
+      - 插件编排更直观：插件拓扑、插件详情、字段化配置和 sequence composer 帮助理解 DNS 请求处理链路，减少手写 YAML 时的引用错误、依赖遗漏和排查成本。
+      - 故障定位更直接：指标、在线日志、查询记录、执行流和缓存详情可以串联查看，便于从异常域名追踪到命中规则、上游行为、缓存状态和最终响应。
+      - 部署与访问更简单：WebUI 随 release archive、Docker 镜像、Debian 包和 `upgrade` 流程分发，也可由 OxiDNS 管理 API 直接托管静态资源，单个 OxiDNS 进程即可同时服务 API 与控制台。
+
+      **主要变更**
+
+      - 管理 API 重构为带前缀的统一入口，新增认证/CORS、runtime state、日志流、指标、配置保存/应用/回滚、插件 API 汇聚等能力。
+      - 插件体系从全局可变 registry 重构为不可变 catalog + runtime manager，插件工厂创建上下文更简洁，reload 路径更稳健，并将 registry 拆分为 catalog、context、init_plan、runtime 等模块。
+      - 新增共享插件指标层，覆盖 server、forward upstream、cache、query recorder、side-effect executor 等路径，并统一暴露给管理 API。
+      - `query_recorder` 具备 matcher 命中采样统计、过滤查询、执行流可视化和记录详情展示能力；相关 model 和 store 结构完成清理。
+      - cache 新增管理 API，可读取缓存 DNS 响应详情、TTL、命中信息、记录内容和缓存快照。
+      - `upgrade`、release、Docker、Debian packaging、systemd service 和 CI workflow 更新为 OxiDNS 1.0 发布链路。
+      - 项目品牌从 ForgeDNS 完成迁移到 OxiDNS，更新 GitHub 模板和所有面向用户的项目标识。
+      - 性能与稳定性方面，TCP upstream 禁用 Nagle、减少 split lock；dual-selector 探测逻辑从 forward 中解耦；支持 dual-stack port-only listener；全局 runtime manager reload 更稳健。
+      - 文档系统更新 README、quickstart、configuration、API、plugin reference、scenarios、benchmarks 和 MikroTik policy routing。
+
+      **配置与升级说明**
+
+      - 根 crate 版本号升级为 `1.0.0`；release tag 应使用 `v1.0.0`。
+      - 现有 `v0.5.2` DNS 解析配置通常可直接升级；`v1.0.0` 主要引入完整 WebUI、管理 API、指标和打包能力。
+      - 从旧项目名版本升级时，不能依赖旧的自动更新流程跨过项目更名边界；请手动下载 `v1.0.0` release 包并完成迁移。
+      - 管理 API 入口已收敛为带前缀的路由；如果外层反向代理、ACL 或脚本直接调用旧 API 路径，需要按新版 API 文档确认路径。
+      - 使用自动升级、Docker 或 Debian 包部署时，建议同时确认控制台静态资源目录和服务文件已随新包安装。
+      - 依赖插件 reload、配置在线编辑或运行时 API 的部署，建议先在测试环境验证权限、CORS、认证和回滚流程。
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.5.2" badge="Patch Release" date="2026-05-04">
       **版本定位**
 
       - Patch Release，重点修复 DoH / DoH3 上游长连接复用和 upstream duration 配置解析问题。

@@ -10,7 +10,48 @@ import ReleaseCard from '@site/src/components/ReleaseCard';
 ## 2026-05
 
 <div className="release-stack">
-  <ReleaseCard version="v0.5.2" badge="Patch Release" date="2026-05-04" defaultOpen>
+  <ReleaseCard version="v1.0.0" badge="Major Release" date="2026-05-19" defaultOpen>
+      **Release Scope**
+
+      - Major Release marking OxiDNS's move from an experimental plugin-driven DNS engine to the 1.0 stable line. `v1.0.0` officially includes the built-in WebUI management console and management API, plugin runtime, observability, packaging, and stability work since `v0.5.2`.
+
+      **Important Upgrade Notice**
+
+      - This release completes the project rename to OxiDNS. The GitHub repository, release assets, binary name, package metadata, service files, README files, docs site, logo, and startup banner now use `oxidns`.
+      - Older automatic upgrade flows still point at the pre-rename project and release assets, so they cannot upgrade directly to `v1.0.0`. When upgrading from an older build, manually download the matching OxiDNS release package, replace the binary, and deploy the bundled WebUI static assets.
+      - After this one-time manual migration, future upgrades should use the new `svenshi/oxidns` repository and `oxidns-*` release assets.
+
+      **WebUI Capabilities**
+
+      - OxiDNS WebUI brings runtime status, configuration, plugins, metrics, logs, query auditing, and cache management into one console, reducing day-to-day reliance on scattered CLI commands, log files, and handwritten API calls.
+      - Configuration management is safer for production use: YAML editing, live validation, config history, diff review, apply, and rollback live in one workflow, so complex policy changes can be reviewed before they take effect and recovered more easily.
+      - Plugin orchestration is easier to understand: plugin topology, plugin details, structured configuration, and the sequence composer make the DNS request path visible and reduce YAML reference mistakes, missing dependencies, and troubleshooting time.
+      - Troubleshooting is more direct: metrics, live logs, query records, execution flow, and cache details can be inspected together, making it easier to trace a problematic domain to matched rules, upstream behavior, cache state, and final responses.
+      - Deployment and access are simpler: the WebUI ships with release archives, Docker images, Debian packages, and the `upgrade` flow, and OxiDNS can host the static assets directly from the management API so one process serves both the API and the console.
+
+      **Changes**
+
+      - Reworked the management API into a prefixed unified entry point, adding auth/CORS support, runtime state, log streaming, metrics, config save/apply/rollback, and plugin API aggregation.
+      - Replaced the mutable global plugin registry with an immutable catalog plus runtime manager, simplified plugin factory creation context, hardened reload paths, and split registry internals into catalog, context, init_plan, and runtime modules.
+      - Added a shared plugin metrics layer covering servers, forward upstreams, cache, query recorder, and side-effect executors, with unified management API exposure.
+      - Expanded `query_recorder` with sampled matcher-hit stats, filtering, execution-flow visualization, record details, and cleaned-up model/store structures.
+      - Added cache management APIs for reading cached DNS response details, TTLs, hit metadata, record contents, and cache snapshots.
+      - Updated `upgrade`, release, Docker, Debian packaging, systemd service files, and CI workflows for the OxiDNS 1.0 release path.
+      - Completed the project branding migration from ForgeDNS to OxiDNS across GitHub templates and all user-facing project identity.
+      - Performance and stability work includes disabling Nagle on TCP upstreams, reducing split-lock pressure, moving dual-selector preferred probing out of forward, supporting dual-stack port-only listeners, and hardening global runtime-manager reloads.
+      - Refreshed README, quickstart, configuration, API, plugin reference, scenarios, benchmarks, and MikroTik policy routing documentation.
+
+      **Compatibility and Upgrade Notes**
+
+      - The root crate version is now `1.0.0`; the release tag should be `v1.0.0`.
+      - Existing `v0.5.2` DNS resolution configs should generally upgrade directly. This release mainly introduces the complete WebUI, management API, metrics, and packaging capabilities.
+      - When upgrading from pre-rename builds, do not rely on the old automatic upgrade flow to cross the rename boundary. Manually download the `v1.0.0` release package and complete the migration.
+      - The management API now uses a prefixed route layout. If reverse proxies, ACLs, or automation scripts call old API paths directly, confirm them against the updated API docs.
+      - For automatic upgrade, Docker, or Debian package deployments, confirm that the console static asset directory and service files are installed with the new package.
+      - Deployments relying on plugin reload, online config editing, or runtime APIs should validate auth, CORS, permissions, and rollback flows in a staging environment first.
+  </ReleaseCard>
+
+  <ReleaseCard version="v0.5.2" badge="Patch Release" date="2026-05-04">
       **Release Scope**
 
       - Patch Release focused on DoH / DoH3 upstream long-connection reuse and upstream duration parsing.
