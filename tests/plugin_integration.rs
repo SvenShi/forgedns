@@ -905,6 +905,50 @@ plugins:
 }
 
 #[tokio::test]
+async fn test_sequence_quick_setup_matchers_accept_enum_text() -> Result<()> {
+    let yaml = r#"
+log:
+  level: info
+plugins:
+  - tag: seq
+    type: sequence
+    args:
+      - matches:
+          - qtype A
+          - qclass IN
+        exec: mark 10
+      - matches: rcode SERVFAIL
+        exec: mark 20
+      - exec: reject 2
+"#;
+
+    let config = parse_config(yaml)?;
+    let registry = plugin::init(config).await?;
+
+    let sequence = registry
+        .get_plugin("seq")
+        .expect("sequence plugin should exist")
+        .to_executor();
+    let mut context = make_context_with_qtype(registry.clone(), "example.com.", RecordType::A);
+
+    let step = sequence.execute(&mut context).await?;
+
+    assert!(matches!(step, ExecStep::Stop));
+    assert!(context.marks().contains(&10));
+    assert!(!context.marks().contains(&20));
+    assert_eq!(
+        context
+            .response()
+            .expect("reject should set a response")
+            .rcode(),
+        Rcode::ServFail
+    );
+
+    registry.destroy().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_sequence_accept_in_jump_stops_current_and_parent_sequences() -> Result<()> {
     let yaml = r#"
 log:

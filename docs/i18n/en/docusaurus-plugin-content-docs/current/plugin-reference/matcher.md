@@ -12,7 +12,7 @@ Inside `sequence`, quick-setup matcher expressions are usually the clearest form
 ```yaml
 - matches:
     - "client_ip $lan_ip_set"
-    - "qtype 1"
+    - "qtype A,28"
   exec: "$forward_main"
 ```
 
@@ -21,7 +21,7 @@ Other quick-setup matchers can be combined in the same way:
 ```yaml
 - matches:
     - "qname domain:example.com"
-    - "qclass 1"
+    - "qclass IN,3"
   exec: "$forward_main"
 ```
 
@@ -47,7 +47,7 @@ Composes multiple matcher expressions and returns `true` when any one of them ma
   type: any_match
   args:
     - "$lan_clients"
-    - "qtype 28"
+    - "qtype AAAA"
     - "!$blocked_qname"
 ```
 
@@ -169,29 +169,32 @@ Matches request qtypes.
 
 ### Example Configuration
 
+This example mixes text and numeric forms. Both formats are equivalent and can be used together.
+
 ```yaml
 - tag: only_a_aaaa
   type: qtype
   args:
-    - "1"
+    - "A"
     - "28"
 ```
 
 ### Configuration Details
 
 - Type: `array`; Required: yes; Default: none
-- The examples below use numeric qtype codes.
+- Supports both enum text and decimal numeric codes; text matching is case-insensitive, and both formats can be mixed in the same list.
 - Common mappings:
-  - `1` = `A`
-  - `28` = `AAAA`
-  - `12` = `PTR`
+  - `A` = `1`
+  - `AAAA` = `28`
+  - `PTR` = `12`
+- Unknown or future qtypes can still be matched with numeric codes.
 - Runtime impact:
   - Returns `true` if any question type matches the configured set.
 
 ### quick setup
 
 ```yaml
-- matches: "qtype 1"
+- matches: "qtype A,28"
 ```
 
 ### Typical Uses
@@ -208,28 +211,32 @@ Matches request qclasses.
 
 ### Example Configuration
 
+This example mixes text and numeric forms. Both formats are equivalent and can be used together.
+
 ```yaml
-- tag: only_in
+- tag: in_or_ch
   type: qclass
   args:
-    - "1"
+    - "IN"
+    - "3"
 ```
 
 ### Configuration Details
 
 - Type: `array`; Required: yes; Default: none
-- The examples below use numeric qclass codes.
+- Supports both enum text and decimal numeric codes; text matching is case-insensitive, and both formats can be mixed in the same list.
 - Common mappings:
-  - `1` = `IN`
-  - `3` = `CH`
-  - `4` = `HS`
+  - `IN` = `1`
+  - `CH` = `3`
+  - `HS` = `4`
+- Unknown or future qclasses can still be matched with numeric codes.
 - Runtime impact:
   - Returns `true` if any question class matches the configured set.
 
 ### quick setup
 
 ```yaml
-- matches: "qclass 1"
+- matches: "qclass IN,3"
 ```
 
 ### Typical Uses
@@ -395,28 +402,32 @@ Matches the current response code.
 
 ### Example Configuration
 
+This example mixes text and numeric forms. Both formats are equivalent and can be used together.
+
 ```yaml
-- tag: only_noerror
+- tag: failure_rcodes
   type: rcode
   args:
-    - "2"
+    - "SERVFAIL"
+    - "3"
 ```
 
 ### Configuration Details
 
 - Type: `array`; Required: yes; Default: none
-- Supports decimal numeric rcodes only.
+- Supports both enum text and decimal numeric codes; text matching is case-insensitive, and both formats can be mixed in the same list.
 - Common examples:
-  - `0` = `NOERROR`
-  - `2` = `SERVFAIL`
-  - `3` = `NXDOMAIN`
+  - `NOERROR` = `0`
+  - `SERVFAIL` = `2`
+  - `NXDOMAIN` = `3`
+- Unknown or future rcodes can still be matched with numeric codes.
 - Runtime impact:
   - Returns `true` when the response rcode matches the configured set.
 
 ### quick setup
 
 ```yaml
-- matches: "rcode 2"
+- matches: "rcode SERVFAIL,3"
 ```
 
 ### Typical Uses

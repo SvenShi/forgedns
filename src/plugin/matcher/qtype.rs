@@ -16,7 +16,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    parse_quick_setup_rules, parse_rr_type, parse_rules_from_value, parse_u16_rules,
+    parse_enum_rules_from_value, parse_quick_setup_rules, parse_rr_type, parse_u16_rules,
     validate_non_empty_rules,
 };
 use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
@@ -32,7 +32,7 @@ impl PluginFactory for QtypeFactory {
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
     ) -> DnsResult<UninitializedPlugin> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
+        let rules = parse_enum_rules_from_value("qtype", plugin_config.args.clone())?;
         build_qtype_matcher(plugin_config.tag.clone(), rules)
     }
 
@@ -120,6 +120,25 @@ mod tests {
     #[test]
     fn test_build_qtype_matcher_rejects_empty_rules() {
         assert!(build_qtype_matcher("qtype".to_string(), vec![]).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_build_qtype_matcher_accepts_text_rules() {
+        let matcher = match build_qtype_matcher(
+            "qtype".to_string(),
+            vec!["A".to_string(), "aaaa".to_string()],
+        )
+        .expect("text qtype rules should build")
+        {
+            UninitializedPlugin::Matcher(matcher) => matcher,
+            _ => unreachable!("qtype factory should create a matcher"),
+        };
+
+        let mut a_ctx = make_context(&[RecordType::A]);
+        assert!(matcher.is_match(&mut a_ctx));
+
+        let mut aaaa_ctx = make_context(&[RecordType::AAAA]);
+        assert!(matcher.is_match(&mut aaaa_ctx));
     }
 
     #[tokio::test]

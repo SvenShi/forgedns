@@ -76,14 +76,14 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     configSchema: [
       stringArrayField(
         "args",
-        "QType 数值",
-        "1\n28",
+        "QType 文本或数值",
+        "A\nAAAA\n1\n28",
         true,
-        "定义允许命中的查询类型集合。",
+        "定义允许命中的查询类型集合，同时支持 A/AAAA 等文本和对应数值。",
       ),
     ],
     quickSetup: {
-      paramPlaceholder: "1,28 或 A,AAAA",
+      paramPlaceholder: "A,AAAA 或 1,28",
     },
   },
   {
@@ -95,14 +95,14 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     configSchema: [
       stringArrayField(
         "args",
-        "QClass 数值",
-        "1",
+        "QClass 文本或数值",
+        "IN\n1",
         true,
-        "定义允许命中的查询类别集合。",
+        "定义允许命中的查询类别集合，同时支持 IN/CH 等文本和对应数值。",
       ),
     ],
     quickSetup: {
-      paramPlaceholder: "1",
+      paramPlaceholder: "IN 或 1",
     },
   },
   {
@@ -214,14 +214,14 @@ export const matcherPluginDefinitions: PluginKindDefinition[] = [
     configSchema: [
       stringArrayField(
         "args",
-        "RCode 数值",
-        "0\n2\n3",
+        "RCode 文本或数值",
+        "NOERROR\nSERVFAIL\nNXDOMAIN\n0\n2\n3",
         true,
-        "定义允许命中的响应码集合。",
+        "定义允许命中的响应码集合，同时支持 SERVFAIL/NXDOMAIN 等文本和对应数值。",
       ),
     ],
     quickSetup: {
-      paramPlaceholder: "0,2,3",
+      paramPlaceholder: "SERVFAIL,NXDOMAIN 或 2,3",
     },
   },
   {

@@ -282,7 +282,7 @@ api:
   args:
     - matches:
         - "$lan_clients"
-        - "qtype 1"
+        - "qtype A,28"
       exec: "$cache_main"
     - matches: "!has_resp"
       exec: "$forward_main"

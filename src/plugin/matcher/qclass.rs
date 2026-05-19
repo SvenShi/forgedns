@@ -16,7 +16,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    parse_class, parse_quick_setup_rules, parse_rules_from_value, parse_u16_rules,
+    parse_class, parse_enum_rules_from_value, parse_quick_setup_rules, parse_u16_rules,
     validate_non_empty_rules,
 };
 use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
@@ -32,7 +32,7 @@ impl PluginFactory for QclassFactory {
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
     ) -> DnsResult<UninitializedPlugin> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
+        let rules = parse_enum_rules_from_value("qclass", plugin_config.args.clone())?;
         build_qclass_matcher(plugin_config.tag.clone(), rules)
     }
 
@@ -107,6 +107,25 @@ mod tests {
     #[test]
     fn test_build_qclass_matcher_rejects_empty_rules() {
         assert!(build_qclass_matcher("qclass".to_string(), vec![]).is_err());
+    }
+
+    #[test]
+    fn test_build_qclass_matcher_accepts_text_rules() {
+        let matcher = match build_qclass_matcher(
+            "qclass".to_string(),
+            vec!["in".to_string(), "CH".to_string()],
+        )
+        .expect("text qclass rules should build")
+        {
+            UninitializedPlugin::Matcher(matcher) => matcher,
+            _ => unreachable!("qclass factory should create a matcher"),
+        };
+
+        let mut in_ctx = make_context(DNSClass::IN);
+        assert!(matcher.is_match(&mut in_ctx));
+
+        let mut ch_ctx = make_context(DNSClass::CH);
+        assert!(matcher.is_match(&mut ch_ctx));
     }
 
     #[test]

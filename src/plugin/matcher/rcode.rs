@@ -6,8 +6,8 @@
 //! This plugin follows standard plugin lifecycle (`init/destroy`) and
 //! matches DNS response code from the generated upstream response.
 //!
-//! Config currently accepts only decimal numeric rcodes, for example `["0"]`
-//! or quick-setup syntax like `rcode 2`.
+//! Config accepts decimal numeric rcodes and text names, for example `["0"]`,
+//! `["NOERROR"]`, or quick-setup syntax like `rcode SERVFAIL`.
 
 use std::fmt::Debug;
 
@@ -19,7 +19,7 @@ use crate::core::context::DnsContext;
 use crate::core::error::Result as DnsResult;
 use crate::plugin::matcher::Matcher;
 use crate::plugin::matcher::matcher_utils::{
-    parse_quick_setup_rules, parse_rcode, parse_rules_from_value, parse_u16_rules,
+    parse_enum_rules_from_value, parse_quick_setup_rules, parse_rcode, parse_u16_rules,
     validate_non_empty_rules,
 };
 use crate::plugin::{Plugin, PluginFactory, UninitializedPlugin};
@@ -35,7 +35,7 @@ impl PluginFactory for RcodeFactory {
         plugin_config: &PluginConfig,
         _init_context: &crate::plugin::PluginInitContext<'_>,
     ) -> DnsResult<UninitializedPlugin> {
-        let rules = parse_rules_from_value(plugin_config.args.clone())?;
+        let rules = parse_enum_rules_from_value("rcode", plugin_config.args.clone())?;
         build_rcode_matcher(plugin_config.tag.clone(), rules)
     }
 
@@ -118,6 +118,32 @@ mod tests {
         ctx.set_response(response);
 
         assert!(!matcher.is_match(&mut ctx));
+    }
+
+    #[tokio::test]
+    async fn test_build_rcode_matcher_accepts_text_rules() {
+        let matcher = match build_rcode_matcher(
+            "rcode".to_string(),
+            vec![
+                "SERVFAIL".to_string(),
+                "ServFail".to_string(),
+                "NXDOMAIN".to_string(),
+                "2".to_string(),
+            ],
+        )
+        .expect("text rcode rules should build")
+        {
+            UninitializedPlugin::Matcher(matcher) => matcher,
+            _ => unreachable!("rcode factory should create a matcher"),
+        };
+
+        let mut servfail_ctx = make_context();
+        servfail_ctx.set_response(servfail_ctx.request().response(Rcode::ServFail));
+        assert!(matcher.is_match(&mut servfail_ctx));
+
+        let mut nxdomain_ctx = make_context();
+        nxdomain_ctx.set_response(nxdomain_ctx.request().response(Rcode::NXDomain));
+        assert!(matcher.is_match(&mut nxdomain_ctx));
     }
 
     #[tokio::test]

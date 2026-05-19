@@ -341,10 +341,10 @@ export const pluginFieldDocs = {
     args: '- `args`\n  - 类型：`array[string]`；必填：是；默认值：无\n  - 作用：使用 `"$provider_tag"` 形式引用实现了 `contains_question` 的 provider。',
   },
   qtype: {
-    args: "`qtype` 的 `args` 为类型列表。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义允许命中的查询类型集合。\n- 常见映射：`1` = `A`、`28` = `AAAA`、`12` = `PTR`\n- 运行影响：\n  - 请求中的任意问题类型命中配置集合时返回 `true`。",
+    args: "`qtype` 的 `args` 为类型列表。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义允许命中的查询类型集合。\n- 同时支持枚举文本和十进制数值，例如 `A` / `AAAA` / `PTR` 或 `1` / `28` / `12`；同一个列表中可以混用两种格式。\n- 未知或未来扩展类型可继续使用数值形式匹配。\n- 运行影响：\n  - 请求中的任意问题类型命中配置集合时返回 `true`。",
   },
   qclass: {
-    args: "`qclass` 的 `args` 为类别列表。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义允许命中的查询类别集合。\n- 常见映射：`1` = `IN`、`3` = `CH`、`4` = `HS`\n- 运行影响：\n  - 请求中的任意问题类别命中配置集合时返回 `true`。",
+    args: "`qclass` 的 `args` 为类别列表。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义允许命中的查询类别集合。\n- 同时支持枚举文本和十进制数值，例如 `IN` / `CH` / `HS` 或 `1` / `3` / `4`；同一个列表中可以混用两种格式。\n- 未知或未来扩展类别可继续使用数值形式匹配。\n- 运行影响：\n  - 请求中的任意问题类别命中配置集合时返回 `true`。",
   },
   client_ip: {
     args: "`client_ip` 的 `args` 采用规则列表形式。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义客户端来源地址匹配条件。\n- 支持元素：\n  - 单个 IP\n  - CIDR\n  - `ip_set` 引用\n- 运行影响：\n  - 只要客户端来源地址命中任一规则，matcher 即返回 `true`。",
@@ -359,7 +359,7 @@ export const pluginFieldDocs = {
     args: "`cname` 的 `args` 采用规则列表形式。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义 CNAME 目标名称匹配条件。\n- 支持元素：\n  - 域名表达式\n  - `domain_set` 引用\n  - 文件引用\n- 运行影响：\n  - 只检查响应中的 CNAME 目标。\n  - 任一 CNAME 目标命中时返回 `true`。",
   },
   rcode: {
-    args: "`rcode` 的 `args` 为 rcode 列表。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义可命中的响应码集合。\n- 取值要求：\n  - 当前使用十进制整数表示。\n  - 例如：\n    - `0` = `NOERROR`\n    - `2` = `SERVFAIL`\n    - `3` = `NXDOMAIN`\n- 运行影响：\n  - 仅当上下文中已有响应且 rcode 命中配置集合时返回 `true`。",
+    args: "`rcode` 的 `args` 为 rcode 列表。\n\n- 类型：`array`；必填：是；默认值：无\n- 作用：定义可命中的响应码集合。\n- 同时支持枚举文本和十进制数值，例如 `NOERROR` / `SERVFAIL` / `NXDOMAIN` 或 `0` / `2` / `3`；同一个列表中可以混用两种格式。\n- 未知或未来扩展响应码可继续使用数值形式匹配。\n- 运行影响：\n  - 仅当上下文中已有响应且 rcode 命中配置集合时返回 `true`。",
   },
   has_resp: {
     args: "无独立配置字段。",

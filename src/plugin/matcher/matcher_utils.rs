@@ -9,7 +9,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use ahash::AHashSet;
-use serde_yaml_ng::Value;
+use serde_yaml_ng::{Number, Value};
 
 use crate::core::error::{DnsError, Result as DnsResult};
 use crate::core::rule_matcher::{DomainRuleMatcher, IpPrefixMatcher};
@@ -23,6 +23,14 @@ pub(crate) fn parse_rules_from_value(args: Option<Value>) -> DnsResult<Vec<Strin
     parse_rule_list_value(args)
 }
 
+pub(crate) fn parse_enum_rules_from_value(
+    field: &str,
+    args: Option<Value>,
+) -> DnsResult<Vec<String>> {
+    let args = args.ok_or_else(|| DnsError::plugin(format!("{field} matcher requires args")))?;
+    parse_enum_rule_list_value(field, args)
+}
+
 pub(crate) fn parse_u16_rules(
     field: &str,
     raw_rules: &[String],
@@ -34,7 +42,7 @@ pub(crate) fn parse_u16_rules(
         if v.is_empty() {
             continue;
         }
-        let num = if let Ok(num) = v.parse::<u16>() {
+        let num = if let Some(num) = parse_u16_rule_token(field, v)? {
             num
         } else {
             named_parser(v).ok_or_else(|| {
@@ -49,6 +57,28 @@ pub(crate) fn parse_u16_rules(
     Ok(parsed)
 }
 
+fn parse_u16_rule_token(field: &str, raw: &str) -> DnsResult<Option<u16>> {
+    if let Ok(num) = raw.parse::<u16>() {
+        return Ok(Some(num));
+    }
+
+    if raw.parse::<u64>().is_ok() || raw.parse::<i64>().is_ok() {
+        return Err(DnsError::plugin(format!(
+            "invalid {} value '{}': numeric value must be between 0 and 65535",
+            field, raw
+        )));
+    }
+
+    if raw.parse::<f64>().is_ok() {
+        return Err(DnsError::plugin(format!(
+            "invalid {} value '{}': numeric value must be an integer between 0 and 65535",
+            field, raw
+        )));
+    }
+
+    Ok(None)
+}
+
 pub(crate) fn parse_rr_type(raw: &str) -> Option<u16> {
     RecordType::from_str(&raw.to_ascii_uppercase())
         .ok()
@@ -61,15 +91,35 @@ pub(crate) fn parse_class(raw: &str) -> Option<u16> {
         .map(u16::from)
 }
 
-/// Parse rcode matcher input.
-///
-/// Current config only accepts decimal numeric rcodes. Mnemonic tokens such as
-/// `NOERROR` or `SERVFAIL` are intentionally not mapped here.
 pub(crate) fn parse_rcode(raw: &str) -> Option<u16> {
     if let Ok(code) = raw.parse::<u16>() {
         return Some(u16::from(Rcode::from(code)));
     }
-    None
+
+    let rcode = match raw.to_ascii_uppercase().as_str() {
+        "NOERROR" => Rcode::NoError,
+        "FORMERR" => Rcode::FormErr,
+        "SERVFAIL" => Rcode::ServFail,
+        "NXDOMAIN" => Rcode::NXDomain,
+        "NOTIMP" => Rcode::NotImp,
+        "REFUSED" => Rcode::Refused,
+        "YXDOMAIN" => Rcode::YXDomain,
+        "YXRRSET" => Rcode::YXRRSet,
+        "NXRRSET" => Rcode::NXRRSet,
+        "NOTAUTH" => Rcode::NotAuth,
+        "NOTZONE" => Rcode::NotZone,
+        "BADVERS" => Rcode::BADVERS,
+        "BADSIG" => Rcode::BADSIG,
+        "BADKEY" => Rcode::BADKEY,
+        "BADTIME" => Rcode::BADTIME,
+        "BADMODE" => Rcode::BADMODE,
+        "BADNAME" => Rcode::BADNAME,
+        "BADALG" => Rcode::BADALG,
+        "BADTRUNC" => Rcode::BADTRUNC,
+        "BADCOOKIE" => Rcode::BADCOOKIE,
+        _ => return None,
+    };
+    Some(u16::from(rcode))
 }
 
 pub(crate) fn parse_ip_prefix_matcher(
@@ -330,6 +380,57 @@ fn parse_rule_list_value(value: Value) -> DnsResult<Vec<String>> {
     }
 }
 
+fn parse_enum_rule_list_value(field: &str, value: Value) -> DnsResult<Vec<String>> {
+    match value {
+        Value::String(s) => Ok(split_rule_tokens(&s)),
+        Value::Number(n) => Ok(vec![parse_u16_number_rule(field, &n)?]),
+        Value::Sequence(seq) => {
+            let mut out = Vec::with_capacity(seq.len());
+            for (idx, item) in seq.into_iter().enumerate() {
+                match item {
+                    Value::String(s) => out.extend(split_rule_tokens(&s)),
+                    Value::Number(n) => out.push(parse_u16_number_rule(field, &n)?),
+                    other => {
+                        return Err(DnsError::plugin(format!(
+                            "{} matcher args[{}] must be a string or unsigned integer, got {:?}",
+                            field, idx, other
+                        )));
+                    }
+                }
+            }
+            Ok(out)
+        }
+        other => Err(DnsError::plugin(format!(
+            "{} matcher args must be a string, unsigned integer, or list of strings/unsigned integers, got {:?}",
+            field, other
+        ))),
+    }
+}
+
+fn parse_u16_number_rule(field: &str, number: &Number) -> DnsResult<String> {
+    if let Some(value) = number.as_u64() {
+        let value = u16::try_from(value).map_err(|_| {
+            DnsError::plugin(format!(
+                "invalid {} value {}: numeric value must be between 0 and 65535",
+                field, value
+            ))
+        })?;
+        return Ok(value.to_string());
+    }
+
+    if let Some(value) = number.as_i64() {
+        return Err(DnsError::plugin(format!(
+            "invalid {} value {}: numeric value must be between 0 and 65535",
+            field, value
+        )));
+    }
+
+    Err(DnsError::plugin(format!(
+        "invalid {} value {}: numeric value must be an integer between 0 and 65535",
+        field, number
+    )))
+}
+
 fn split_rule_tokens(raw: &str) -> Vec<String> {
     raw.split(|c: char| c == ',' || c.is_ascii_whitespace())
         .map(str::trim)
@@ -349,6 +450,75 @@ mod tests {
         let rules =
             parse_quick_setup_rules(Some("a, b c".to_string())).expect("rules should parse");
         assert_eq!(rules, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_enum_rules_from_value_accepts_strings_and_numbers() {
+        let value = serde_yaml_ng::from_str::<Value>(
+            r#"
+- 1
+- A,AAAA
+- ServFail
+"#,
+        )
+        .expect("yaml should parse");
+
+        let rules = parse_enum_rules_from_value("qtype", Some(value))
+            .expect("enum matcher rules should parse");
+
+        assert_eq!(rules, vec!["1", "A", "AAAA", "ServFail"]);
+    }
+
+    #[test]
+    fn test_parse_enum_rules_from_value_rejects_invalid_values() {
+        let negative = serde_yaml_ng::from_str::<Value>("-1").expect("yaml should parse");
+        let err = parse_enum_rules_from_value("qtype", Some(negative))
+            .expect_err("negative values should be rejected");
+        assert!(err.to_string().contains("between 0 and 65535"));
+
+        let float = serde_yaml_ng::from_str::<Value>("256.0").expect("yaml should parse");
+        let err = parse_enum_rules_from_value("qtype", Some(float))
+            .expect_err("floating-point values should be rejected");
+        assert!(err.to_string().contains("must be an integer"));
+
+        let out_of_range = serde_yaml_ng::from_str::<Value>("70000").expect("yaml should parse");
+        let err = parse_enum_rules_from_value("qtype", Some(out_of_range))
+            .expect_err("out-of-range values should be rejected");
+        assert!(err.to_string().contains("between 0 and 65535"));
+
+        let bool_value = serde_yaml_ng::from_str::<Value>("true").expect("yaml should parse");
+        let err = parse_enum_rules_from_value("qtype", Some(bool_value))
+            .expect_err("booleans should be rejected");
+        assert!(err.to_string().contains("must be a string"));
+    }
+
+    #[test]
+    fn test_parse_u16_rules_rejects_invalid_numeric_strings() {
+        let out_of_range = vec!["70000".to_string()];
+        let err = parse_u16_rules("qtype", &out_of_range, parse_rr_type)
+            .expect_err("out-of-range string values should be rejected");
+        assert!(err.to_string().contains("between 0 and 65535"));
+
+        let negative = vec!["-1".to_string()];
+        let err = parse_u16_rules("qtype", &negative, parse_rr_type)
+            .expect_err("negative string values should be rejected");
+        assert!(err.to_string().contains("between 0 and 65535"));
+
+        let float = vec!["1.0".to_string()];
+        let err = parse_u16_rules("qtype", &float, parse_rr_type)
+            .expect_err("floating-point string values should be rejected");
+        assert!(err.to_string().contains("must be an integer"));
+    }
+
+    #[test]
+    fn test_named_enum_parsers_are_case_insensitive() {
+        assert_eq!(parse_rr_type("a"), Some(1));
+        assert_eq!(parse_rr_type("AAAA"), Some(28));
+        assert_eq!(parse_class("in"), Some(1));
+        assert_eq!(parse_class("CH"), Some(3));
+        assert_eq!(parse_rcode("ServFail"), Some(2));
+        assert_eq!(parse_rcode("NXDOMAIN"), Some(3));
+        assert_eq!(parse_rcode("BADSIG"), Some(16));
     }
 
     #[test]

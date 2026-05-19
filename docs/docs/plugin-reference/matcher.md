@@ -12,7 +12,7 @@ sidebar_position: 4
 ```yaml
 - matches:
     - "client_ip $lan_ip_set"
-    - "qtype 1"
+    - "qtype A,28"
   exec: "$forward_main"
 ```
 
@@ -21,7 +21,7 @@ sidebar_position: 4
 ```yaml
 - matches:
     - "qname domain:example.com"
-    - "qclass 1"
+    - "qclass IN,3"
   exec: "$forward_main"
 ```
 
@@ -47,7 +47,7 @@ sidebar_position: 4
   type: any_match
   args:
     - "$lan_clients"
-    - "qtype 28"
+    - "qtype AAAA"
     - "!$blocked_qname"
 ```
 
@@ -167,11 +167,13 @@ sidebar_position: 4
 
 ### 配置示例
 
+以下示例混用文本与数字，两种格式等价且可以同时使用。
+
 ```yaml
 - tag: only_a_aaaa
   type: qtype
   args: 
-    - "1"
+    - "A"
     - "28"
 ```
 
@@ -181,15 +183,16 @@ sidebar_position: 4
 
 - 类型：`array`；必填：是；默认值：无
 - 作用：定义允许命中的查询类型集合。
-- 文档示例统一使用查询类型对应的数值形式。
-- 常见映射：`1` = `A`、`28` = `AAAA`、`12` = `PTR`
+- 同时支持枚举文本和十进制数值，大小写不敏感；同一个列表中可以混用两种格式。
+- 常见映射：`A` = `1`、`AAAA` = `28`、`PTR` = `12`
+- 未知或未来扩展类型可继续使用数值形式匹配。
 - 运行影响：
   - 请求中的任意问题类型命中配置集合时返回 `true`。
 
 ### quick setup
 
 ```yaml
-- matches: "qtype 1"
+- matches: "qtype A,28"
 ```
 
 ### 典型用途
@@ -206,11 +209,14 @@ sidebar_position: 4
 
 ### 配置示例
 
+以下示例混用文本与数字，两种格式等价且可以同时使用。
+
 ```yaml
-- tag: only_in
+- tag: in_or_ch
   type: qclass
   args: 
-    - "1"
+    - "IN"
+    - "3"
 ```
 
 ### 配置项
@@ -219,15 +225,16 @@ sidebar_position: 4
 
 - 类型：`array`；必填：是；默认值：无
 - 作用：定义允许命中的查询类别集合。
-- 文档示例统一使用查询类别对应的数值形式。
-- 常见映射：`1` = `IN`、`3` = `CH`、`4` = `HS`
+- 同时支持枚举文本和十进制数值，大小写不敏感；同一个列表中可以混用两种格式。
+- 常见映射：`IN` = `1`、`CH` = `3`、`HS` = `4`
+- 未知或未来扩展类别可继续使用数值形式匹配。
 - 运行影响：
   - 请求中的任意问题类别命中配置集合时返回 `true`。
 
 ### quick setup
 
 ```yaml
-- matches: "qclass 1"
+- matches: "qclass IN,3"
 ```
 
 ### 典型用途
@@ -409,11 +416,14 @@ sidebar_position: 4
 
 ### 配置示例
 
+以下示例混用文本与数字，两种格式等价且可以同时使用。
+
 ```yaml
-- tag: only_noerror
+- tag: failure_rcodes
   type: rcode
   args:
-    - "2"
+    - "SERVFAIL"
+    - "3"
 ```
 
 ### 配置项
@@ -422,19 +432,19 @@ sidebar_position: 4
 
 - 类型：`array`；必填：是；默认值：无
 - 作用：定义可命中的响应码集合。
-- 取值要求：
-  - 当前使用十进制整数表示。
-  - 例如：
-    - `0` = `NOERROR`
-    - `2` = `SERVFAIL`
-    - `3` = `NXDOMAIN`
+- 同时支持枚举文本和十进制数值，大小写不敏感；同一个列表中可以混用两种格式。
+- 常见映射：
+  - `NOERROR` = `0`
+  - `SERVFAIL` = `2`
+  - `NXDOMAIN` = `3`
+- 未知或未来扩展响应码可继续使用数值形式匹配。
 - 运行影响：
   - 仅当上下文中已有响应且 rcode 命中配置集合时返回 `true`。
 
 ### quick setup
 
 ```yaml
-- matches: "rcode 2"
+- matches: "rcode SERVFAIL,3"
 ```
 
 ### 典型用途
