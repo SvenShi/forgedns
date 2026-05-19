@@ -110,7 +110,7 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton asChild>
               <a
-                href="https://oxidns.cn"
+                href="https://oxidns.org"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted-foreground"

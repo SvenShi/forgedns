@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
 import {
   Select,
   SelectContent,
@@ -431,29 +432,27 @@ function QueryRecordsPanel({ tag }: { tag: string }) {
                 </Select>
               </FilterField>
               <FilterField label="开始">
-                <Input
-                  type="datetime-local"
+                <DateTimePicker
                   value={filterForm.sinceLocal}
-                  onChange={(event) =>
+                  onChange={(sinceLocal) =>
                     setFilterForm((current) => ({
                       ...current,
-                      sinceLocal: event.target.value,
+                      sinceLocal,
                     }))
                   }
-                  className="h-8 font-mono"
+                  placeholder="开始时间"
                 />
               </FilterField>
               <FilterField label="结束">
-                <Input
-                  type="datetime-local"
+                <DateTimePicker
                   value={filterForm.untilLocal}
-                  onChange={(event) =>
+                  onChange={(untilLocal) =>
                     setFilterForm((current) => ({
                       ...current,
-                      untilLocal: event.target.value,
+                      untilLocal,
                     }))
                   }
-                  className="h-8 font-mono"
+                  placeholder="结束时间"
                 />
               </FilterField>
               <div className="flex items-end gap-2">

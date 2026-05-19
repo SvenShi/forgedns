@@ -106,11 +106,6 @@ export function LogViewer() {
     const controller = new AbortController();
     let retryDelay = 1500;
 
-    // clear stale entries so tail from the new stream doesn't produce duplicate keys
-    setEntries([]);
-    pendingRef.current = [];
-    setBacklog(0);
-
     const run = async () => {
       while (mounted && !controller.signal.aborted) {
         try {
@@ -150,6 +145,10 @@ export function LogViewer() {
       mounted = false;
       controller.abort();
       setConnected(false);
+      // clear stale entries so the next stream's tail doesn't produce duplicate keys
+      setEntries([]);
+      pendingRef.current = [];
+      setBacklog(0);
     };
   }, [levelFilter]);
 
